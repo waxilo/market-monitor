@@ -25,11 +25,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          skip-pkg-install: 'true'
-          auto-accept-license: 'true'
+      - name: Use Android SDK from runner image
+        # 见 ci.yml 说明：避开 setup-android 对 legacy `tools` 包的失败依赖
+        run: echo "ANDROID_HOME=$ANDROID_HOME"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

@@ -26,12 +26,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          # runner 镜像已预置 platform/build-tools；该 action 默认会去装已被官方移除的 `tools` 包
-          skip-pkg-install: 'true'
-          auto-accept-license: 'true'
+      - name: Show Android SDK from runner image
+        # 不使用 android-actions/setup-android：它会安装已被官方下架的 legacy `tools` 包并失败。
+        # ubuntu-latest 已预置 SDK 与已接受的许可，缺失的 platform/build-tools 由 AGP 自动下载。
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          ls "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" 2>&1 | head -20
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
