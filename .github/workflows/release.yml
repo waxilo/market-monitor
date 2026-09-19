@@ -27,6 +27,9 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          skip-pkg-install: 'true'
+          auto-accept-license: 'true'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

@@ -28,6 +28,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # runner 镜像已预置 platform/build-tools；该 action 默认会去装已被官方移除的 `tools` 包
+          skip-pkg-install: 'true'
+          auto-accept-license: 'true'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
