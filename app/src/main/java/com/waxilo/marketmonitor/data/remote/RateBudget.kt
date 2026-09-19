@@ -24,10 +24,9 @@ class RateBudget(private val limitPerMinute: Int, private val nowMs: () -> Long 
 
     /** 记账并等待到窗口有余量；持锁串行，避免并发请求看到同一份余量后一起超支。 */
     suspend fun await(cost: Int): Unit = mutex.withLock {
-        val startedAt = nowMs()
         while (true) {
             val wait = waitMs(cost, nowMs())
-            if (wait <= 0L || nowMs() - startedAt > MAX_WAIT_MS) break
+            if (wait <= 0L) break
             delay(wait)
         }
         spends.addLast(nowMs() to cost.coerceAtLeast(0))
@@ -36,6 +35,5 @@ class RateBudget(private val limitPerMinute: Int, private val nowMs: () -> Long 
 
     companion object {
         const val WINDOW_MS = 60_000L
-        const val MAX_WAIT_MS = 30_000L
     }
 }

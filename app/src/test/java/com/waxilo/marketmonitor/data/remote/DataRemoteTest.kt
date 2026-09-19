@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Test
 import java.math.BigDecimal
 
 class RateBudgetTest {
@@ -39,23 +40,24 @@ class RateBudgetTest {
 
     @Test
     fun `await 会真的挂起到窗口滑出`() = runTest {
-        val clock = RateBudget(limitPerMinute = 100, nowMs = { currentTime })
+        val clock = RateBudget(limitPerMinute = 100, nowMs = { testScheduler.currentTime })
         clock.await(100)
         clock.await(1)
-        assertEquals(RateBudget.WINDOW_MS, currentTime)
+        assertEquals(RateBudget.WINDOW_MS, testScheduler.currentTime)
     }
 
-    /** 多笔排队时一次等待不足以腾出预算，此时不无限挂起，交给服务端 429 兜底。 */
+    /** 排队多笔时等到最老一笔滑出窗口即放行，放行后窗口内重新有余量。 */
     @Test
-    fun `等待超过上限时放行`() = runTest {
-        val clock = RateBudget(limitPerMinute = 100, nowMs = { currentTime })
+    fun `排队多笔时等到最老一笔滑出窗口`() = runTest {
+        val clock = RateBudget(limitPerMinute = 100, nowMs = { testScheduler.currentTime })
         clock.await(30)
         delay(1_000)
         clock.await(30)
         delay(1_000)
         clock.await(30)
         clock.await(20)
-        assertEquals(58_000L, currentTime)
+        assertEquals(RateBudget.WINDOW_MS, testScheduler.currentTime)
+        assertEquals(0L, clock.waitMs(cost = 20, now = testScheduler.currentTime))
     }
 }
 
