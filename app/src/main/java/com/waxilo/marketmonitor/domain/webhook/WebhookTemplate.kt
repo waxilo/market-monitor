@@ -1,8 +1,10 @@
 package com.waxilo.marketmonitor.domain.webhook
 
+import kotlinx.serialization.Serializable
 import java.math.BigDecimal
 
 /** 一个 Webhook 端点配置（PRD FR-4.1）。URL 含 secret，落库前需加密。 */
+@Serializable
 data class WebhookEndpoint(
     val id: Long = 0L,
     val name: String,

@@ -103,6 +103,8 @@ data class ReleaseInfo(
     val body: String,
     val publishedAt: String?,
     val assets: List<ReleaseAsset>,
+    /** Release 页面地址，无法应用内安装时用它走浏览器。 */
+    val pageUrl: String = "",
 ) {
     val version: SemVer? get() = VersionCompare.parse(tagName)
 
