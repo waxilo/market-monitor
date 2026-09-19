@@ -16,8 +16,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -126,7 +126,7 @@ private fun ResultRow(
             }
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(40.dp)) {
                 Icon(
-                    imageVector = if (row.watched) Icons.Default.Star else Icons.Default.StarBorder,
+                    imageVector = if (row.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = if (row.watched) "移出自选" else "加为自选",
                     tint = if (row.watched) {
                         MaterialTheme.colorScheme.primary

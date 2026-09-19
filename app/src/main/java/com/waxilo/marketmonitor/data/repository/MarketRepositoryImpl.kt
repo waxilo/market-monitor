@@ -167,6 +167,18 @@ class MarketRepositoryImpl(
     override fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline> =
         klineStream.filter { it.first == id }.map { it.second }
 
+    override fun watchKlineUpdates(id: SymbolId, interval: CandleInterval) {
+        val code = interval.apiCode
+        if (code.isEmpty()) return
+        // 连接是按市场的，订阅现货的合约标的收不到推送，所以先切连接
+        if (market.value != id.market) market.value = id.market
+        setWatchedStreams(listOf(Streams.kline(id.symbol, code)))
+    }
+
+    override fun clearKlineUpdates() {
+        setWatchedStreams(emptyList())
+    }
+
     override suspend fun ping(market: MarketType): Boolean = api.ping(market)
 
     /**

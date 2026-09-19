@@ -17,8 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -165,7 +165,7 @@ private fun TickerRowItem(
             }
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(40.dp)) {
                 Icon(
-                    imageVector = if (row.watched) Icons.Default.Star else Icons.Default.StarBorder,
+                    imageVector = if (row.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = if (row.watched) "移出自选" else "加为自选",
                     tint = if (row.watched) {
                         MaterialTheme.colorScheme.primary
@@ -196,7 +196,7 @@ private fun EmptyState(tab: MarketTab, onRefresh: () -> Unit) {
     when (tab) {
         MarketTab.WATCHLIST -> HintRow(
             title = "还没有自选交易对",
-            subtitle = "在行情页或搜索页点星标，即可加入自选",
+            subtitle = "在行情页或搜索页点收藏，即可加入自选",
             actionLabel = "去刷新行情",
             onAction = onRefresh,
         )

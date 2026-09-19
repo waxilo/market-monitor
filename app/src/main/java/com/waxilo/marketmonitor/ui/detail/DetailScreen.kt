@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,12 +14,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,24 +27,30 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
+import com.waxilo.marketmonitor.ui.chart.ChartModel
+import com.waxilo.marketmonitor.ui.chart.KlineChart
+import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.LabelValueRow
 import com.waxilo.marketmonitor.ui.common.OfflineBanner
+import com.waxilo.marketmonitor.ui.common.SegmentPicker
 import com.waxilo.marketmonitor.ui.common.ThinDivider
 import com.waxilo.marketmonitor.ui.common.appViewModel
 
 /**
- * 详情页（PRD 4.1 第三级）。K 线画布在图表引擎任务里接入，
- * 这里先把数据、周期切换与翻页跑通，图表位置用等高的占位框保留。
+ * 详情页（PRD 4.1 第三级、4.2 图表）。
+ * 图表高度固定，下面的统计与指标开关随页面滚动，避免小屏上蜡烛被压扁。
  */
 @Composable
 fun DetailScreen(
@@ -56,65 +61,89 @@ fun DetailScreen(
     },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPane) {
+        ChartModel.build(
+            candles = state.candles,
+            maPeriods = state.maPeriods,
+            showBoll = state.showBoll,
+            subPane = state.subPane,
+        )
+    }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+    ) {
         Header(
             state = state,
             onBack = onBack,
             onRefresh = viewModel::refresh,
             onToggleWatch = viewModel::toggleWatch,
         )
-        state.error?.let { OfflineBanner(it) }
-        if (state.origin == DataOrigin.CACHE && state.error == null) {
-            OfflineBanner("K 线来自本地缓存")
+        when {
+            state.error != null -> OfflineBanner(state.error)
+            state.origin == DataOrigin.CACHE -> OfflineBanner("K 线来自本地缓存")
+            else -> Unit
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            state.intervals.forEach { option ->
-                val selected = option == state.interval
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (selected) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant
-                        })
-                        .clickable { viewModel.selectInterval(option) }
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                ) {
-                    Text(
-                        text = option.label,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (selected) {
-                            MaterialTheme.colorScheme.onPrimary
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                    )
+        IntervalChips(
+            options = state.intervals,
+            selected = state.interval,
+            onSelect = viewModel::selectInterval,
+        )
+
+        Box(modifier = Modifier.fillMaxWidth().height(CHART_HEIGHT_DP.dp)) {
+            if (state.loadingCandles && state.candles.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
+            } else if (state.candles.isEmpty()) {
+                HintRow(
+                    title = "没有取到 K 线",
+                    subtitle = state.error ?: "换个周期或点右上角刷新试试",
+                    actionLabel = "重新加载",
+                    onAction = viewModel::refresh,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            } else {
+                KlineChart(
+                    series = series,
+                    interval = state.interval,
+                    tickSize = state.tickSize,
+                    onLoadMore = viewModel::loadMore,
+                )
+            }
+            if (state.loadingMore) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center).size(28.dp),
+                    strokeWidth = 2.dp,
+                )
             }
         }
 
-        ChartSlot(
-            state = state,
-            onRetry = viewModel::refresh,
-            onLoadMore = viewModel::loadMore,
+        IndicatorControls(
+            maChoices = state.maChoices,
+            activeMa = state.maPeriods,
+            showBoll = state.showBoll,
+            subPane = state.subPane,
+            onToggleMa = viewModel::toggleMaPeriod,
+            onToggleBoll = viewModel::toggleBoll,
+            onSelectSubPane = viewModel::setSubPane,
         )
         ThinDivider()
-
-        state.stats.forEach { item ->
-            LabelValueRow(label = item.label, value = item.value)
-        }
-        Spacer(Modifier.height(24.dp))
+        state.stats.forEach { LabelValueRow(label = it.label, value = it.value) }
+        Text(
+            text = "提示：切到后台后价格检测会停止，预警依赖前台保活",
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
     }
 }
+
+private const val CHART_HEIGHT_DP = 360
 
 @Composable
 private fun Header(
@@ -123,6 +152,7 @@ private fun Header(
     onRefresh: () -> Unit,
     onToggleWatch: () -> Unit,
 ) {
+    val watched = state.watched
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -139,11 +169,7 @@ private fun Header(
             )
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = state.price,
-                style = MaterialTheme.typography.titleLarge,
-                textAlign = TextAlign.End,
-            )
+            Text(state.price, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.End)
             ChangeText(state.changePercent)
         }
         IconButton(onClick = onRefresh) {
@@ -151,9 +177,9 @@ private fun Header(
         }
         IconButton(onClick = onToggleWatch) {
             Icon(
-                imageVector = if (state.watched) Icons.Default.Star else Icons.Default.StarBorder,
-                contentDescription = if (state.watched) "移出自选" else "加为自选",
-                tint = if (state.watched) {
+                imageVector = if (watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (watched) "取消自选" else "加为自选",
+                tint = if (watched) {
                     MaterialTheme.colorScheme.primary
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -163,30 +189,85 @@ private fun Header(
     }
 }
 
-/** 图表引擎接入前的占位：先把「有多少根、能否翻页」这两件事验证掉。 */
 @Composable
-private fun ChartSlot(state: DetailUiState, onRetry: () -> Unit, onLoadMore: () -> Unit) {
-    Box(
+private fun IntervalChips(
+    options: List<CandleInterval>,
+    selected: CandleInterval,
+    onSelect: (CandleInterval) -> Unit,
+) {
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(260.dp)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        when {
-            state.loadingCandles -> CircularProgressIndicator()
-            state.candles.isEmpty() -> HintRow(
-                title = "没有取到 K 线",
-                subtitle = state.error ?: "换个周期或下拉刷新试试",
-                actionLabel = "重新加载",
-                onAction = onRetry,
-            )
-            else -> HintRow(
-                title = "${state.interval.label} · ${state.candles.size} 根蜡烛",
-                subtitle = if (state.hasMore) "图表引擎接入后在此渲染蜡烛与指标" else "已取到最早的历史数据",
-                actionLabel = if (state.hasMore) "加载更早" else null,
-                onAction = if (state.hasMore) onLoadMore else null,
+        options.forEach { option ->
+            Chip(
+                text = option.label,
+                selected = option == selected,
+                onClick = { onSelect(option) },
             )
         }
+    }
+}
+
+@Composable
+private fun IndicatorControls(
+    maChoices: List<Int>,
+    activeMa: List<Int>,
+    showBoll: Boolean,
+    subPane: SubPaneKind,
+    onToggleMa: (Int) -> Unit,
+    onToggleBoll: () -> Unit,
+    onSelectSubPane: (SubPaneKind) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            maChoices.forEach { period ->
+                Chip(text = "MA$period", selected = period in activeMa, onClick = { onToggleMa(period) })
+            }
+            Chip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "副图",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SegmentPicker(
+                options = SubPaneKind.entries.toList(),
+                selected = subPane,
+                labelOf = { it.label },
+                onSelect = onSelectSubPane,
+            )
+        }
+    }
+}
+
+@Composable
+private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        )
     }
 }

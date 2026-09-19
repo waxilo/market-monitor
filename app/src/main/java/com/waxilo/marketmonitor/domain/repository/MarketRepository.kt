@@ -57,6 +57,15 @@ interface MarketRepository {
      */
     fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline>
 
+    /**
+     * 让 WS 开始推送该交易对的 K 线（按 [CandleInterval.apiCode] 即基础周期）。
+     * 与 [klineUpdate] 配对：进入详情页订阅、离开时 [clearKlineUpdates]。
+     */
+    fun watchKlineUpdates(id: SymbolId, interval: CandleInterval)
+
+    /** 退订全部 K 线流，列表页只保留合并快照流。 */
+    fun clearKlineUpdates()
+
     /** 连通性探测，供设置页与容灾切换使用。 */
     suspend fun ping(market: MarketType): Boolean
 }
