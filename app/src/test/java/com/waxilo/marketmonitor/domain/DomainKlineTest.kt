@@ -105,21 +105,21 @@ class KlineAggregatorTest {
     @Test
     fun `聚合按目标周期边界分桶而非按根数`() {
         // 5m 蜡烛：00:00 与 00:05 属于同一个 10m 桶；00:10 与 00:15 属于下一个
-        val source = listOf(0L, 5, 10, 15).map { i ->
-            kline(i * 5 * MINUTE, "$i", "$i", "$i", "$i", volume = "1")
+        val source = listOf(0L, 5L, 10L, 15L).map { minute ->
+            kline(minute * MINUTE, "$minute", "$minute", "$minute", "$minute", volume = "1")
         }
         val merged = KlineAggregator.aggregate(source, CandleInterval.custom(10)!!)
 
         assertEquals(2, merged.size)
         assertEquals(0L, merged[0].openTime)
-        assertEquals(10 * 5 * MINUTE, merged[1].openTime)
+        assertEquals(10 * MINUTE, merged[1].openTime)
         assertTrue(merged.all { it.closed })
     }
 
     @Test
     fun `不完整的最后一个桶视为未收盘`() {
-        val source = listOf(0L, 5L, 10L).map { i ->
-            kline(i * 5 * MINUTE, "$i", "$i", "$i", "$i")
+        val source = listOf(0L, 5L, 10L).map { minute ->
+            kline(minute * MINUTE, "$minute", "$minute", "$minute", "$minute")
         }
         val merged = KlineAggregator.aggregate(source, CandleInterval.custom(10)!!)
 
