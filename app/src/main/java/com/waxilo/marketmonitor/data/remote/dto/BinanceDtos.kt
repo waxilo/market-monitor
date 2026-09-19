@@ -5,6 +5,7 @@ import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
 
@@ -61,8 +62,9 @@ data class TickerDto(
 
 @Serializable
 data class WsKlineDto(
-    val t: Long = 0L,
-    val T: Long = 0L,
+    /** t / T 的 getter 同为 getT()，必须显式改名，否则 JVM 签名冲突。 */
+    @SerialName("t") val openTimeMs: Long = 0L,
+    @SerialName("T") val closeTimeMs: Long = 0L,
     val o: String = "0",
     val c: String = "0",
     val h: String = "0",

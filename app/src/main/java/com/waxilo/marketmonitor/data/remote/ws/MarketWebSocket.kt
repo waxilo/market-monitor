@@ -185,8 +185,8 @@ object WsParser {
         val low = k.l.toBigDecimalOrNull() ?: return null
         val close = k.c.toBigDecimalOrNull() ?: return null
         val kline = Kline(
-            openTime = k.t,
-            closeTime = k.T,
+            openTime = k.openTimeMs,
+            closeTime = k.closeTimeMs,
             open = open,
             high = high,
             low = low,

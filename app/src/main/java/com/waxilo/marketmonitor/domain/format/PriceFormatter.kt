@@ -72,7 +72,8 @@ object PriceFormatter {
     fun localeNumber(value: Double, decimals: Int = DEFAULT_DECIMALS): String =
         String.format(Locale.US, "%.${decimals}f", value)
 
-    private const val NO_DATA = "--"
+    /** 无数据占位；缺失与零值是两回事，不能用 0 兜。 */
+    const val NO_DATA = "--"
 
     private val THOUSAND = BigDecimal("1E3")
     private val MILLION = BigDecimal("1E6")
