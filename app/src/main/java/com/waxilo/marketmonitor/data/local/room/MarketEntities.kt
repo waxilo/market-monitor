@@ -1,7 +1,6 @@
 package com.waxilo.marketmonitor.data.local.room
 
 import androidx.room.Entity
-import androidx.room.PrimaryKey
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
@@ -15,10 +14,10 @@ import java.math.BigDecimal
  * 主键一律含 market，现货与合约同名交易对互不覆盖（PRD 3.2 市场隔离）。
  */
 
-@Entity(tableName = "ticker")
+@Entity(tableName = "ticker", primaryKeys = ["market", "symbol"])
 data class TickerEntity(
-    @PrimaryKey val market: String,
-    @PrimaryKey val symbol: String,
+    val market: String,
+    val symbol: String,
     val lastPrice: String,
     val openPrice: String,
     val highPrice: String,
@@ -28,10 +27,10 @@ data class TickerEntity(
     val updatedAt: Long,
 )
 
-@Entity(tableName = "instrument")
+@Entity(tableName = "instrument", primaryKeys = ["market", "symbol"])
 data class InstrumentEntity(
-    @PrimaryKey val market: String,
-    @PrimaryKey val symbol: String,
+    val market: String,
+    val symbol: String,
     val baseAsset: String,
     val quoteAsset: String,
     val status: String,
@@ -40,13 +39,13 @@ data class InstrumentEntity(
     val syncedAt: Long,
 )
 
-@Entity(tableName = "kline")
+@Entity(tableName = "kline", primaryKeys = ["market", "symbol", "intervalKey", "openTime"])
 data class KlineEntity(
-    @PrimaryKey val market: String,
-    @PrimaryKey val symbol: String,
+    val market: String,
+    val symbol: String,
     /** CandleInterval.storageKey，如 `o:5m` / `c:10`。 */
-    @PrimaryKey val intervalKey: String,
-    @PrimaryKey val openTime: Long,
+    val intervalKey: String,
+    val openTime: Long,
     val closeTime: Long,
     val open: String,
     val high: String,
@@ -58,10 +57,10 @@ data class KlineEntity(
     val closed: Int,
 )
 
-@Entity(tableName = "watchlist")
+@Entity(tableName = "watchlist", primaryKeys = ["market", "symbol"])
 data class WatchlistEntity(
-    @PrimaryKey val market: String,
-    @PrimaryKey val symbol: String,
+    val market: String,
+    val symbol: String,
     val position: Int,
     val addedAt: Long,
 )
