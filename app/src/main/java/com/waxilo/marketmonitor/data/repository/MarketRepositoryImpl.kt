@@ -182,7 +182,9 @@ class MarketRepositoryImpl(
     ): KlinePage {
         val base = interval.baseInterval ?: error("周期缺少基础周期")
         // 聚合需要整数倍根数，多取一点避免最后一桶总是不够
-        val rawLimit = (limit * interval.aggregateRatio).coerceAtMost(BinanceMarketApi.MAX_KLINE_LIMIT.toLong()).toInt()
+        val rawLimit = (limit.toLong() * interval.aggregateRatio)
+            .coerceAtMost(BinanceMarketApi.MAX_KLINE_LIMIT.toLong())
+            .toInt()
         val raw = api.klines(id.market, id.symbol, base.apiCode, rawLimit, startTime, endTime)
         val now = System.currentTimeMillis()
         val stamped = raw.map { if (it.closeTime > now) it.copy(closed = false) else it }

@@ -7,8 +7,8 @@ import com.waxilo.marketmonitor.data.local.EncryptedWebhookStore
 import com.waxilo.marketmonitor.data.local.SettingsDataStore
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
 import com.waxilo.marketmonitor.data.remote.DefaultRestHosts
-import com.waxilo.marketmonitor.data.remote.DefaultWsHosts
 import com.waxilo.marketmonitor.data.remote.GithubReleaseApi
+import com.waxilo.marketmonitor.data.remote.ws.DefaultWsHosts
 import com.waxilo.marketmonitor.data.remote.ws.MarketWebSocket
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.ApkInstaller

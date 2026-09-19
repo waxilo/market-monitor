@@ -9,6 +9,7 @@ import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -104,7 +105,7 @@ class MarketWebSocket(
                 WsParser.parse(text, market, timeMs()).forEach { channel.trySend(it) }
             }
 
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String?) {
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 webSocket.close(1000, null)
                 channel.close()
             }

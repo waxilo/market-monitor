@@ -128,7 +128,7 @@ fun TickerDto.toDomain(market: MarketType, fallbackUpdatedAt: Long): MarketTicke
 fun List<String>.toKline(): Kline? {
     if (size < 9) return null
     val openTime = this[0].toLongOrNull() ?: return null
-    val closeTime = this[6].toLongOrNull() ?: return openTime
+    val closeTime = this[6].toLongOrNull() ?: openTime
     val o = this[1].toBigDecimalOrNull() ?: return null
     val h = this[2].toBigDecimalOrNull() ?: return null
     val l = this[3].toBigDecimalOrNull() ?: return null
