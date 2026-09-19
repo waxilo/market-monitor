@@ -81,8 +81,9 @@ fun DetailScreen(
             onRefresh = viewModel::refresh,
             onToggleWatch = viewModel::toggleWatch,
         )
+        val error = state.error
         when {
-            state.error != null -> OfflineBanner(state.error)
+            error != null -> OfflineBanner(error)
             state.origin == DataOrigin.CACHE -> OfflineBanner("K 线来自本地缓存")
             else -> Unit
         }

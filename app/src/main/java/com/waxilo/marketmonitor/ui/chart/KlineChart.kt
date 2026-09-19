@@ -1,11 +1,12 @@
 package com.waxilo.marketmonitor.ui.chart
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.onSizeChanged
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -26,6 +27,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
@@ -43,6 +46,7 @@ import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
  * 自研 K 线画布（PRD FR-2.1，已定不引入第三方图表库）。
@@ -88,32 +92,17 @@ fun KlineChart(
         crosshair = null
     }
 
-    val palette = remember(
-        upColor,
-        downColor,
-        MaterialTheme.colorScheme.primary,
-        MaterialTheme.colorScheme.secondary,
-        MaterialTheme.colorScheme.tertiary,
-        MaterialTheme.colorScheme.error,
-        MaterialTheme.colorScheme.outlineVariant,
-        MaterialTheme.colorScheme.onSurface,
-        MaterialTheme.colorScheme.onSurfaceVariant,
-    ) {
-        ChartPalette(
-            up = upColor,
-            down = downColor,
-            grid = MaterialTheme.colorScheme.outlineVariant,
-            label = MaterialTheme.colorScheme.onSurfaceVariant,
-            lines = listOf(
-                MaterialTheme.colorScheme.primary,
-                MaterialTheme.colorScheme.tertiary,
-                MaterialTheme.colorScheme.secondary,
-                MaterialTheme.colorScheme.error,
-            ),
-            band = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
-            crosshair = MaterialTheme.colorScheme.onSurface,
-        )
-    }
+    // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
+    val scheme = MaterialTheme.colorScheme
+    val palette = ChartPalette(
+        up = upColor,
+        down = downColor,
+        grid = scheme.outlineVariant,
+        label = scheme.onSurfaceVariant,
+        lines = listOf(scheme.primary, scheme.tertiary, scheme.secondary, scheme.error),
+        band = scheme.primary.copy(alpha = 0.08f),
+        crosshair = scheme.onSurface,
+    )
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
@@ -329,8 +318,8 @@ private fun DrawScope.drawLastPrice(
     if (y !in 0f..geo.mainHeightPx) return
     drawLine(
         color = if (last.close >= last.open) palette.up else palette.down,
-        p1 = Offset(0f, y),
-        p2 = Offset(geo.plotWidthPx, y),
+        start = Offset(0f, y),
+        end = Offset(geo.plotWidthPx, y),
         strokeWidth = 1f,
         pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
     )
@@ -536,46 +525,58 @@ private suspend fun PointerInputScope.detectChartGestures(
 ) {
     awaitEachGesture {
         val first = awaitFirstDown(requireUnconsumed = false)
+        // 自己记下每个指头上一次的位置：不依赖 positionChange，它在不同版本里签名动过
+        val lastPositions = mutableMapOf<Any, Offset>()
         var travelled = 0f
         var previousDistance = 0f
         var longPressActive = false
         while (true) {
             val event = awaitPointerEvent()
-            val pressed = event.changes.filter { it.pressed }
+            val pressed: List<PointerInputChange> = event.changes.filter { change -> change.pressed }
             if (pressed.isEmpty()) break
+            val primary = pressed.first()
+            val previous = lastPositions[primary.id] ?: primary.position
+            pressed.forEach { change -> lastPositions[change.id] = change.position }
+
             if (!longPressActive && pressed.size == 1) {
-                val held = pressed[0].uptimeMillis - first.uptimeMillis
+                val held = primary.uptimeMillis - first.uptimeMillis
                 if (held >= longPressMs && travelled <= touchSlop) longPressActive = true
             }
             if (longPressActive) {
-                pressed.forEach { it.consume() }
-                onCrosshair(pressed[0].position)
+                pressed.forEach { change -> change.consume() }
+                onCrosshair(primary.position)
                 continue
             }
             if (pressed.size >= 2) {
-                val distance = (pressed[0].position - pressed[1].position).getDistance()
+                val distance = distanceBetween(pressed[0].position, pressed[1].position)
                 val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
                 if (previousDistance > 0f && distance > 0f) {
-                    // 双指张开时距离变大，可见根数应变少，因此因子取倒数比
+                    // 双指张开时距离变大、可见根数应变少，因此因子取倒数比
                     onZoom((previousDistance / distance).coerceIn(0.5f, 2f), anchorX.coerceIn(0f, plotWidth))
                 }
                 previousDistance = distance
-                pressed.forEach { it.consume() }
+                pressed.forEach { change -> change.consume() }
                 continue
             }
-            val change: PointerInputChange = pressed[0]
-            if (change.positionChanged()) {
-                val delta = change.positionChange()
-                travelled += delta.getDistance()
-                if (abs(delta.x) > 0.1f) {
-                    change.consume()
-                    onPan(delta.x)
-                }
+            val deltaX = primary.position.x - previous.x
+            val deltaY = primary.position.y - previous.y
+            if (deltaX != 0f || deltaY != 0f) {
+                travelled += abs(deltaX) + abs(deltaY)
                 previousDistance = 0f
+                if (abs(deltaX) > 0.1f) {
+                    primary.consume()
+                    onPan(deltaX)
+                }
             }
         }
         onCrosshair(null)
     }
+}
+
+private fun distanceBetween(a: Offset, b: Offset): Float {
+    val dx = a.x - b.x
+    val dy = a.y - b.y
+    return sqrt(dx * dx + dy * dy)
 }
 
 private const val MAX_TIME_LABELS = 4
