@@ -18,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
@@ -56,6 +57,7 @@ import com.waxilo.marketmonitor.ui.common.appViewModel
 fun DetailScreen(
     symbolId: SymbolId,
     onBack: () -> Unit,
+    onCreateAlert: () -> Unit,
     viewModel: DetailViewModel = appViewModel(key = "detail:${symbolId.storageKey}") {
         DetailViewModel(it, symbolId)
     },
@@ -80,6 +82,7 @@ fun DetailScreen(
             onBack = onBack,
             onRefresh = viewModel::refresh,
             onToggleWatch = viewModel::toggleWatch,
+            onCreateAlert = onCreateAlert,
         )
         val error = state.error
         when {
@@ -135,7 +138,7 @@ fun DetailScreen(
         ThinDivider()
         state.stats.forEach { LabelValueRow(label = it.label, value = it.value) }
         Text(
-            text = "提示：切到后台后价格检测会停止，预警依赖前台保活",
+            text = "提示：预警在后台由常驻通知保活，杀掉进程后检测会停止",
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -152,6 +155,7 @@ private fun Header(
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onToggleWatch: () -> Unit,
+    onCreateAlert: () -> Unit,
 ) {
     val watched = state.watched
     Row(
@@ -172,6 +176,9 @@ private fun Header(
         Column(horizontalAlignment = Alignment.End) {
             Text(state.price, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.End)
             ChangeText(state.changePercent)
+        }
+        IconButton(onClick = onCreateAlert) {
+            Icon(Icons.Default.Notifications, contentDescription = "为该交易对建预警")
         }
         IconButton(onClick = onRefresh) {
             Icon(Icons.Default.Refresh, contentDescription = "刷新")

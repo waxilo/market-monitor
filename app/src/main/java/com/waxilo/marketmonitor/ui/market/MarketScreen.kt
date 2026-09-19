@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -48,6 +49,7 @@ fun MarketScreen(
     onOpenDetail: (SymbolId) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAlerts: () -> Unit,
     viewModel: MarketViewModel = appViewModel { MarketViewModel(it) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -57,6 +59,7 @@ fun MarketScreen(
             onRefresh = viewModel::refresh,
             onOpenSearch = onOpenSearch,
             onOpenSettings = onOpenSettings,
+            onOpenAlerts = onOpenAlerts,
             refreshing = state.refreshing,
         )
         Row(
@@ -110,6 +113,7 @@ private fun TitleBar(
     onRefresh: () -> Unit,
     onOpenSearch: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenAlerts: () -> Unit,
     refreshing: Boolean,
 ) {
     Row(
@@ -130,6 +134,9 @@ private fun TitleBar(
         }
         IconButton(onClick = onRefresh) {
             Icon(Icons.Default.Refresh, contentDescription = "刷新")
+        }
+        IconButton(onClick = onOpenAlerts) {
+            Icon(Icons.Default.Notifications, contentDescription = "价格预警")
         }
         IconButton(onClick = onOpenSettings) {
             Icon(Icons.Default.Settings, contentDescription = "设置")

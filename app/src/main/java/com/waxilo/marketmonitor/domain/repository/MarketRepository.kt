@@ -7,6 +7,7 @@ import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 /** 数据来自远端还是本地缓存，UI 据此显示「离线数据」标记（PRD 3.2）。 */
 enum class DataOrigin { REMOTE, CACHE }
@@ -34,6 +35,12 @@ interface MarketRepository {
 
     /** 主动拉取 24h 行情并落库；返回本次更新的行数。 */
     suspend fun refreshTickers(market: MarketType): Int
+
+    /**
+     * 只刷新单个标的（预警轮询用，权重 1，远低于全量的 80）。
+     * 网络失败返回 null，交给上层的 ticker 流继续回放缓存。
+     */
+    suspend fun refreshTicker(id: SymbolId): MarketTicker?
 
     /** 行情快照流：先回放缓存，随后由 WS 增量覆盖。 */
     fun tickers(market: MarketType, quoteAsset: String = "USDT"): Flow<List<MarketTicker>>
@@ -68,6 +75,18 @@ interface MarketRepository {
 
     /** 连通性探测，供设置页与容灾切换使用。 */
     suspend fun ping(market: MarketType): Boolean
+}
+
+/**
+ * 一组标的的快照流（预警检测与规则列表共用）。
+ * 取不到价的标的不出现在结果里，避免调用方把「没有数据」当成「价格为 0」。
+ */
+fun MarketRepository.tickerSnapshots(ids: List<SymbolId>): Flow<Map<SymbolId, MarketTicker>> {
+    val distinct = ids.distinct()
+    if (distinct.isEmpty()) return flowOf(emptyMap())
+    return combine(distinct.map { id -> ticker(id).map { id to it } }) { rows ->
+        rows.asSequence().mapNotNull { (id, ticker) -> ticker?.let { id to it } }.toMap()
+    }
 }
 
 /** 自选列表（PRD FR-1.2），顺序即展示顺序。 */

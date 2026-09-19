@@ -74,6 +74,7 @@ class DetailViewModel(
 
     private val repository = container.marketRepository
     private val watchlist = container.watchlistRepository
+    private val settings = container.settings
 
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
@@ -132,6 +133,8 @@ class DetailViewModel(
 
     init {
         viewModelScope.launch {
+            // 先恢复上次使用的周期与指标开关，再开始加载：顺序反了会被首次加载的 copy 覆盖
+            restoreChartPreferences()
             combine(interval, reloadToken) { selected, token -> selected to token }
                 .flatMapLatest { (selected, _) -> flow { emit(loadBase(selected)) } }
                 .collect { loaded -> chart.value = loaded }
@@ -155,6 +158,21 @@ class DetailViewModel(
     fun selectInterval(target: CandleInterval) {
         if (interval.value == target) return
         interval.value = target
+        viewModelScope.launch { settings.edit { it.copy(lastIntervalKey = target.storageKey) } }
+    }
+
+    /** 详情页的图表偏好跨会话保留（PRD 8 设置：周期、均线、副图、布林）。 */
+    private suspend fun restoreChartPreferences() {
+        val saved = settings.current()
+        CandleInterval.fromStorageKey(saved.lastIntervalKey)?.let { interval.value = it }
+        chart.update {
+            it.copy(
+                maPeriods = saved.maPeriods.sorted().ifEmpty { DEFAULT_MA_PERIODS },
+                showBoll = saved.bollEnabled,
+                subPane = SubPaneKind.entries.firstOrNull { kind -> kind.name == saved.subPaneKey }
+                    ?: it.subPane,
+            )
+        }
     }
 
     fun toggleWatch() {
@@ -164,11 +182,14 @@ class DetailViewModel(
     }
 
     fun toggleBoll() {
-        chart.update { it.copy(showBoll = !it.showBoll) }
+        val next = !chart.value.showBoll
+        chart.update { it.copy(showBoll = next) }
+        viewModelScope.launch { settings.edit { it.copy(bollEnabled = next) } }
     }
 
     fun setSubPane(kind: SubPaneKind) {
         chart.update { it.copy(subPane = kind) }
+        viewModelScope.launch { settings.edit { it.copy(subPaneKey = kind.name) } }
     }
 
     fun toggleMaPeriod(period: Int) {
@@ -179,8 +200,10 @@ class DetailViewModel(
                 (current.maPeriods + period).sorted()
             }
             // 全关掉时保留刚点中的那条，否则图上什么都不剩
-            current.copy(maPeriods = periods.ifEmpty { listOf(period) })
+            current.copy(maPeriods = (periods.ifEmpty { listOf(period) }).sorted())
         }
+        val saved = chart.value.maPeriods
+        viewModelScope.launch { settings.edit { it.copy(maPeriods = saved) } }
     }
 
     /** 重取快照与当前周期序列。 */

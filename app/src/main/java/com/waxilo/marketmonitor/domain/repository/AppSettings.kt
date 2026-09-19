@@ -12,18 +12,19 @@ data class AppSettings(
     /** 冷启动默认市场。 */
     val defaultMarket: MarketType = MarketType.SPOT,
     /** 详情页记忆的周期（CandleInterval.storageKey）。 */
-    val lastIntervalKey: String = "o:1m",
+    val lastIntervalKey: String = "o:1d",
     /** 主图均线周期。 */
-    val maPeriods: List<Int> = listOf(7, 25, 99),
-    /** 副图窗格：成交量 / MACD / RSI / KDJ。 */
-    val showVolumePane: Boolean = true,
-    val showMacdPane: Boolean = true,
-    val showRsiPane: Boolean = false,
-    val showKdjPane: Boolean = false,
+    val maPeriods: List<Int> = listOf(5, 10, 30),
+    /** 是否叠加布林带。 */
+    val bollEnabled: Boolean = false,
+    /** 副图窗格（SubPaneKind 名）：一次只显示一个，切换即替换。 */
+    val subPaneKey: String = "VOLUME",
     /** 十字光标长按开启（PRD FR-2.5）。 */
     val crosshairEnabled: Boolean = true,
     /** 后台预警轮询间隔秒数；受系统省电策略影响，见 PRD 4.3。 */
-    val alertPollingSeconds: Int = 10,
+    val alertPollingSeconds: Int = 30,
+    /** 新建预警规则的默认冷却分钟数（PRD 4.5 提醒默认参数）。 */
+    val alertDefaultCooldownMinutes: Int = 5,
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,

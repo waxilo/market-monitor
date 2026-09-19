@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.domain.webhook
 
+import com.waxilo.marketmonitor.domain.alert.AlertText
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
 
@@ -87,6 +88,24 @@ object WebhookTemplate {
 
     fun render(template: String, event: AlertEvent): RenderResult =
         render(template, variables(event))
+
+    /**
+     * 配置页自检用的示例事件：让用户不必等真实触发就能确认对端收得到，
+     * 也能在保存前把模板跑一遍——模板错误半夜才暴露的话，等于没有提醒。
+     */
+    fun demoEvent(nowMs: Long = System.currentTimeMillis()): AlertEvent = AlertEvent(
+        alertName = "示例预警",
+        marketLabel = "现货",
+        symbol = "BTCUSDT",
+        directionKey = "above",
+        price = BigDecimal("65000.10"),
+        threshold = BigDecimal("65000"),
+        changePercent = 1.23,
+        triggeredAtIso = AlertText.isoUtc(nowMs),
+        timestampMs = nowMs,
+    )
+
+    fun demoVariables(): Map<String, String> = variables(demoEvent())
 
     fun render(template: String, vars: Map<String, String>): RenderResult {
         val unknown = LinkedHashSet<String>()

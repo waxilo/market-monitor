@@ -111,13 +111,26 @@ class MarketRepositoryImpl(
         return tickers.size
     }
 
+    override suspend fun refreshTicker(id: SymbolId): MarketTicker? = try {
+        val ticker = api.ticker(id.market, id.symbol)
+        if (ticker == null) {
+            null
+        } else {
+            tickerDao.upsertAll(listOf(ticker.toEntity()))
+            liveTickers.update { it + (id to ticker) }
+            ticker
+        }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        null
+    }
+
     override fun tickers(market: MarketType, quoteAsset: String): Flow<List<MarketTicker>> =
         combine(tickerDao.observeMarket(market.key), liveTickers) { cached, live ->
             val merged = cached.mapNotNull { it.toDomain() }.associateBy { it.id }
                 .toMutableMap()
-            market.key.let { key ->
-                live.forEach { (id, ticker) -> if (id.market.key == key) merged[id] = ticker }
-            }
+            live.forEach { (id, ticker) -> if (id.market.key == market.key) merged[id] = ticker }
             merged.values
                 .filter { it.id.symbol.endsWith(quoteAsset) }
                 .sortedByDescending { it.quoteVolume }

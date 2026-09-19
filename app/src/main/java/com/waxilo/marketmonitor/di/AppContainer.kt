@@ -3,11 +3,14 @@ package com.waxilo.marketmonitor.di
 import android.content.Context
 import android.os.Build
 import com.waxilo.marketmonitor.BuildConfig
+import com.waxilo.marketmonitor.data.alert.AlertEngine
+import com.waxilo.marketmonitor.data.alert.AlertNotifier
 import com.waxilo.marketmonitor.data.local.EncryptedWebhookStore
 import com.waxilo.marketmonitor.data.local.SettingsDataStore
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
 import com.waxilo.marketmonitor.data.remote.DefaultRestHosts
 import com.waxilo.marketmonitor.data.remote.GithubReleaseApi
+import com.waxilo.marketmonitor.data.remote.WebhookSender
 import com.waxilo.marketmonitor.data.remote.ws.DefaultWsHosts
 import com.waxilo.marketmonitor.data.remote.ws.MarketWebSocket
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
@@ -36,6 +39,9 @@ import java.util.concurrent.TimeUnit
  */
 class AppContainer(private val context: Context) {
 
+    /** 供 UI 层查询系统状态（通知权限等），不用于创建新依赖。 */
+    val appContext: Context get() = context
+
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /** 共享连接池：REST 与下载复用同一客户端（PRD 7 网络选型）。 */
@@ -60,6 +66,11 @@ class AppContainer(private val context: Context) {
     /** 更新包下载可能持续数十秒，只放宽整体 callTimeout。 */
     private val downloadClient: OkHttpClient by lazy {
         restClient.newBuilder().callTimeout(5, TimeUnit.MINUTES).build()
+    }
+
+    /** Webhook 端点 URL 含 secret，禁止重定向以免把它递给另一个主机。 */
+    private val webhookClient: OkHttpClient by lazy {
+        restClient.newBuilder().followRedirects(false).callTimeout(20, TimeUnit.SECONDS).build()
     }
 
     private val database: MarketDatabase by lazy { MarketDatabase.create(context) }
@@ -110,6 +121,28 @@ class AppContainer(private val context: Context) {
 
     /** Webhook 端点含密钥，加密存储的初始化涉及主线程禁做的磁盘 IO，首次访问时构建。 */
     val webhookRepository: WebhookRepository by lazy { EncryptedWebhookStore.create(context) }
+
+    val alertNotifier: AlertNotifier by lazy { AlertNotifier(context) }
+
+    /** 端点配置页的「测试发送」也走同一个客户端，保证行为与真实推送一致。 */
+    val webhookSender: WebhookSender by lazy { WebhookSender(webhookClient) }
+
+    /**
+     * 预警检测中枢。懒构建：没有启用规则时不该为它付协程与数据库的代价，
+     * 但一旦构建就一直活在进程里（[appScope]），因为提醒必须跨页面存活。
+     */
+    val alertEngine: AlertEngine by lazy {
+        AlertEngine(
+            context = context,
+            alerts = alertRepository,
+            webhooks = webhookRepository,
+            market = marketRepository,
+            settings = settings,
+            notifier = alertNotifier,
+            sender = webhookSender,
+            scope = appScope,
+        )
+    }
 
     val updateRepository: UpdateRepository by lazy {
         UpdateRepositoryImpl(
