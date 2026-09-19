@@ -7,7 +7,9 @@ import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 
 /** 数据来自远端还是本地缓存，UI 据此显示「离线数据」标记（PRD 3.2）。 */
 enum class DataOrigin { REMOTE, CACHE }

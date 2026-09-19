@@ -270,7 +270,7 @@ private fun Field(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         label = { Text(label) },
         placeholder = { Text(placeholder) },
-        supportingText = supporting?.let { text -> @Composable { Text(text) } },
+        supportingText = { supporting?.let { Text(it) } },
         singleLine = true,
         keyboardOptions = KeyboardOptions(
             keyboardType = if (numeric) KeyboardType.Decimal else KeyboardType.Text,

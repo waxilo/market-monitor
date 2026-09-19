@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.repository.WebhookRepository
+import com.waxilo.marketmonitor.domain.webhook.AlertEvent
 import com.waxilo.marketmonitor.domain.webhook.WebhookEndpoint
 import com.waxilo.marketmonitor.domain.webhook.WebhookTemplate
 import kotlinx.coroutines.flow.MutableStateFlow
