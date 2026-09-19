@@ -177,7 +177,9 @@ class AlertEditorViewModel(
         id = ruleId ?: 0L,
         market = market,
         symbol = symbol.trim().uppercase(),
-        name = name.trim().ifBlank { "${symbol.trim().uppercase()} 价格预警" },
+        name = name.trim().ifBlank {
+            if (symbol.isBlank()) "未命名预警" else "${symbol.trim().uppercase()} 价格预警"
+        },
         condition = condition,
         threshold = decimal(threshold),
         rangeLower = decimal(rangeLower),
