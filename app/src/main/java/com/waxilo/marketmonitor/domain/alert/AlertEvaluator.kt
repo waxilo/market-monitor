@@ -27,6 +27,10 @@ object AlertEvaluator {
         if (!rule.enabled || satisfied == null || price == null) {
             return AlertDecision.Silent to state
         }
+        if (state.lastPrice == null) {
+            // lastPrice 为空即"从未观测过"，本轮只记基线，避免新建规则当场刷屏
+            return AlertDecision.Silent to state.copy(wasSatisfied = satisfied, lastPrice = price)
+        }
 
         val inCooldown = state.lastTriggeredAt?.let { nowMs - it < cooldownMs(rule) } == true
         val edge = satisfied && !state.wasSatisfied

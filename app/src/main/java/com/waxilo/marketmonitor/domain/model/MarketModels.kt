@@ -1,6 +1,5 @@
 package com.waxilo.marketmonitor.domain.model
 
-import com.waxilo.marketmonitor.domain.model.MarketType
 import java.math.BigDecimal
 import java.math.MathContext
 

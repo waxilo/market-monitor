@@ -3,7 +3,6 @@ package com.waxilo.marketmonitor.domain.format
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.util.Locale
-import kotlin.math.abs
 
 /**
  * 价格与数量展示规则（PRD FR-1.1）。
@@ -55,6 +54,8 @@ object PriceFormatter {
     /** 数量：去掉无意义的尾零，保留原始精度。 */
     fun formatQuantity(value: BigDecimal?): String {
         if (value == null) return NO_DATA
+        // 旧版 BigDecimal 对零值 stripTrailingZeros 行为不一致，先归零避免输出 "0.000"
+        if (value.signum() == 0) return "0"
         return value.stripTrailingZeros().toPlainString()
     }
 

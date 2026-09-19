@@ -50,21 +50,20 @@ object VersionCompare {
         return compare(latest, current) > 0
     }
 
-    private fun comparePreRelease(a: String, b: String): Int = when {
-        a == b -> 0
-        a.isEmpty() -> 1 // 正式版大于任何预发布版
-        b.isEmpty() -> -1
-        else -> {
-            val left = a.split('.')
-            val right = b.split('.')
-            for (i in 0 until maxOf(left.size, right.size)) {
-                val l = left.getOrNull(i) ?: return@comparePreRelease -1 // 前缀相同、段数少者更小
-                val r = right.getOrNull(i) ?: return@comparePreRelease 1
-                val result = compareIdentifier(l, r)
-                if (result != 0) return result
-            }
-            0
+    private fun comparePreRelease(a: String, b: String): Int {
+        if (a == b) return 0
+        if (a.isEmpty()) return 1 // 正式版大于任何预发布版
+        if (b.isEmpty()) return -1
+        val left = a.split('.')
+        val right = b.split('.')
+        for (i in 0 until maxOf(left.size, right.size)) {
+            // 前缀相同时，标识符段少者更小（1.0.0-alpha < 1.0.0-alpha.1）
+            val l = left.getOrNull(i) ?: return -1
+            val r = right.getOrNull(i) ?: return 1
+            val result = compareIdentifier(l, r)
+            if (result != 0) return result
         }
+        return 0
     }
 
     private fun compareIdentifier(left: String, right: String): Int {
