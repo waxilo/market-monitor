@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">行情监控</string>
+
+    <!-- 首页 -->
+    <string name="tab_watchlist">自选</string>
+    <string name="tab_market">市场</string>
+    <string name="market_spot">现货</string>
+    <string name="market_futures">合约</string>
+
+    <!-- 通知渠道 -->
+    <string name="channel_alert_name">价格预警</string>
+    <string name="channel_alert_desc">价格触达时产生的提醒</string>
+    <string name="channel_service_name">后台行情监测</string>
+    <string name="channel_service_desc">App 在后台时保持价格监测的通知</string>
+
+    <string name="offline_badge">离线数据</string>
+    <string name="disclaimer">数据来自币安公开接口，仅供参考，不构成任何投资建议。</string>
+</resources>
