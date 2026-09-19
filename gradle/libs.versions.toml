@@ -7,6 +7,8 @@ activityCompose = "1.10.1"
 lifecycle = "2.9.4"
 navigationCompose = "2.9.6"
 composeBom = "2025.12.01"
+# 图标包已从 Compose BOM 独立出来，material3 不再传递依赖它
+composeIconsCore = "1.7.8"
 room = "2.7.2"
 okhttp = "4.12.0"
 kotlinxSerializationJson = "1.9.0"
@@ -30,6 +32,7 @@ androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "u
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core", version.ref = "composeIconsCore" }
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }

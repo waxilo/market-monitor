@@ -2,7 +2,6 @@ package com.waxilo.marketmonitor.di
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
-import kotlin.reflect.KClass
 
 /**
  * 手工容器注入 ViewModel（PRD 7 已定：不引入 Hilt）。
@@ -14,5 +13,5 @@ class ContainerViewModelFactory(
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: KClass<T>): T = create(container) as T
+    override fun <T : ViewModel> create(modelClass: Class<T>): T = create(container) as T
 }

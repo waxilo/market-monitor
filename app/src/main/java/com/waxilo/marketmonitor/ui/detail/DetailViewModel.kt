@@ -23,6 +23,9 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** 详情页默认周期：日线信息密度最低，首屏最不容易看起来空白。 */
+val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
+
 data class StatItem(val label: String, val value: String)
 
 data class DetailUiState(
@@ -32,7 +35,7 @@ data class DetailUiState(
     val changePercent: Double? = null,
     val stats: List<StatItem> = emptyList(),
     val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
-    val interval: CandleInterval = DEFAULT_INTERVAL,
+    val interval: CandleInterval = DEFAULT_CHART_INTERVAL,
     val candles: List<Kline> = emptyList(),
     val watched: Boolean = false,
     val origin: DataOrigin = DataOrigin.REMOTE,
@@ -56,7 +59,7 @@ class DetailViewModel(
     private val repository = container.marketRepository
     private val watchlist = container.watchlistRepository
 
-    private val interval = MutableStateFlow(DEFAULT_INTERVAL)
+    private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
     private val candles = MutableStateFlow(CandleState())
 
@@ -186,7 +189,6 @@ class DetailViewModel(
     }
 
     companion object {
-        val DEFAULT_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
         const val PAGE_SIZE = 300
         const val CACHE_HINT = "网络不可用，K 线展示的是本地缓存"
     }
