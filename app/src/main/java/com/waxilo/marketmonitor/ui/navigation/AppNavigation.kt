@@ -13,8 +13,8 @@ import com.waxilo.marketmonitor.ui.alerts.AlertEditorScreen
 import com.waxilo.marketmonitor.ui.alerts.AlertsScreen
 import com.waxilo.marketmonitor.ui.detail.DetailScreen
 import com.waxilo.marketmonitor.ui.market.MarketScreen
-import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.search.SearchScreen
+import com.waxilo.marketmonitor.ui.settings.SettingsScreen
 import com.waxilo.marketmonitor.ui.webhook.WebhookScreen
 
 /**
@@ -63,8 +63,7 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
             SearchScreen(onOpenDetail = openDetail)
         }
         composable(Routes.SETTINGS) {
-            // 设置页与在线更新在下一阶段实现（任务 #8），此处先占位
-            HintRow(title = "设置页正在开发", subtitle = "计价币、刷新间隔、预警与更新将在此提供")
+            SettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.ALERTS) {
             AlertsScreen(

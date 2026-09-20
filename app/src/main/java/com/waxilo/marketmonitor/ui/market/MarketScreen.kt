@@ -46,8 +46,8 @@ import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
 
 /**
- * 行情首页（PRD 4.1）：市场切换 + 自选/行情两个页签。
- * 列表本身不轮询——WS 合并流会持续推进内存快照。
+ * 行情首页（PRD 4.3）：仅展示关注（自选）列表。市场切换 + WS 实时节流刷新。
+ * 列表本身不轮询——WS 合并流会持续推进内存快照，每 300ms 合并一次渲染。
  */
 @Composable
 fun MarketScreen(
@@ -71,7 +71,7 @@ fun MarketScreen(
                     Icon(Icons.Default.Search, contentDescription = "搜索交易对")
                 }
                 IconButton(onClick = viewModel::refresh) {
-                    Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                    Icon(Icons.Default.Refresh, contentDescription = "刷新关注行情")
                 }
                 IconButton(onClick = onOpenAlerts) {
                     Icon(Icons.Default.Notifications, contentDescription = "价格预警")
@@ -84,19 +84,12 @@ fun MarketScreen(
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             SegmentPicker(
                 options = MarketType.entries.toList(),
                 selected = state.market,
                 labelOf = { it.label },
                 onSelect = viewModel::selectMarket,
-            )
-            SegmentPicker(
-                options = MarketTab.entries.toList(),
-                selected = state.tab,
-                labelOf = { it.label },
-                onSelect = viewModel::selectTab,
             )
         }
         if (state.offline) OfflineBanner("网络中断，正在展示最近一次缓存")
@@ -105,7 +98,7 @@ fun MarketScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             when {
                 state.rows.isEmpty() && state.loading -> CenteredSpinner()
-                state.rows.isEmpty() -> EmptyState(state.tab, onRefresh = viewModel::refresh)
+                state.rows.isEmpty() -> EmptyState(onOpenSearch)
                 else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(state.rows, key = { it.id.storageKey }) { row ->
                         TickerRowItem(
@@ -208,19 +201,11 @@ private fun CenteredSpinner() {
 }
 
 @Composable
-private fun EmptyState(tab: MarketTab, onRefresh: () -> Unit) {
-    when (tab) {
-        MarketTab.WATCHLIST -> HintRow(
-            title = "还没有自选交易对",
-            subtitle = "在行情页或搜索页点收藏，即可加入自选",
-            actionLabel = "去刷新行情",
-            onAction = onRefresh,
-        )
-        MarketTab.ALL -> HintRow(
-            title = "暂无行情数据",
-            subtitle = "首次启动需要拉取一次全市场快照",
-            actionLabel = "立即刷新",
-            onAction = onRefresh,
-        )
-    }
+private fun EmptyState(onOpenSearch: () -> Unit) {
+    HintRow(
+        title = "还没有关注任何交易对",
+        subtitle = "在搜索页搜索并点收藏，即可在此实时查看行情",
+        actionLabel = "去搜索添加",
+        onAction = onOpenSearch,
+    )
 }

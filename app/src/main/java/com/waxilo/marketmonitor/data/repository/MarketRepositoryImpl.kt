@@ -19,6 +19,7 @@ import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.domain.repository.KlinePage
 import com.waxilo.marketmonitor.domain.repository.MarketRepository
+import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -47,6 +49,7 @@ class MarketRepositoryImpl(
     private val tickerDao: TickerDao,
     private val instrumentDao: InstrumentDao,
     private val klineDao: KlineDao,
+    private val watchlist: WatchlistRepository,
     private val scope: CoroutineScope,
     initialMarket: MarketType = MarketType.SPOT,
 ) : MarketRepository {
@@ -65,11 +68,12 @@ class MarketRepositoryImpl(
     fun start() {
         scope.launch {
             market.flatMapLatest { target ->
-                val streams = extraStreams.map { extras ->
+                // 只订阅当前市场自选交易对的 miniTicker 流，不再订阅全市场 !miniTicker@arr
+                val streams = combine(watchlist.watchlist(target), extraStreams) { watched, extras ->
                     buildList {
-                        add(Streams.ALL_MINI_TICKER)
+                        watched.forEach { add(Streams.miniTicker(it.symbol)) }
                         addAll(extras)
-                    }
+                    }.distinct()
                 }
                 socket.events(target, streams)
             }.collect { event -> handle(market.value, event) }
@@ -103,12 +107,14 @@ class MarketRepositoryImpl(
         }
 
     override suspend fun refreshTickers(market: MarketType): Int {
-        val tickers = api.tickers(market)
-        tickerDao.upsertAll(tickers.map { it.toEntity() })
-        liveTickers.update { current ->
-            current + tickers.associateBy { it.id }
+        // 只刷新关注（自选）交易对，不再全量拉取（PRD 4.3：仅刷新关注 + 控制权重）
+        val watched = watchlist.watchlist(market).first().filter { it.market == market }
+        if (watched.isEmpty()) return 0
+        var count = 0
+        watched.forEach { id ->
+            if (refreshTicker(id) != null) count++
         }
-        return tickers.size
+        return count
     }
 
     override suspend fun refreshTicker(id: SymbolId): MarketTicker? = try {

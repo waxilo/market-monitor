@@ -145,6 +145,7 @@ class AppContainer(private val context: Context) {
             tickerDao = database.tickerDao(),
             instrumentDao = database.instrumentDao(),
             klineDao = database.klineDao(),
+            watchlist = watchlistRepository,
             scope = appScope,
             initialMarket = settingsSnapshot.value.defaultMarket,
         ).also { it.start() }

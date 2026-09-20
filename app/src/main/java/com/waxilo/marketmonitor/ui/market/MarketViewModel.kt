@@ -16,13 +16,14 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
+/** 首页页签：仅自选关注列表（PRD 4.3 不展示全市场）。 */
 enum class MarketTab(val label: String) {
     WATCHLIST("自选"),
-    ALL("行情"),
 }
 
 /** 列表一行需要的展示数据，全部已在领域层格式化完毕，Compose 只做排版。 */
@@ -83,7 +84,8 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     private val sources = combine(activeMarket, quoteAsset) { market, quote -> market to quote }
         .flatMapLatest { (market, quote) ->
             combine(
-                repository.tickers(market, quote),
+                // WS 推送是实时的，sample 300ms 让 UI 每 0.3 秒合并一次最新行情（PRD 4.3）
+                repository.tickers(market, quote).sample(300),
                 watchlist.watchlist(market),
                 repository.instruments(market),
             ) { tickers, watched, instruments ->
@@ -93,10 +95,9 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
 
     val state: StateFlow<MarketUiState> = combine(sources, tab, flags) { source, selectedTab, current ->
         val watchedIds = source.watched.toSet()
-        val rows = when (selectedTab) {
-            // 自选按用户手动排序展示，行情页按成交额排序
-            MarketTab.WATCHLIST -> source.watched.mapNotNull { id -> source.tickers.firstOrNull { it.id == id } }
-            MarketTab.ALL -> source.tickers.sortedByDescending { it.quoteVolume }
+        // 首页仅自选关注列表，按用户手动排序展示
+        val rows = source.watched.mapNotNull { id ->
+            source.tickers.firstOrNull { it.id == id }
         }.map { ticker -> ticker.toRow(source, watchedIds) }
         MarketUiState(
             market = source.market,
