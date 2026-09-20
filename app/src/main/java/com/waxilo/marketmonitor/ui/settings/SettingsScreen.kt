@@ -31,7 +31,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import com.waxilo.marketmonitor.ui.common.AppBar
@@ -94,36 +93,6 @@ fun SettingsScreen(
                         placeholder = "USDT",
                         onValue = viewModel::setQuoteAsset,
                     )
-                    Rule()
-                    SegmentRow("默认市场") {
-                        SegmentedControl(
-                            options = listOf(MarketType.SPOT),
-                            selected = state.defaultMarket,
-                            labelOf = { it.label },
-                            onSelect = viewModel::setDefaultMarket,
-                        )
-                    }
-                }
-            }
-
-            item {
-                Section(title = "备用域名镜像") {
-                    ValueRow("现货 REST", state.spotRestMirror, "留空=官方", viewModel::setSpotRestMirror)
-                    Rule()
-                    ValueRow("合约 REST", state.futuresRestMirror, "留空=官方", viewModel::setFuturesRestMirror)
-                    Rule()
-                    ValueRow("WebSocket", state.wsMirror, "留空=官方", viewModel::setWsMirror)
-                    Text(
-                        text = "镜像用于国内网络直连币安受限时兜底；现货大陆可用 data-api.binance.vision。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MarketTheme.colors.muted,
-                        modifier = Modifier.padding(
-                            start = Spacing.Gutter,
-                            end = Spacing.Gutter,
-                            top = Spacing.Xs,
-                            bottom = Spacing.Sm,
-                        ),
-                    )
                 }
             }
 
@@ -143,7 +112,7 @@ fun SettingsScreen(
                 Section(title = "预警轮询") {
                     SegmentRow("轮询间隔") {
                         SegmentedControl(
-                            options = listOf(30, 60, 120),
+                            options = listOf(5, 10, 30),
                             selected = state.alertPollingSeconds,
                             labelOf = { "${it}s" },
                             onSelect = viewModel::setAlertPollingSeconds,

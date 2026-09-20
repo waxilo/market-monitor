@@ -25,12 +25,16 @@ class AlertNotifier(private val context: Context) {
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     init {
+        // 渠道的振动样式一经创建就无法被应用覆盖（系统会把用户改过的设置视为最终值），
+        // 所以长震动必须换新的渠道 id；顺手删掉上一版的旧渠道，避免系统设置里出现重复项。
+        LEGACY_CHANNELS.forEach(manager::deleteNotificationChannel)
         createChannel(
             CHANNEL_ALERT,
             R.string.channel_alert_name,
             R.string.channel_alert_desc,
             importance = NotificationManager.IMPORTANCE_HIGH,
             sound = true,
+            vibration = LONG_VIBRATION,
         )
         createChannel(
             CHANNEL_ALERT_SILENT,
@@ -38,6 +42,7 @@ class AlertNotifier(private val context: Context) {
             R.string.channel_alert_desc,
             importance = NotificationManager.IMPORTANCE_DEFAULT,
             sound = false,
+            vibration = null,
         )
         createChannel(
             CHANNEL_MONITOR,
@@ -45,6 +50,7 @@ class AlertNotifier(private val context: Context) {
             R.string.channel_service_desc,
             importance = NotificationManager.IMPORTANCE_LOW,
             sound = false,
+            vibration = null,
         )
     }
 
@@ -94,12 +100,23 @@ class AlertNotifier(private val context: Context) {
         )
     }
 
-    private fun createChannel(id: String, nameRes: Int, descRes: Int, importance: Int, sound: Boolean) {
+    private fun createChannel(
+        id: String,
+        nameRes: Int,
+        descRes: Int,
+        importance: Int,
+        sound: Boolean,
+        vibration: LongArray?,
+    ) {
         val channel = NotificationChannel(id, context.getString(nameRes), importance).apply {
             description = context.getString(descRes)
             if (!sound) {
                 setSound(null, null)
-                enableVibration(false)
+            }
+            enableVibration(vibration != null)
+            if (vibration != null) {
+                // 长震动：首段静默后连续几轮长振，比默认的两下短促更能把人从睡梦里叫醒
+                vibrationPattern = vibration
             }
             lockscreenVisibility = if (sound) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE
         }
@@ -111,9 +128,15 @@ class AlertNotifier(private val context: Context) {
 
     companion object {
         const val EXTRA_OPEN_ALERTS = "com.waxilo.marketmonitor.OPEN_ALERTS"
-        const val CHANNEL_ALERT = "price_alerts"
-        const val CHANNEL_ALERT_SILENT = "price_alerts_silent"
+        const val CHANNEL_ALERT = "price_alerts_long_buzz"
+        const val CHANNEL_ALERT_SILENT = "price_alerts_silent_v2"
         const val CHANNEL_MONITOR = "alert_monitor"
+
+        /** 长震动样式：立即开始、连续三轮长振（间隔 200ms），总时长约 3.2s。 */
+        private val LONG_VIBRATION = longArrayOf(0L, 900L, 200L, 900L, 200L, 900L)
+
+        /** 上一版渠道（默认短震动），创建新渠道时一并清理。 */
+        private val LEGACY_CHANNELS = listOf("price_alerts", "price_alerts_silent")
 
         private const val REQUEST_CODE = 4100
     }

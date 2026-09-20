@@ -100,7 +100,9 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val BOLL = booleanPreferencesKey("boll_enabled")
             val PANE = stringPreferencesKey("sub_pane")
             val CROSSHAIR = booleanPreferencesKey("crosshair")
-            val POLL = intPreferencesKey("alert_polling_seconds")
+            // key 从 alert_polling_seconds 改名：旧默认 30s 会被持久化下来，
+            // 继续读旧 key 的话新默认 5s 对老装机永远不生效（看起来像没改）
+            val POLL = intPreferencesKey("alert_polling_seconds_v2")
             val COOLDOWN = intPreferencesKey("alert_cooldown_minutes")
             val NOTIFY = booleanPreferencesKey("notification_enabled")
             val SOUND = booleanPreferencesKey("sound_enabled")

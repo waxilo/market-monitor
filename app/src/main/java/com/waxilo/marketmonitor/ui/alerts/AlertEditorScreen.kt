@@ -36,13 +36,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRepeatMode
-import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.webhook.WebhookEndpoint
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.Section
-import com.waxilo.marketmonitor.ui.common.SegmentedControl
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -62,11 +60,10 @@ import java.math.BigDecimal
 @Composable
 fun AlertEditorScreen(
     ruleId: Long?,
-    presetMarket: MarketType,
     presetSymbol: String,
     onBack: () -> Unit,
     viewModel: AlertEditorViewModel = appViewModel(key = "alert-editor:${ruleId ?: presetSymbol}") {
-        AlertEditorViewModel(it, ruleId, presetMarket, presetSymbol)
+        AlertEditorViewModel(it, ruleId, presetSymbol)
     },
 ) {
     val form by viewModel.state.collectAsStateWithLifecycle()
@@ -93,14 +90,6 @@ fun AlertEditorScreen(
         }
 
         Section(title = "交易对", trailing = "必填") {
-            SegmentedControl(
-                options = MarketType.entries.toList(),
-                selected = form.market,
-                labelOf = { it.label },
-                onSelect = { market -> viewModel.on { it.copy(market = market) } },
-                modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs),
-            )
-            Rule()
             FieldRow(
                 label = "交易对代码",
                 value = form.symbol,

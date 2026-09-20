@@ -1,13 +1,15 @@
 package com.waxilo.marketmonitor.ui.detail
 
+import android.content.pm.ActivityInfo
+import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,33 +17,46 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
@@ -65,6 +80,7 @@ import com.waxilo.marketmonitor.ui.common.rememberPriceFlash
 import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Motion
+import com.waxilo.marketmonitor.ui.theme.Radius
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import java.math.BigDecimal
 
@@ -89,66 +105,281 @@ fun DetailScreen(
     },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    /**
+     * 用 `rememberSaveable` 而不是普通 state：全屏要横屏，旋屏会让 Activity 重建，
+     * 普通 state 会连同「正在全屏」一起丢掉，用户看到的是自动退出全屏。
+     */
+    var fullscreen by rememberSaveable { mutableStateOf(false) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MarketTheme.colors.paper)
-            .verticalScroll(rememberScrollState()),
-    ) {
-        DetailTopBar(
-            state = state,
-            onBack = onBack,
-            onRefresh = viewModel::refresh,
-            onToggleWatch = viewModel::toggleWatch,
-            onCreateAlert = onCreateAlert,
-        )
+    FullscreenController(active = fullscreen)
 
-        val error = state.error
-        AnimatedBanner(visible = error != null, text = error.orEmpty(), tone = BannerTone.Error)
+    Box(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
+        if (fullscreen) {
+            FullscreenChart(state = state, viewModel = viewModel, onExit = { fullscreen = false })
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                DetailTopBar(
+                    state = state,
+                    onBack = onBack,
+                    onRefresh = viewModel::refresh,
+                    onToggleWatch = viewModel::toggleWatch,
+                    onCreateAlert = onCreateAlert,
+                    onFullscreen = { fullscreen = true },
+                )
+
+                val error = state.error
+                AnimatedBanner(visible = error != null, text = error.orEmpty(), tone = BannerTone.Error)
+                AnimatedBanner(
+                    visible = error == null && state.origin == DataOrigin.CACHE,
+                    text = "K 线来自本地缓存",
+                )
+
+                Hero(state = state)
+
+                Rule(inset = Spacing.Gutter)
+
+                IntervalSelector(
+                    options = state.intervals,
+                    selected = state.interval,
+                    onSelect = viewModel::selectInterval,
+                )
+
+                ChartArea(state = state, onLoadMore = viewModel::loadMore, onRetry = viewModel::refresh)
+
+                IndicatorBar(
+                    maChoices = state.maChoices,
+                    activeMa = state.maPeriods,
+                    showBoll = state.showBoll,
+                    subPanes = state.subPanes,
+                    onToggleMa = viewModel::toggleMaPeriod,
+                    onToggleBoll = viewModel::toggleBoll,
+                    onToggleSubPane = viewModel::toggleSubPane,
+                )
+
+                Rule(inset = Spacing.Gutter, strong = true)
+
+                StatsSection(stats = state.stats)
+
+                Text(
+                    text = "预警由常驻通知保活；杀掉进程后检测会停止",
+                    modifier = Modifier.fillMaxWidth().padding(
+                        start = Spacing.Gutter,
+                        end = Spacing.Gutter,
+                        top = Spacing.Sm,
+                        bottom = Spacing.Xl,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MarketTheme.colors.muted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+
+        // 确认框宿主在最外层：两种形态下都可能弹（划线是在全屏里划的，但退出全屏的
+        // 那一下不该把已经拉出来的确认框吞掉）
+        val draft by viewModel.alertDraftPrice.collectAsStateWithLifecycle()
+        val price = draft
+        if (price != null) {
+            AlertDraftDialog(
+                price = price,
+                tickSize = state.tickSize,
+                currentPrice = state.price,
+                onDismiss = viewModel::dismissAlertDraft,
+                onCreate = viewModel::createAlertFromDraft,
+            )
+        }
+    }
+}
+
+/**
+ * 进全屏 = 横屏 + 隐藏系统栏；退出时逐一还原。
+ *
+ * 两个容易踩的点：
+ * 1. 恢复方向必须**跳过旋屏重建**的那一次 —— 新的 Activity 会立刻再次请求横屏，
+ *    这里若抢先置回 `UNSPECIFIED`，两者就会打架（表现为闪一下竖屏再横过来）；
+ * 2. 重建后系统栏的可见性会回到默认值，所以隐藏动作必须随新的 Activity 再做一遍，
+ *    这也是把副作用挂在 `active` 而非「进入时执行一次」的原因。
+ */
+@Composable
+private fun FullscreenController(active: Boolean) {
+    val activity = LocalActivity.current ?: return
+    val view = LocalView.current
+    DisposableEffect(active) {
+        if (!active) return@DisposableEffect onDispose { }
+        val controller = WindowCompat.getInsetsController(activity.window, view)
+        val previousBehavior = controller.systemBarsBehavior
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        onDispose {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior = previousBehavior
+            if (!activity.isChangingConfigurations) {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
+}
+
+/**
+ * 全屏图表：整屏只有图，顶部一条窄操作栏。
+ *
+ * 「划线」不需要长按 —— 在这个模式下划线就是唯一目的，再要求长按只是多余一步；
+ * 单指拖动直接移动告警线，松手弹确认框，双指缩放照旧可用。
+ */
+@Composable
+private fun FullscreenChart(
+    state: DetailUiState,
+    viewModel: DetailViewModel,
+    onExit: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    val alertLine by viewModel.alertLinePrice.collectAsStateWithLifecycle()
+    val notice by viewModel.notice.collectAsStateWithLifecycle()
+    // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线模式
+    var alertMode by rememberSaveable { mutableStateOf(false) }
+
+    Box(modifier = Modifier.fillMaxSize().background(colors.paper)) {
+        if (state.candles.isEmpty()) {
+            HintRow(
+                title = "没有取到 K 线",
+                subtitle = state.error ?: "换个周期或重新加载试试",
+                actionLabel = "重新加载 →",
+                onAction = viewModel::refresh,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        } else {
+            val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
+                ChartModel.build(
+                    candles = state.candles,
+                    maPeriods = state.maPeriods,
+                    showBoll = state.showBoll,
+                    subPanes = state.subPanes,
+                )
+            }
+            KlineChart(
+                series = series,
+                interval = state.interval,
+                tickSize = state.tickSize,
+                symbolKey = state.id.storageKey,
+                onLoadMore = viewModel::loadMore,
+                alertLinePrice = alertLine?.toDouble(),
+                alertLineMode = alertMode,
+                onAlertLineDrag = viewModel::dragAlertLine,
+                onAlertLineCommit = viewModel::commitAlertLine,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
+        Row(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(Spacing.Xs),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (alertLine != null) {
+                FilterChip(
+                    text = "清除线",
+                    selected = false,
+                    onClick = viewModel::clearAlertLine,
+                )
+            }
+            FilterChip(
+                text = "划线",
+                selected = alertMode,
+                onClick = { alertMode = !alertMode },
+            )
+            IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "退出全屏",
+                    modifier = Modifier.size(20.dp),
+                    tint = colors.ink,
+                )
+            }
+        }
+
+        if (alertMode) {
+            Text(
+                text = "上下拖动放置告警线，松手确认",
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = Spacing.Lg)
+                    .clip(Radius.fullShape)
+                    .background(colors.washStrong)
+                    .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+            )
+        }
+
+        // 提示浮在底部而不是顶部：顶部让给「划线 / 退出」按钮
         AnimatedBanner(
-            visible = error == null && state.origin == DataOrigin.CACHE,
-            text = "K 线来自本地缓存",
+            visible = notice != null,
+            text = notice.orEmpty(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Gutter),
         )
+    }
+}
 
-        Hero(state = state)
-
-        Rule(inset = Spacing.Gutter)
-
-        IntervalSelector(
-            options = state.intervals,
-            selected = state.interval,
-            onSelect = viewModel::selectInterval,
-        )
-
-        ChartArea(state = state, onLoadMore = viewModel::loadMore, onRetry = viewModel::refresh)
-
-        IndicatorBar(
-            maChoices = state.maChoices,
-            activeMa = state.maPeriods,
-            showBoll = state.showBoll,
-            subPanes = state.subPanes,
-            onToggleMa = viewModel::toggleMaPeriod,
-            onToggleBoll = viewModel::toggleBoll,
-            onToggleSubPane = viewModel::toggleSubPane,
-        )
-
-        Rule(inset = Spacing.Gutter, strong = true)
-
-        StatsSection(stats = state.stats)
-
-        Text(
-            text = "预警由常驻通知保活；杀掉进程后检测会停止",
-            modifier = Modifier.fillMaxWidth().padding(
-                start = Spacing.Gutter,
-                end = Spacing.Gutter,
-                top = Spacing.Sm,
-                bottom = Spacing.Xl,
-            ),
-            style = MaterialTheme.typography.labelSmall,
-            color = MarketTheme.colors.muted,
-            textAlign = TextAlign.Center,
-        )
+/**
+ * 划线后的确认框：把「在哪个价位」与「上破还是下破」一次问清。
+ *
+ * 方向必须由用户当场选：划线的语义是「到这个价提醒我」，猜错方向的规则比没有规则更危险。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AlertDraftDialog(
+    price: BigDecimal,
+    tickSize: BigDecimal?,
+    currentPrice: String,
+    onDismiss: () -> Unit,
+    onCreate: (above: Boolean) -> Unit,
+) {
+    val colors = MarketTheme.colors
+    val label = PriceFormatter.format(price, tickSize)
+    BasicAlertDialog(onDismissRequest = onDismiss) {
+        Surface(shape = Radius.lgShape, color = colors.paper) {
+            Column(modifier = Modifier.fillMaxWidth().padding(Spacing.Lg)) {
+                Text(
+                    text = "设置为价格预警",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = colors.ink,
+                )
+                Spacer(Modifier.height(Spacing.Xs))
+                Text(
+                    text = "划线价位 $label · 现价 $currentPrice",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = colors.muted,
+                )
+                Spacer(Modifier.height(Spacing.Lg))
+                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Sm)) {
+                    Button(
+                        onClick = { onCreate(true) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.up),
+                    ) {
+                        Text("上破提醒")
+                    }
+                    Button(
+                        onClick = { onCreate(false) },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = colors.down),
+                    ) {
+                        Text("下破提醒")
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text("取消", color = colors.muted)
+                }
+            }
+        }
     }
 }
 
@@ -164,6 +395,7 @@ private fun DetailTopBar(
     onRefresh: () -> Unit,
     onToggleWatch: () -> Unit,
     onCreateAlert: () -> Unit,
+    onFullscreen: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     var menuOpen by remember { mutableStateOf(false) }
@@ -173,6 +405,18 @@ private fun DetailTopBar(
         onBack = onBack,
         large = false,
         actions = {
+            // 用文字而不是图标：material-icons-core 里没有全屏图标，
+            // 为它引入整个 icons-extended（上千个矢量）不值得
+            Text(
+                text = "全屏",
+                modifier = Modifier
+                    .clip(Radius.fullShape)
+                    .clickable(onClick = onFullscreen)
+                    .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.ink,
+                maxLines = 1,
+            )
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = if (state.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,

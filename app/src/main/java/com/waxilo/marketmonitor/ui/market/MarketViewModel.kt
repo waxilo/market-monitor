@@ -27,6 +27,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** 首页页签：仅自选关注列表（PRD 4.3 不展示全市场）。 */
 enum class MarketTab(val label: String) {
@@ -83,6 +85,9 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
 
     /** 定时自动拉取 24h 快照的任务：WS 在线时价格已实时，轮询仅兜底断线场景。 */
     private var autoRefreshJob: Job? = null
+
+    /** 串行化拖动排序的落库（见 [moveWatch] 的说明）。 */
+    private val reorderMutex = Mutex()
 
     /**
      * 迷你走势线数据：自选的「最近 24 根 1h 收盘价」。
@@ -176,6 +181,24 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     fun toggleWatch(id: SymbolId) {
         viewModelScope.launch {
             if (watchlist.contains(id)) watchlist.remove(id) else watchlist.add(id)
+        }
+    }
+
+    /** 左滑「移除」：语义明确地只做移除，不因当前状态反转成添加。 */
+    fun removeWatch(id: SymbolId) {
+        viewModelScope.launch { watchlist.remove(id) }
+    }
+
+    /**
+     * 拖动排序：把 [id] 落到 [toIndex]。
+     *
+     * 拖动过程中每越过一格就调一次，而 `move()` 是「读当前顺序 → 重排 → 整表写回」，
+     * 并发的两次调用若交错，最终顺序就不是手指的意图。Mutex 是公平（FIFO）的，
+     * 配合 launch 的先后顺序即可保证按手势发生的次序依次落库。
+     */
+    fun moveWatch(id: SymbolId, toIndex: Int) {
+        viewModelScope.launch {
+            reorderMutex.withLock { watchlist.move(id, toIndex) }
         }
     }
 

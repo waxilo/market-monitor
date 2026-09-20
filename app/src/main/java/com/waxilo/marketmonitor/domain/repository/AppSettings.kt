@@ -27,7 +27,7 @@ data class AppSettings(
     /** 十字光标长按开启（PRD FR-2.5）。 */
     val crosshairEnabled: Boolean = true,
     /** 后台预警轮询间隔秒数；受系统省电策略影响，见 PRD 4.3。 */
-    val alertPollingSeconds: Int = 30,
+    val alertPollingSeconds: Int = 5,
     /** 新建预警规则的默认冷却分钟数（PRD 4.5 提醒默认参数）。 */
     val alertDefaultCooldownMinutes: Int = 5,
     val notificationEnabled: Boolean = true,

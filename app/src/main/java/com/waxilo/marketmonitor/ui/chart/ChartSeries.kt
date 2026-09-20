@@ -137,7 +137,9 @@ object ChartModel {
         val overlayLines = if (boll == null) {
             lines
         } else {
+            // 三条都要加：只加上下轨的话中轨（SMA）画不出来
             lines + listOf(
+                ChartLine("BOLL.M", LineRole.ACCENT, boll.middle),
                 ChartLine("BOLL.U", LineRole.ACCENT, boll.upper),
                 ChartLine("BOLL.L", LineRole.ACCENT, boll.lower),
             )

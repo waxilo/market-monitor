@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +83,20 @@ fun KlineChart(
     upColor: Color = UpGreen,
     downColor: Color = DownRed,
     onLoadMore: () -> Unit = {},
+    /**
+     * 已划出的告警线（价格原始值）。由调用方持有：一条线是不是「已经建好预警」
+     * 只有调用方知道，图表只负责把它画出来。
+     */
+    alertLinePrice: Double? = null,
+    /**
+     * 划线模式：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
+     * 双指缩放照旧（画线时同样需要能缩放看细节）。
+     */
+    alertLineMode: Boolean = false,
+    /** 划线过程中每帧回调当前落点（价格原始值），调用方据此实时更新 [alertLinePrice]。 */
+    onAlertLineDrag: (Double) -> Unit = {},
+    /** 手指离开：调用方此时读自己保存的 [alertLinePrice] 去弹确认框。 */
+    onAlertLineCommit: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -171,6 +186,14 @@ fun KlineChart(
         series.subPanes.map { series.subRange(it, dataWindow.first, dataWindow.last) }
     }
 
+    /**
+     * 手势协程在 `pointerInput` 启动那一刻把回调闭包一起捕获，之后不会更新。
+     * 量程与划线回调都必须读**实时**值，否则量程一变（缩放/平移后）划线价位就按旧量程换算。
+     */
+    val alertRange by rememberUpdatedState(mainRange)
+    val alertDrag by rememberUpdatedState(onAlertLineDrag)
+    val alertCommit by rememberUpdatedState(onAlertLineCommit)
+
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
     val scheme = MaterialTheme.colorScheme
     val palette = ChartPalette(
@@ -188,12 +211,31 @@ fun KlineChart(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, barCount, visibleBars) {
+                // ⚠️ visibleBars 绝不能进 key：双指缩放每提交一根它就变一次，
+                // key 一变 pointerInput 协程就重启 —— 当前手势直接作废
+                // （重启后的 awaitFirstDown 要等一次全新的按下，手指没抬起就永远等不到），
+                // 表现为「缩放像被打断，每次捏一下只动一根」。
+                // 回调里读的是 viewport / priceZoom / pricePan / 两个余量（都是 state，实时值），
+                // 以及 barCount 与 geo 的像素尺寸（手势期间不会变，留在 key 里兜住换数据/旋转）。
+                // alertLineMode 进 key 是安全的：它只由「划线」按钮切换，不可能在手势中途变，
+                // 不像 visibleBars 那样每帧都动（那个进 key 会把正在进行的缩放手势打断）。
+                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, barCount, alertLineMode) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
                         plotWidth = geo.plotWidthPx,
+                        plotTop = geo.mainTopPx,
                         plotHeight = geo.mainHeightPx,
+                        alertLineMode = alertLineMode,
+                        onAlertLineDrag = { yPx ->
+                            val fraction =
+                                (yPx - geo.mainTopPx) / geo.mainHeightPx.coerceAtLeast(1f)
+                            // 量程是变动的（缩放/平移），必须走 rememberUpdatedState 读实时值，
+                            // 否则这个回调会拿协程启动那一刻的旧量程换算，画出来的线跑偏
+                            val price = alertRange.fromFraction(fraction)
+                            if (price.isFinite()) alertDrag(price)
+                        },
+                        onAlertLineCommit = { alertCommit() },
                         onGestureStart = {
                             barPanRemainder = 0f
                             pinchRemainder = 0f
@@ -282,6 +324,7 @@ fun KlineChart(
                 drawCandles(series, plotRange, visibleBars, geo, palette, mainRange)
                 drawOverlays(series, plotRange, visibleBars, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
+                drawAlertLine(alertLinePrice, geo, palette, mainRange)
             }
             series.subPanes.forEachIndexed { index, pane ->
                 clipRect(
@@ -300,6 +343,25 @@ fun KlineChart(
 
         if (isReady) {
             PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
+            // 十字光标的横向读数：长按只画一条线而不给价位，用户无从知道线落在哪，
+            // 而「这是哪个价位」正是划线的全部意义（全屏里还要据此建预警线）。
+            CrosshairPriceBadge(
+                crosshair = crosshair,
+                range = mainRange,
+                geo = geo,
+                density = density,
+                tickSize = tickSize,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
+            // 告警线也要给出价位：划线时手指底下若没有读数，落点全凭感觉
+            AlertLinePriceBadge(
+                price = alertLinePrice,
+                range = mainRange,
+                geo = geo,
+                density = density,
+                tickSize = tickSize,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
             SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
             TimeAxisLabels(
                 series, plotRange, visibleBars, geo, interval, density,
@@ -598,6 +660,31 @@ private fun DrawScope.drawLastPrice(
     )
 }
 
+/**
+ * 已划出的告警线。
+ *
+ * 与 [drawLastPrice] 用同一条换算链（`toFraction` → `yOf`），所以线所在的高度与右侧
+ * 价格标上的数字严格对应。量程是被缩放过/平移过的，超出主图区就不画 —— 一条跑到图例带
+ * 或时间轴上的虚线只会让人以为刻度坏了。
+ */
+private fun DrawScope.drawAlertLine(
+    price: Double?,
+    geo: ChartGeo,
+    palette: ChartPalette,
+    range: ValueRange,
+) {
+    if (price == null || !price.isFinite()) return
+    val y = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx)
+    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
+    drawLine(
+        color = palette.crosshair,
+        start = Offset(0f, y),
+        end = Offset(geo.plotWidthPx, y),
+        strokeWidth = 2f,
+        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+    )
+}
+
 private fun DrawScope.drawSubPane(
     series: ChartSeries,
     pane: SubPaneData,
@@ -739,7 +826,9 @@ private fun PriceAxisLabels(
     range.gridLines().forEach { value ->
         val y = geo.yOf(range.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
         if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
-        if (y - lastDrawnY < minGapPx) return@forEach
+        // 必须取绝对值：gridLines 按数值升序，而像素 y 随数值增大而减小（屏幕 y 轴向下）。
+        // 不取绝对值的话 y - lastDrawnY 恒为负，除第一条外全被当成「挨太近」丢掉。
+        if (abs(y - lastDrawnY) < minGapPx) return@forEach
         lastDrawnY = y
         AxisLabel(
             text = PriceFormatter.localeNumber(value, decimals),
@@ -751,6 +840,108 @@ private fun PriceAxisLabels(
             modifier = modifier,
         )
     }
+}
+
+/**
+ * 十字光标处的价格标：贴在右侧价格轴上、与手指同高。
+ *
+ * 取值走 [ValueRange.fromFraction]——正是 `drawCandles` 里 `toFraction` 的逆运算，
+ * 所以标上的数字与横线所指的价位严格一致，不会因为刻度对齐而差一格。
+ *
+ * 只画在 [CrosshairPriceBadge] 的主图范围内，与 `drawCrosshair` 里横线的显示条件保持一致：
+ * 手指落到副图上时横线不画，这里也不该冒出一个孤立的读数。
+ */
+@Composable
+private fun CrosshairPriceBadge(
+    crosshair: Crosshair?,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    tickSize: BigDecimal?,
+    modifier: Modifier = Modifier,
+) {
+    val mark = crosshair ?: return
+    PriceTag(
+        yPx = mark.yPx,
+        range = range,
+        geo = geo,
+        density = density,
+        tickSize = tickSize,
+        modifier = modifier,
+    )
+}
+
+/**
+ * 告警线的价格标。与十字光标的价格标同一套定位，只是 y 由**已保存的价格**反算 ——
+ * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
+ */
+@Composable
+private fun AlertLinePriceBadge(
+    price: Double?,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    tickSize: BigDecimal?,
+    modifier: Modifier = Modifier,
+) {
+    if (price == null || !price.isFinite()) return
+    PriceTag(
+        yPx = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx),
+        range = range,
+        geo = geo,
+        density = density,
+        tickSize = tickSize,
+        modifier = modifier,
+    )
+}
+
+/**
+ * 贴在右侧价格轴上、与 [yPx] 同高的价格标。
+ *
+ * 取值走 [ValueRange.fromFraction]——正是 `drawCandles` 里 `toFraction` 的逆运算，
+ * 所以标上的数字与横线所指的价位严格一致，不会因为刻度对齐而差一格。
+ */
+@Composable
+private fun PriceTag(
+    yPx: Float,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    tickSize: BigDecimal?,
+    modifier: Modifier = Modifier,
+) {
+    val bottom = geo.mainTopPx + geo.mainHeightPx
+    // 落到副图上时不画：那里既没有横线，冒一个孤立读数只会误导
+    if (yPx > bottom) return
+    val y = yPx.coerceIn(geo.mainTopPx, bottom)
+    val fraction = if (geo.mainHeightPx > 0f) (y - geo.mainTopPx) / geo.mainHeightPx else 0f
+    val price = range.fromFraction(fraction)
+    if (!price.isFinite()) return
+
+    val colors = MarketTheme.colors
+    val style = MaterialTheme.typography.labelSmall
+    val text = PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize))
+    val measurer = rememberTextMeasurer()
+    val textSize = remember(text, style, density) {
+        measurer.measure(AnnotatedString(text), style, density = density).size
+    }
+    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
+    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
+    Text(
+        text = text,
+        modifier = modifier
+            .offset(
+                x = with(density) { geo.plotWidthPx.toDp() },
+                // 以横线为中心垂直居中：先退掉文字高度的一半，再退掉上内边距
+                y = with(density) { (y - textSize.height / 2f - padV).toDp() },
+            )
+            .clip(Radius.xsShape)
+            .background(colors.ink)
+            .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
+        style = style,
+        color = colors.paper,
+        maxLines = 1,
+    )
 }
 
 /**
@@ -816,12 +1007,13 @@ private fun SubAxisLabels(
             maxLines = 1,
         )
         // 取首尾两条刻度：副图块普遍矮，画满会糊；挨太近时同样丢掉下面那条
+        // （间距判断同样必须取绝对值，理由见 PriceAxisLabels）
         val lines = range.gridLines(count = 2)
         val picks = listOfNotNull(lines.firstOrNull(), lines.lastOrNull()).distinct()
         var lastDrawnY = Float.NEGATIVE_INFINITY
         picks.forEach { value ->
             val y = geo.yOf(range.toFraction(value), top, geo.subHeightPx)
-            if (y - lastDrawnY < minGapPx) return@forEach
+            if (abs(y - lastDrawnY) < minGapPx) return@forEach
             lastDrawnY = y
             Text(
                 text = PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS),
@@ -960,12 +1152,23 @@ private fun ChartLegend(
  *
  * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
+ *
+ * 划线模式（[alertLineMode]）下单指纵向改判为「拖告警线」：既不平移刻度也不出十字光标，
+ * **且不需要长按**——划线是这个模式下唯一的目的，再要求长按只是多余的一步。
+ * 双指缩放保持不变：画线时同样要能缩放看清细节。
  */
 private suspend fun PointerInputScope.detectChartGestures(
     longPressMs: Long,
     touchSlop: Float,
     plotWidth: Float,
+    plotTop: Float,
     plotHeight: Float,
+    /** 划线模式：单指拖动直接移动告警线（见上方说明）。 */
+    alertLineMode: Boolean,
+    /** 划线过程中回调当前落点（未换算的 y 像素）。 */
+    onAlertLineDrag: (yPx: Float) -> Unit,
+    /** 手指离开且本场手势划过线时回调一次，调用方据此弹确认。 */
+    onAlertLineCommit: () -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
     onPan: (deltaPx: Float) -> Unit,
@@ -988,6 +1191,8 @@ private suspend fun PointerInputScope.detectChartGestures(
         var previousDistanceX = 0f
         var previousDistanceY = 0f
         var longPressActive = false
+        /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
+        var alertLineActive = false
         // 单指方向锁：null 表示还没定，锁定后本次手势不再改
         var axis: ChartGesture.Axis? = null
         var axisAccumX = 0f
@@ -1002,6 +1207,13 @@ private suspend fun PointerInputScope.detectChartGestures(
             // 每次事件都先消费，避免父滚动容器把纵向位移吃掉
             pressed.forEach { change -> change.consume() }
 
+            // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
+            if (alertLineMode && pressed.size == 1) {
+                val y = primary.position.y.coerceIn(plotTop, plotTop + plotHeight)
+                onAlertLineDrag(y)
+                alertLineActive = true
+                continue
+            }
             if (!longPressActive && pressed.size == 1) {
                 val held = primary.uptimeMillis - first.uptimeMillis
                 if (held >= longPressMs && travelled <= touchSlop) longPressActive = true
@@ -1052,6 +1264,7 @@ private suspend fun PointerInputScope.detectChartGestures(
                 }
             }
         }
+        if (alertLineActive) onAlertLineCommit()
         onCrosshair(null)
     }
 }
@@ -1079,3 +1292,9 @@ private const val AXIS_LABEL_MIN_GAP_DP = 4f
 
 /** 副图标题距绘图区左边缘的内缩（dp）。 */
 private const val SUB_PANE_TITLE_INSET_DP = 6f
+
+/** 十字光标价格标的水平内边距（dp）。 */
+private const val PRICE_BADGE_PAD_H_DP = 5f
+
+/** 十字光标价格标的垂直内边距（dp）。 */
+private const val PRICE_BADGE_PAD_V_DP = 2f

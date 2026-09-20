@@ -360,10 +360,13 @@ class ChartModelTest {
     }
 
     @Test
-    fun `开启 BOLL 后给出上下轨与填充带`() {
+    fun `开启 BOLL 后给出中轨上下轨与填充带`() {
         val series = ChartModel.build(candles(60), listOf(5), showBoll = true, subPanes = emptyList())
         assertNotNull(series.overlay.bandFill)
+        // 三条线缺一不可：历史上只加了上下轨，中轨（SMA）画不出来
+        assertTrue(series.overlay.lines.any { it.label == "BOLL.M" })
         assertTrue(series.overlay.lines.any { it.label == "BOLL.U" })
+        assertTrue(series.overlay.lines.any { it.label == "BOLL.L" })
     }
 
     @Test

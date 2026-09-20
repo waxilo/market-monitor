@@ -211,7 +211,8 @@ class AlertEngine(
     }
 
     private companion object {
-        const val MIN_POLL_SECONDS = 15
+        /** 下限即为默认值：预警按 5 秒一轮检测。 */
+        const val MIN_POLL_SECONDS = 5
         const val MAX_POLL_SECONDS = 600
         const val RETRY_INTERVAL_MS = 60_000L
         const val RETRY_BATCH = 10

@@ -4,6 +4,8 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
+import com.waxilo.marketmonitor.domain.alert.AlertCondition
+import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
@@ -16,9 +18,12 @@ import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.common.displayMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -26,6 +31,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
+import java.math.RoundingMode
 
 /** 详情页默认周期：日线信息密度最低，首屏最不容易看起来空白。 */
 val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
@@ -91,10 +97,30 @@ class DetailViewModel(
     private val repository = container.marketRepository
     private val watchlist = container.watchlistRepository
     private val settings = container.settings
+    private val alerts = container.alertRepository
 
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
     private val chart = MutableStateFlow(ChartData())
+
+    /**
+     * 划在图表上的告警线（价格原始值）。
+     *
+     * 放在 ViewModel 而不是 `rememberSaveable`：全屏要横屏，旋屏会让 Activity 重建，
+     * 而 ViewModel 实例是保留的 —— 线不会因为转个屏就消失。
+     */
+    private val alertLine = MutableStateFlow<BigDecimal?>(null)
+
+    /** 松手后待确认的价位。非空即弹确认框；确认或取消都清空。 */
+    private val alertDraft = MutableStateFlow<BigDecimal?>(null)
+
+    /** 一次性提示（创建成功之类）。3 秒后自动消失。 */
+    private val noticeText = MutableStateFlow<String?>(null)
+    private var noticeJob: Job? = null
+
+    val alertLinePrice: StateFlow<BigDecimal?> = alertLine.asStateFlow()
+    val alertDraftPrice: StateFlow<BigDecimal?> = alertDraft.asStateFlow()
+    val notice: StateFlow<String?> = noticeText.asStateFlow()
 
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
     private data class ChartData(
@@ -234,6 +260,81 @@ class DetailViewModel(
         viewModelScope.launch { settings.edit { it.copy(maPeriods = saved) } }
     }
 
+    /** 划线过程中每帧回调：只更新要画的那条线，不落库。 */
+    fun dragAlertLine(price: Double) {
+        if (!price.isFinite()) return
+        alertLine.value = BigDecimal(price.toString())
+    }
+
+    /**
+     * 手指离开：把落点对齐到 tickSize 再弹确认框。
+     *
+     * 对齐是必须的 —— 校验器要求目标价是 tickSize 的整数倍，而手指落点换算出来的价格
+     * 几乎不可能正好落在刻度上，不处理的话用户每次划线都会收到「需为 tickSize 的整数倍」。
+     */
+    fun commitAlertLine() {
+        val raw = alertLine.value ?: return
+        val aligned = alignToTick(raw)
+        alertLine.value = aligned
+        alertDraft.value = aligned
+    }
+
+    fun dismissAlertDraft() {
+        alertDraft.value = null
+    }
+
+    fun clearAlertLine() {
+        alertLine.value = null
+        alertDraft.value = null
+    }
+
+    /**
+     * 用划线价位建一条预警规则（PRD FR-3.1）。
+     * [above] 为 true 走上破，false 走下破 —— 划线的意义就是「到这个价提醒我」，
+     * 方向必须让用户当场选，猜错方向的规则比没有规则更危险。
+     */
+    fun createAlertFromDraft(above: Boolean) {
+        val price = alertDraft.value ?: return
+        alertDraft.value = null
+        val label = PriceFormatter.format(price, state.value.tickSize)
+        viewModelScope.launch {
+            try {
+                alerts.saveRule(
+                    AlertRule(
+                        market = id.market,
+                        symbol = id.symbol,
+                        name = "${id.symbol} ${if (above) "上破" else "下破"} $label",
+                        condition = if (above) AlertCondition.ABOVE else AlertCondition.BELOW,
+                        threshold = price,
+                        // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
+                        createdAt = System.currentTimeMillis(),
+                    ),
+                )
+                showNotice("已创建${if (above) "上破" else "下破"}预警 · $label")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("预警创建失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /** 把价格对齐到交易规则的最小变动单位，避免建规则时被精度校验挡下。 */
+    private fun alignToTick(price: BigDecimal): BigDecimal {
+        val tick = state.value.tickSize ?: return price
+        if (tick.signum() == 0) return price
+        return price.divide(tick, 0, RoundingMode.HALF_UP).multiply(tick)
+    }
+
+    private fun showNotice(text: String) {
+        noticeText.value = text
+        noticeJob?.cancel()
+        noticeJob = viewModelScope.launch {
+            delay(NOTICE_MS)
+            noticeText.value = null
+        }
+    }
+
     /** 重取快照与当前周期序列。 */
     fun refresh() {
         viewModelScope.launch {
@@ -319,6 +420,9 @@ class DetailViewModel(
         /** 内存里保留的最大基础蜡烛数，翻页过多时丢弃最老的。 */
         const val MAX_RAW = 2_000
         const val CACHE_HINT = "网络不可用，K 线展示的是本地缓存"
+
+        /** 一次性提示的停留时长。 */
+        const val NOTICE_MS = 3_000L
     }
 }
 

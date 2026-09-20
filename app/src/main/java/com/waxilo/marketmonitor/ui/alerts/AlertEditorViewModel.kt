@@ -73,15 +73,15 @@ data class EditorHints(
 class AlertEditorViewModel(
     container: AppContainer,
     private val ruleId: Long?,
-    presetMarket: MarketType,
     presetSymbol: String,
 ) : ViewModel() {
 
     private val alerts = container.alertRepository
     private val repository = container.marketRepository
 
+    // 当前只做现货：表单不再让用户选市场，规则一律落在 SPOT
     private val form = MutableStateFlow(
-        AlertEditorState(market = presetMarket, symbol = presetSymbol.uppercase()),
+        AlertEditorState(market = MarketType.SPOT, symbol = presetSymbol.uppercase()),
     )
 
     val state: StateFlow<AlertEditorState> = form
@@ -122,7 +122,7 @@ class AlertEditorViewModel(
     init {
         viewModelScope.launch {
             val id = ruleId ?: return@launch
-            alerts.rule(id)?.let { form.value = it.toForm() }
+            alerts.rule(id)?.let { form.value = it.toForm().copy(market = MarketType.SPOT) }
         }
     }
 
@@ -175,7 +175,7 @@ class AlertEditorViewModel(
 
     private fun AlertEditorState.toRule(): AlertRule = AlertRule(
         id = ruleId ?: 0L,
-        market = market,
+        market = MarketType.SPOT,
         symbol = symbol.trim().uppercase(),
         name = name.trim().ifBlank {
             if (symbol.isBlank()) "未命名预警" else "${symbol.trim().uppercase()} 价格预警"

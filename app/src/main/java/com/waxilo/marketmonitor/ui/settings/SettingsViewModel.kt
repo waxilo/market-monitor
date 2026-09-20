@@ -5,7 +5,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.BuildConfig
 import com.waxilo.marketmonitor.di.AppContainer
-import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
@@ -23,15 +22,11 @@ import java.io.File
 data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val quoteAsset: String = "USDT",
-    val defaultMarket: MarketType = MarketType.SPOT,
-    val spotRestMirror: String = "",
-    val futuresRestMirror: String = "",
-    val wsMirror: String = "",
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
     val webhookEnabled: Boolean = true,
-    val alertPollingSeconds: Int = 30,
+    val alertPollingSeconds: Int = 5,
     val autoUpdateCheck: Boolean = true,
     val versionName: String = BuildConfig.VERSION_NAME,
     /** 检查更新的结果：null 表示未检查或进行中。 */
@@ -63,10 +58,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 backing.value = SettingsUiState(
                     themeMode = it.themeMode,
                     quoteAsset = it.quoteAsset,
-                    defaultMarket = it.defaultMarket,
-                    spotRestMirror = it.spotRestMirror,
-                    futuresRestMirror = it.futuresRestMirror,
-                    wsMirror = it.wsMirror,
                     notificationEnabled = it.notificationEnabled,
                     soundEnabled = it.soundEnabled,
                     vibrateEnabled = it.vibrateEnabled,
@@ -86,26 +77,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setQuoteAsset(v: String) {
         backing.update { it.copy(quoteAsset = v) }
         persist { s -> s.copy(quoteAsset = v.ifBlank { "USDT" }) }
-    }
-
-    fun setDefaultMarket(v: MarketType) {
-        backing.update { it.copy(defaultMarket = v) }
-        persist { s -> s.copy(defaultMarket = v) }
-    }
-
-    fun setSpotRestMirror(v: String) {
-        backing.update { it.copy(spotRestMirror = v) }
-        persist { s -> s.copy(spotRestMirror = v) }
-    }
-
-    fun setFuturesRestMirror(v: String) {
-        backing.update { it.copy(futuresRestMirror = v) }
-        persist { s -> s.copy(futuresRestMirror = v) }
-    }
-
-    fun setWsMirror(v: String) {
-        backing.update { it.copy(wsMirror = v) }
-        persist { s -> s.copy(wsMirror = v) }
     }
 
     fun setNotificationEnabled(v: Boolean) {
