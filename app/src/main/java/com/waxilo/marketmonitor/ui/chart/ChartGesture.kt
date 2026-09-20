@@ -77,6 +77,84 @@ object ChartGesture {
         return BarPan(bars = whole, remainder = total - whole)
     }
 
+    /**
+     * 缩放（捏合）的累积结果。
+     *
+     * @property bars 本帧应提交给 [ChartViewport.zoom] 的**根数步进**（0 = 本帧不提交，可正可负）
+     * @property remainder 尚未凑够一根而攒下的**根数**余量
+     *
+     * 为什么提交的是「根数」而不是「因子」：`ChartViewport.zoom()` 最后要把可见根数
+     * `roundToInt()`，**实际生效的变化量未必等于请求的量**。调用方必须把真实生效的
+     * 根数变化回调给 [reportApplied]，否则取整误差会一轮轮混进余量里累积
+     * （实测余量能漂到 -26 根，缩放手感完全脱节）。
+     */
+    data class PinchBar(val bars: Int, val remainder: Float)
+
+    /**
+     * 把每一帧的捏合因子累积成「真正能改变可见根数」的根数步进。
+     *
+     * ## 要解决什么
+     *
+     * 不能逐帧直接 `zoom()`：`ChartViewport.zoom()` 内部要对可见根数
+     * `roundToInt()`。可见 120 根时，手指缓慢张开一帧只让间距变 1px
+     * （因子约 1.0033），`120 * 1.0033 = 120.4` 一取整又回到 **120** ——
+     * 每帧都被抹平，表现为「手指慢慢捏了半天，图纹丝不动」。
+     * 只有快速大幅捏合（单帧变化超过半根）才看得出效果，
+     * 这正是「双指缩放时灵时不灵 / 无法放大放小」的根因。
+     *
+     * ## 为什么余量以「根数」而不是「对数」记账（写错过两次，务必看）
+     *
+     * 直觉做法是把因子取对数后累加，凑够 `stepLog = ln((bars+1)/bars)` 再提交。
+     * 但 `stepLog` **随 bars 变**、bars 又随每次提交而变，旧对数换到新单位下不再成立：
+     * 要么被误判成「没攒够」而丢量，要么被当成「攒了很多」而**一帧冲过头**。
+     *
+     * ## 为什么必须允许回调真实生效量
+     *
+     * 余量改用根数记账后，仍然会漂：因为 `zoom()` 收到因子 `(bars+1)/bars` 后
+     * 走的是 `(visibleBars * factor).roundToInt()`，而取整结果**不等于 bars±1**
+     * （浮点误差 + 锚点反推都会掺进来）。这部分差额若不校正，会被当成「手指没捏完的量」
+     * 留在余量里，一帧帧累加就成了持续的偏置。
+     *
+     * 所以调用方在 `zoom()` 之后**必须**把真实生效的根数变化调 [reportApplied] 报回来，
+     * 由它扣掉余量。只提交不校正 = 手感会慢慢跑偏。
+     *
+     * @param remainder 上一帧留下的**根数**余量（不是对数）
+     * @param factor 本帧的捏合因子（来自 [pinchFactor]）
+     * @param visibleBars 当前可见根数（用于把因子折算成根数）
+     */
+    fun accumulatePinch(remainder: Float, factor: Float, visibleBars: Int): PinchBar {
+        if (!factor.isFinite() || factor <= 0f) return PinchBar(0, remainder)
+        val bars = visibleBars.coerceAtLeast(1)
+        val ratio = factor.coerceIn(MIN_RATIO, MAX_RATIO).toDouble()
+        // 因子 → 根数：在「bars 根占满一屏」的假设下，可见根数变为 bars * ratio，
+        // 因此根数增量 = bars * (ratio - 1)。
+        // 注意 ratio < 1（张开手指，间距变大）→ 增量为负 → 可见根数变少 = 放大。
+        // 这与 TradingView 一致：张开 = 放大 = 看得更少更细；合拢 = 缩小 = 看得更多。
+        val total = remainder + (bars * (ratio - 1.0)).toFloat()
+        if (!total.isFinite()) return PinchBar(0, remainder)
+        // 没攒够一根：本帧不缩放，余量留到下一帧（这是「缓慢捏合仍生效」的关键）
+        val whole = total.toInt()
+        if (whole == 0) return PinchBar(0, total)
+        // 每帧最多走一根：既不会把攒下的量一次放完（冲过头），也不会清零丢量。
+        // 快速张合时每帧都能提交一根，累积起来自然就是连续缩放。
+        val step = whole.coerceIn(-1, 1)
+        return PinchBar(bars = step, remainder = total - step)
+    }
+
+    /**
+     * 把「实际生效的根数变化」从余量里扣掉 —— 见 [accumulatePinch] 的说明。
+     *
+     * @param remainder [accumulatePinch] 返回的余量
+     * @param requestedBars 本帧请求提交的根数（[PinchBar.bars]）
+     * @param appliedBars 调用方实际生效的根数变化（新 visibleBars - 旧 visibleBars）
+     */
+    fun reportApplied(remainder: Float, requestedBars: Int, appliedBars: Int): Float {
+        if (requestedBars == 0) return remainder
+        // 请求 step 根、实际只生效 appliedBars 根时，差额要退回余量里下次再用
+        val corrected = remainder + (requestedBars - appliedBars)
+        return corrected
+    }
+
     const val MIN_RATIO = 0.5f
     const val MAX_RATIO = 2f
 }

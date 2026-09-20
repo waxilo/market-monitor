@@ -44,6 +44,8 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     private data class Candidate(
         val id: SymbolId,
         val baseAsset: String,
+        /** 计价币。排序时用于把 USDT 对排到法币对前面，见 [SearchRanking.quotePriority]。 */
+        val quoteAsset: String,
         val ticker: MarketTicker?,
         val meta: InstrumentMeta?,
         val watched: Boolean,
@@ -62,7 +64,10 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
                 Candidate(
                     id = id,
                     baseAsset = metas[id]?.baseAsset ?: id.symbol,
-
+                    // 元数据缺失时退回「用交易对名剥掉币种」推断，
+                    // 这样冷启动（instrument 还没同步）也不会让计价币优先级失效。
+                    quoteAsset = metas[id]?.quoteAsset
+                        ?: id.symbol.removePrefix(metas[id]?.baseAsset ?: ""),
                     ticker = bySymbol[id],
                     meta = metas[id],
                     watched = id in watched,
@@ -74,16 +79,32 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     val state: StateFlow<SearchUiState> = combine(query, market, source) { text, selected, candidates ->
         val keyword = text.trim()
         val matched = candidates
-            .filter { keyword.isEmpty() || it.matches(keyword) }
+            .mapNotNull { candidate -> candidate.rank(keyword)?.let { candidate to it } }
+            // 排序优先级（PRD FR-1.2 的「搜索结果要有优先级」）：
+            // ① 自选置顶：已经在自选里的标的优先，方便快速回到常看的那几个。
+            // ② 匹配质量分层：精确币种 > 币种前缀 > 交易对前缀 > 交易对包含。
+            //    搜索 "btc" 时 BTCUSDT 必须排在 1INCHBTC / AAVEBTC 之前 ——
+            //    这些是「BTC 计价」的交易对，币种本身并不是 BTC。
+            // ③ 计价币优先级：同一层里 USDT 对排在法币对前面。
+            //    这一条**不能省**：`ticker` 表在冷启动/同步失败时是空的，
+            //    那时 quoteVolume 全是 0，按成交量排等于没排，顺序会掉回字母序 ——
+            //    实测 BTCUSDT 因此掉到第 32/35 名（前面全是 BTCAEUR/BTCARS），
+            //    这正是「搜 btc 搜不到比特币」的另一半原因。
+            // ④ 有行情时再按成交额降序，让流动性好的标的先出现。
+            // ⑤ 最后才用交易对名兜底，保证顺序稳定不跳动。
             .sortedWith(
-                compareByDescending<Candidate> { it.watched }
-                    .thenByDescending { it.ticker?.quoteVolume ?: BigDecimal.ZERO }
-                    .thenBy { it.id.symbol },
+                compareByDescending<Pair<Candidate, Int>> { it.first.watched }
+                    .thenBy { it.second }
+                    .thenBy { SearchRanking.quotePriority(it.first.quoteAsset) }
+                    .thenByDescending { it.first.ticker?.quoteVolume ?: BigDecimal.ZERO }
+                    .thenBy { it.first.id.symbol },
             )
+            .take(MAX_RESULTS)
+            .map { it.first.toRow() }
         SearchUiState(
             market = selected,
             query = text,
-            rows = matched.take(MAX_RESULTS).map { it.toRow() },
+            rows = matched,
             emptyReason = when {
                 candidates.isEmpty() -> "本地还没有该市场的标的，先回首页刷新一次行情"
                 matched.isEmpty() && keyword.isNotEmpty() -> "没有匹配「$keyword」的交易对"
@@ -110,10 +131,11 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    private fun Candidate.matches(keyword: String): Boolean {
-        val upper = keyword.uppercase()
-        return id.symbol.contains(upper) || baseAsset.uppercase().contains(upper)
-    }
+    /**
+     * 匹配质量分层，见 [SearchRanking.rank]（抽成纯函数以便单测覆盖）。
+     */
+    private fun Candidate.rank(keyword: String): Int? =
+        SearchRanking.rank(symbol = id.symbol, baseAsset = baseAsset, keyword = keyword)
 
     private fun Candidate.toRow() = TickerRow(
         id = id,

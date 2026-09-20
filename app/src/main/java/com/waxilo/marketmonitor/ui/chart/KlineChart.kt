@@ -108,6 +108,17 @@ fun KlineChart(
      */
     var barPanRemainder by remember { mutableFloatStateOf(0f) }
 
+    /**
+     * 双指捏合的对数余量。
+     *
+     * 与 [barPanRemainder] 同一个道理，但作用在**乘性**的缩放上：
+     * `ChartViewport.zoom()` 最后要把可见根数 `roundToInt()`，
+     * 可见 120 根时缓慢张开一帧只让因子到 0.997，`120 * 0.997 ≈ 119.6`
+     * 取整又回到 120 —— 每帧都被抹平，手指慢慢捏就完全没反应。
+     * 这里把 `ln(factor)` 攒起来，凑够「一根可见变化」的对数当量再一次性提交。
+     */
+    var pinchRemainder by remember { mutableFloatStateOf(0f) }
+
     val geo = remember(canvasSize, density, series.subPanes.size) {
         ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.LEGEND_HEIGHT_DP)
     }
@@ -150,12 +161,14 @@ fun KlineChart(
         pricePan = 0f
         // 横向零头按「根数」计，换周期后 slot 变了，旧零头已无意义
         barPanRemainder = 0f
+        pinchRemainder = 0f
     }
     // 换标的同理：跨标的的纵向缩放/平移没有可比性，必须复位
     LaunchedEffect(symbolKey) {
         priceZoom = 1f
         pricePan = 0f
         barPanRemainder = 0f
+        pinchRemainder = 0f
     }
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
@@ -181,7 +194,10 @@ fun KlineChart(
                         touchSlop = viewConfiguration.touchSlop,
                         plotWidth = geo.plotWidthPx,
                         plotHeight = geo.mainHeightPx,
-                        onGestureStart = { barPanRemainder = 0f },
+                        onGestureStart = {
+                            barPanRemainder = 0f
+                            pinchRemainder = 0f
+                        },
                         onPan = { deltaPx ->
                             val slot = geo.slot(viewport.clamp().visibleBars)
                             // 换算成「整根 + 余量」：单帧位移通常不足一根，
@@ -202,7 +218,30 @@ fun KlineChart(
                             }
                         },
                         onZoom = { barFactor, anchorX ->
-                            viewport = viewport.zoom(barFactor, anchorX / geo.plotWidthPx)
+                            // 逐帧因子太小会被 zoom() 里的 roundToInt 抹平，
+                            // 必须先把「不足一根」的零头攒起来（与横向平移同一套思路）。
+                            val before = viewport.clamp().visibleBars
+                            val step = ChartGesture.accumulatePinch(
+                                remainder = pinchRemainder,
+                                factor = barFactor,
+                                visibleBars = before,
+                            )
+                            if (step.bars != 0) {
+                                viewport = viewport.zoom(
+                                    barFactor = (before + step.bars).toFloat() / before,
+                                    anchorRatio = anchorX / geo.plotWidthPx,
+                                )
+                                // zoom() 内部 roundToInt，实际生效的根数未必等于请求的 step，
+                                // 差额必须退回余量，否则取整误差会逐帧累积成偏置。
+                                val applied = viewport.clamp().visibleBars - before
+                                pinchRemainder = ChartGesture.reportApplied(
+                                    remainder = step.remainder,
+                                    requestedBars = step.bars,
+                                    appliedBars = applied,
+                                )
+                            } else {
+                                pinchRemainder = step.remainder
+                            }
                         },
                         onPriceZoom = { factor ->
                             // 用 autoRange 当基准算钳制边界，不能传当前量程（会越缩越跑）

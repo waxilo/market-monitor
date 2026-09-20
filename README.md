@@ -51,9 +51,9 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.6.0` |
-| versionCode | `8` |
-| 最新 tag | `0.6.0` |
+| versionName | `0.7.0` |
+| versionCode | `9` |
+| 最新 tag | `0.7.0` |
 | 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（当前为 CI 随机 debug 签名，见下方签名问题），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
@@ -106,3 +106,44 @@ git push origin main 0.2.0
 ⚠️ **签名一旦更换，线上已发布的老版本（≤ 0.5.0）就再也无法应用内升级**，那批用户必须卸载重装。
 另：本地验证更新功能时，**不要拿本地 debug 包去覆盖官方 Release 包**（签名天然不同，会误判成功能损坏）；
 要复现完整安装请先 `adb uninstall`，或让本地包使用与线上相同的密钥。
+
+## 排查搜索问题时容易踩的三个坑
+
+**① 先确认输入框里真的有字。** 空查询时展示的是全量标的按字母序截断的前 80 个
+（`0GUSDT / 1000CATUSDT …`），`BTCUSDT` 在 3705 个标的里排第 **144** 名，首屏当然没有。
+这**不是**排序 bug。曾因此误判过一次：`adb shell input text` 没落到输入框上，
+看到的是空查询首屏，却被当成「搜了 btc 却搜不到比特币」的证据。
+判据：读 `uiautomator dump` 里输入框的 `text`，为空就是没输入。
+
+**② 截图/dump 前必须先把列表滚回顶部。** 这条代价最大：用 `input swipe` 翻页找某个标的之后，
+**滚动位置会一直保留**，下一次 `uiautomator dump` 读到的是列表中段的行，
+却被当成「首屏」用来推断排序 —— 于是「`BTCDOWNUSDT` 排在 `BTCUSDT` 前面」这个结论
+其实是读到了中段。做排序验证前先反复 `input swipe y_bottom → y_top` 回到顶部，
+或干脆重启应用。
+
+**③ `ticker` 表在模拟器上恒空**（无外网），此时所有 `quoteVolume` 都是 `BigDecimal.ZERO`，
+按成交量排序等价于不排序 —— 顺序会掉回字母序，`BTCUSDT` 实测会掉到第 32/35 名。
+这正是 `SearchRanking.quotePriority` 必须存在的原因：它不依赖行情。
+所以**不要用「模拟器上排得对不对」来验证成交量相关的排序**，那部分在模拟器上永远不生效。
+
+### 排序结论的可信来源
+
+排序是纯逻辑，**在 JVM 单测里断言**，不要靠截图推断。
+真机上要确认时，最省事的是打一行日志把 `Take` 之后的前 9 名连同 `baseAsset` 打出来 ——
+一次就能看清「算出来的顺序」与「屏幕上的顺序」是否一致：
+
+```kotlin
+.also { rows ->
+    if (keyword.equals("btc", ignoreCase = true)) {
+        Log.i("SEARCHDIAG", "top9=" + rows.take(9).joinToString(",") {
+            "${it.id.symbol}(base=${it.baseAsset})" })
+    }
+}
+```
+
+实测输出（0.7.0，`instrument` 3705 行、`ticker` 为空）：
+```
+kw=btc cands=3705 rows=80
+top9=BTCUSDT(base=BTC),BTCUSDC(base=BTC),BTCFDUSD(base=BTC),BTCTUSD(base=BTC),
+     BTCEUR(base=BTC),BTCTRY(base=BTC),BTCAEUR(base=BTC),BTCARS(base=BTC),BTCAUD(base=BTC)
+```
