@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   release:
-    name: Build debug APK and publish release
+    name: Build signed release APK and publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -35,8 +35,51 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode signing keystore
+        # 签名必须逐版本一致，否则应用内更新永远装不上（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+        # 密钥来自仓库 Secrets，绝不落进仓库；这里只解码到 runner 的临时目录。
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "${KEYSTORE_BASE64:-}" ]; then
+            echo "::error::缺少 KEYSTORE_BASE64，无法保证签名一致。请先配置签名 Secrets。"
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/signing"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/signing/release.keystore"
+          echo "KEYSTORE_FILE=$RUNNER_TEMP/signing/release.keystore" >> "$GITHUB_ENV"
+
       - name: Build
-        run: ./gradlew --no-daemon assembleDebug
+        env:
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      - name: Verify signature is consistent with the pinned key
+        # 用与 Secrets 同一把密钥的证书指纹做断言：签名跑偏时在这里就红，而不是等用户装不上。
+        # 必须用 apksigner：AGP 默认只做 v2/v3 签名，APK 里没有 META-INF/*.RSA，
+        # `keytool -printcert -jarfile` 会报「不是已签名的 jar 文件」。
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -f "$APK"
+          # 期望指纹：本仓库固定的发布密钥证书 SHA-256（见 README「签名」章节）
+          EXPECTED="cf2e20c74d1edd4d1fb290afee3b68ed1a18e20ac70a89e4ab5c43ec2d52f034"
+          APKSIGNER="$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -1)/apksigner"
+          echo "--- apksigner verify ---"
+          "$APKSIGNER" verify --print-certs "$APK"
+          # 取「Signer #1 certificate SHA-256 digest」，去掉冒号转小写后比对
+          ACTUAL=$("$APKSIGNER" verify --print-certs "$APK" \
+            | grep 'certificate SHA-256 digest' | head -1 \
+            | sed 's/.*digest: *//' | tr -d ':\r' | tr 'A-Z' 'a-z')
+          echo "apk cert sha256: ${ACTUAL:-<empty>}"
+          echo "expected       : $EXPECTED"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::APK 签名与固定密钥不符，应用内更新会装不上。"
+            exit 1
+          fi
 
       - name: Stage artifacts
         run: |
@@ -44,7 +87,7 @@ jobs:
           mkdir -p dist
           # 直接产出带版本号的包名，边车文件必须叫 `<apk>.sha256`，App 端按后缀配对。
           APK="dist/market-monitor-$GITHUB_REF_NAME.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APK"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
           sha256sum "$APK" | awk '{print $1}' > "$APK.sha256"
           ls -l dist
 

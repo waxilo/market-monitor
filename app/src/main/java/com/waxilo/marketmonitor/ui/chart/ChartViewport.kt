@@ -8,12 +8,23 @@ import kotlin.math.roundToInt
 
 /**
  * 图表可视窗口（PRD FR-2.1 的缩放与平移）。
- * 只以「蜡烛根数」为单位表达，不碰像素与 Compose 类型，因此在 JVM 单测里可穷举；
- * 像素换算留在绘制层做。
+ *
+ * **这里只存「用户意图」两个量**：[visibleBars]（看多宽）与 [rightOffset]（右端停在哪儿）。
+ * 序列长度 `barCount` **不是视窗的状态，而是每次查询时的入参** —— 它是数据层的投影，
+ * 存进来就必须和 `series.size` 保持同步，而「保持同步」正是历史上出问题的地方：
+ *
+ * > 旧版把 `barCount` 存成字段，靠 `LaunchedEffect(series.size)` 事后对齐。
+ * > 但 effect 在组合结束后的副作用里才跑，不参与当前帧绘制 —— 首个「数据已到、
+ * > 视窗未对齐」的帧里 `barCount` 还是 0（初始值），`window()`/`clamp()` 全按 0 算，
+ * > 量程与窗口一起错位，表现为「首次进入 K 线图挤在一角，切一下周期才恢复」。
+ *
+ * 改成入参之后，`barCount` 与 `series.size` 在**同一个表达式里**取值，
+ * 结构上不可能再脱钩，那几条对齐用的 `LaunchedEffect` 也随之删掉。
+ *
+ * 因为不碰像素与 Compose 类型，本类在 JVM 单测里可穷举。
  */
 data class ChartViewport(
-    val barCount: Int,
-    val visibleBars: Int,
+    val visibleBars: Int = DEFAULT_VISIBLE,
     /**
      * 右端**越过最新一根**空出的根数。
      *
@@ -30,10 +41,10 @@ data class ChartViewport(
 ) {
 
     /** 单屏最少 15 根（再多影线就糊成一条线），最多不超过序列长度与 [MAX_BARS]。 */
-    private fun visibleBound(): IntRange =
+    private fun visibleBound(barCount: Int): IntRange =
         min(MIN_BARS, max(1, barCount))..min(max(1, barCount), MAX_BARS)
 
-    private fun effectiveVisible(): Int = visibleBars.coerceIn(visibleBound())
+    private fun effectiveVisible(barCount: Int): Int = visibleBars.coerceIn(visibleBound(barCount))
 
     /**
      * 右侧最多能留出多少根空白（让最新一根可以被推到屏幕中间偏左）。
@@ -45,8 +56,12 @@ data class ChartViewport(
     private fun maxRightBlank(visible: Int): Int =
         max(0, (visible * (1f - MIN_VISIBLE_SHARE)).toInt())
 
-    fun clamp(): ChartViewport {
-        val visible = effectiveVisible()
+    /**
+     * 把意图夹到 [barCount] 允许的范围内。每次查询前都会调用，
+     * 因此字段里允许短暂存在越界值（比如刚缩放完还没换过序列）。
+     */
+    fun clamp(barCount: Int): ChartViewport {
+        val visible = effectiveVisible(barCount)
         // 左界：最多把窗口右端推到「只看得到 1 根」之前 —— 即移出 (barCount-visible) 根历史
         val minOffset = -max(0, barCount - visible)
         // 右界：最新一根被推到屏幕内偏左，右侧最多留 maxRightBlank 根空白
@@ -61,10 +76,10 @@ data class ChartViewport(
      * 本函数把它夹回末根 —— 所有**按索引取数据**的地方都用它（索引必须安全）。
      * 需要「含空白的完整绘图区」的地方用 [plotRange]。
      */
-    fun window(): IntRange {
+    fun window(barCount: Int): IntRange {
         if (barCount <= 0) return 1..0
-        val current = clamp()
-        val end = (current.barCount - 1 + current.rightOffset).coerceIn(0, current.barCount - 1)
+        val current = clamp(barCount)
+        val end = (barCount - 1 + current.rightOffset).coerceIn(0, barCount - 1)
         val start = (end - current.visibleBars + 1).coerceIn(0, end)
         return start..end
     }
@@ -75,46 +90,41 @@ data class ChartViewport(
      * 供绘制层做「横向位置/网格/时间轴刻度」这类**纯几何**计算：
      * 越界的位置由 `xOf` 落到位图外，再由 `clipRect` 裁掉，不需要索引数据。
      */
-    fun plotRange(): IntRange {
+    fun plotRange(barCount: Int): IntRange {
         if (barCount <= 0) return 1..0
-        val current = clamp()
-        val end = current.barCount - 1 + current.rightOffset
+        val current = clamp(barCount)
+        val end = barCount - 1 + current.rightOffset
         return (end - current.visibleBars + 1)..end
     }
 
-    fun startIndex(): Int = plotRange().first
-    fun endIndex(): Int = plotRange().last
+    fun startIndex(barCount: Int): Int = plotRange(barCount).first
+    fun endIndex(barCount: Int): Int = plotRange(barCount).last
 
     /**
      * 平移：[deltaBars] > 0 表示手指往右移 = 看更早的数据（窗口左移）；
      * 负值表示手指往左移 = 把最新一根往屏幕里推，右侧露出空白。
      */
-    fun pan(deltaBars: Float): ChartViewport =
-        copy(rightOffset = rightOffset - deltaBars.roundToInt()).clamp()
+    fun pan(deltaBars: Float, barCount: Int): ChartViewport =
+        copy(rightOffset = rightOffset - deltaBars.roundToInt()).clamp(barCount)
 
     /**
      * 缩放：[barFactor] 为新可见根数 / 旧可见根数（双指张开 <1，捏合 >1）。
      * [anchorRatio] 为手势焦点在窗口内的横向位置（0 左端、1 右端），缩放时该处的蜡烛保持不动。
      */
-    fun zoom(barFactor: Float, anchorRatio: Float = 1f): ChartViewport {
-        val current = clamp()
-        if (current.barCount <= 0) return current
+    fun zoom(barFactor: Float, anchorRatio: Float = 1f, barCount: Int): ChartViewport {
+        val current = clamp(barCount)
+        if (barCount <= 0) return current
         val target = (current.visibleBars * barFactor.coerceIn(0.05f, 20f)).roundToInt()
-            .coerceIn(current.visibleBound())
+            .coerceIn(visibleBound(barCount))
         // 当前绘图区左端 = (barCount - 1 + O) - V + 1 = barCount + O - V
-        val start = current.barCount + current.rightOffset - current.visibleBars
+        val start = barCount + current.rightOffset - current.visibleBars
         val ratio = anchorRatio.coerceIn(0f, 1f)
         val anchor = start + (current.visibleBars * ratio).roundToInt()
         val newStart = anchor - (target * ratio).roundToInt()
         // 反推 O'：新右端 newStart + target - 1 应等于 barCount - 1 + O'
         //   => O' = newStart + target - barCount
-        return ChartViewport(current.barCount, target, newStart + target - current.barCount).clamp()
+        return ChartViewport(target, newStart + target - barCount).clamp(barCount)
     }
-
-    /** 序列变长（新蜡烛或翻页）后维持同一右端视感：默认贴回最新。 */
-    fun resize(newBarCount: Int, keepRightOffset: Boolean = false): ChartViewport =
-        if (keepRightOffset) copy(barCount = newBarCount).clamp()
-        else ChartViewport(newBarCount, effectiveVisible(), 0).clamp()
 
     /**
      * 第 [index] 根在**绘图区**内的归一化横向位置（0..1）；窗口外返回 NaN。
@@ -122,8 +132,8 @@ data class ChartViewport(
      * 用 [plotRange] 而非 [window]：右侧留白时两者起点/终点都不同，
      * 用 [window] 算会让十字光标的位置整体偏移。
      */
-    fun fractionOf(index: Int): Float {
-        val range = plotRange()
+    fun fractionOf(index: Int, barCount: Int): Float {
+        val range = plotRange(barCount)
         if (index !in range || range.last == range.first) return Float.NaN
         return (index - range.first).toFloat() / range.last.minus(range.first).toFloat()
     }
@@ -134,8 +144,8 @@ data class ChartViewport(
      * 结果**夹回 `0..barCount-1`**：右侧留白区内按下时几何上落在最后一根之后，
      * 那个位置没有数据，返回末根是最贴近的语义（而不是返回一个会越界的下标）。
      */
-    fun indexAt(fraction: Float): Int {
-        val range = plotRange()
+    fun indexAt(fraction: Float, barCount: Int): Int {
+        val range = plotRange(barCount)
         if (range.first > range.last) return -1
         val ratio = fraction.coerceIn(0f, 1f)
         val raw = range.first + (ratio * (range.last - range.first)).roundToInt()
@@ -156,8 +166,11 @@ data class ChartViewport(
          */
         const val MIN_VISIBLE_SHARE = 0.25f
 
-        fun initial(barCount: Int, visibleBars: Int = DEFAULT_VISIBLE): ChartViewport =
-            ChartViewport(barCount, min(visibleBars, max(1, barCount)), 0).clamp()
+        /**
+         * 初始视窗：贴最新价、默认宽度。**与序列长度无关** ——
+         * 宽度会在 `clamp(barCount)` 里按实际根数收窄，因此拿到短序列也安全。
+         */
+        fun initial(): ChartViewport = ChartViewport(DEFAULT_VISIBLE, 0)
     }
 }
 

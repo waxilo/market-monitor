@@ -10,6 +10,10 @@ captures/
 *.apk
 *.keystore
 !debug.keystore
+# base64 备份同样是私钥明文，绝不入库
+*.keystore.base64
+# 签名密钥路径与口令，绝不入库（CI 走 Secrets，本地放仓库根）
+keystore.properties
 
 # AI 工具产物：保留 memory 笔记（对后续会话有价值），但别把临时截图/中间产物提交进去
 .workbuddy/tmp/

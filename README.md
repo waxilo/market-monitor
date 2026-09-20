@@ -51,10 +51,10 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.7.0` |
-| versionCode | `9` |
-| 最新 tag | `0.7.0` |
-| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（当前为 CI 随机 debug 签名，见下方签名问题），边车 `<apk>.sha256` |
+| versionName | `0.7.1` |
+| versionCode | `10` |
+| 最新 tag | `0.7.1` |
+| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
 `本地文件#远端名` 写法不生效，用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
@@ -74,36 +74,47 @@ git tag 0.2.0
 git push origin main 0.2.0
 ```
 
-4. `Release` workflow 由 tag 触发（`v*` 与裸版本号都能触发），构建 debug APK、算 SHA-256，
+4. `Release` workflow 由 tag 触发（`v*` 与裸版本号都能触发），解码签名密钥后构建 **release APK**、算 SHA-256，
    创建同名 GitHub Release。应用内更新读取 `releases/latest` 的 tag（**不带 `v` 前缀**）与 `versionName` 比较，
    所以优先打裸版本号 tag。
 5. 若推送 tag 后没看到 Release 运行，手动补一次：`gh workflow run release.yml --ref <tag>`。
 6. 发版前先确认 tag 不存在（`git tag -l`），并确认要发的改动**已经提交** —— 曾出现「线上 tag 已存在、而本地改动全未提交」的组合，那会误以为改动已发布。
 
-### ⚠️ 已知阻塞问题：签名未固定，应用内更新装不上
+## 签名：应用内更新的前提
 
-`app/build.gradle.kts` 目前**没有配置 `signingConfig`**，`release.yml` 直接用 `./gradlew assembleDebug`，
-即依赖 Gradle 自动生成的 debug keystore。而 GitHub runner 是一次性的，**每次发版都会生成一把新的密钥**，
-于是相邻两个 Release 的签名并不相同：
+应用内更新的本质是「新包覆盖安装旧包」，而 Android 只接受**同一把密钥**签出的包。
+因此发布密钥必须固定 —— CI 上一次性的 debug keystore 会让每个版本换一把钥匙，
+表现为下载完成后安装报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`。
+
+### 当前配置
+
+密钥不入库，只以 base64 存在仓库 Secrets 里：
+
+| Secret | 含义 |
+| --- | --- |
+| `KEYSTORE_BASE64` | keystore 文件的 base64 |
+| `KEY_ALIAS` | 密钥别名（`market-monitor`） |
+| `KEYSTORE_PASSWORD` | keystore 口令 |
+| `KEY_PASSWORD` | 密钥口令 |
+
+`release.yml` 解码到 runner 临时目录后注入 `KEYSTORE_FILE` 环境变量；
+`app/build.gradle.kts` 的 `android { signingConfigs }` 从该变量（CI）或仓库根的
+`keystore.properties`（本地，已 gitignore）读取，挂在 `release` buildType 上。
+
+**发布密钥证书 SHA-256 指纹**（换密钥必须同步改 `release.yml` 里的断言）：
 
 ```
-0.5.0 → SHA-256 ad9473d7086fd239adb54550cec0543d702f6c15f8e0033dca647921d85cb55b
-0.6.0 → SHA-256 99c7af161c47f8d3bc612e1f1d169a4d33beda36ffafb324d1dbb15249fc3691
+cf2e20c74d1edd4d1fb290afee3b68ed1a18e20ac70a89e4ab5c43ec2d52f034
 ```
 
-后果是覆盖安装必报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`，
-**真实用户无法通过应用内更新升级，只能卸载重装**。
+### 设计取舍
 
-> 这个问题的隐蔽之处在于：「检查更新」提示一直正常（`releases/latest` + `versionName` 比较是另一套机制），
-> 只有走到安装那一步才暴露。
+- **缺密钥时不报错，降级到 debug 签名**：本地开发和跑单测不该被一把生产密钥卡住。
+  发布流水线会显式断言 `KEYSTORE_BASE64` 存在并用指纹校验产物，**签名跑偏在 CI 就红**，不会漏到用户手里。
+- **只做 v2 签名**（AGP 默认），因此 APK 里没有 `META-INF/*.RSA`。
+  ⚠️ 校验指纹必须用 `apksigner verify --print-certs`，`keytool -printcert -jarfile` 会报「不是已签名的 jar 文件」。
 
-修复方向（二选一，需一次定死）：
-
-1. **固定 debug keystore**：把一把 `debug.keystore` 入库（或存为 Secret），在 `build.gradle.kts` 里显式指定 `signingConfigs.debug.storeFile`。
-2. **改用正式 release keystore**（推荐）：keystore base64 存入 Secrets（`KEYSTORE_BASE64` / `KEY_ALIAS` / `KEYSTORE_PASSWORD` / `KEY_PASSWORD`），
-   `release.yml` 解码后在 `release` buildType 挂上 `signingConfig`，构建 `assembleRelease`。
-
-⚠️ **签名一旦更换，线上已发布的老版本（≤ 0.5.0）就再也无法应用内升级**，那批用户必须卸载重装。
+⚠️ **签名一旦更换，线上已发布的老版本就再也无法应用内升级**，那批用户必须卸载重装。
 另：本地验证更新功能时，**不要拿本地 debug 包去覆盖官方 Release 包**（签名天然不同，会误判成功能损坏）；
 要复现完整安装请先 `adb uninstall`，或让本地包使用与线上相同的密钥。
 

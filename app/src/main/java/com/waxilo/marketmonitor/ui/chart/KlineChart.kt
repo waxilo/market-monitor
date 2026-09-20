@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -86,18 +85,33 @@ fun KlineChart(
 ) {
     val density = LocalDensity.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-    var viewport by remember { mutableStateOf(ChartViewport.initial(series.size)) }
-    var crosshair by remember { mutableStateOf<Crosshair?>(null) }
+    /**
+     * 视窗只存「用户意图」（看多宽、右端停哪儿）；序列长度每次查询时作为入参传入。
+     *
+     * `remember` 的 key 就是**换序列的两件事**：换标的与换周期。key 一变就重建视窗，
+     * 复位天然发生在组合期、与 `series` 同帧生效，因此不再需要
+     * `LaunchedEffect(series.size)` 事后对齐、也不再需要两个复位用的 effect。
+     * 副作用里的复位永远慢一帧，而这一帧就是首屏错渲染的全部窗口期。
+     */
+    val barCount = series.size
+    var viewport by remember(symbolKey, interval.storageKey) {
+        mutableStateOf(ChartViewport.initial())
+    }
+    var crosshair by remember(symbolKey, interval.storageKey) { mutableStateOf<Crosshair?>(null) }
     var oldestRequested by remember { mutableLongStateOf(-1L) }
     // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
     val measurer = rememberTextMeasurer()
     /**
      * 纵向缩放倍数（相对主图原始量程）。1f = 自动量程。
      * 手指在**价格轴一侧**上下拖会改它 —— 这是「拉伸/压缩金额刻度」的手势。
+     *
+     * 与 [viewport] 同为「用户意图」，因此挂同一组 key：换标的/换周期一律复位。
+     * 跨标的保留毫无意义（BTC 上 0.2 的位移放到 ETH 上不是同一回事），
+     * 而换周期后价格量级也可能完全不同。
      */
-    var priceZoom by remember { mutableFloatStateOf(1f) }
+    var priceZoom by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(1f) }
     /** 纵向平移（占主图高度的比例）。手指上滑看更低价区。 */
-    var pricePan by remember { mutableFloatStateOf(0f) }
+    var pricePan by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
     /**
      * 横向平移的「不足一根」余量（单位：根）。
      *
@@ -105,8 +119,10 @@ fun KlineChart(
      * （除以 slot 后不足半根）。若直接把每帧的 `deltaPx / slot` 交给 `pan()`，
      * `roundToInt()` 会把每帧的零头全部抹掉 —— 表现为「左右拖完全不动」。
      * 所以把零头攒在这里，凑够一根才提交。
+     *
+     * 挂同一组 key：零头按「根数」计，换周期后每根的像素宽度变了，旧零头已无意义。
      */
-    var barPanRemainder by remember { mutableFloatStateOf(0f) }
+    var barPanRemainder by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
 
     /**
      * 双指捏合的对数余量。
@@ -117,23 +133,31 @@ fun KlineChart(
      * 取整又回到 120 —— 每帧都被抹平，手指慢慢捏就完全没反应。
      * 这里把 `ln(factor)` 攒起来，凑够「一根可见变化」的对数当量再一次性提交。
      */
-    var pinchRemainder by remember { mutableFloatStateOf(0f) }
+    var pinchRemainder by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
 
     val geo = remember(canvasSize, density, series.subPanes.size) {
         ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.LEGEND_HEIGHT_DP)
     }
     /**
+     * 「有数据 + 有尺寸」才允许绘制。
+     *
+     * `ChartGeo.of` 在尺寸还是 [IntSize.Zero] 时会把宽度兜底成 1f（为了让下游除法不炸），
+     * 于是所有以 `plotWidthPx <= 1f` 当哨兵值的判断都依赖这个魔数。
+     * 这里显式算一次，绘制与轴标签共用，避免各写各的判据时漏掉某一个。
+     */
+    val isReady = barCount > 0 && geo.isUsable
+    /**
      * 有数据的区间（**夹在 `0..barCount-1` 内**），只用于「算量程」——
      * 右侧留白那段没有数据，参与算量程会把价格区间拉歪。
      */
-    val dataWindow = remember(viewport, series.size) { viewport.window() }
+    val dataWindow = remember(viewport, barCount) { viewport.window(barCount) }
     /**
      * 绘图区区间（**含右侧留白，可能越出序列末尾**），用于所有横向定位。
      * 与 [dataWindow] 分开是因为两者在「最新 K 线左移留白」时起点不同：
      * 用错会让整排蜡烛横向错位。
      */
-    val plotRange = remember(viewport, series.size) { viewport.plotRange() }
-    val visibleBars = remember(viewport) { viewport.clamp().visibleBars }
+    val plotRange = remember(viewport, barCount) { viewport.plotRange(barCount) }
+    val visibleBars = remember(viewport, barCount) { viewport.clamp(barCount).visibleBars }
     /** 主图自动量程（未叠加用户纵向缩放）。 */
     val autoRange = remember(series, dataWindow.first, dataWindow.last) {
         series.mainRange(dataWindow.first, dataWindow.last)
@@ -145,30 +169,6 @@ fun KlineChart(
     }
     val subRanges = remember(series, dataWindow.first, dataWindow.last) {
         series.subPanes.map { series.subRange(it, dataWindow.first, dataWindow.last) }
-    }
-
-    // 序列变长（新蜡烛、翻页）时保持当前右端视感：
-    // 用户可能正把最新一根推向左边看形态，来了根新蜡烛不该把他弹回最右端。
-    LaunchedEffect(series.size) {
-        if (series.size > 0) viewport = viewport.resize(series.size, keepRightOffset = true)
-    }
-    // 换周期等于换序列，视窗回到默认宽度，否则自定义周期里会带着上一周期的缩放比例
-    LaunchedEffect(interval.storageKey) {
-        viewport = ChartViewport.initial(series.size)
-        crosshair = null
-        // 纵向缩放同样复位：新周期的价格量级可能完全不同，留着旧倍数会离谱
-        priceZoom = 1f
-        pricePan = 0f
-        // 横向零头按「根数」计，换周期后 slot 变了，旧零头已无意义
-        barPanRemainder = 0f
-        pinchRemainder = 0f
-    }
-    // 换标的同理：跨标的的纵向缩放/平移没有可比性，必须复位
-    LaunchedEffect(symbolKey) {
-        priceZoom = 1f
-        pricePan = 0f
-        barPanRemainder = 0f
-        pinchRemainder = 0f
     }
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
@@ -188,7 +188,7 @@ fun KlineChart(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, series.size, visibleBars) {
+                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, barCount, visibleBars) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
@@ -199,16 +199,16 @@ fun KlineChart(
                             pinchRemainder = 0f
                         },
                         onPan = { deltaPx ->
-                            val slot = geo.slot(viewport.clamp().visibleBars)
+                            val slot = geo.slot(viewport.clamp(barCount).visibleBars)
                             // 换算成「整根 + 余量」：单帧位移通常不足一根，
                             // 逐帧取整会把零头全抹掉（历史上表现为横向完全拖不动）。
                             val step = ChartGesture.accumulateBarPan(barPanRemainder, deltaPx, slot)
                             barPanRemainder = step.remainder
                             if (step.bars != 0) {
-                                val moved = viewport.pan(step.bars.toFloat())
+                                val moved = viewport.pan(step.bars.toFloat(), barCount)
                                 viewport = moved
                                 // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）
-                                if (step.bars > 0 && moved.startIndex() == 0) {
+                                if (step.bars > 0 && moved.startIndex(barCount) == 0) {
                                     val oldest = series.candles.firstOrNull()?.openTime ?: 0L
                                     if (oldest != oldestRequested) {
                                         oldestRequested = oldest
@@ -220,7 +220,7 @@ fun KlineChart(
                         onZoom = { barFactor, anchorX ->
                             // 逐帧因子太小会被 zoom() 里的 roundToInt 抹平，
                             // 必须先把「不足一根」的零头攒起来（与横向平移同一套思路）。
-                            val before = viewport.clamp().visibleBars
+                            val before = viewport.clamp(barCount).visibleBars
                             val step = ChartGesture.accumulatePinch(
                                 remainder = pinchRemainder,
                                 factor = barFactor,
@@ -230,10 +230,11 @@ fun KlineChart(
                                 viewport = viewport.zoom(
                                     barFactor = (before + step.bars).toFloat() / before,
                                     anchorRatio = anchorX / geo.plotWidthPx,
+                                    barCount = barCount,
                                 )
                                 // zoom() 内部 roundToInt，实际生效的根数未必等于请求的 step，
                                 // 差额必须退回余量，否则取整误差会逐帧累积成偏置。
-                                val applied = viewport.clamp().visibleBars - before
+                                val applied = viewport.clamp(barCount).visibleBars - before
                                 pinchRemainder = ChartGesture.reportApplied(
                                     remainder = step.remainder,
                                     requestedBars = step.bars,
@@ -260,14 +261,14 @@ fun KlineChart(
                         },
                         onCrosshair = { position ->
                             crosshair = if (position == null) null else {
-                                val index = viewport.indexAt(position.x / geo.plotWidthPx)
+                                val index = viewport.indexAt(position.x / geo.plotWidthPx, barCount)
                                 if (index >= 0) Crosshair(index, position.y) else crosshair
                             }
                         },
                     )
                 },
         ) {
-            if (series.size == 0 || geo.plotWidthPx <= 1f) return@Canvas
+            if (!isReady) return@Canvas
             // 纵向缩放/平移会把 K 线推出量程，`toFraction` 只把结果夹到 [-0.5, 1.5]，
             // 落在边界外的部分仍会被画出来 —— 于是 K 线跑到图例带和时间轴上去。
             // 用 clipRect 把每次绘制限制在本 pane 的矩形里，才是根治。
@@ -297,23 +298,28 @@ fun KlineChart(
             drawCrosshair(crosshair, plotRange, visibleBars, geo, palette)
         }
 
-        PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
-        SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
-        TimeAxisLabels(series, plotRange, visibleBars, geo, interval, density, Modifier.align(Alignment.TopStart))
-        ChartLegend(
-            tooltip = remember(crosshair, series.size, interval, tickSize) {
-                ChartModel.tooltip(
-                    series.candles,
-                    crosshair?.index ?: (series.size - 1),
-                    interval,
-                    tickSize,
-                )
-            },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(start = Spacing.Sm, top = 4.dp),
-            legendMaxWidth = with(density) { geo.plotWidthPx.toDp() } - Spacing.Sm * 2,
-        )
+        if (isReady) {
+            PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
+            SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
+            TimeAxisLabels(
+                series, plotRange, visibleBars, geo, interval, density,
+                Modifier.align(Alignment.TopStart),
+            )
+            ChartLegend(
+                tooltip = remember(crosshair, barCount, interval, tickSize) {
+                    ChartModel.tooltip(
+                        series.candles,
+                        crosshair?.index ?: (barCount - 1),
+                        interval,
+                        tickSize,
+                    )
+                },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(start = Spacing.Sm, top = 4.dp),
+                legendMaxWidth = with(density) { geo.plotWidthPx.toDp() } - Spacing.Sm * 2,
+            )
+        }
         // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
         // 而且没有任何办法回去（双击复位这个手势不显眼）。
         // 位置选**绘图区左下角**：
@@ -405,6 +411,14 @@ private data class ChartPalette(
  * 否则图例是自由流的多行 Text，会直接压在蜡烛和网格上。
  */
 private data class ChartGeo(
+    /**
+     * 画布是否已经量到真实尺寸。
+     *
+     * 首帧 `onSizeChanged` 还没回调，`IntSize.Zero` 会让下方所有 `max(1f, ...)`
+     * 兜底成 1px —— 那是为了让除法不炸的权宜值，**不能当尺寸用**。
+     * 绘制前一律先看这个标志，而不是拿 `plotWidthPx <= 1f` 当哨兵。
+     */
+    val measured: Boolean,
     val plotWidthPx: Float,
     val plotHeightPx: Float,
     val labelWidthPx: Float,
@@ -415,6 +429,9 @@ private data class ChartGeo(
     /** 副图块数；0 表示不显示副图。 */
     val subCount: Int,
 ) {
+    /** 尺寸可用（已量到且宽度足够放下一个像素以上的绘图区）。 */
+    val isUsable: Boolean get() = measured && plotWidthPx > 1f
+
     fun slot(visibleBars: Int): Float = plotWidthPx / max(1, visibleBars)
 
     /** 一根蜡烛的横向中心；窗口起点左侧的蜡烛会落在画布外，由裁剪处理。 */
@@ -455,6 +472,7 @@ private data class ChartGeo(
 
         fun of(size: IntSize, density: Density, subCount: Int, legendHeightDp: Float): ChartGeo =
             with(density) {
+                val measured = size.width > 0 && size.height > 0
                 val label = AXIS_LABEL_WIDTH_DP.dp.toPx()
                 val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
                 val legend = legendHeightDp.dp.toPx()
@@ -465,6 +483,7 @@ private data class ChartGeo(
                 val candles = max(1f, plotHeight - safeLegend)
                 val main = if (subCount > 0) candles * MAIN_SHARE else candles
                 ChartGeo(
+                    measured = measured,
                     plotWidthPx = plotWidth,
                     plotHeightPx = plotHeight,
                     labelWidthPx = label,

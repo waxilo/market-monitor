@@ -58,6 +58,7 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 - 详情页图表 = `ui/chart/KlineChart.kt`（Compose Canvas）+ `ChartSeries`（算什么）+ `ChartViewport`（看哪几根）+ `ChartGeo`（几何分区）。
 - **`KlineChartWebView.kt` 与 `app/src/main/assets/` 已删除**，不要重新引入 WebView。
 - ❗**改动前先 `grep -rn "XXX(" app/src/main/java --include=*.kt` 确认调用点**，别假设「文件存在 = 在用」（历史两次踩坑：完整 Compose 图表零调用点；更新下载能力全实现但 UI 无入口）。
+- 单测基线：**180 个全绿**（2026-09-20）。
 
 ### 指标开关的产品语义
 - **MA 允许全关 = 裸 K 图**，不要加「至少保留一条」兜底。
@@ -83,19 +84,27 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 3. **越界内容必须 `clipRect`**：`ValueRange.toFraction` 只钳到 `[-0.5,1.5]`。主图与**每块副图各自 `clipRect`**；**十字光标不裁**。
 - 纵向缩放以**中位价**为不动点（`ValueRange.center`）；量程钳到原量程 `[0.08, 12]` 倍。
 - 纵向**平移按未缩放的原始量程**折算，不是当前量程。
-- **换标的/换周期都复位 `priceZoom` + `pricePan`**（`KlineChart(symbolKey = state.id.storageKey)`）。
+- **换标的/换周期都复位 `priceZoom` + `pricePan`** —— 做法是 `remember(symbolKey, interval.storageKey)`，**不是 effect**（见「视窗状态模型」）。
 - 手势判定抽在 **`ui/chart/ChartGesture.kt`**（纯函数+单测）：`axisLock(accumX, accumY, threshold): Axis?`（`null` = 未定性，是必需中间态）+ `pinchFactor(previous, current)`（单帧比值钳 `[0.5,2]`）。手势 bug 截图难复现，纯函数断言一目了然。
 - `adb shell input` **不支持多点触控**，双指手势只能靠 `ChartGesture` 单测 + 真机人工确认。
+
+### ❗视窗状态模型（2026-09-20 重构，务必按新 API 写）
+`ChartViewport` **只存「用户意图」两个字段**：`visibleBars` + `rightOffset`。
+**`barCount` 不是字段，是所有方法的显式入参**（`clamp(barCount)` / `window(barCount)` / `plotRange(barCount)` / `pan(d, barCount)` / `zoom(f, anchor, barCount)` / `startIndex(barCount)` / `endIndex(barCount)` / `fractionOf(i, barCount)` / `indexAt(f, barCount)`）。
+- 理由：`barCount` 是数据层投影，存字段就必须和 `series.size` 同步，而「靠 effect 事后对齐」永远慢一帧 ⇒ 首屏按 `barCount = 0` 算 ⇒ 窗口空、量程退化 ⇒ **「首帧 K 线挤在一角，切一下周期才恢复」**。改成入参后二者在同一表达式取值，**结构上不可能脱钩**。
+- `ChartViewport.initial()` **无参**；`resize()` **已删除**（「来了新蜡烛」= `barCount` 变大，`rightOffset = 0` 自然贴回最新）。
+- **复位 = 重建 `remember`**：`viewport`/`crosshair`/`priceZoom`/`pricePan`/`barPanRemainder`/`pinchRemainder` 全挂 `remember(symbolKey, interval.storageKey)`。`KlineChart` 里**没有任何 `LaunchedEffect`**（三条对齐/复位 effect 已删）。
+- ⚠️ **新增「A 必须跟随 B」的状态时别用 `LaunchedEffect` 事后对齐**；把 A 做成 B 的派生量，或挂同一组 `remember` key。`remember { mutableStateOf(f(x)) }` 在 x 首帧为空时是陷阱（定值后不自更新）。
+- 首帧守卫：`ChartGeo.measured`（`size > 0`）+ `isUsable`，`KlineChart` 里 `val isReady = barCount > 0 && geo.isUsable` 统一把关绘制/轴标签/图例。**别再拿 `plotWidthPx <= 1f` 当哨兵**（那是 `max(1f,…)` 的权宜兜底值）。
 
 ### 横向平移与右侧留白
 **`ChartViewport.rightOffset` = 右端越过最新一根空出的根数**（极易搞反）：
 - `0` 贴最新价（默认）；`>0` 最新一根被推向屏幕内偏左、**右侧露出留白**；`<0` 窗口移向更早数据。
-- `end = barCount - 1 + rightOffset`；`pan(deltaBars)` = `rightOffset - round(deltaBars)`（手指右移=看更早=变负）。
-- `clamp()` = `[-(barCount - visible), visible * (1 - MIN_VISIBLE_SHARE)]`；`zoom()` 反推 `O' = newStart + target - barCount`。
+- `end = barCount - 1 + rightOffset`；`pan(deltaBars, barCount)` = `rightOffset - round(deltaBars)`（手指右移=看更早=变负）。
+- `clamp(barCount)` = `[-(barCount - visible), visible * (1 - MIN_VISIBLE_SHARE)]`；`zoom()` 反推 `O' = newStart + target - barCount`。
 - ❌ 旧写法 `end = barCount-1 - rightOffset` + 下界 0 把「看更早」和「右侧留白」混成一个量 ⇒ **最新一根永远顶在最右、往左拖不动**。
 - **`window()` vs `plotRange()` 必须分开**：`window()` 夹在 `0..barCount-1`（算量程/取数据）；`plotRange()` 含留白可越界（横向像素定位/网格/时间轴）。所有 `drawXxx` 的 `xOf` 传 `plotRange`，取数据用 `candles.getOrNull(i) ?: continue`。`indexAt()` 结果**夹回 `0..barCount-1`**。⚠️ 两者只差一个符号，易 grep 漏；用「`plotRange().last > barCount-1` 且 `window().last == barCount-1`」单测钉死。
-- **每帧位移不足一根必须累积**：`pan()` 内 `roundToInt()` 会把 `deltaPx/slot`（<<1）抹成 0 ⇒「横向完全拖不动」。抽成 **`ChartGesture.accumulateBarPan(remainder, pixelDelta, slotPx): BarPan`**，用 `toInt()` **向零取整**保留符号，凑够一根才提交，零头留 `barPanRemainder`。非法输入→本帧无位移但**保留零头**。零头清零时机：`onGestureStart`、换周期、换标的。
-- 新蜡烛到达用 `resize(size, keepRightOffset = true)`，别把用户正推向左边的最新一根弹回最右。
+- **每帧位移不足一根必须累积**：`pan()` 内 `roundToInt()` 会把 `deltaPx/slot`（<<1）抹成 0 ⇒「横向完全拖不动」。抽成 **`ChartGesture.accumulateBarPan(remainder, pixelDelta, slotPx): BarPan`**，用 `toInt()` **向零取整**保留符号，凑够一根才提交，零头留 `barPanRemainder`。非法输入→本帧无位移但**保留零头**。零头清零时机：`onGestureStart`、以及挂 key 重建时（换周期/换标的）。
 - 留白上限复用 `MIN_VISIBLE_SHARE`：`maxRightBlank(visible) = visible * (1 - MIN_VISIBLE_SHARE)`，常量在 **`ChartViewport.companion`**（`ValueRange.companion` 里是别名引用）。⚠️ 它是 `Float`，Double 乘法要 `* MIN_VISIBLE_SHARE.toDouble()`。
 
 ## 列表 Sparkline 的取数回退
@@ -124,15 +133,31 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 ### 造「可更新」场景
 临时把 `versionCode`/`versionName` 压到低于线上最新 tag（如 `6`/`0.4.1`），构建安装后走完整流程，**验证完务必改回真实版本号并重新构建**。
 
-## ❗阻塞级：签名不固定 ⇒ 应用内更新永远装不上（2026-09-20 发现，待修）
-`app/build.gradle.kts` **没有 `signingConfig` 块**，`release.yml` 是裸 `./gradlew assembleDebug` ⇒ 用 Gradle 自动生成的 debug keystore，GitHub runner 是一次性的，**每次发版都生成一把新钥匙**。
-实测取证：
+## ✅ 签名已固定（2026-09-20 修复完成）
+
+原问题：`app/build.gradle.kts` 无 `signingConfig`，`release.yml` 跑 `assembleDebug` ⇒ 用 Gradle 自动生成的 debug keystore，而 GitHub runner 是一次性的，**每次发版一把新钥匙**。实测：
 ```
-0.5.0 → SHA-256 ad9473d7086fd239adb54550cec0543d702f6c15f8e0033dca647921d85cb55b
-0.6.0 → SHA-256 99c7af161c47f8d3bc612e1f1d169a4d33beda36ffafb324d1dbb15249fc3691
+0.5.0 → ad9473d7086fd239adb54550cec0543d702f6c15f8e0033dca647921d85cb55b
+0.6.0 → 99c7af161c47f8d3bc612e1f1d169a4d33beda36ffafb324d1dbb15249fc3691
 覆盖安装 → INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match
 ```
-- **为什么易漏**：「检查更新」一直正常（另一套机制），只有走到安装才暴露。**后果**：真实用户永远无法应用内升级，只能卸载重装。
-- **修法（二选一，需一次性定死）**：① 固定 debug keystore（入库或做成 Secret，显式指定 `signingConfigs.debug.storeFile`）；② 正式 release keystore（推荐）：keystore base64 存 Secrets，`release.yml` 解码，`release` buildType 挂 `signingConfig`，构建 `assembleRelease`。
-- ⚠️ **签名一换，线上老版本（≤0.5.0）再也升不上来**，那批用户必须卸载重装。别反复换签名。
-- ⚠️ **别用「本地 debug 包」去装官方 Release 包**（签名天然不同，会误报成「更新功能坏了」）。要复现完整安装：先 `adb uninstall`，或让本地包用与线上相同密钥。
+**修法（已落地）**：正式 release keystore + Secrets 注入 + `assembleRelease`。
+
+### 固定发布密钥
+- 证书 SHA-256 指纹：**`cf2e20c74d1edd4d1fb290afee3b68ed1a18e20ac70a89e4ab5c43ec2d52f034`**
+- alias `market-monitor`，PKCS12，有效期 30 年；口令见 `.workbuddy/signing/`（该目录不入库）
+- 本地备份：`.workbuddy/signing/release.keystore` + `.base64`；CI 侧：Secrets `KEYSTORE_BASE64`/`KEY_ALIAS`/`KEYSTORE_PASSWORD`/`KEY_PASSWORD`（已写入）
+- ⚠️ **密钥丢失 = 所有用户只能卸载重装**。别换签名。
+
+### 接线方式（照这个写，别改回去）
+- `app/build.gradle.kts` 里 `resolveReleaseKeystore()`：先读 CI 环境变量 `KEYSTORE_FILE`/`KEY_ALIAS`/`KEYSTORE_PASSWORD`/`KEY_PASSWORD`，再读仓库根 `keystore.properties`（已 gitignore）；**都拿不到返回 null ⇒ 降级 debug 签名**（本地开发/单测不该被生产密钥卡住）。
+- 类型必须是 **`com.android.build.api.dsl.ApkSigningConfig`**（不是 `SigningConfig`，后者会报 `ApkSigningConfig? expected`）。
+- `release.yml`：decode `KEYSTORE_BASE64` → `$RUNNER_TEMP/signing/release.keystore` → 写 `$GITHUB_ENV` 的 `KEYSTORE_FILE` → `assembleRelease` → 指纹断言 → 产物 `app-release.apk`。
+- ❗**AGP 默认只做 v2/v3 签名，APK 里没有 `META-INF/*.RSA`** ⇒ 校验指纹**只能用 `apksigner verify --print-certs`**；`keytool -printcert -jarfile` 会报「不是已签名的 jar 文件」。`apksigner` 在 `$ANDROID_HOME/build-tools/<ver>/apksigner`。
+- `release.yml` 里用 `grep 'certificate SHA-256 digest' | sed 's/.*digest: *//' | tr -d ':\r' | tr 'A-Z' 'a-z'` 提指纹（本机实测 MATCH）。
+
+### 本地离线构建
+- 本机 `--offline` 跑 `assembleRelease` 会因 `lint-gradle` 未缓存失败 ⇒ 加 `-x lintVitalAnalyzeRelease -x lintVitalRelease`（**CI 上别加**，CI 有网）。
+- 真机验证更新：`adb uninstall` → 装新签名包 → 再 `adb install -r` 同包（模拟覆盖）⇒ 应报 `Success`。实测已验证通过。
+- MuMu 的 adb 连接会反复 `device offline`，用 `adb reconnect offline` + `wait-for-device` 恢复；且**一条 bat 里连续跑多步 adb 最稳**（分多次调用容易撞上 offline）。
+- ⚠️ **别用「本地 debug 包」去装官方 Release 包**（签名天然不同，会误报成「更新功能坏了」）。

@@ -18,6 +18,9 @@ class ChartModelTest {
     private val day = CandleInterval.of(OfficialInterval.D1)
     private val minuteMs = 60_000L
 
+    /** 手势类测试统一用的序列长度：足够长，任何平移/缩放都不会撞到边界。 */
+    private val BARS = 2_000
+
     private fun candles(count: Int, base: Double = 100.0): List<Kline> = (0 until count).map { i ->
         // 收盘价线性上涨，便于手算指标与涨幅
         val close = base + i
@@ -37,131 +40,151 @@ class ChartModelTest {
     // region 视口
     @Test
     fun `空序列的窗口是空区间`() {
-        assertTrue(ChartViewport(0, 120, 0).window().isEmpty())
+        assertTrue(ChartViewport(120, 0).window(0).isEmpty())
     }
 
     @Test
     fun `序列不足一屏时可见根数收到实际长度`() {
-        val viewport = ChartViewport(barCount = 6, visibleBars = 120).clamp()
+        val viewport = ChartViewport(visibleBars = 120).clamp(barCount = 6)
         assertEquals(6, viewport.visibleBars)
-        assertEquals(0..5, viewport.window())
+        assertEquals(0..5, viewport.window(6))
+    }
+
+    /**
+     * 回归：`barCount` 改成入参之后，「视窗」与「序列长度」不可能再错配。
+     *
+     * 旧版 `barCount` 是字段，靠 `LaunchedEffect` 事后对齐，首个数据已到、
+     * 视窗未对齐的帧会按 `barCount = 0` 算，于是窗口空、量程退化，
+     * 表现为「首次进详情页 K 线挤在一角，切一下周期才恢复」。
+     * 同一个 viewport 现在对不同 barCount 各自给出正确窗口 —— 这才是根因的封堵。
+     */
+    @Test
+    fun `同一视窗对任意序列长度都给出正确窗口`() {
+        val viewport = ChartViewport(visibleBars = 100)
+        // 视窗与序列长度无关：换一个 barCount 就得到那个序列的窗口，不需要任何对齐步骤
+        assertEquals(20..119, viewport.window(120))
+        assertEquals(0..99, viewport.window(100))
+        assertEquals(420..519, viewport.window(520))
+        // 短序列收窄到实际根数，绝不出现空窗口
+        assertEquals(0..5, viewport.window(6))
     }
 
     @Test
     fun `往右拖（看更早）右偏移为负`() {
         // 语义：pan 正数 = 手指右移 = 窗口左移看更早的历史 => rightOffset 变负
-        val moved = ChartViewport(300, 100, 0).pan(20f)
+        val moved = ChartViewport(100, 0).pan(20f, barCount = 300)
         assertEquals(-20, moved.rightOffset)
-        assertEquals(279, moved.endIndex())
+        assertEquals(279, moved.endIndex(300))
     }
 
     @Test
     fun `往更早方向拖到底时停在序列起点`() {
-        val moved = ChartViewport(100, 50, 0).pan(1_000f)
+        val moved = ChartViewport(50, 0).pan(1_000f, barCount = 100)
         // 最多移出 (barCount - visible) 根历史，恰好看得到第 0 根
         assertEquals(-50, moved.rightOffset)
-        assertEquals(0, moved.startIndex())
+        assertEquals(0, moved.startIndex(100))
     }
 
     @Test
     fun `最新一根可以往左拖出右侧留白`() {
         // 用户诉求：最新 K 线不能只顶在最右边，要能把它推到中间偏左，右侧露出空白。
         // 手指往左拖（负 delta）=> rightOffset 变正 => 绘图区右端越出序列末根。
-        val viewport = ChartViewport(300, 100, 0)
-        val moved = viewport.pan(-20f)
+        val viewport = ChartViewport(100, 0)
+        val moved = viewport.pan(-20f, barCount = 300)
         assertEquals(20, moved.rightOffset)
         // 绘图区右端越出序列末根（这就是右侧那段空白）
-        assertEquals(319, moved.endIndex())
+        assertEquals(319, moved.endIndex(300))
         // 但**真实数据**的右端仍是末根，索引安全 —— 不会越界取数据
-        assertEquals(299, moved.window().last)
+        assertEquals(299, moved.window(300).last)
     }
 
     @Test
     fun `可左拖的留白有上限不会拖成一片空白`() {
-        val viewport = ChartViewport(300, 100, 0)
-        val moved = viewport.pan(-10_000f)
+        val viewport = ChartViewport(100, 0)
+        val moved = viewport.pan(-10_000f, barCount = 300)
         // 上限 = visibleBars * (1 - MIN_VISIBLE_SHARE)
         val expected = (100 * (1f - ChartViewport.MIN_VISIBLE_SHARE)).toInt()
         assertEquals(expected, moved.rightOffset)
         // 数据区仍占满可视区的至少 MIN_VISIBLE_SHARE
-        val dataShare = (moved.clamp().visibleBars - moved.rightOffset).toFloat() / moved.clamp().visibleBars
+        val dataShare = (moved.clamp(300).visibleBars - moved.rightOffset).toFloat() / moved.clamp(300).visibleBars
         assertTrue("数据占比 $dataShare 太低", dataShare >= ChartViewport.MIN_VISIBLE_SHARE - 1e-6f)
     }
 
     @Test
     fun `右侧留白时 window 不越界而 plotRange 会越界`() {
-        val viewport = ChartViewport(300, 100, 20).clamp()
+        val viewport = ChartViewport(100, 20).clamp(300)
         // window：夹在 0..barCount-1，索引安全
-        assertEquals(299, viewport.window().last)
-        assertTrue(viewport.window().first >= 0)
+        assertEquals(299, viewport.window(300).last)
+        assertTrue(viewport.window(300).first >= 0)
         // plotRange：含留白，右端越出末根
-        assertEquals(319, viewport.plotRange().last)
-        assertEquals(220, viewport.plotRange().first)
+        assertEquals(319, viewport.plotRange(300).last)
+        assertEquals(220, viewport.plotRange(300).first)
     }
 
     @Test
     fun `右侧留白区内点按十字光标不越界`() {
-        val viewport = ChartViewport(300, 100, 20).clamp()
+        val viewport = ChartViewport(100, 20).clamp(300)
         // 绘图区最右侧（留白区）反查——必须夹回末根，不能返回 319
-        assertEquals(299, viewport.indexAt(1f))
+        assertEquals(299, viewport.indexAt(1f, barCount = 300))
     }
 
     @Test
     fun `横坐标反查与归一化在留白时互为逆运算`() {
-        val viewport = ChartViewport(300, 100, 20).clamp()
-        val index = viewport.indexAt(0.5f)
-        val fraction = viewport.fractionOf(index)
+        val viewport = ChartViewport(100, 20).clamp(300)
+        val index = viewport.indexAt(0.5f, barCount = 300)
+        val fraction = viewport.fractionOf(index, barCount = 300)
         assertTrue("index=$index fraction=$fraction", !fraction.isNaN())
         assertEquals(0.5f, fraction, 0.03f)
     }
 
     @Test
     fun `缩放上下界固定`() {
-        val viewport = ChartViewport(1_000, 100, 0)
-        assertEquals(ChartViewport.MIN_BARS, viewport.zoom(0.0001f).visibleBars)
-        assertEquals(ChartViewport.MAX_BARS, viewport.zoom(1_000f).visibleBars)
+        val viewport = ChartViewport(100, 0)
+        assertEquals(ChartViewport.MIN_BARS, viewport.zoom(0.0001f, barCount = 1_000).visibleBars)
+        assertEquals(ChartViewport.MAX_BARS, viewport.zoom(1_000f, barCount = 1_000).visibleBars)
     }
 
     @Test
     fun `缩放时锚点处的蜡烛保持不动`() {
         // 负右偏移 = 正在看更早的历史
-        val viewport = ChartViewport(1_000, 100, -200)
-        val start = viewport.startIndex()
-        val anchored = viewport.zoom(0.5f, anchorRatio = 0f)
+        val viewport = ChartViewport(100, -200)
+        val start = viewport.startIndex(1_000)
+        val anchored = viewport.zoom(0.5f, anchorRatio = 0f, barCount = 1_000)
         // 锚点在左端：缩放后左端仍是同一根蜡烛
-        assertEquals(start, anchored.startIndex())
+        assertEquals(start, anchored.startIndex(1_000))
     }
 
     @Test
     fun `右侧留白时缩放锚点依然不动`() {
-        val viewport = ChartViewport(1_000, 100, 30).clamp()
-        val start = viewport.startIndex()
-        val anchored = viewport.zoom(0.5f, anchorRatio = 0f)
+        val viewport = ChartViewport(100, 30).clamp(1_000)
+        val start = viewport.startIndex(1_000)
+        val anchored = viewport.zoom(0.5f, anchorRatio = 0f, barCount = 1_000)
         // 放大（可见根数变少）后左端仍是同一根
-        assertEquals(start, anchored.startIndex())
+        assertEquals(start, anchored.startIndex(1_000))
     }
 
     @Test
     fun `右侧留白时右端锚点也不动`() {
-        val viewport = ChartViewport(1_000, 100, 30).clamp()
-        val end = viewport.endIndex()
-        val anchored = viewport.zoom(0.5f, anchorRatio = 1f)
-        assertEquals(end, anchored.endIndex())
+        val viewport = ChartViewport(100, 30).clamp(1_000)
+        val end = viewport.endIndex(1_000)
+        val anchored = viewport.zoom(0.5f, anchorRatio = 1f, barCount = 1_000)
+        assertEquals(end, anchored.endIndex(1_000))
     }
 
     @Test
     fun `横坐标反查与归一化互为逆运算`() {
-        val viewport = ChartViewport(300, 100, 0)
-        val index = viewport.indexAt(0.5f)
-        val fraction = viewport.fractionOf(index)
+        val viewport = ChartViewport(100, 0)
+        val index = viewport.indexAt(0.5f, barCount = 300)
+        val fraction = viewport.fractionOf(index, barCount = 300)
         assertTrue("index=$index fraction=$fraction", !fraction.isNaN())
         assertEquals(0.5f, fraction, 0.03f)
     }
 
     @Test
     fun `序列变长后仍贴着最新`() {
-        val grown = ChartViewport(300, 100, 0).resize(301)
-        assertEquals(300, grown.endIndex())
+        // 视窗不带序列长度，`barCount` 变大即为「来了新蜡烛」：
+        // rightOffset 保持 0 就自然贴回最新，不再需要 resize 这一步。
+        assertEquals(300, ChartViewport(100, 0).endIndex(barCount = 301))
     }
     // endregion
 
@@ -662,24 +685,29 @@ class ChartModelTest {
         viewport: ChartViewport,
         distances: List<Float>,
         anchorRatio: Float = 0.5f,
+        barCount: Int = 2_000,
     ): ChartViewport {
         var current = viewport
         var previousDistance = 0f
         var remainder = 0f
         distances.forEach { distance ->
             ChartGesture.pinchFactor(previousDistance, distance)?.let { factor ->
-                val before = current.clamp().visibleBars
+                val before = current.clamp(barCount).visibleBars
                 val step = ChartGesture.accumulatePinch(
                     remainder = remainder,
                     factor = factor,
                     visibleBars = before,
                 )
                 if (step.bars != 0) {
-                    current = current.zoom((before + step.bars).toFloat() / before, anchorRatio)
+                    current = current.zoom(
+                        barFactor = (before + step.bars).toFloat() / before,
+                        anchorRatio = anchorRatio,
+                        barCount = barCount,
+                    )
                     remainder = ChartGesture.reportApplied(
                         remainder = step.remainder,
                         requestedBars = step.bars,
-                        appliedBars = current.clamp().visibleBars - before,
+                        appliedBars = current.clamp(barCount).visibleBars - before,
                     )
                 } else {
                     remainder = step.remainder
@@ -696,14 +724,14 @@ class ChartModelTest {
     fun `双指张开可以缩小可见根数`() {
         // 两指从 200px 一路张到 600px
         val opening = (0..7).map { 200f + it * (400f / 7f) }
-        val zoomed = applyPinch(ChartViewport(500, 120, 0), opening)
+        val zoomed = applyPinch(ChartViewport(120, 0), opening, barCount = 500)
         assertTrue("张开应减少可见根数，实际 ${zoomed.visibleBars}", zoomed.visibleBars < 120)
     }
 
     @Test
     fun `双指合拢可以放大可见根数`() {
         val closing = (0..7).map { 600f - it * (400f / 7f) }
-        val zoomed = applyPinch(ChartViewport(500, 120, 0), closing)
+        val zoomed = applyPinch(ChartViewport(120, 0), closing, barCount = 500)
         assertTrue("合拢应增加可见根数，实际 ${zoomed.visibleBars}", zoomed.visibleBars > 120)
     }
 
@@ -715,14 +743,14 @@ class ChartModelTest {
         // 慢速捏合时**第一帧是无效帧**（previousDistance 初始为 0，返回 null），
         // 所以有效帧数是 30 帧而不是 31 帧。
         val gentle = (0..30).map { 300f - it * 1f }
-        val zoomed = applyPinch(ChartViewport(2000, 120, 0), gentle)
+        val zoomed = applyPinch(ChartViewport(120, 0), gentle)
         assertTrue("30 帧缓慢张开必须累积出变化，实际 ${zoomed.visibleBars}", zoomed.visibleBars > 120)
     }
 
     @Test
     fun `缓慢合拢同样能累积出变化`() {
         val gentle = (0..30).map { 300f + it * 1f }
-        val zoomed = applyPinch(ChartViewport(2000, 120, 0), gentle)
+        val zoomed = applyPinch(ChartViewport(120, 0), gentle)
         assertTrue("30 帧缓慢合拢应减少可见根数，实际 ${zoomed.visibleBars}", zoomed.visibleBars < 120)
     }
 
@@ -732,8 +760,8 @@ class ChartModelTest {
         // `pinchFactor` 是**相邻两帧的比值**，所以 1px/帧 的绝对速度越到后面
         // 占比越小 —— 间距 300→270 时每帧只变 0.33%，而 150→120 时每帧变 0.67%，
         // 同样的手指速度自然更灵敏。这与真机手感一致（起始间距越大越迟钝）。
-        val fromFar = applyPinch(ChartViewport(2000, 120, 0), (0..30).map { 300f - it * 1f })
-        val fromNear = applyPinch(ChartViewport(2000, 120, 0), (0..30).map { 150f - it * 1f })
+        val fromFar = applyPinch(ChartViewport(120, 0), (0..30).map { 300f - it * 1f })
+        val fromNear = applyPinch(ChartViewport(120, 0), (0..30).map { 150f - it * 1f })
         assertTrue(
             "起点更近的手势应该更灵敏：fromFar=${fromFar.visibleBars} fromNear=${fromNear.visibleBars}",
             fromNear.visibleBars > fromFar.visibleBars,
@@ -746,7 +774,7 @@ class ChartModelTest {
         // 单帧因子 300/299 ≈ 1.00334，120 根算下来 120.4，取整后仍是 120。
         val factor = ChartGesture.pinchFactor(previous = 300f, current = 299f)
         assertNotNull(factor)
-        assertEquals(120, ChartViewport(2000, 120, 0).zoom(factor!!, 0.5f).visibleBars)
+        assertEquals(120, ChartViewport(120, 0).zoom(factor!!, 0.5f, barCount = 2_000).visibleBars)
         // 而累加器会把这一帧的量攒住，不让它被抹掉。
         // 张开 = 两指间距变大 = 可见根数要变多，余量应为**正**的根数。
         val step = ChartGesture.accumulatePinch(remainder = 0f, factor = factor, visibleBars = 120)
@@ -785,16 +813,16 @@ class ChartModelTest {
         // 1. 每帧提交量的绝对值 ≤ 1（防冲过头）；
         // 2. 余量按「本帧折算量 - 实际生效量」精确结转，不丢也不重复计。
         var remainder = 0f
-        var viewport = ChartViewport(2000, 120, 0)
+        var viewport = ChartViewport(120, 0)
         val factors = listOf(0.90f, 0.92f, 1.05f, 0.88f, 1.03f, 0.95f)
         factors.forEach { factor ->
-            val before = viewport.clamp().visibleBars
+            val before = viewport.clamp(BARS).visibleBars
             val folded = before * (factor - 1f)          // 本帧手指折算出的根数
             val step = ChartGesture.accumulatePinch(remainder, factor, before)
             assertTrue("每帧提交量不得超过一根：${step.bars}", kotlin.math.abs(step.bars) <= 1)
             if (step.bars != 0) {
-                viewport = viewport.zoom((before + step.bars).toFloat() / before, 0.5f)
-                val applied = viewport.clamp().visibleBars - before
+                viewport = viewport.zoom((before + step.bars).toFloat() / before, 0.5f, BARS)
+                val applied = viewport.clamp(BARS).visibleBars - before
                 remainder = ChartGesture.reportApplied(step.remainder, step.bars, applied)
                 // 结转正确性：(上一帧余量 + 本帧折算量) - 实际生效量 == 新余量
                 assertEquals(
@@ -816,7 +844,7 @@ class ChartModelTest {
         // 一帧捏进 20 根的量：第一帧只能走 1 根，其余 19 根留在余量里，
         // 此后每帧继续走 1 根 —— 既不会一帧跳 20 根，也不会把量丢掉。
         var remainder = 0f
-        var viewport = ChartViewport(2000, 120, 0)
+        var viewport = ChartViewport(120, 0)
         val bars = 120
         val first = ChartGesture.accumulatePinch(remainder, 0.85f, bars)
         assertEquals("一帧最多一根", -1, first.bars)
@@ -825,11 +853,11 @@ class ChartModelTest {
         // 接下来空手（factor = 1）继续捏，余量应被逐帧消化
         var frames = 1
         while (kotlin.math.abs(remainder) >= 1f && frames < 40) {
-            val before = viewport.clamp().visibleBars
+            val before = viewport.clamp(BARS).visibleBars
             val step = ChartGesture.accumulatePinch(remainder, 1f, before)
             if (step.bars == 0) break
-            viewport = viewport.zoom((before + step.bars).toFloat() / before, 0.5f)
-            remainder = ChartGesture.reportApplied(step.remainder, step.bars, viewport.clamp().visibleBars - before)
+            viewport = viewport.zoom((before + step.bars).toFloat() / before, 0.5f, BARS)
+            remainder = ChartGesture.reportApplied(step.remainder, step.bars, viewport.clamp(BARS).visibleBars - before)
             frames++
         }
         assertTrue("余量应被逐帧消化完，实际剩余 $remainder", kotlin.math.abs(remainder) < 1f)
@@ -884,8 +912,8 @@ class ChartModelTest {
     @Test
     fun `双指缩放不受单指方向锁影响`() {
         // 双指分支必须 continue，不能落进单指分支去改 axisAccum
-        val viewport = ChartViewport(500, 120, 0)
-        val once = applyPinch(viewport, listOf(200f, 400f))
+        val viewport = ChartViewport(120, 0)
+        val once = applyPinch(viewport, listOf(200f, 400f), barCount = 500)
         assertNotEquals(viewport.visibleBars, once.visibleBars)
     }
 
