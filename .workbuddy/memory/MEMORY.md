@@ -181,4 +181,27 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 ### 轮询下载进度时不要乱点屏幕
 边轮询边 `adb shell input tap` 会误触导航、打断观察窗口。**轮询只读文件体积**：`adb exec-out run-as <pkg> ls -l cache/updates`。
 
+## ❗阻塞级：签名不固定 ⇒ 应用内更新永远装不上（2026-09-20 发现，待修）
+
+`app/build.gradle.kts` **没有 `signingConfig` 块**，`release.yml` 是裸 `./gradlew assembleDebug` ⇒ 用 Gradle 自动生成的 debug keystore，而 GitHub runner 是一次性的，**每次发版都生成一把新钥匙**。
+
+实测取证（两个官方 Release 的证书不同）：
+```
+0.5.0 → SHA-256 ad9473d7086fd239adb54550cec0543d702f6c15f8e0033dca647921d85cb55b
+0.6.0 → SHA-256 99c7af161c47f8d3bc612e1f1d169a4d33beda36ffafb324d1dbb15249fc3691
+覆盖安装报 INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match
+```
+
+**为什么容易被漏**：「检查更新」提示一直正常（`releases/latest` + `VersionCompare` 是另一套机制），只有走到安装才暴露。
+**后果**：真实用户永远无法应用内升级，只能卸载重装。
+
+**修法（二选一，需一次性定死）**：
+1. 固定 debug keystore：把一把 `debug.keystore` 入库或做成 Secret，显式指定 `signingConfigs.debug.storeFile`。
+2. 正式 release keystore（推荐）：keystore base64 存 Secrets，`release.yml` 解码，`release` buildType 挂 `signingConfig`，构建 `assembleRelease`。
+
+⚠️ **签名一换，线上老版本（≤0.5.0）再也升不上来**，那批用户必须卸载重装。别反复换签名。
+
+⚠️ **验证应用内更新时，别用「本地 debug 包」去装官方 Release 包** —— 两者签名天然不同，会误报成「更新功能坏了」。
+要复现完整安装：先 `adb uninstall`，或让本地包用与线上相同的密钥。
+
 

@@ -53,8 +53,8 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 | --- | --- |
 | versionName | `0.6.0` |
 | versionCode | `8` |
-| 最新 tag | `0.5.0` |
-| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（debug 签名），边车 `<apk>.sha256` |
+| 最新 tag | `0.6.0` |
+| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（当前为 CI 随机 debug 签名，见下方签名问题），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
 `本地文件#远端名` 写法不生效，用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
@@ -78,6 +78,31 @@ git push origin main 0.2.0
    创建同名 GitHub Release。应用内更新读取 `releases/latest` 的 tag（**不带 `v` 前缀**）与 `versionName` 比较，
    所以优先打裸版本号 tag。
 5. 若推送 tag 后没看到 Release 运行，手动补一次：`gh workflow run release.yml --ref <tag>`。
+6. 发版前先确认 tag 不存在（`git tag -l`），并确认要发的改动**已经提交** —— 曾出现「线上 tag 已存在、而本地改动全未提交」的组合，那会误以为改动已发布。
 
-签名当前沿用 debug keystore，保证覆盖安装可用；正式签名接入时改 `release.yml`，
-Secrets 注入，不动版本号约定。
+### ⚠️ 已知阻塞问题：签名未固定，应用内更新装不上
+
+`app/build.gradle.kts` 目前**没有配置 `signingConfig`**，`release.yml` 直接用 `./gradlew assembleDebug`，
+即依赖 Gradle 自动生成的 debug keystore。而 GitHub runner 是一次性的，**每次发版都会生成一把新的密钥**，
+于是相邻两个 Release 的签名并不相同：
+
+```
+0.5.0 → SHA-256 ad9473d7086fd239adb54550cec0543d702f6c15f8e0033dca647921d85cb55b
+0.6.0 → SHA-256 99c7af161c47f8d3bc612e1f1d169a4d33beda36ffafb324d1dbb15249fc3691
+```
+
+后果是覆盖安装必报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match`，
+**真实用户无法通过应用内更新升级，只能卸载重装**。
+
+> 这个问题的隐蔽之处在于：「检查更新」提示一直正常（`releases/latest` + `versionName` 比较是另一套机制），
+> 只有走到安装那一步才暴露。
+
+修复方向（二选一，需一次定死）：
+
+1. **固定 debug keystore**：把一把 `debug.keystore` 入库（或存为 Secret），在 `build.gradle.kts` 里显式指定 `signingConfigs.debug.storeFile`。
+2. **改用正式 release keystore**（推荐）：keystore base64 存入 Secrets（`KEYSTORE_BASE64` / `KEY_ALIAS` / `KEYSTORE_PASSWORD` / `KEY_PASSWORD`），
+   `release.yml` 解码后在 `release` buildType 挂上 `signingConfig`，构建 `assembleRelease`。
+
+⚠️ **签名一旦更换，线上已发布的老版本（≤ 0.5.0）就再也无法应用内升级**，那批用户必须卸载重装。
+另：本地验证更新功能时，**不要拿本地 debug 包去覆盖官方 Release 包**（签名天然不同，会误判成功能损坏）；
+要复现完整安装请先 `adb uninstall`，或让本地包使用与线上相同的密钥。
