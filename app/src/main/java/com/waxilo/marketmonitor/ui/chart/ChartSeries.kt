@@ -41,12 +41,16 @@ data class SubPaneData(
     val legendAt: (Int) -> String = { "" },
 )
 
+/**
+ * 可选副图。**不含「不显示」**——空集本身就是「不显示」，
+ * 用枚举值表达「无」会和「支持多选」互相打架（多选时空集才是唯一的"无"）。
+ */
 enum class SubPaneKind(val label: String) {
-    NONE("不显示"),
     VOLUME("VOL"),
     MACD("MACD"),
     RSI("RSI"),
     KDJ("KDJ"),
+    ;
 }
 
 /**
@@ -58,7 +62,8 @@ data class ChartSeries(
     val candles: List<Kline>,
     val closes: DoubleArray,
     val overlay: OverlayData,
-    val subPane: SubPaneData?,
+    /** 副图列表：空列表表示不显示副图，多元素表示多副图纵向堆叠。 */
+    val subPanes: List<SubPaneData>,
 ) {
     val size: Int get() = candles.size
 
@@ -80,9 +85,11 @@ data class ChartSeries(
         return ValueRange(all.minOf { it.low }, all.maxOf { it.high }).padded()
     }
 
-    /** 副图纵向范围：固定刻度（RSI）优先，其余按可见窗口取值。 */
-    fun subRange(start: Int, end: Int): ValueRange {
-        val pane = subPane ?: return ValueRange(0.0, 1.0)
+    /**
+     * 单块副图的纵向范围：固定刻度（RSI / KDJ）优先，其余按可见窗口取值。
+     * 每块副图各算各的，互不影响——多选时 MACD 与 VOL 的量级差好几个数量级。
+     */
+    fun subRange(pane: SubPaneData, start: Int, end: Int): ValueRange {
         pane.fixedRange?.let { return it }
         val fromBars = pane.bars?.let { ValueRange.of(it, start, end) }
         val fromLines = pane.lines.mapNotNull { ValueRange.of(it.values, start, end) }
@@ -117,7 +124,7 @@ object ChartModel {
         candles: List<Kline>,
         maPeriods: List<Int>,
         showBoll: Boolean,
-        subPane: SubPaneKind,
+        subPanes: List<SubPaneKind>,
         bollPeriod: Int = 20,
         macdParams: Triple<Int, Int, Int> = Triple(12, 26, 9),
         rsiPeriod: Int = 14,
@@ -142,7 +149,11 @@ object ChartModel {
                 lines = overlayLines,
                 bandFill = boll?.let { Pair(it.upper, it.lower) },
             ),
-            subPane = buildSubPane(candles, closes, subPane, macdParams, rsiPeriod),
+            // 按枚举声明顺序输出，保证「多选后副图从上到下的次序」稳定，
+            // 不随用户点击先后跳来跳去。
+            subPanes = SubPaneKind.entries
+                .filter { it in subPanes }
+                .mapNotNull { buildSubPane(candles, closes, it, macdParams, rsiPeriod) },
         )
     }
 
@@ -180,8 +191,6 @@ object ChartModel {
         macdParams: Triple<Int, Int, Int>,
         rsiPeriod: Int,
     ): SubPaneData? = when (kind) {
-        SubPaneKind.NONE -> null
-
         SubPaneKind.VOLUME -> {
             val volumes = DoubleArray(candles.size) { candles[it].volumeDouble() }
             SubPaneData(
@@ -252,4 +261,51 @@ object ChartModel {
         val pattern = if (intervalMinutes >= 1_440) "yyyy-MM-dd" else "MM-dd HH:mm"
         return SimpleDateFormat(pattern, Locale.US).format(Date(epochMs))
     }
+
+    /**
+     * 时间轴标签的像素落点。
+     *
+     * 单独抽出来是因为这段纯数学必须能跑单测——放进 Composable 里就依赖
+     * [androidx.compose.ui.text.TextMeasurer]，只能靠截图肉眼看，回归了也不知道。
+     *
+     * 规则（三条缺一不可）：
+     * 1. 以蜡烛中心为锚点、按标签宽度折半得到左边缘；
+     * 2. 左边缘**夹进** `[0, plotWidth - labelWidth]`，避免首尾被切掉半个字；
+     * 3. 夹完之后仍要与**上一条已画标签**保持 `minGap`：
+     *    间距不够就整条丢掉。少了第 3 条，被夹回来的首条标签就会和第二条糊在一起
+     *    （真实踩过：`17:18` 与 `17:23` 贴成 `17:1817:23`）。
+     *
+     * @param centersPx 候选位置的横向中心，按 [step] 从窗口起点起逐根取
+     * @param step 每画一条前进几根蜡烛；至少 1
+     * @return 每个元素是一条标签的左边缘（dp 无关，纯像素），已按绘制顺序排列，
+     *         同时给出它对应的候选下标，便于调用方取时间文案
+     */
+    fun timeLabelPlacements(
+        centersPx: List<Float>,
+        labelWidthPx: Float,
+        plotWidthPx: Float,
+        minGapPx: Float,
+        step: Int,
+    ): List<TimeLabelPlacement> {
+        if (centersPx.isEmpty() || plotWidthPx <= 0f) return emptyList()
+        val stride = maxOf(1, step)
+        val rightLimit = maxOf(0f, plotWidthPx - labelWidthPx)
+        val placed = ArrayList<TimeLabelPlacement>(centersPx.size / stride + 1)
+        var lastLeft = Float.NEGATIVE_INFINITY
+        var index = 0
+        while (index < centersPx.size) {
+            val left = (centersPx[index] - labelWidthPx / 2f).coerceIn(0f, rightLimit)
+            if (left - lastLeft >= minGapPx) {
+                lastLeft = left
+                placed += TimeLabelPlacement(index = index, leftPx = left)
+            }
+            index += stride
+        }
+        return placed
+    }
 }
+
+/**
+ * 一条要画的时间轴标签：对应第 [index] 根候选蜡烛，左边缘落在 [leftPx]。
+ */
+data class TimeLabelPlacement(val index: Int, val leftPx: Float)

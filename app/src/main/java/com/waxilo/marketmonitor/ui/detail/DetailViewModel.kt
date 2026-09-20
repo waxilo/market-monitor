@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.detail
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
@@ -34,8 +35,18 @@ val MA_CHOICES: List<Int> = listOf(5, 10, 20, 30, 60)
 
 val DEFAULT_MA_PERIODS: List<Int> = listOf(5, 10, 30)
 
-data class StatItem(val label: String, val value: String)
+/**
+ * 详情页的一条统计。
+ * [raw] 保留未格式化的原始数值，供进度条之类的可视化使用；
+ * [value] 是给用户看的格式化结果。两者分开避免在组合里反解析字符串。
+ */
+@Immutable
+data class StatItem(
+    val label: String,
+    val value: String,
+)
 
+@Immutable
 data class DetailUiState(
     val id: SymbolId = SymbolId(MarketType.SPOT, ""),
     val title: String = "",
@@ -44,13 +55,18 @@ data class DetailUiState(
     /** 图表刻度与 tooltip 的小数位由它决定（PRD 已定：低价币自动放开位数）。 */
     val tickSize: BigDecimal? = null,
     val stats: List<StatItem> = emptyList(),
+    /** 24h 高低与当前价（原始值），Hero 卡片的高低区间条使用。 */
+    val low24h: Double? = null,
+    val high24h: Double? = null,
+    val lastPrice: Double? = null,
     val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
     val interval: CandleInterval = DEFAULT_CHART_INTERVAL,
     val candles: List<Kline> = emptyList(),
     val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
     val maChoices: List<Int> = MA_CHOICES,
     val showBoll: Boolean = false,
-    val subPane: SubPaneKind = SubPaneKind.VOLUME,
+    /** 选中的副图。空列表 = 不显示副图；支持多选。 */
+    val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
     val watched: Boolean = false,
     val origin: DataOrigin = DataOrigin.REMOTE,
     val loadingCandles: Boolean = true,
@@ -90,7 +106,8 @@ class DetailViewModel(
         val error: String? = null,
         val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
         val showBoll: Boolean = false,
-        val subPane: SubPaneKind = SubPaneKind.VOLUME,
+        /** 选中的副图集合（按枚举声明顺序归一化）。 */
+        val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
     )
 
     val state: StateFlow<DetailUiState> = combine(
@@ -106,6 +123,9 @@ class DetailViewModel(
             price = PriceFormatter.format(price?.lastPrice, rule?.priceTickSize),
             changePercent = price?.changePercent,
             tickSize = rule?.priceTickSize,
+            low24h = price?.lowPrice?.toDouble(),
+            high24h = price?.highPrice?.toDouble(),
+            lastPrice = price?.lastPrice?.toDouble(),
             stats = price?.let {
                 listOf(
                     StatItem("24h 最高", PriceFormatter.format(it.highPrice, rule?.priceTickSize)),
@@ -121,7 +141,7 @@ class DetailViewModel(
             candles = KlineAggregator.aggregate(data.raw, selected),
             maPeriods = data.maPeriods,
             showBoll = data.showBoll,
-            subPane = data.subPane,
+            subPanes = data.subPanes,
             watched = id in watched,
             origin = data.origin,
             loadingCandles = data.loading,
@@ -167,10 +187,10 @@ class DetailViewModel(
         CandleInterval.fromStorageKey(saved.lastIntervalKey)?.let { interval.value = it }
         chart.update {
             it.copy(
-                maPeriods = saved.maPeriods.sorted().ifEmpty { DEFAULT_MA_PERIODS },
+                // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
+                maPeriods = saved.maPeriods.sorted(),
                 showBoll = saved.bollEnabled,
-                subPane = SubPaneKind.entries.firstOrNull { kind -> kind.name == saved.subPaneKey }
-                    ?: it.subPane,
+                subPanes = saved.subPaneKeys.toSubPaneKinds(),
             )
         }
     }
@@ -187,20 +207,28 @@ class DetailViewModel(
         viewModelScope.launch { settings.edit { it.copy(bollEnabled = next) } }
     }
 
-    fun setSubPane(kind: SubPaneKind) {
-        chart.update { it.copy(subPane = kind) }
-        viewModelScope.launch { settings.edit { it.copy(subPaneKey = kind.name) } }
+    /** 副图多选：点中即切换该块的显隐，全不选 = 只留主图。 */
+    fun toggleSubPane(kind: SubPaneKind) {
+        chart.update {
+            val next = if (kind in it.subPanes) it.subPanes - kind else it.subPanes + kind
+            it.copy(subPanes = next.sortedBy { k -> SubPaneKind.entries.indexOf(k) })
+        }
+        val saved = chart.value.subPanes.toSubPaneKeys()
+        viewModelScope.launch { settings.edit { it.copy(subPaneKeys = saved) } }
     }
 
+    /**
+     * 主图均线：允许全关。关光后就是**裸 K 图**——
+     * 这是看图的基本需求（判断形态时叠着均线反而看不清），因此不做「至少留一条」的兜底。
+     */
     fun toggleMaPeriod(period: Int) {
         chart.update { current ->
             val periods = if (period in current.maPeriods) {
                 current.maPeriods - period
             } else {
-                (current.maPeriods + period).sorted()
+                current.maPeriods + period
             }
-            // 全关掉时保留刚点中的那条，否则图上什么都不剩
-            current.copy(maPeriods = (periods.ifEmpty { listOf(period) }).sorted())
+            current.copy(maPeriods = periods.sorted())
         }
         val saved = chart.value.maPeriods
         viewModelScope.launch { settings.edit { it.copy(maPeriods = saved) } }
@@ -293,3 +321,16 @@ class DetailViewModel(
         const val CACHE_HINT = "网络不可用，K 线展示的是本地缓存"
     }
 }
+
+/**
+ * 副图选择与持久化串之间的转换。
+ *
+ * 存成逗号分隔的名字（而不是序号）是为了：① 枚举增删不影响历史数据；
+ * ② 空串天然表达「不显示副图」，不需要额外的哨兵值。
+ */
+private fun String.toSubPaneKinds(): List<SubPaneKind> {
+    if (isBlank()) return emptyList()
+    return split(',').mapNotNull { name -> SubPaneKind.entries.firstOrNull { it.name == name.trim() } }
+}
+
+private fun List<SubPaneKind>.toSubPaneKeys(): String = joinToString(",") { it.name }

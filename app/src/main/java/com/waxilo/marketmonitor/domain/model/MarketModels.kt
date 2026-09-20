@@ -1,9 +1,11 @@
 package com.waxilo.marketmonitor.domain.model
 
+import androidx.compose.runtime.Immutable
 import java.math.BigDecimal
 import java.math.MathContext
 
 /** 行情实体的复合身份：同一 symbol 在现货与合约是不同标的。 */
+@Immutable
 data class SymbolId(
     val market: MarketType,
     val symbol: String,
@@ -21,6 +23,7 @@ data class SymbolId(
 }
 
 /** 24h 行情快照（列表页一行数据）。 */
+@Immutable
 data class MarketTicker(
     val id: SymbolId,
     val lastPrice: BigDecimal,
@@ -42,6 +45,7 @@ data class MarketTicker(
 }
 
 /** 交易规则中与展示/校验相关的部分（来自 exchangeInfo）。 */
+@Immutable
 data class InstrumentMeta(
     val id: SymbolId,
     val baseAsset: String,

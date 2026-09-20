@@ -1,5 +1,10 @@
 package com.waxilo.marketmonitor.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavType
@@ -50,6 +55,11 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
         // 从通知栏进入时首帧就落在预警页，避免先闪一下行情列表
         startDestination = if (openAlerts) Routes.ALERTS else Routes.MARKET,
         modifier = modifier,
+        // 克制转场：进入从右滑入 + 淡入，退出轻淡出；返回时反向滑回。
+        enterTransition = { slideInHorizontally(tween(220)) { it / 3 } + fadeIn(tween(220)) },
+        exitTransition = { fadeOut(tween(160)) },
+        popEnterTransition = { fadeIn(tween(220)) + slideInHorizontally(tween(220)) { -it / 3 } },
+        popExitTransition = { slideOutHorizontally(tween(220)) { it / 3 } + fadeOut(tween(220)) },
     ) {
         composable(Routes.MARKET) {
             MarketScreen(
@@ -60,7 +70,10 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
             )
         }
         composable(Routes.SEARCH) {
-            SearchScreen(onOpenDetail = openDetail)
+            SearchScreen(
+                onOpenDetail = openDetail,
+                onBack = { navController.popBackStack() },
+            )
         }
         composable(Routes.SETTINGS) {
             SettingsScreen(onBack = { navController.popBackStack() })

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
+import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.model.MarketType
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -41,12 +42,13 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
     private fun Preferences.toSettings(): AppSettings {
         val d = DEFAULTS
         return d.copy(
+            themeMode = ThemeMode.fromKey(this[Keys.THEME]),
             quoteAsset = this[Keys.QUOTE] ?: d.quoteAsset,
             defaultMarket = MarketType.fromKey(this[Keys.MARKET] ?: d.defaultMarket.key),
             lastIntervalKey = this[Keys.INTERVAL] ?: d.lastIntervalKey,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
-            subPaneKey = this[Keys.PANE] ?: d.subPaneKey,
+            subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
             crosshairEnabled = this[Keys.CROSSHAIR] ?: d.crosshairEnabled,
             alertPollingSeconds = this[Keys.POLL] ?: d.alertPollingSeconds,
             alertDefaultCooldownMinutes = this[Keys.COOLDOWN] ?: d.alertDefaultCooldownMinutes,
@@ -64,12 +66,13 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
     }
 
     private fun AppSettings.writeTo(prefs: MutablePreferences) {
+        prefs[Keys.THEME] = themeMode.key
         prefs[Keys.QUOTE] = quoteAsset
         prefs[Keys.MARKET] = defaultMarket.key
         prefs[Keys.INTERVAL] = lastIntervalKey
         prefs[Keys.MA] = maPeriods.joinToString(",")
         prefs[Keys.BOLL] = bollEnabled
-        prefs[Keys.PANE] = subPaneKey
+        prefs[Keys.PANE] = subPaneKeys
         prefs[Keys.CROSSHAIR] = crosshairEnabled
         prefs[Keys.POLL] = alertPollingSeconds
         prefs[Keys.COOLDOWN] = alertDefaultCooldownMinutes
@@ -89,6 +92,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         private val DEFAULTS = AppSettings()
 
         private object Keys {
+            val THEME = stringPreferencesKey("theme_mode")
             val QUOTE = stringPreferencesKey("quote_asset")
             val MARKET = stringPreferencesKey("default_market")
             val INTERVAL = stringPreferencesKey("last_interval")

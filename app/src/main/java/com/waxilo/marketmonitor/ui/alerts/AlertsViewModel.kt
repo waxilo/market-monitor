@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.alerts
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.data.alert.notificationsAllowed
@@ -29,6 +30,7 @@ enum class AlertsTab(val label: String) {
 }
 
 /** 规则列表一行：条件文案与现价都在领域层算好，Compose 只排版。 */
+@Immutable
 data class AlertRuleRow(
     val rule: AlertRule,
     val condition: String,
@@ -38,6 +40,7 @@ data class AlertRuleRow(
     val status: String,
 )
 
+@Immutable
 data class AlertMessageRow(
     val message: AlertMessage,
     val title: String,
@@ -46,6 +49,7 @@ data class AlertMessageRow(
     val delivery: String?,
 )
 
+@Immutable
 data class AlertsUiState(
     val tab: AlertsTab = AlertsTab.RULES,
     val rules: List<AlertRuleRow> = emptyList(),
@@ -73,14 +77,22 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         val rules: List<AlertRule>,
         val prices: Map<SymbolId, MarketTicker>,
         val messages: List<AlertMessage>,
+        /**
+         * 每条规则最近一次触发（messages 已按 triggeredAt 倒序，取首次命中即最近）。
+         * 旧实现是在 [statusOf] 里对每条规则扫一遍全部消息（最多 200 条 × N 条规则），
+         * 而该函数在每次价格推送时都会随 state 重算——预索引成 Map 后降为 O(1) 查表。
+         */
+        val lastTriggeredAt: Map<Long, Long>,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val sources = combine(alerts.rules(), alerts.messages(MESSAGE_LIMIT)) { ruleList, logs ->
         ruleList to logs
     }.flatMapLatest { (ruleList, logs) ->
+        val lastByRule = HashMap<Long, Long>(ruleList.size)
+        logs.forEach { log -> lastByRule.putIfAbsent(log.ruleId, log.triggeredAt) }
         repository.tickerSnapshots(ruleList.map { SymbolId(it.market, it.symbol) })
-            .map { prices -> Sources(ruleList, prices, logs) }
+            .map { prices -> Sources(ruleList, prices, logs, lastByRule) }
     }
 
     val state: StateFlow<AlertsUiState> = combine(
@@ -139,12 +151,11 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         )
     }
 
-    /** 最近触发时间直接从消息流取，避免为每行规则再读一次状态表。 */
+    /** 最近触发时间从预索引的 Map 取，避免对每条规则扫一遍消息列表。 */
     private fun statusOf(rule: AlertRule, source: Sources): String {
         if (!rule.enabled) return "已停用"
-        val last = source.messages.firstOrNull { it.ruleId == rule.id }
-            ?: return "等待触发"
-        return "最近触发 ${AlertText.timeOf(last.triggeredAt)}"
+        val last = source.lastTriggeredAt[rule.id] ?: return "等待触发"
+        return "最近触发 ${AlertText.timeOf(last)}"
     }
 
     private fun AlertMessage.toRow(): AlertMessageRow = AlertMessageRow(

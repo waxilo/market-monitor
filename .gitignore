@@ -10,3 +10,7 @@ captures/
 *.apk
 *.keystore
 !debug.keystore
+
+# AI 工具产物：保留 memory 笔记（对后续会话有价值），但别把临时截图/中间产物提交进去
+.workbuddy/tmp/
+.trae/

@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.search
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+@Immutable
 data class SearchUiState(
     val market: MarketType = MarketType.SPOT,
     val query: String = "",

@@ -12,12 +12,31 @@
 | 数据层（REST + WS + Room 缓存） | `data/remote`、`data/local` | 已实现 |
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
-| 设置页与应用内更新 | `ui/settings`（待建）、`domain/repository/UpdateRepository` | 开发中；数据层已就绪 |
+| 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 
 一个前置问题：当前仓库是 **private**，而 `GithubReleaseApi` 匿名访问 `api.github.com/repos/…/releases/latest`，
 私有仓库对匿名请求一律 404，所以应用内更新现在必然失败。三条出路：仓库转 public（最省事，代码随之公开）、
 只读 token（会被打进 APK，有泄露风险）、或把产物同步到一个可匿名读的地址。
 数据层已按「tag 比较 + `<apk>.sha256` 边车 + 流式校验」写好，只差决定这条读取路径。
+
+## UI 设计系统
+
+风格定调：**极简杂志风**，刻意与「币安黄铺满屏」的零售交易所观感拉开距离。
+
+| 维度 | 约定 |
+| --- | --- |
+| 色彩 | 只有墨黑/纸白两级中性色撑结构，饱和度全部留给涨跌信号；黄色仅用于「已选中」的极小面积 |
+| 描边 | 用 1px 细线（`Rule`）代替卡片阴影，全 App 只有一档描边层级 |
+| 分隔 | 不铺 6 层 `surfaceContainer`，只有 `paper` / `surface` / `wash` 三档 |
+| 排版 | 等宽体承载所有数字与小标题，系统无衬线承载所有自然语言；靠字重与字距做层次，不引入字体文件 |
+| 组件 | `ui/common/CommonUi.kt` 为唯一组件来源；选择器只有两种形态（`SegmentedControl` 互斥 / `FilterChip` 多选） |
+| 常量 | 间距、圆角、动效曲线集中在 `ui/theme/Tokens.kt`，页面不得写字面量 |
+
+色彩入口是 `MarketTheme.colors`（自定义 `CompositionLocal`），不直接读 M3 的 `colorScheme`——
+M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱化文字」这类本设计系统的概念。
+
+主题模式（跟随系统 / 浅色 / 深色）已接入设置页并持久化（`AppSettings.themeMode`），改动即时生效。
+
 
 ## 本地构建
 
@@ -32,14 +51,14 @@
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.2.1` |
-| versionCode | `3` |
-| 最新 tag | `0.2.1` |
-| 安装包 | GitHub Release `0.2.0` 的 `app-debug.apk`（debug 签名），边车 `app-debug.apk.sha256` |
+| versionName | `0.5.0` |
+| versionCode | `7` |
+| 最新 tag | `0.4.0` |
+| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（debug 签名），边车 `<apk>.sha256` |
 
-SHA-256：`bc5ea46a28fea1131f7336100742570a9f462eb9746d4ed915745c0002b243f1`（已与 GitHub 侧 digest 对过）。
-从下一个版本起产物改名 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的 `本地文件#远题名` 写法不生效，
-用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
+产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
+`本地文件#远端名` 写法不生效，用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
+应用内更新按 `releases/latest` 的 tag 与 `versionName` 比较，因此**发版前务必确认 versionName 严格大于线上最新 tag**。
 
 ## 发版流程
 

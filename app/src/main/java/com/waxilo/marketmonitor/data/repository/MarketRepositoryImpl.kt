@@ -148,6 +148,37 @@ class MarketRepositoryImpl(
             liveTickers.map { it[id] }.distinctUntilChanged(),
         ) { cached, live -> live ?: cached?.toDomain() }
 
+    override suspend fun recentCloses(id: SymbolId, interval: CandleInterval, limit: Int): List<Double> {
+        val marketKey = id.market.key
+        // 首选周期直接命中
+        readCloses(marketKey, id.symbol, interval, limit)?.let { return it }
+        // 降级：用户可能从没在首选周期上停留过（缓存里只有 1m/15m），
+        // 这时退到「已缓存周期里最粗的那个」画走势线。
+        // 挑最粗的是因为走势线要表达「最近一段的趋势」，越细的周期趋势越吵。
+        val fallback = klineDao.cachedIntervalCounts(marketKey, id.symbol)
+            .mapNotNull { CandleInterval.fromStorageKey(it.intervalKey) }
+            .maxByOrNull { it.minutes }
+            ?: return emptyList()
+        return readCloses(marketKey, id.symbol, fallback, limit).orEmpty()
+    }
+
+    /** 读到数据才返回非 null；根数不足 2 根画不出线，等同于没数据。 */
+    private suspend fun readCloses(
+        marketKey: String,
+        symbol: String,
+        interval: CandleInterval,
+        limit: Int,
+    ): List<Double>? {
+        val key = interval.storageKey
+        // 先看有没有数据：没有就早退，省掉一次必然返回空的时间段查询
+        if (klineDao.countFor(marketKey, symbol, key) == 0) return null
+        // 以「当前时间往前推 limit 个周期」为下界，避免对每个自选都扫全表
+        val from = System.currentTimeMillis() - interval.durationMs * limit
+        val closes = klineDao.recentCloses(marketKey, symbol, key, from, limit)
+            .mapNotNull { it.toDoubleOrNull() }
+        return closes.takeIf { it.size >= 2 }
+    }
+
     override suspend fun klines(id: SymbolId, interval: CandleInterval, limit: Int): KlinePage =
         fetch(id, interval, limit, startTime = null, endTime = null)
             ?: KlinePage(

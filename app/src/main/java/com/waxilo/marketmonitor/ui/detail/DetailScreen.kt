@@ -1,59 +1,83 @@
 package com.waxilo.marketmonitor.ui.detail
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
+import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
+import com.waxilo.marketmonitor.ui.common.BannerTone
 import com.waxilo.marketmonitor.ui.common.ChangeText
+import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.HintRow
-import com.waxilo.marketmonitor.ui.common.LabelValueRow
-import com.waxilo.marketmonitor.ui.common.OfflineBanner
-import com.waxilo.marketmonitor.ui.common.SegmentPicker
-import com.waxilo.marketmonitor.ui.common.ThinDivider
+import com.waxilo.marketmonitor.ui.common.MetricCell
+import com.waxilo.marketmonitor.ui.common.RangeBar
+import com.waxilo.marketmonitor.ui.common.Rule
+import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.appViewModel
-import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
+import com.waxilo.marketmonitor.ui.common.rememberPriceFlash
+import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
+import com.waxilo.marketmonitor.ui.theme.MarketTheme
+import com.waxilo.marketmonitor.ui.theme.Motion
+import com.waxilo.marketmonitor.ui.theme.Spacing
+import java.math.BigDecimal
 
 /**
  * 详情页（PRD 4.1 第三级、4.2 图表）。
- * 图表高度固定，下面的统计与指标开关随页面滚动，避免小屏上蜡烛被压扁。
+ *
+ * 版面重排的要点：
+ * 1. **价格从顶栏里搬出来**，成为独立的 Hero 区块。旧版把价格塞在 AppBar 的 actions 里，
+ *    和三个图标按钮抢横向空间，长价格（如 0.00004321）必然被截断；
+ * 2. 顶栏只留返回 + 标题 + 一个溢出菜单，把「刷新 / 建预警 / 自选」收进菜单；
+ * 3. Hero 下方直接给「24h 高低区间条」——一屏数字说不出「现在离高点还有多远」，
+ *    一根条能。
+ * 4. 图表高度按屏高自适应，不再写死 360dp：小屏上 360dp 会挤掉统计区，大屏上又显小。
  */
 @Composable
 fun DetailScreen(
@@ -65,214 +89,394 @@ fun DetailScreen(
     },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPane) {
-        ChartModel.build(
-            candles = state.candles,
-            maPeriods = state.maPeriods,
-            showBoll = state.showBoll,
-            subPane = state.subPane,
-        )
-    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .background(MarketTheme.colors.paper)
             .verticalScroll(rememberScrollState()),
     ) {
-        Header(
+        DetailTopBar(
             state = state,
             onBack = onBack,
             onRefresh = viewModel::refresh,
             onToggleWatch = viewModel::toggleWatch,
             onCreateAlert = onCreateAlert,
         )
-        val error = state.error
-        when {
-            error != null -> OfflineBanner(error)
-            state.origin == DataOrigin.CACHE -> OfflineBanner("K 线来自本地缓存")
-            else -> Unit
-        }
 
-        IntervalChips(
+        val error = state.error
+        AnimatedBanner(visible = error != null, text = error.orEmpty(), tone = BannerTone.Error)
+        AnimatedBanner(
+            visible = error == null && state.origin == DataOrigin.CACHE,
+            text = "K 线来自本地缓存",
+        )
+
+        Hero(state = state)
+
+        Rule(inset = Spacing.Gutter)
+
+        IntervalSelector(
             options = state.intervals,
             selected = state.interval,
             onSelect = viewModel::selectInterval,
         )
 
-        Box(modifier = Modifier.fillMaxWidth().height(CHART_HEIGHT_DP.dp)) {
-            if (state.loadingCandles && state.candles.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            } else if (state.candles.isEmpty()) {
-                HintRow(
-                    title = "没有取到 K 线",
-                    subtitle = state.error ?: "换个周期或点右上角刷新试试",
-                    actionLabel = "重新加载",
-                    onAction = viewModel::refresh,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-            } else {
-                KlineChart(
-                    series = series,
-                    interval = state.interval,
-                    tickSize = state.tickSize,
-                    onLoadMore = viewModel::loadMore,
-                )
-            }
-            if (state.loadingMore) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center).size(28.dp),
-                    strokeWidth = 2.dp,
-                )
-            }
-        }
+        ChartArea(state = state, onLoadMore = viewModel::loadMore, onRetry = viewModel::refresh)
 
-        IndicatorControls(
+        IndicatorBar(
             maChoices = state.maChoices,
             activeMa = state.maPeriods,
             showBoll = state.showBoll,
-            subPane = state.subPane,
+            subPanes = state.subPanes,
             onToggleMa = viewModel::toggleMaPeriod,
             onToggleBoll = viewModel::toggleBoll,
-            onSelectSubPane = viewModel::setSubPane,
+            onToggleSubPane = viewModel::toggleSubPane,
         )
-        ThinDivider()
-        state.stats.forEach { LabelValueRow(label = it.label, value = it.value) }
+
+        Rule(inset = Spacing.Gutter, strong = true)
+
+        StatsSection(stats = state.stats)
+
         Text(
-            text = "提示：预警在后台由常驻通知保活，杀掉进程后检测会停止",
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            text = "预警由常驻通知保活；杀掉进程后检测会停止",
+            modifier = Modifier.fillMaxWidth().padding(
+                start = Spacing.Gutter,
+                end = Spacing.Gutter,
+                top = Spacing.Sm,
+                bottom = Spacing.Xl,
+            ),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MarketTheme.colors.muted,
             textAlign = TextAlign.Center,
         )
     }
 }
 
-private const val CHART_HEIGHT_DP = 360
-
+/**
+ * 顶栏：返回 + 币种名 + 溢出菜单。
+ * 三个高频动作（刷新/建预警/自选）收进菜单，只把「自选」的当前状态做成菜单图标本身
+ * （未加自选时是空心星，加了是实心星），这样一眼能看出状态而不用展开菜单。
+ */
 @Composable
-private fun Header(
+private fun DetailTopBar(
     state: DetailUiState,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onToggleWatch: () -> Unit,
     onCreateAlert: () -> Unit,
 ) {
-    val watched = state.watched
+    val colors = MarketTheme.colors
+    var menuOpen by remember { mutableStateOf(false) }
     AppBar(
         title = state.title,
         subtitle = "${state.id.symbol} · ${state.id.market.label}",
         onBack = onBack,
+        large = false,
         actions = {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(
-                    state.price,
-                    style = PriceTextStyle.copy(fontSize = MaterialTheme.typography.titleLarge.fontSize),
-                    textAlign = TextAlign.End,
-                )
-                ChangeText(state.changePercent)
-            }
-            IconButton(onClick = onCreateAlert) {
-                Icon(Icons.Default.Notifications, contentDescription = "为该交易对建预警")
-            }
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Default.Refresh, contentDescription = "刷新")
-            }
-            IconButton(onClick = onToggleWatch) {
+            IconButton(onClick = onToggleWatch, modifier = Modifier.size(44.dp)) {
                 Icon(
-                    imageVector = if (watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = if (watched) "取消自选" else "加为自选",
-                    tint = if (watched) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
+                    imageVector = if (state.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (state.watched) "取消自选" else "加为自选",
+                    modifier = Modifier.size(20.dp),
+                    tint = if (state.watched) colors.accent else colors.muted,
                 )
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "更多操作",
+                        tint = colors.ink,
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text("为该交易对建预警") },
+                        leadingIcon = { Icon(Icons.Default.Notifications, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onCreateAlert()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("重新加载 K 线") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onRefresh()
+                        },
+                    )
+                }
             }
         },
     )
 }
 
+/**
+ * Hero 价格区：大字号价格 + 涨跌 + 24h 高低区间条。
+ *
+ * 这是详情页最重要的改动——价格是全屏最大的信息，必须占据最大的视觉权重。
+ * 数字用负字距的等宽体，价格变动时整块底色闪一下（沿用列表的闪现语言）。
+ */
 @Composable
-private fun IntervalChips(
+private fun Hero(state: DetailUiState) {
+    val colors = MarketTheme.colors
+    val flash = rememberPriceFlash(state.changePercent)
+    val priceColor by animateColorAsState(
+        targetValue = colors.forChange(state.changePercent),
+        animationSpec = tween(Motion.BaseMs),
+        label = "heroPriceColor",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(flash)
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+    ) {
+        Text(
+            text = state.price,
+            style = HeroPriceStyle,
+            color = priceColor,
+            maxLines = 1,
+        )
+        Spacer(Modifier.height(Spacing.Xxs))
+        ChangeText(
+            changePercent = state.changePercent,
+            showArrow = true,
+            fontSize = MaterialTheme.typography.titleMedium.fontSize,
+        )
+
+        val low = state.low24h
+        val high = state.high24h
+        val current = state.lastPrice
+        if (low != null && high != null && current != null && high > low) {
+            Spacer(Modifier.height(Spacing.Md))
+            RangeBar(low = low, high = high, current = current)
+            Spacer(Modifier.height(Spacing.Xs))
+            Row(modifier = Modifier.fillMaxWidth()) {
+                MetricCell(
+                    label = "24H 最低",
+                    value = formatPriceFor(low, state),
+                    valueStyle = MaterialTheme.typography.labelMedium,
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "24H 区间",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                )
+                Spacer(Modifier.weight(1f))
+                MetricCell(
+                    label = "24H 最高",
+                    value = formatPriceFor(high, state),
+                    align = Alignment.End,
+                    valueStyle = MaterialTheme.typography.labelMedium,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 用与主价格相同的精度格式化高低价。
+ * 两者是不同数值，但精度规则一致，所以按同一个 tickSize 走 PriceFormatter。
+ */
+private fun formatPriceFor(value: Double, state: DetailUiState): String =
+    PriceFormatter.format(BigDecimal(value.toString()), state.tickSize)
+
+/** 周期选择：横向可滚的方块标签。选中态用反色块，与图表区的指标条语言统一。 */
+@Composable
+private fun IntervalSelector(
     options: List<CandleInterval>,
     selected: CandleInterval,
     onSelect: (CandleInterval) -> Unit,
 ) {
-    Row(
+    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
+        SectionOverline(text = "周期")
+        Spacer(Modifier.height(Spacing.Xs))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Gutter),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+        ) {
+            options.forEach { option ->
+                FilterChip(
+                    text = option.label,
+                    selected = option == selected,
+                    onClick = { onSelect(option) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 图表区：高度按屏高自适应（屏高的 40%，钳制在 260–380dp）。
+ *
+ * 固定 360dp 的问题是：在 6.1 寸以下的机器上，图表 + 统计区会超出一屏，
+ * 用户必须滚动才能看到 24h 量能；而在折叠屏展开后 360dp 又显得矮。
+ */
+@Composable
+private fun ChartArea(
+    state: DetailUiState,
+    onLoadMore: () -> Unit,
+    onRetry: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .height(chartHeight())
+            .padding(top = Spacing.Sm),
     ) {
-        options.forEach { option ->
-            Chip(
-                text = option.label,
-                selected = option == selected,
-                onClick = { onSelect(option) },
+        when {
+            state.loadingCandles && state.candles.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.dp,
+                        color = colors.muted,
+                    )
+                }
+            }
+
+            state.candles.isEmpty() -> {
+                HintRow(
+                    title = "没有取到 K 线",
+                    subtitle = state.error ?: "换个周期或重新加载试试",
+                    actionLabel = "重新加载 →",
+                    onAction = onRetry,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+
+            else -> {
+                // 自研 Compose 画布而非 WebView：不依赖系统 WebView 与 GL 合成，
+                // 模拟器/低端机上同样能画出来，也少一套 HTML/JS 资源要维护。
+                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
+                    ChartModel.build(
+                        candles = state.candles,
+                        maPeriods = state.maPeriods,
+                        showBoll = state.showBoll,
+                        subPanes = state.subPanes,
+                    )
+                }
+                KlineChart(
+                    series = series,
+                    interval = state.interval,
+                    tickSize = state.tickSize,
+                    symbolKey = state.id.storageKey,
+                    onLoadMore = onLoadMore,
+                )
+            }
+        }
+        if (state.loadingMore) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center).size(24.dp),
+                strokeWidth = 2.dp,
+                color = colors.muted,
             )
         }
     }
 }
 
+/** 图表高度：屏高 40%，钳制到 [260, 400] dp。 */
 @Composable
-private fun IndicatorControls(
+private fun chartHeight(): Dp {
+    val screenHeight = LocalConfiguration.current.screenHeightDp
+    return (screenHeight * 0.4f).coerceIn(260f, 400f).dp
+}
+
+/**
+ * 指标开关条：主图叠图（MA / BOLL）与副图选择各占一行。
+ *
+ * MA 与副图**都允许全不选**：MA 全关 = 裸 K 图，副图全关 = 只留主图。
+ * 这是看图的基本需求，不做「至少留一个」的兜底。
+ */
+@Composable
+private fun IndicatorBar(
     maChoices: List<Int>,
     activeMa: List<Int>,
     showBoll: Boolean,
-    subPane: SubPaneKind,
+    subPanes: List<SubPaneKind>,
     onToggleMa: (Int) -> Unit,
     onToggleBoll: () -> Unit,
-    onSelectSubPane: (SubPaneKind) -> Unit,
+    onToggleSubPane: (SubPaneKind) -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
+        SectionOverline(text = "叠加指标")
+        Spacer(Modifier.height(Spacing.Xs))
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Gutter),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
         ) {
             maChoices.forEach { period ->
-                Chip(text = "MA$period", selected = period in activeMa, onClick = { onToggleMa(period) })
+                FilterChip(
+                    text = "MA$period",
+                    selected = period in activeMa,
+                    onClick = { onToggleMa(period) },
+                )
             }
-            Chip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
+            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
         }
+
+        Spacer(Modifier.height(Spacing.Md))
+        SectionOverline(text = "副图 · 可多选")
+        Spacer(Modifier.height(Spacing.Xs))
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Gutter),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
         ) {
-            Text(
-                text = "副图",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SegmentPicker(
-                options = SubPaneKind.entries.toList(),
-                selected = subPane,
-                labelOf = { it.label },
-                onSelect = onSelectSubPane,
-            )
+            SubPaneKind.entries.forEach { kind ->
+                FilterChip(
+                    text = kind.label,
+                    selected = kind in subPanes,
+                    onClick = { onToggleSubPane(kind) },
+                )
+            }
         }
     }
 }
 
+/**
+ * 统计区：单列「标签 —— 值」的长表，而不是 2×3 的网格。
+ *
+ * 网格在 6 项时最后一行会只剩一格，视觉上不平衡；而长表天然对齐、
+ * 各行的值左边缘一致，扫读一列数值时更顺。极简风也更接受这种「表格」形态。
+ */
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 5.dp),
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        )
+private fun StatsSection(stats: List<StatItem>) {
+    if (stats.isEmpty()) return
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Spacer(Modifier.height(Spacing.Lg))
+        SectionOverline(text = "24H 概览")
+        Spacer(Modifier.height(Spacing.Xs))
+        // chunked(2) 分成左右两列，但保持成对排列（高低/量额各自成对，语义相关）
+        stats.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+            ) {
+                pair.forEachIndexed { index, item ->
+                    MetricCell(
+                        label = item.label,
+                        value = item.value,
+                        modifier = Modifier.weight(1f),
+                        align = if (index == 0) Alignment.Start else Alignment.End,
+                    )
+                }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
     }
 }

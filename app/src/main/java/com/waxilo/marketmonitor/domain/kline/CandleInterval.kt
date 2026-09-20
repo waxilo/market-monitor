@@ -54,6 +54,9 @@ data class CandleInterval(val minutes: Long, val official: OfficialInterval?) {
     /** 存储用的稳定键。 */
     val storageKey: String get() = if (isOfficial) "o:${official?.apiCode}" else "c:$minutes"
 
+    /** 周期时长（毫秒）。用于按时间窗裁剪查询范围，避免扫全表。 */
+    val durationMs: Long get() = minutes * 60_000L
+
     companion object {
 
         /** 详情页默认展示的官方周期。 */

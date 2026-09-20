@@ -20,7 +20,7 @@ enum class MarketType(
         key = "SPOT",
         apiPrefix = "/api/v3",
         defaultRestHost = "https://api.binance.com",
-        defaultWsHost = "wss://stream.binance.com:9443",
+        defaultWsHost = "wss://data-stream.binance.vision",
         label = "现货",
     ),
     FUTURES(

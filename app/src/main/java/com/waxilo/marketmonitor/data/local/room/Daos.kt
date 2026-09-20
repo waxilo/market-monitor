@@ -83,6 +83,53 @@ interface KlineDao {
     @Query("SELECT MIN(openTime) FROM kline WHERE market = :market AND symbol = :symbol AND intervalKey = :intervalKey")
     suspend fun oldestOpenTime(market: String, symbol: String, intervalKey: String): Long?
 
+    /**
+     * 列表迷你走势线的数据源：取该币种最近 N 根指定周期的收盘价。
+     * 只 SELECT 需要的两列（而非 `*`），1500 根蜡烛也只搬 1500 个 (long, string)。
+     */
+    @Query(
+        """
+        SELECT close FROM kline
+        WHERE market = :market AND symbol = :symbol AND intervalKey = :intervalKey
+          AND openTime >= :fromOpenTime
+        ORDER BY openTime ASC LIMIT :limit
+        """
+    )
+    suspend fun recentCloses(
+        market: String,
+        symbol: String,
+        intervalKey: String,
+        fromOpenTime: Long,
+        limit: Int,
+    ): List<String>
+
+    /** 走势线是否有足够数据可画，避免为每个自选都查一次全表。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM kline
+        WHERE market = :market AND symbol = :symbol AND intervalKey = :intervalKey
+        """
+    )
+    suspend fun countFor(market: String, symbol: String, intervalKey: String): Int
+
+    /**
+     * 该标的**已缓存过的全部周期**及其根数。
+     *
+     * 用于走势线降级：用户可能只在 15m/1m 页停留过，缓存里没有首选周期。
+     * 与其让列表那一格空着，不如退到「有数据的周期里最粗的一个」再画。
+     */
+    @Query(
+        """
+        SELECT intervalKey, COUNT(*) AS n FROM kline
+        WHERE market = :market AND symbol = :symbol
+        GROUP BY intervalKey
+        """
+    )
+    suspend fun cachedIntervalCounts(market: String, symbol: String): List<IntervalCount>
+
+    /** [cachedIntervalCounts] 的行。 */
+    data class IntervalCount(val intervalKey: String, val n: Int)
+
     @Query("DELETE FROM kline WHERE market = :market AND symbol = :symbol AND intervalKey = :intervalKey")
     suspend fun clearFor(market: String, symbol: String, intervalKey: String)
 

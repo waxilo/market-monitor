@@ -1,6 +1,8 @@
 package com.waxilo.marketmonitor.ui.chart
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
@@ -8,29 +10,38 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
@@ -41,12 +52,15 @@ import com.waxilo.marketmonitor.domain.model.highDouble
 import com.waxilo.marketmonitor.domain.model.lowDouble
 import com.waxilo.marketmonitor.domain.model.openDouble
 import com.waxilo.marketmonitor.ui.theme.DownRed
+import com.waxilo.marketmonitor.ui.theme.MarketTheme
+import com.waxilo.marketmonitor.ui.theme.Radius
+import com.waxilo.marketmonitor.ui.theme.Spacing
 import com.waxilo.marketmonitor.ui.theme.UpGreen
 import java.math.BigDecimal
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sqrt
 
 /**
  * 自研 K 线画布（PRD FR-2.1，已定不引入第三方图表库）。
@@ -60,6 +74,12 @@ fun KlineChart(
     interval: CandleInterval,
     tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
+    /**
+     * 标的身份（如 `BTCUSDT`）。换标的时纵向缩放/平移必须复位：
+     * 平移量是「按原始量程折算的比例」，BTC 上 0.2 的位移放到 ETH 上毫无意义；
+     * 缩放虽是无量纲倍数，但跨标的保留也只会让人莫名其妙。
+     */
+    symbolKey: String = "",
     upColor: Color = UpGreen,
     downColor: Color = DownRed,
     onLoadMore: () -> Unit = {},
@@ -69,27 +89,73 @@ fun KlineChart(
     var viewport by remember { mutableStateOf(ChartViewport.initial(series.size)) }
     var crosshair by remember { mutableStateOf<Crosshair?>(null) }
     var oldestRequested by remember { mutableLongStateOf(-1L) }
+    // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
+    val measurer = rememberTextMeasurer()
+    /**
+     * 纵向缩放倍数（相对主图原始量程）。1f = 自动量程。
+     * 手指在**价格轴一侧**上下拖会改它 —— 这是「拉伸/压缩金额刻度」的手势。
+     */
+    var priceZoom by remember { mutableFloatStateOf(1f) }
+    /** 纵向平移（占主图高度的比例）。手指上滑看更低价区。 */
+    var pricePan by remember { mutableFloatStateOf(0f) }
+    /**
+     * 横向平移的「不足一根」余量（单位：根）。
+     *
+     * [ChartViewport.rightOffset] 是整数根数，而一次手势事件往往只移动几像素
+     * （除以 slot 后不足半根）。若直接把每帧的 `deltaPx / slot` 交给 `pan()`，
+     * `roundToInt()` 会把每帧的零头全部抹掉 —— 表现为「左右拖完全不动」。
+     * 所以把零头攒在这里，凑够一根才提交。
+     */
+    var barPanRemainder by remember { mutableFloatStateOf(0f) }
 
-    val geo = remember(canvasSize, density, series.subPane) {
-        ChartGeo.of(canvasSize, density, series.subPane != null)
+    val geo = remember(canvasSize, density, series.subPanes.size) {
+        ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.LEGEND_HEIGHT_DP)
     }
-    val window = remember(viewport, series.size) { viewport.window() }
+    /**
+     * 有数据的区间（**夹在 `0..barCount-1` 内**），只用于「算量程」——
+     * 右侧留白那段没有数据，参与算量程会把价格区间拉歪。
+     */
+    val dataWindow = remember(viewport, series.size) { viewport.window() }
+    /**
+     * 绘图区区间（**含右侧留白，可能越出序列末尾**），用于所有横向定位。
+     * 与 [dataWindow] 分开是因为两者在「最新 K 线左移留白」时起点不同：
+     * 用错会让整排蜡烛横向错位。
+     */
+    val plotRange = remember(viewport, series.size) { viewport.plotRange() }
     val visibleBars = remember(viewport) { viewport.clamp().visibleBars }
-    val mainRange = remember(series, window.first, window.last) {
-        series.mainRange(window.first, window.last)
+    /** 主图自动量程（未叠加用户纵向缩放）。 */
+    val autoRange = remember(series, dataWindow.first, dataWindow.last) {
+        series.mainRange(dataWindow.first, dataWindow.last)
     }
-    val subRange = remember(series, window.first, window.last) {
-        series.subRange(window.first, window.last)
+    val mainRange = remember(autoRange, priceZoom, pricePan) {
+        autoRange
+            .scaled(priceZoom, autoRange)
+            .panned(pricePan, autoRange)
+    }
+    val subRanges = remember(series, dataWindow.first, dataWindow.last) {
+        series.subPanes.map { series.subRange(it, dataWindow.first, dataWindow.last) }
     }
 
-    // 序列变长（新蜡烛、翻页）时右端视感保持不变
+    // 序列变长（新蜡烛、翻页）时保持当前右端视感：
+    // 用户可能正把最新一根推向左边看形态，来了根新蜡烛不该把他弹回最右端。
     LaunchedEffect(series.size) {
-        if (series.size > 0) viewport = viewport.resize(series.size)
+        if (series.size > 0) viewport = viewport.resize(series.size, keepRightOffset = true)
     }
     // 换周期等于换序列，视窗回到默认宽度，否则自定义周期里会带着上一周期的缩放比例
     LaunchedEffect(interval.storageKey) {
         viewport = ChartViewport.initial(series.size)
         crosshair = null
+        // 纵向缩放同样复位：新周期的价格量级可能完全不同，留着旧倍数会离谱
+        priceZoom = 1f
+        pricePan = 0f
+        // 横向零头按「根数」计，换周期后 slot 变了，旧零头已无意义
+        barPanRemainder = 0f
+    }
+    // 换标的同理：跨标的的纵向缩放/平移没有可比性，必须复位
+    LaunchedEffect(symbolKey) {
+        priceZoom = 1f
+        pricePan = 0f
+        barPanRemainder = 0f
     }
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
@@ -109,26 +175,49 @@ fun KlineChart(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                .pointerInput(geo.plotWidthPx, series.size, visibleBars) {
+                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, series.size, visibleBars) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
                         plotWidth = geo.plotWidthPx,
+                        plotHeight = geo.mainHeightPx,
+                        onGestureStart = { barPanRemainder = 0f },
                         onPan = { deltaPx ->
                             val slot = geo.slot(viewport.clamp().visibleBars)
-                            val moved = viewport.pan(if (slot > 0f) deltaPx / slot else 0f)
-                            viewport = moved
-                            // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）
-                            if (deltaPx > 0f && moved.startIndex() == 0) {
-                                val oldest = series.candles.firstOrNull()?.openTime ?: 0L
-                                if (oldest != oldestRequested) {
-                                    oldestRequested = oldest
-                                    onLoadMore()
+                            // 换算成「整根 + 余量」：单帧位移通常不足一根，
+                            // 逐帧取整会把零头全抹掉（历史上表现为横向完全拖不动）。
+                            val step = ChartGesture.accumulateBarPan(barPanRemainder, deltaPx, slot)
+                            barPanRemainder = step.remainder
+                            if (step.bars != 0) {
+                                val moved = viewport.pan(step.bars.toFloat())
+                                viewport = moved
+                                // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）
+                                if (step.bars > 0 && moved.startIndex() == 0) {
+                                    val oldest = series.candles.firstOrNull()?.openTime ?: 0L
+                                    if (oldest != oldestRequested) {
+                                        oldestRequested = oldest
+                                        onLoadMore()
+                                    }
                                 }
                             }
                         },
                         onZoom = { barFactor, anchorX ->
                             viewport = viewport.zoom(barFactor, anchorX / geo.plotWidthPx)
+                        },
+                        onPriceZoom = { factor ->
+                            // 用 autoRange 当基准算钳制边界，不能传当前量程（会越缩越跑）
+                            priceZoom = (priceZoom * factor).coerceIn(
+                                ValueRange.MIN_SPAN_RATIO.toFloat(),
+                                ValueRange.MAX_SPAN_RATIO.toFloat(),
+                            )
+                        },
+                        onPricePan = { deltaFraction ->
+                            // 钳的是累积量本身而不是渲染结果：否则拖到边界后 pricePan
+                            // 还在涨，反向拖要先走完这段空行程才见效，手感像卡住了。
+                            // 跨度取「缩放后」的量程（平移不改变跨度），与渲染时一致。
+                            val span = (autoRange.high - autoRange.low) * priceZoom
+                            val limit = autoRange.panLimit(autoRange, span)
+                            pricePan = (pricePan + deltaFraction).coerceIn(limit.start, limit.endInclusive)
                         },
                         onCrosshair = { position ->
                             crosshair = if (position == null) null else {
@@ -140,16 +229,38 @@ fun KlineChart(
                 },
         ) {
             if (series.size == 0 || geo.plotWidthPx <= 1f) return@Canvas
-            drawGridAndAxes(geo, palette, mainRange, subRange)
-            drawCandles(series, window, visibleBars, geo, palette, mainRange)
-            drawOverlays(series, window, visibleBars, geo, palette, mainRange)
-            drawLastPrice(series, geo, palette, mainRange)
-            series.subPane?.let { drawSubPane(series, it, window, visibleBars, geo, palette, subRange) }
-            drawCrosshair(crosshair, window, visibleBars, geo, palette, series, mainRange, subRange)
+            // 纵向缩放/平移会把 K 线推出量程，`toFraction` 只把结果夹到 [-0.5, 1.5]，
+            // 落在边界外的部分仍会被画出来 —— 于是 K 线跑到图例带和时间轴上去。
+            // 用 clipRect 把每次绘制限制在本 pane 的矩形里，才是根治。
+            clipRect(
+                left = 0f,
+                top = geo.mainTopPx,
+                right = geo.plotWidthPx,
+                bottom = geo.mainTopPx + geo.mainHeightPx,
+            ) {
+                drawGridAndAxes(geo, palette, mainRange, subRanges)
+                drawCandles(series, plotRange, visibleBars, geo, palette, mainRange)
+                drawOverlays(series, plotRange, visibleBars, geo, palette, mainRange)
+                drawLastPrice(series, geo, palette, mainRange)
+            }
+            series.subPanes.forEachIndexed { index, pane ->
+                clipRect(
+                    left = 0f,
+                    top = geo.subTopOf(index),
+                    right = geo.plotWidthPx,
+                    bottom = geo.subTopOf(index) + geo.subHeightPx,
+                ) {
+                    drawSubPane(
+                        series, pane, plotRange, visibleBars, geo, palette, subRanges[index], index,
+                    )
+                }
+            }
+            drawCrosshair(crosshair, plotRange, visibleBars, geo, palette)
         }
 
         PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
-        TimeAxisLabels(series, window, visibleBars, geo, interval, density, Modifier.align(Alignment.TopStart))
+        SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
+        TimeAxisLabels(series, plotRange, visibleBars, geo, interval, density, Modifier.align(Alignment.TopStart))
         ChartLegend(
             tooltip = remember(crosshair, series.size, interval, tickSize) {
                 ChartModel.tooltip(
@@ -159,9 +270,66 @@ fun KlineChart(
                     tickSize,
                 )
             },
-            modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(start = Spacing.Sm, top = 4.dp),
+            legendMaxWidth = with(density) { geo.plotWidthPx.toDp() } - Spacing.Sm * 2,
         )
+        // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
+        // 而且没有任何办法回去（双击复位这个手势不显眼）。
+        // 位置选**绘图区左下角**：
+        //   · 右侧不放 —— 最新/最该看的蜡烛就在右边，浮层压上去代价最大；
+        //   · 顶部不放 —— 图例带（开高低收/量）占满左上，且绘图区顶端往往是近期高点；
+        //   · 左下角是整块图里信息密度最低的地方（左侧是历史蜡烛、下沿是最低价影线），
+        //     且天然离图例与时间轴都足够远。
+        if (priceZoom != 1f || pricePan != 0f) {
+            val badgeStyle = MaterialTheme.typography.labelSmall
+            val badgeSize = remember(badgeStyle, density) {
+                measurer.measure(
+                    AnnotatedString(RESET_BADGE_TEXT),
+                    badgeStyle,
+                    density = density,
+                ).size
+            }
+            val badgeHeightPx = with(density) {
+                badgeSize.height.toFloat() + RESET_BADGE_VERTICAL_PADDING_DP.dp.toPx()
+            }
+            PriceScaleResetBadge(
+                onClick = {
+                    priceZoom = 1f
+                    pricePan = 0f
+                },
+                modifier = Modifier
+                    .offset(
+                        x = Spacing.Sm,
+                        y = with(density) {
+                            ((geo.mainTopPx + geo.mainHeightPx) - badgeHeightPx - Spacing.Xs.toPx())
+                                .toDp()
+                        },
+                    ),
+            )
+        }
     }
+}
+
+/** 「价格刻度已缩放 · 复位」小标。 */
+@Composable
+private fun PriceScaleResetBadge(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = MarketTheme.colors
+    Text(
+        text = "刻度已缩放 · 复位",
+        modifier = modifier
+            .clip(RoundedCornerShape(Radius.Full))
+            .background(colors.wash)
+            .clickable(onClick = onClick)
+            .padding(
+                horizontal = Spacing.Xs,
+                vertical = RESET_BADGE_VERTICAL_PADDING_DP.dp / 2,
+            ),
+        style = MaterialTheme.typography.labelSmall,
+        color = colors.muted,
+        maxLines = 1,
+    )
 }
 
 /** 十字光标：竖线锁定到某根蜡烛，横线跟手指。 */
@@ -188,16 +356,25 @@ private data class ChartPalette(
 
 /**
  * 像素布局：价格刻度固定右侧、时间刻度固定底部，其余给蜡烛。
- * 有副图时主图占 [MAIN_SHARE]，两图共用横轴，因此左右边界天然对齐。
+ * 有副图时主图占 [MAIN_SHARE]，全部副图等分剩余高度、共用横轴，
+ * 因此左右边界天然对齐。
+ *
+ * 副图数量可变（0~4），所以副图区域用「第几块」描述而不是单一起点/高度：
+ * `subTopOf(i)` / `subHeightPx` 算出每块自己的矩形。
+ *
+ * 顶部额外预留 [LEGEND_HEIGHT_DP] 给图例（开高低收/量），
+ * 否则图例是自由流的多行 Text，会直接压在蜡烛和网格上。
  */
 private data class ChartGeo(
     val plotWidthPx: Float,
     val plotHeightPx: Float,
     val labelWidthPx: Float,
     val timeAxisHeightPx: Float,
+    /** 图例占用的高度；绘图区（含主图与副图）从这条线以下才开始。 */
+    val legendHeightPx: Float,
     val mainHeightPx: Float,
-    val subTopPx: Float,
-    val subHeightPx: Float,
+    /** 副图块数；0 表示不显示副图。 */
+    val subCount: Int,
 ) {
     fun slot(visibleBars: Int): Float = plotWidthPx / max(1, visibleBars)
 
@@ -209,47 +386,83 @@ private data class ChartGeo(
 
     fun bodyWidth(visibleBars: Int): Float = (slot(visibleBars) * BODY_SHARE).coerceIn(1f, 26f)
 
+    /**
+     * 主图顶边：图例之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，
+     * 直接传 0f 会把曲线画到图例里。
+     */
+    val plotTopPx: Float get() = legendHeightPx
+
+    /** 绘图区（主图 + 全部副图）总高度。 */
+    val candlesHeightPx: Float get() = plotHeightPx - legendHeightPx
+
+    /** 每块副图的高度（等分主图之外的区域）。 */
+    val subHeightPx: Float
+        get() = if (subCount <= 0) 0f else (candlesHeightPx - mainHeightPx) / subCount
+
+    /** 第 [index] 块副图的顶边 Y。 */
+    fun subTopOf(index: Int): Float = plotTopPx + mainHeightPx + index * subHeightPx
+
     companion object {
         const val MAIN_SHARE = 0.72f
         const val BODY_SHARE = 0.66f
         const val AXIS_LABEL_WIDTH_DP = 58f
         const val TIME_AXIS_HEIGHT_DP = 18f
 
-        fun of(size: IntSize, density: Density, hasSubPane: Boolean): ChartGeo = with(density) {
-            val label = AXIS_LABEL_WIDTH_DP.dp.toPx()
-            val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
-            val plotWidth = max(1f, size.width.toFloat() - label)
-            val plotHeight = max(1f, size.height.toFloat() - timeAxis)
-            val main = if (hasSubPane) plotHeight * MAIN_SHARE else plotHeight
-            ChartGeo(
-                plotWidthPx = plotWidth,
-                plotHeightPx = plotHeight,
-                labelWidthPx = label,
-                timeAxisHeightPx = timeAxis,
-                mainHeightPx = main,
-                subTopPx = main,
-                subHeightPx = if (hasSubPane) plotHeight - main else 0f,
-            )
-        }
+        /**
+         * 图例区高度：4 行 labelSmall（时间行 + 开高 + 低收 + 量）≈ 4×13dp，
+         * 再加一点与绘图区的间距。行数变了必须同步改这里，否则图例又会压到蜡烛上。
+         */
+        const val LEGEND_HEIGHT_DP = 62f
+
+        fun of(size: IntSize, density: Density, subCount: Int, legendHeightDp: Float): ChartGeo =
+            with(density) {
+                val label = AXIS_LABEL_WIDTH_DP.dp.toPx()
+                val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
+                val legend = legendHeightDp.dp.toPx()
+                val plotWidth = max(1f, size.width.toFloat() - label)
+                val plotHeight = max(1f, size.height.toFloat() - timeAxis)
+                // 极端窄高比下先保住蜡烛区域，再夹图例区，避免把绘图区压没
+                val safeLegend = legend.coerceAtMost((plotHeight * 0.3f).coerceAtLeast(0f))
+                val candles = max(1f, plotHeight - safeLegend)
+                val main = if (subCount > 0) candles * MAIN_SHARE else candles
+                ChartGeo(
+                    plotWidthPx = plotWidth,
+                    plotHeightPx = plotHeight,
+                    labelWidthPx = label,
+                    timeAxisHeightPx = timeAxis,
+                    legendHeightPx = safeLegend,
+                    mainHeightPx = main,
+                    subCount = subCount,
+                )
+            }
     }
 }
+
+/**
+ * 主图区域：顶边 [ChartGeo.mainTopPx]、高度 [ChartGeo.mainHeightPx]。
+ * `yOf` 只认「相对顶边的比例」，所以这两个值必须成对传，不能只换其中一个。
+ */
+private val ChartGeo.mainTopPx: Float get() = plotTopPx
 
 private fun DrawScope.drawGridAndAxes(
     geo: ChartGeo,
     palette: ChartPalette,
     mainRange: ValueRange,
-    subRange: ValueRange,
+    subRanges: List<ValueRange>,
 ) {
     mainRange.gridLines().forEach { value ->
-        val y = geo.yOf(mainRange.toFraction(value), 0f, geo.mainHeightPx)
-        if (y in 0f..geo.mainHeightPx) {
+        val y = geo.yOf(mainRange.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
+        if (y in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) {
             drawLine(palette.grid, Offset(0f, y), Offset(geo.plotWidthPx, y), 1f)
         }
     }
-    if (geo.subHeightPx > 1f) {
-        drawLine(palette.grid, Offset(0f, geo.subTopPx), Offset(geo.plotWidthPx, geo.subTopPx), 1f)
+    // 每块副图各画一条与主图的分隔线 + 零轴（MACD 这类有正负的指标需要基准线）
+    subRanges.forEachIndexed { index, subRange ->
+        if (geo.subHeightPx <= 1f) return@forEachIndexed
+        val top = geo.subTopOf(index)
+        drawLine(palette.grid, Offset(0f, top), Offset(geo.plotWidthPx, top), 1f)
         if (subRange.low < 0 && subRange.high > 0) {
-            val zero = geo.yOf(subRange.toFraction(0.0), geo.subTopPx, geo.subHeightPx)
+            val zero = geo.yOf(subRange.toFraction(0.0), top, geo.subHeightPx)
             drawLine(palette.grid, Offset(0f, zero), Offset(geo.plotWidthPx, zero), 1f)
         }
     }
@@ -266,21 +479,23 @@ private fun DrawScope.drawCandles(
     val slot = geo.slot(visibleBars)
     val bodyWidth = geo.bodyWidth(visibleBars)
     val half = bodyWidth / 2f
+    // window 是 plotRange（含右侧留白，可能越出序列末尾），所以索引一律走 getOrNull：
+    // 右侧留白那几根没有数据，不画即可，不能让它崩掉。
     for (i in window) {
-        val candle = series.candles[i]
+        val candle = series.candles.getOrNull(i) ?: continue
         val color = if (candle.close >= candle.open) palette.up else palette.down
         val x = geo.xOf(i, window.first, visibleBars)
         if (x < 0f || x > geo.plotWidthPx) continue
-        val highY = geo.yOf(range.toFraction(candle.highDouble()), 0f, geo.mainHeightPx)
-        val lowY = geo.yOf(range.toFraction(candle.lowDouble()), 0f, geo.mainHeightPx)
+        val highY = geo.yOf(range.toFraction(candle.highDouble()), geo.mainTopPx, geo.mainHeightPx)
+        val lowY = geo.yOf(range.toFraction(candle.lowDouble()), geo.mainTopPx, geo.mainHeightPx)
         if (slot < 1.5f) {
             // 密度太高时实体只会糊成一片，退化成一根影线
             drawLine(color, Offset(x, min(highY, lowY)), Offset(x, max(highY, lowY)), 1f)
             continue
         }
         drawLine(color, Offset(x, highY), Offset(x, lowY), 1f)
-        val openY = geo.yOf(range.toFraction(candle.openDouble()), 0f, geo.mainHeightPx)
-        val closeY = geo.yOf(range.toFraction(candle.closeDouble()), 0f, geo.mainHeightPx)
+        val openY = geo.yOf(range.toFraction(candle.openDouble()), geo.mainTopPx, geo.mainHeightPx)
+        val closeY = geo.yOf(range.toFraction(candle.closeDouble()), geo.mainTopPx, geo.mainHeightPx)
         val top = min(openY, closeY)
         drawRect(
             color = color,
@@ -302,7 +517,7 @@ private fun DrawScope.drawOverlays(
         bandPath(upper, lower, window, visibleBars, geo, range)?.let { drawPath(it, palette.band) }
     }
     series.overlay.lines.forEach { line ->
-        val path = linePath(line.values, window, visibleBars, geo, range, geo.mainHeightPx, 0f)
+        val path = linePath(line.values, window, visibleBars, geo, range, geo.mainHeightPx, geo.mainTopPx)
         if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.5f))
     }
 }
@@ -314,8 +529,8 @@ private fun DrawScope.drawLastPrice(
     range: ValueRange,
 ) {
     val last: Kline = series.candles.lastOrNull() ?: return
-    val y = geo.yOf(range.toFraction(last.closeDouble()), 0f, geo.mainHeightPx)
-    if (y !in 0f..geo.mainHeightPx) return
+    val y = geo.yOf(range.toFraction(last.closeDouble()), geo.mainTopPx, geo.mainHeightPx)
+    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
     drawLine(
         color = if (last.close >= last.open) palette.up else palette.down,
         start = Offset(0f, y),
@@ -333,14 +548,17 @@ private fun DrawScope.drawSubPane(
     geo: ChartGeo,
     palette: ChartPalette,
     range: ValueRange,
+    paneIndex: Int,
 ) {
+    val top = geo.subTopOf(paneIndex)
+    val height = geo.subHeightPx
     pane.bars?.let { bars ->
         val width = geo.bodyWidth(visibleBars)
-        val base = geo.yOf(range.toFraction(0.0.coerceIn(range.low, range.high)), geo.subTopPx, geo.subHeightPx)
+        val base = geo.yOf(range.toFraction(0.0.coerceIn(range.low, range.high)), top, height)
         for (i in window) {
             val value = bars.getOrNull(i) ?: continue
             if (value.isNaN()) continue
-            val y = geo.yOf(range.toFraction(value), geo.subTopPx, geo.subHeightPx)
+            val y = geo.yOf(range.toFraction(value), top, height)
             val candle = series.candles.getOrNull(i)
             val color = if (candle == null || candle.close >= candle.open) palette.up else palette.down
             drawRect(
@@ -351,7 +569,7 @@ private fun DrawScope.drawSubPane(
         }
     }
     pane.lines.forEach { line ->
-        val path = linePath(line.values, window, visibleBars, geo, range, geo.subHeightPx, geo.subTopPx)
+        val path = linePath(line.values, window, visibleBars, geo, range, height, top)
         if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.2f))
     }
 }
@@ -362,9 +580,6 @@ private fun DrawScope.drawCrosshair(
     visibleBars: Int,
     geo: ChartGeo,
     palette: ChartPalette,
-    series: ChartSeries,
-    mainRange: ValueRange,
-    subRange: ValueRange,
 ) {
     val mark = crosshair ?: return
     if (mark.index !in window) return
@@ -372,12 +587,14 @@ private fun DrawScope.drawCrosshair(
     val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
     drawLine(
         palette.crosshair.copy(alpha = 0.7f),
-        Offset(x, 0f),
+        Offset(x, geo.plotTopPx),
         Offset(x, geo.plotHeightPx),
         1.5f,
         pathEffect = dash,
     )
-    val y = mark.yPx.coerceIn(0f, geo.plotHeightPx)
+    // 横线只在主图内跟随手指：落到副图上时画一条横贯全高的线会盖住副图读数
+    if (mark.yPx > geo.mainTopPx + geo.mainHeightPx) return
+    val y = mark.yPx.coerceIn(geo.mainTopPx, geo.mainTopPx + geo.mainHeightPx)
     drawLine(
         palette.crosshair.copy(alpha = 0.7f),
         Offset(0f, y),
@@ -423,19 +640,27 @@ private fun bandPath(
     return Path().apply {
         points.forEachIndexed { order, i ->
             val x = geo.xOf(i, window.first, visibleBars)
-            val y = geo.yOf(range.toFraction(upper[i]), 0f, geo.mainHeightPx)
+            val y = geo.yOf(range.toFraction(upper[i]), geo.mainTopPx, geo.mainHeightPx)
             if (order == 0) moveTo(x, y) else lineTo(x, y)
         }
         points.asReversed().forEach { i ->
             lineTo(
                 geo.xOf(i, window.first, visibleBars),
-                geo.yOf(range.toFraction(lower[i]), 0f, geo.mainHeightPx),
+                geo.yOf(range.toFraction(lower[i]), geo.mainTopPx, geo.mainHeightPx),
             )
         }
         close()
     }
 }
 
+/**
+ * 主图右侧价格刻度。
+ *
+ * 两条边界规则：
+ * - 文字**垂直居中**到网格线上（旧版用 `y - 6f` 硬编码，字高变了就偏）；
+ * - 相邻刻度挨太近时**丢掉下面那条**——价格区间被压得很窄时网格线会挤成一堆，
+ *   逐一画出来就是重叠的乱码。
+ */
 @Composable
 private fun PriceAxisLabels(
     range: ValueRange,
@@ -445,18 +670,128 @@ private fun PriceAxisLabels(
     modifier: Modifier = Modifier,
 ) {
     val decimals = PriceFormatter.decimalsFor(tickSize)
+    val style = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    val labelHeightPx = remember(style, density) {
+        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
+    }
+    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
+
+    var lastDrawnY = Float.NEGATIVE_INFINITY
     range.gridLines().forEach { value ->
-        val y = geo.yOf(range.toFraction(value), 0f, geo.mainHeightPx)
-        if (y !in 0f..geo.plotHeightPx) return@forEach
-        Text(
+        val y = geo.yOf(range.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
+        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+        if (y - lastDrawnY < minGapPx) return@forEach
+        lastDrawnY = y
+        AxisLabel(
             text = PriceFormatter.localeNumber(value, decimals),
-            modifier = modifier.offset(x = with(density) { geo.plotWidthPx.toDp() }, y = with(density) { (y - 6f).toDp() }),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            x = geo.plotWidthPx,
+            centerYPx = y,
+            labelHeightPx = labelHeightPx,
+            density = density,
+            style = style,
+            modifier = modifier,
         )
     }
 }
 
+/**
+ * 右侧轴文字：以 [centerYPx] 垂直居中。
+ * 用固定 [labelHeightPx] 折半来定位，避免依赖 TextStyle 的行高推断。
+ */
+@Composable
+private fun AxisLabel(
+    text: String,
+    x: Float,
+    centerYPx: Float,
+    labelHeightPx: Float,
+    density: Density,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = text,
+        modifier = modifier.offset(
+            x = with(density) { x.toDp() },
+            y = with(density) { (centerYPx - labelHeightPx / 2f).toDp() },
+        ),
+        style = style,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+    )
+}
+
+/**
+ * 副图的右侧纵轴刻度 + 左上角标题。
+ *
+ * 副图是多选可变的（0~4 块），所以标题必须画，否则用户看到两条线不知道哪个是 MACD；
+ * 刻度只在每块副图自己的高度里取 2 条，避免小块副图被数字塞满。
+ */
+@Composable
+private fun SubAxisLabels(
+    panes: List<SubPaneData>,
+    ranges: List<ValueRange>,
+    geo: ChartGeo,
+    density: Density,
+    modifier: Modifier = Modifier,
+) {
+    if (panes.isEmpty() || geo.subHeightPx <= 1f) return
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val style = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    val labelHeightPx = remember(style, density) {
+        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
+    }
+    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
+
+    panes.forEachIndexed { index, pane ->
+        val range = ranges.getOrNull(index) ?: return@forEachIndexed
+        val top = geo.subTopOf(index)
+        Text(
+            text = pane.title,
+            modifier = modifier.offset(
+                x = SUB_PANE_TITLE_INSET_DP.dp,
+                y = with(density) { (top + SUB_PANE_TITLE_INSET_DP).toDp() },
+            ),
+            style = style,
+            color = labelColor,
+            maxLines = 1,
+        )
+        // 取首尾两条刻度：副图块普遍矮，画满会糊；挨太近时同样丢掉下面那条
+        val lines = range.gridLines(count = 2)
+        val picks = listOfNotNull(lines.firstOrNull(), lines.lastOrNull()).distinct()
+        var lastDrawnY = Float.NEGATIVE_INFINITY
+        picks.forEach { value ->
+            val y = geo.yOf(range.toFraction(value), top, geo.subHeightPx)
+            if (y - lastDrawnY < minGapPx) return@forEach
+            lastDrawnY = y
+            Text(
+                text = PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS),
+                modifier = modifier.offset(
+                    x = with(density) { geo.plotWidthPx.toDp() },
+                    y = with(density) { (y - labelHeightPx / 2f).toDp() },
+                ),
+                style = style,
+                color = labelColor,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/**
+ * 时间轴刻度。
+ *
+ * 两个必须量的约束（旧版只按「最多几条」算，必然重叠）：
+ * 1. **步长由标签实际宽度反推**：`MM-dd HH:mm` 有 11 个字符，在 1080px 宽的屏上
+ *    最多只放得下 3 条。所以先量出单条宽度 `labelWidthPx`，再按
+ *    `minGap = labelWidthPx + 间隙` 算每条之间至少要跨多少像素。
+ * 2. **右端必须裁掉**：贴着右边界的那条会横跨到价格轴上，所以最后一条的右边缘
+ *    不能超过 [ChartGeo.plotWidthPx]。
+ *
+ * 另外文字用 `centerX` 对齐到刻度位置（旧版按左边缘定位，导致标签整体右偏、
+ * 与下一个标签的间隙看起来更窄）。
+ */
 @Composable
 private fun TimeAxisLabels(
     series: ChartSeries,
@@ -469,43 +804,87 @@ private fun TimeAxisLabels(
 ) {
     val count = window.count()
     if (count <= 1 || geo.plotWidthPx <= 1f) return
-    val step = max(1, count / MAX_TIME_LABELS)
-    var index = window.first
-    while (index <= window.last) {
-        val candle = series.candles.getOrNull(index) ?: break
-        val x = geo.xOf(index, window.first, visibleBars)
-        if (x > geo.plotWidthPx) break
+
+    val style = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+
+    // 用最长的一条（含最宽数字）量一次，作为步长的下界；只量一次，不逐条测量。
+    val sampleWidthPx = remember(interval, density, style) {
+        val sample = ChartModel.formatTime(0L, interval.minutes)
+        measurer.measure(AnnotatedString(sample), style, density = density).size.width.toFloat()
+    }
+    val minGapPx = sampleWidthPx + with(density) { TIME_LABEL_MIN_GAP_DP.dp.toPx() }
+
+    // 「能放下几条」只决定起点步长的下限；真正是否放下由 [ChartModel.timeLabelPlacements]
+    // 按前后两个标签的实际像素间距判定。旧版只按条数算 step，遇到「左端被夹进来」
+    // 的标签就必然重叠（真实踩过 17:18 / 17:23 贴在一起）。
+    val capacity = max(1, (geo.plotWidthPx / minGapPx).toInt())
+    val slots = capacity.coerceAtMost(MAX_TIME_LABELS)
+    val step = max(1, ceil(count / slots.toFloat()).toInt())
+    val candidates = buildList {
+        var i = window.first
+        while (i <= window.last) {
+            val candle = series.candles.getOrNull(i) ?: break
+            add(geo.xOf(i, window.first, visibleBars) to candle.openTime)
+            i += step
+        }
+    }
+
+    ChartModel.timeLabelPlacements(
+        centersPx = candidates.map { it.first },
+        labelWidthPx = sampleWidthPx,
+        plotWidthPx = geo.plotWidthPx,
+        minGapPx = minGapPx,
+        step = 1,
+    ).forEach { placement ->
+        val time = candidates[placement.index].second
         Text(
-            text = ChartModel.formatTime(candle.openTime, interval.minutes),
+            text = ChartModel.formatTime(time, interval.minutes),
             modifier = modifier.offset(
-                x = with(density) { x.toDp() },
+                x = with(density) { placement.leftPx.toDp() },
                 y = with(density) { (geo.plotHeightPx + 2f).toDp() },
             ),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = style,
+            color = labelColor,
+            maxLines = 1,
         )
-        index += step
     }
 }
 
 @Composable
-private fun ChartLegend(tooltip: CandleTooltip?, modifier: Modifier = Modifier) {
+private fun ChartLegend(
+    tooltip: CandleTooltip?,
+    legendMaxWidth: Dp,
+    modifier: Modifier = Modifier,
+) {
     if (tooltip == null) return
-    Column(modifier = modifier) {
+    Column(modifier = modifier.widthIn(max = legendMaxWidth)) {
         Text(
             text = tooltip.time + "  " + tooltip.changeText,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
         )
+        // 拆成「开/高」与「低/收」两行：单行四个价格在 8 位数字时会顶到价格轴，
+        // 拆开后每行长度腰斩，再窄的屏也放得下。
         Text(
-            text = "开 ${tooltip.open} 高 ${tooltip.high} 低 ${tooltip.low} 收 ${tooltip.close}",
+            text = "开 ${tooltip.open} 高 ${tooltip.high}",
             style = MaterialTheme.typography.labelSmall,
             color = if (tooltip.up) UpGreen else DownRed,
+            maxLines = 1,
+        )
+        Text(
+            text = "低 ${tooltip.low} 收 ${tooltip.close}",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (tooltip.up) UpGreen else DownRed,
+            maxLines = 1,
         )
         Text(
             text = "量 ${tooltip.volume}",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
         )
     }
 }
@@ -514,22 +893,47 @@ private fun ChartLegend(tooltip: CandleTooltip?, modifier: Modifier = Modifier) 
  * 单指平移、双指缩放、长按出十字光标，全在一个手势循环里判定。
  * 不用 detectTransformGestures：它与自定义长按分属两个 pointerInput 链节点，
  * 抢占事件时行为依赖链顺序，缩放手势一旦改版就会被静默打断。
+ *
+ * 手势分区（按手指起点和主方向判定，不是靠控件位置）：
+ * - **单指横向** → 平移时间轴（看更早/更晚）；
+ * - **单指纵向** → 拉伸/压缩价格刻度（手指上滑 = 量程上移看更低价区）；
+ * - **双指** → 横向张合缩放时间轴 + 纵向张合缩放价格刻度（两个维度同时生效）；
+ * - **长按** → 十字光标。
+ *
+ * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
+ * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
  */
 private suspend fun PointerInputScope.detectChartGestures(
     longPressMs: Long,
     touchSlop: Float,
     plotWidth: Float,
+    plotHeight: Float,
+    /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
+    onGestureStart: () -> Unit,
     onPan: (deltaPx: Float) -> Unit,
     onZoom: (barFactor: Float, anchorX: Float) -> Unit,
+    onPriceZoom: (factor: Float) -> Unit,
+    onPricePan: (deltaFraction: Float) -> Unit,
     onCrosshair: (Offset?) -> Unit,
 ) {
     awaitEachGesture {
         val first = awaitFirstDown(requireUnconsumed = false)
+        // 立刻消费 down：图表落在 verticalScroll 的父容器里，
+        // 不抢占的话父容器会先开一个滚动手势，纵向拖动就变成翻页而不是调刻度。
+        first.consume()
+        // 新手势开始：把上一场遗留的「不足一根」零头清掉，
+        // 否则上一场拖到一半松手，零头会算进下一场，手感上多出一小段跳动。
+        onGestureStart()
         // 自己记下每个指头上一次的位置：不依赖 positionChange，它在不同版本里签名动过
         val lastPositions = mutableMapOf<Any, Offset>()
         var travelled = 0f
-        var previousDistance = 0f
+        var previousDistanceX = 0f
+        var previousDistanceY = 0f
         var longPressActive = false
+        // 单指方向锁：null 表示还没定，锁定后本次手势不再改
+        var axis: ChartGesture.Axis? = null
+        var axisAccumX = 0f
+        var axisAccumY = 0f
         while (true) {
             val event = awaitPointerEvent()
             val pressed: List<PointerInputChange> = event.changes.filter { change -> change.pressed }
@@ -537,35 +941,56 @@ private suspend fun PointerInputScope.detectChartGestures(
             val primary = pressed.first()
             val previous = lastPositions[primary.id] ?: primary.position
             pressed.forEach { change -> lastPositions[change.id] = change.position }
+            // 每次事件都先消费，避免父滚动容器把纵向位移吃掉
+            pressed.forEach { change -> change.consume() }
 
             if (!longPressActive && pressed.size == 1) {
                 val held = primary.uptimeMillis - first.uptimeMillis
                 if (held >= longPressMs && travelled <= touchSlop) longPressActive = true
             }
             if (longPressActive) {
-                pressed.forEach { change -> change.consume() }
                 onCrosshair(primary.position)
                 continue
             }
             if (pressed.size >= 2) {
-                val distance = distanceBetween(pressed[0].position, pressed[1].position)
+                // 双指：水平方向管时间轴缩放，垂直方向管价格刻度缩放，互不打架
+                val dx = abs(pressed[0].position.x - pressed[1].position.x)
+                val dy = abs(pressed[0].position.y - pressed[1].position.y)
                 val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
-                if (previousDistance > 0f && distance > 0f) {
-                    // 双指张开时距离变大、可见根数应变少，因此因子取倒数比
-                    onZoom((previousDistance / distance).coerceIn(0.5f, 2f), anchorX.coerceIn(0f, plotWidth))
+                ChartGesture.pinchFactor(previousDistanceX, dx)?.let { factor ->
+                    onZoom(factor, anchorX.coerceIn(0f, plotWidth))
                 }
-                previousDistance = distance
-                pressed.forEach { change -> change.consume() }
+                if (plotHeight > 0f) {
+                    // 垂直张开 = 量程变大（把价格压扁看全局），与水平方向直觉一致
+                    ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
+                }
+                previousDistanceX = dx
+                previousDistanceY = dy
                 continue
             }
             val deltaX = primary.position.x - previous.x
             val deltaY = primary.position.y - previous.y
             if (deltaX != 0f || deltaY != 0f) {
                 travelled += abs(deltaX) + abs(deltaY)
-                previousDistance = 0f
-                if (abs(deltaX) > 0.1f) {
-                    primary.consume()
-                    onPan(deltaX)
+                previousDistanceX = 0f
+                previousDistanceY = 0f
+                // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
+                if (axis == null) {
+                    axisAccumX += deltaX
+                    axisAccumY += deltaY
+                    axis = ChartGesture.axisLock(axisAccumX, axisAccumY, DIRECTION_LOCK_PX)
+                }
+                when (axis) {
+                    ChartGesture.Axis.HORIZONTAL -> if (abs(deltaX) > 0.1f) {
+                        onPan(deltaX)
+                    }
+
+                    ChartGesture.Axis.VERTICAL -> if (plotHeight > 0f && abs(deltaY) > 0.1f) {
+                        // 手指下滑 = 量程下移（看更低价区），因此取正号
+                        onPricePan(deltaY / plotHeight)
+                    }
+
+                    null -> Unit
                 }
             }
         }
@@ -573,10 +998,26 @@ private suspend fun PointerInputScope.detectChartGestures(
     }
 }
 
-private fun distanceBetween(a: Offset, b: Offset): Float {
-    val dx = a.x - b.x
-    val dy = a.y - b.y
-    return sqrt(dx * dx + dy * dy)
-}
+/** 「刻度已缩放 · 复位」小标的文案与左右内边距（用于实测宽度）。 */
+private const val RESET_BADGE_TEXT = "刻度已缩放 · 复位"
 
+/** 徽标垂直内边距（上下各一份），用于把徽标高度算准后贴绘图区下沿。 */
+private const val RESET_BADGE_VERTICAL_PADDING_DP = 4f
+
+/** 单指方向锁的累计位移阈值（px）：手指刚按下时是斜着动的，先定性再应用。 */
+private const val DIRECTION_LOCK_PX = 12f
+
+/**
+ * 时间轴最多画几条。真正的条数还要受标签宽度约束（见 [TimeAxisLabels]），
+ * 这个常量只是上限——否则宽屏上会一路画到糊成一片。
+ */
 private const val MAX_TIME_LABELS = 4
+
+/** 时间轴相邻标签之间至少要留的水平间隙（dp）。 */
+private const val TIME_LABEL_MIN_GAP_DP = 10f
+
+/** 纵轴相邻刻度之间至少要留的垂直间隙（dp）。 */
+private const val AXIS_LABEL_MIN_GAP_DP = 4f
+
+/** 副图标题距绘图区左边缘的内缩（dp）。 */
+private const val SUB_PANE_TITLE_INSET_DP = 6f

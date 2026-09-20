@@ -49,6 +49,14 @@ interface MarketRepository {
 
     fun ticker(id: SymbolId): Flow<MarketTicker?>
 
+    /**
+     * 列表迷你走势线的收盘价序列（最近 [limit] 根 [interval] 蜡烛，时间升序）。
+     *
+     * 只读本地缓存、绝不触发网络：列表滑到哪就画到哪，缺数据时返回空列表让 UI 画空白，
+     * 而不是为了补走势线在首页发起 N 个 K 线请求。
+     */
+    suspend fun recentCloses(id: SymbolId, interval: CandleInterval, limit: Int = 24): List<Double>
+
     /** 历史 K 线（最近 limit 根，含自定义周期聚合）。 */
     suspend fun klines(id: SymbolId, interval: CandleInterval, limit: Int = 300): KlinePage
 

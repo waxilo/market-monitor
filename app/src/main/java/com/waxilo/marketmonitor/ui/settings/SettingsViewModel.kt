@@ -1,11 +1,13 @@
 package com.waxilo.marketmonitor.ui.settings
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.BuildConfig
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.AppSettings
+import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,7 +18,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 /** 设置页状态：载入一次当前设置快照，编辑即时写入仓库。 */
+@Immutable
 data class SettingsUiState(
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val quoteAsset: String = "USDT",
     val defaultMarket: MarketType = MarketType.SPOT,
     val spotRestMirror: String = "",
@@ -50,6 +54,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             settings.current().let {
                 backing.value = SettingsUiState(
+                    themeMode = it.themeMode,
                     quoteAsset = it.quoteAsset,
                     defaultMarket = it.defaultMarket,
                     spotRestMirror = it.spotRestMirror,
@@ -64,6 +69,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 )
             }
         }
+    }
+
+    fun setThemeMode(v: ThemeMode) {
+        backing.update { it.copy(themeMode = v) }
+        persist { s -> s.copy(themeMode = v) }
     }
 
     fun setQuoteAsset(v: String) {

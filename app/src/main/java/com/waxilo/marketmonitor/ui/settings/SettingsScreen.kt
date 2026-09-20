@@ -1,33 +1,62 @@
 package com.waxilo.marketmonitor.ui.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.Button
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.ui.common.AppBar
-import com.waxilo.marketmonitor.ui.common.SegmentPicker
-import com.waxilo.marketmonitor.ui.common.ThinDivider
+import com.waxilo.marketmonitor.ui.common.Rule
+import com.waxilo.marketmonitor.ui.common.Section
+import com.waxilo.marketmonitor.ui.common.SegmentedControl
+import com.waxilo.marketmonitor.ui.common.StatusPill
+import com.waxilo.marketmonitor.ui.common.PillTone
+import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
+import com.waxilo.marketmonitor.ui.theme.MarketTheme
+import com.waxilo.marketmonitor.ui.theme.Radius
+import com.waxilo.marketmonitor.ui.theme.Spacing
 
-/** 设置页（PRD 8）：计价币/默认市场、镜像域名、通知、预警轮询、更新检查与关于。 */
+/**
+ * 设置页（PRD 8）。
+ *
+ * 版面重做：旧版每个输入项都是一个 OutlinedTextField（自带边框 + 浮动标签 + 56dp 高），
+ * 一屏下来边框把页面切得七零八落，且「设置」本质上不是表单——用户是来扫一眼
+ * 当前值的，不是来填表的。所以这里改成：
+ *
+ * - **标签在左、当前值在右**的一行式布局，值是可直接编辑的裸文本；
+ * - 分组用 [Section] 的小标题 + 细线划分，不再用填充卡片；
+ * - 布尔项用开关，枚举项用分段控件，各司其职。
+ *
+ * 这样一屏能放下所有设置项，「当前是什么」一目了然。
+ */
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
@@ -35,153 +64,241 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        AppBar(title = "设置", onBack = onBack)
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
+        AppBar(title = "设置", subtitle = "本地存储 · 无账号", onBack = onBack)
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = Spacing.Xl),
+        ) {
             item {
-                SectionTitle("通用")
-                TextFieldRow(
-                    label = "计价币",
-                    value = state.quoteAsset,
-                    hint = "USDT",
-                    onValue = viewModel::setQuoteAsset,
-                )
-                SegmentRow("默认市场") {
-                    SegmentPicker(
-                        options = MarketType.entries.toList(),
-                        selected = state.defaultMarket,
-                        labelOf = { it.label },
-                        onSelect = viewModel::setDefaultMarket,
-                    )
-                }
-            }
-            item {
-                SectionTitle("备用域名镜像")
-                TextFieldRow("现货 REST", state.spotRestMirror, "留空=官方域名", viewModel::setSpotRestMirror)
-                TextFieldRow("合约 REST", state.futuresRestMirror, "留空=官方域名", viewModel::setFuturesRestMirror)
-                TextFieldRow("WebSocket", state.wsMirror, "留空=官方域名", viewModel::setWsMirror)
-                Text(
-                    "镜像用于国内网络直连币安受限时兜底；现货大陆可用 data-api.binance.vision。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                )
-            }
-            item {
-                SectionTitle("通知")
-                SwitchRow("允许通知", state.notificationEnabled, viewModel::setNotificationEnabled)
-                SwitchRow("声音提醒", state.soundEnabled, viewModel::setSoundEnabled)
-                SwitchRow("振动", state.vibrateEnabled, viewModel::setVibrateEnabled)
-                SwitchRow("Webhook 推送", state.webhookEnabled, viewModel::setWebhookEnabled)
-            }
-            item {
-                SectionTitle("预警轮询")
-                SegmentRow("轮询间隔") {
-                    SegmentPicker(
-                        options = listOf(30, 60, 120),
-                        selected = state.alertPollingSeconds,
-                        labelOf = { "${it}s" },
-                        onSelect = viewModel::setAlertPollingSeconds,
-                    )
-                }
-            }
-            item {
-                SectionTitle("更新")
-                SwitchRow("启动时自动检查", state.autoUpdateCheck, viewModel::setAutoUpdateCheck)
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("当前版本 ${state.versionName}", style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.weight(1f))
-                    Button(
-                        onClick = viewModel::checkUpdate,
-                        enabled = !state.updating,
-                    ) { Text(if (state.updating) "检查中…" else "检查更新") }
-                }
-                state.updateError?.let {
-                    Text(
-                        it,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                // 无更新
-                if (!state.updating && state.updateError == null && state.updateInfo == null && state.versionName.isNotBlank()) {
-                    Text(
-                        "(启动或手动检查后可在此看到结果)",
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                state.updateInfo?.let { info ->
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text("发现新版本 ${info.latestVersion}", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            info.notes ?: info.releaseName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Section(title = "外观") {
+                    SegmentRow("主题") {
+                        SegmentedControl(
+                            options = ThemeMode.entries.toList(),
+                            selected = state.themeMode,
+                            labelOf = { it.shortLabel },
+                            onSelect = viewModel::setThemeMode,
+                            fillWidth = false,
                         )
                     }
                 }
             }
+
             item {
-                SectionTitle("关于")
+                Section(title = "行情") {
+                    ValueRow(
+                        label = "计价币",
+                        value = state.quoteAsset,
+                        placeholder = "USDT",
+                        onValue = viewModel::setQuoteAsset,
+                    )
+                    Rule()
+                    SegmentRow("默认市场") {
+                        SegmentedControl(
+                            options = listOf(MarketType.SPOT),
+                            selected = state.defaultMarket,
+                            labelOf = { it.label },
+                            onSelect = viewModel::setDefaultMarket,
+                        )
+                    }
+                }
+            }
+
+            item {
+                Section(title = "备用域名镜像") {
+                    ValueRow("现货 REST", state.spotRestMirror, "留空=官方", viewModel::setSpotRestMirror)
+                    Rule()
+                    ValueRow("合约 REST", state.futuresRestMirror, "留空=官方", viewModel::setFuturesRestMirror)
+                    Rule()
+                    ValueRow("WebSocket", state.wsMirror, "留空=官方", viewModel::setWsMirror)
+                    Text(
+                        text = "镜像用于国内网络直连币安受限时兜底；现货大陆可用 data-api.binance.vision。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            top = Spacing.Xs,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
+                }
+            }
+
+            item {
+                Section(title = "通知") {
+                    SwitchRow("允许通知", state.notificationEnabled, viewModel::setNotificationEnabled)
+                    Rule()
+                    SwitchRow("声音提醒", state.soundEnabled, viewModel::setSoundEnabled)
+                    Rule()
+                    SwitchRow("振动", state.vibrateEnabled, viewModel::setVibrateEnabled)
+                    Rule()
+                    SwitchRow("Webhook 推送", state.webhookEnabled, viewModel::setWebhookEnabled)
+                }
+            }
+
+            item {
+                Section(title = "预警轮询") {
+                    SegmentRow("轮询间隔") {
+                        SegmentedControl(
+                            options = listOf(30, 60, 120),
+                            selected = state.alertPollingSeconds,
+                            labelOf = { "${it}s" },
+                            onSelect = viewModel::setAlertPollingSeconds,
+                        )
+                    }
+                }
+            }
+
+            item {
+                Section(title = "更新") {
+                    SwitchRow("启动时自动检查", state.autoUpdateCheck, viewModel::setAutoUpdateCheck)
+                    Rule()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "当前版本 ${state.versionName}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MarketTheme.colors.ink,
+                            )
+                            Text(
+                                text = "从 GitHub Releases 检查并安装",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MarketTheme.colors.muted,
+                            )
+                        }
+                        if (state.updating) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = MarketTheme.colors.muted,
+                            )
+                        } else {
+                            TextAction("检查更新", viewModel::checkUpdate)
+                        }
+                    }
+                    state.updateError?.let {
+                        Text(
+                            text = it,
+                            modifier = Modifier.padding(
+                                start = Spacing.Gutter,
+                                end = Spacing.Gutter,
+                                bottom = Spacing.Sm,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MarketTheme.colors.down,
+                        )
+                    }
+                    state.updateInfo?.let { info ->
+                        Column(modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "发现新版本 ${info.latestVersion}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MarketTheme.colors.ink,
+                                )
+                                Spacer(Modifier.width(Spacing.Xs))
+                                StatusPill("可更新", PillTone.Positive)
+                            }
+                            Text(
+                                text = info.notes ?: info.releaseName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MarketTheme.colors.muted,
+                                maxLines = 6,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
+                Section(title = "关于") {
+                    Text(
+                        text = "行情监控 · 数据来自币安公开接口。本应用不构成投资建议。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            horizontal = Spacing.Gutter,
+                            vertical = Spacing.Sm,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 「标签 —— 可编辑值」一行。
+ *
+ * 值用无边框 BasicTextField 而不是 OutlinedTextField：设置里的值通常是短字符串，
+ * 边框不会带来任何可读性收益，只会让一列值看起来像一堆输入框。聚焦时给整行加一条
+ * 底边线来表示「正在编辑」，比常驻边框克制得多。
+ */
+@Composable
+private fun ValueRow(
+    label: String,
+    value: String,
+    placeholder: String,
+    onValue: (String) -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.ink,
+        )
+        Box(modifier = Modifier.width(160.dp)) {
+            if (value.isEmpty()) {
                 Text(
-                    "行情监控 · 数据来自币安。本应用不构成投资建议。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    text = placeholder,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.muted.copy(alpha = 0.6f),
+                    maxLines = 1,
                 )
             }
-            item { Spacer(Modifier.height(24.dp)) }
+            BasicTextField(
+                value = value,
+                onValueChange = onValue,
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
+                singleLine = true,
+                cursorBrush = SolidColor(colors.ink),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+            )
         }
     }
 }
 
 @Composable
-private fun SectionTitle(title: String) {
-    Text(
-        text = title.uppercase(),
-        modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 16.dp, bottom = 4.dp),
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.primary,
-        fontWeight = FontWeight.SemiBold,
-    )
-    ThinDivider()
-}
-
-@Composable
-private fun TextFieldRow(
-    label: String,
-    value: String,
-    hint: String,
-    onValue: (String) -> Unit,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValue,
-        label = { Text(label) },
-        placeholder = { Text(hint) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        textStyle = MaterialTheme.typography.bodyMedium,
-    )
-}
-
-@Composable
-private fun SegmentRow(
-    label: String,
-    content: @Composable () -> Unit,
-) {
+private fun SegmentRow(label: String, content: @Composable () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        content()
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MarketTheme.colors.ink,
+        )
+        Box(modifier = Modifier.width(168.dp)) { content() }
     }
 }
 
@@ -191,11 +308,26 @@ private fun SwitchRow(
     checked: Boolean,
     onChecked: (Boolean) -> Unit,
 ) {
+    val colors = MarketTheme.colors
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = checked, onCheckedChange = onChecked)
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.ink,
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onChecked,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = colors.onAccent,
+                checkedTrackColor = colors.accent,
+            ),
+        )
     }
 }
