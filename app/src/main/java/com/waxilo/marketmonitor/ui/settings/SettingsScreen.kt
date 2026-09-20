@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -32,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
+import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.Section
@@ -212,6 +214,15 @@ fun SettingsScreen(
                                 maxLines = 6,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            UpdateActions(
+                                info = info,
+                                progress = state.downloadProgress,
+                                downloaded = state.downloadedApk != null,
+                                needPermission = state.needInstallPermission,
+                                onDownload = viewModel::downloadUpdate,
+                                onInstall = viewModel::installDownloaded,
+                                onGrantPermission = viewModel::openInstallPermissionSettings,
+                            )
                         }
                     }
                 }
@@ -299,6 +310,114 @@ private fun SegmentRow(label: String, content: @Composable () -> Unit) {
             color = MarketTheme.colors.ink,
         )
         Box(modifier = Modifier.width(168.dp)) { content() }
+    }
+}
+
+/**
+ * 更新操作区：下载 → 校验 → 安装。
+ *
+ * 为什么不是「一个按钮全自动跑完」：Android 的安装动作要有 `REQUEST_INSTALL_PACKAGES`
+ * 权限，而该权限**无法在应用内静默申请**，必须跳系统设置页让用户手动打开。所以这里
+ * 把流程拆成两个可中断的步骤（下载 / 安装），一旦安装没起来就切到「去授权」引导态 ——
+ * 用户从系统设置回来后再点一次「安装」即可，不必重新下载。
+ *
+ * 进度用 `LinearProgressIndicator` + 百分比数字：下载 APK 是十几 MB 的等待，
+ * 没有百分比用户会以为卡死。
+ */
+@Composable
+private fun UpdateActions(
+    info: UpdateInfo,
+    progress: Float?,
+    downloaded: Boolean,
+    needPermission: Boolean,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onGrantPermission: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Column(modifier = Modifier.padding(top = Spacing.Xs)) {
+        when {
+            // 正在下载：进度条 + 百分比
+            progress != null -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.weight(1f).height(2.dp),
+                        color = colors.accent,
+                        trackColor = colors.hairline,
+                        drawStopIndicator = {},
+                    )
+                    Spacer(Modifier.width(Spacing.Sm))
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.muted,
+                    )
+                }
+                Text(
+                    text = "正在下载 ${info.apkName}",
+                    modifier = Modifier.padding(top = Spacing.Xxs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            // 已下载但缺安装权限：引导去系统设置
+            needPermission -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "需要「安装未知应用」权限",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.ink,
+                        )
+                        Text(
+                            text = "下载已完成，授权后回来点「安装」即可",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.muted,
+                        )
+                    }
+                    TextAction("去授权", onGrantPermission)
+                }
+                TextAction("重新安装", onInstall, modifier = Modifier.padding(top = Spacing.Xxs))
+            }
+
+            // 已下载：直接装
+            downloaded -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "已下载 ${info.apkName}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.ink,
+                        )
+                        Text(
+                            text = "校验通过，可以安装",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.muted,
+                        )
+                    }
+                    TextAction("安装", onInstall)
+                }
+            }
+
+            // 初始态
+            else -> {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = info.apkName,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.muted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    TextAction("下载并安装", onDownload)
+                }
+            }
+        }
     }
 }
 

@@ -14,10 +14,10 @@
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 
-一个前置问题：当前仓库是 **private**，而 `GithubReleaseApi` 匿名访问 `api.github.com/repos/…/releases/latest`，
-私有仓库对匿名请求一律 404，所以应用内更新现在必然失败。三条出路：仓库转 public（最省事，代码随之公开）、
-只读 token（会被打进 APK，有泄露风险）、或把产物同步到一个可匿名读的地址。
-数据层已按「tag 比较 + `<apk>.sha256` 边车 + 流式校验」写好，只差决定这条读取路径。
+应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
+仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
+应用内更新会整体失效（届时的出路：只读 token（会被打进 APK，有泄露风险）、或把产物同步到可匿名读的地址）。
+数据层按「tag 比较 + `<apk>.sha256` 边车 + 流式校验」实现，改动这条读取路径时保持这三段不变。
 
 ## UI 设计系统
 
@@ -51,9 +51,9 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.5.0` |
-| versionCode | `7` |
-| 最新 tag | `0.4.0` |
+| versionName | `0.6.0` |
+| versionCode | `8` |
+| 最新 tag | `0.5.0` |
 | 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（debug 签名），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的

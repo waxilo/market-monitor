@@ -22,6 +22,15 @@ data class UpdateInfo(
      * 无法验证时退回浏览器打开 Release 页，由用户自行判断。
      */
     val canInstallInApp: Boolean get() = apk != null && apk.downloadUrl.isNotBlank() && expectedSha256 != null
+
+    /**
+     * 落盘用的文件名。
+     *
+     * 单一出处：UI 展示的名字与下载实际落盘的名字必须一致，否则用户看到的
+     * 「已下载 xxx.apk」和文件系统里那个对不上。资产名缺失时按版本兜底。
+     */
+    val apkName: String
+        get() = apk?.name?.takeIf { it.isNotBlank() } ?: "market-monitor-$latestVersion.apk"
 }
 
 interface UpdateRepository {

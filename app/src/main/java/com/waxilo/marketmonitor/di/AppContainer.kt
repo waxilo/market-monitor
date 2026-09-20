@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.di
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.os.Build
 import android.util.Log
@@ -34,6 +35,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
+import java.io.File
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
@@ -187,6 +189,22 @@ class AppContainer(private val context: Context) {
             api = GithubReleaseApi(downloadClient, BuildConfig.UPDATE_OWNER, BuildConfig.UPDATE_REPO),
             abiPreferences = Build.SUPPORTED_ABIS.toList(),
         )
+    }
+
+    /**
+     * 更新包下载目录。
+     *
+     * 必须是 `cacheDir/updates/`：`res/xml/file_paths.xml` 里声明的就是
+     * `cache-path name="updates" path="updates/"`，换别的目录 `FileProvider.getUriForFile`
+     * 会直接抛 IllegalArgumentException（表现为「点安装没反应」）。
+     * 走 cacheDir 而非 filesDir：更新包用完即弃，系统空间紧张时可以自行回收。
+     */
+    val updateDir: File get() = File(context.cacheDir, "updates")
+
+    /** 供 ViewModel 拉起「允许安装未知应用」授权页 —— 容器之外不该拿到 Context。 */
+    fun startActivity(intent: Intent) {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
     }
 
     val installer: ApkInstaller by lazy {
