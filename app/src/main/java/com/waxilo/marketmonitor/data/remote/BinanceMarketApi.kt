@@ -44,17 +44,18 @@ class DefaultRestHosts(
             .filter { it.isNotEmpty() }
             .let { addAll(it) }
         when (market) {
-            // 官方公布的主域 + api1~api3 备用 + 仅行情数据的 data-api 镜像
+            // data-api 是官方行情镜像，大陆网络可直连；放首位避免前面被墙的官方主域
+            // 逐个走完 connect/read 超时再兜底（那样会让每次加载都慢到看似“请求不到数据”）。
             MarketType.SPOT -> addAll(
                 listOf(
+                    "https://data-api.binance.vision",
                     "https://api.binance.com",
                     "https://api1.binance.com",
                     "https://api2.binance.com",
                     "https://api3.binance.com",
-                    "https://data-api.binance.vision",
                 ),
             )
-            // 合约官方只公布 fapi.binance.com，备用域依赖用户在设置里填写
+            // 合约官方只公布 fapi.binance.com，大陆网络无法直连，备用域依赖用户在设置里填写镜像
             MarketType.FUTURES -> add("https://fapi.binance.com")
         }
     }.distinct()

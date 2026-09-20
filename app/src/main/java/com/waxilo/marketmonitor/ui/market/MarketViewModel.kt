@@ -116,6 +116,9 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
             val settings = container.settings.current()
             quoteAsset.value = settings.quoteAsset
             selectMarket(settings.defaultMarket)
+            // selectMarket 在市场未变化时会提前返回（默认市场 SPOT == activeMarket SPOT），
+            // 导致冷启动后 never 拉数据、界面停留在初始 loading。这里补一次首次加载。
+            refresh()
         }
     }
 

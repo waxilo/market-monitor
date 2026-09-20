@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.di
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.os.Build
 import android.util.Log
 import com.waxilo.marketmonitor.BuildConfig
@@ -33,6 +34,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "AppContainer"
@@ -60,6 +63,7 @@ class AppContainer(private val context: Context) {
             .readTimeout(15, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .applySystemProxy()
             .build()
     }
 
@@ -69,7 +73,31 @@ class AppContainer(private val context: Context) {
             .connectTimeout(10, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)
+            .applySystemProxy()
             .build()
+    }
+
+    /**
+     * OkHttp 在 Android 上默认不读取系统（Wi-Fi）代理，导致全国性网络治理下走代理才能访问的
+     * 交易所域名请求不到数据。这里把系统代理套用到客户端：系统未配置代理时保持直连不变。
+     */
+    private fun OkHttpClient.Builder.applySystemProxy(): OkHttpClient.Builder {
+        systemProxy()?.let(::proxy)
+        return this
+    }
+
+    private fun systemProxy(): Proxy? {
+        // 1) 显式系统属性（http.proxyHost），少数环境通过命令行/debug 注入
+        System.getProperty("http.proxyHost")?.takeIf { it.isNotBlank() }?.let { host ->
+            val port = System.getProperty("http.proxyPort")?.toIntOrNull() ?: 80
+            return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, port))
+        }
+        // 2) 系统网卡配置的代理（Wi-Fi 高级设置，API 23+；minSdk 26 可安全直达）
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val info = cm?.defaultProxy ?: return null
+        val host = info.host
+        return if (host.isNullOrBlank() || info.port <= 0) null
+        else Proxy(Proxy.Type.HTTP, InetSocketAddress(host, info.port))
     }
 
     /** 更新包下载可能持续数十秒，只放宽整体 callTimeout。 */
