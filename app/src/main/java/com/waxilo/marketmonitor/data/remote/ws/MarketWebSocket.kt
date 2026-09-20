@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.data.remote.ws
 
+import android.util.Log
 import com.waxilo.marketmonitor.data.remote.MarketJson
 import com.waxilo.marketmonitor.data.remote.dto.TickerDto
 import com.waxilo.marketmonitor.data.remote.dto.WsKlineEventDto
@@ -29,7 +30,6 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import java.io.IOException
 import java.math.BigDecimal
 import kotlin.random.Random
 
@@ -84,8 +84,16 @@ class MarketWebSocket(
         val urls = hosts.urlsFor(market).ifEmpty { listOf(market.defaultWsHost) }
         var attempt = 0
         while (true) {
-            val url = buildUrl(urls[attempt % urls.size].ifEmpty { market.defaultWsHost }, streams)
-                ?: throw IOException("无法构造 WS 地址：${market.label}")
+            val base = urls[attempt % urls.size].ifEmpty { market.defaultWsHost }
+            val url = buildUrl(base, streams)
+            if (url == null) {
+                // 构造失败只跳过本轮重连：向上抛会经无兜底的协程作用域杀死整个进程
+                Log.w(TAG, "无法构造 WS 地址（${market.label}），base=$base，退避后重试")
+                emit(WsEvent.Reconnecting)
+                attempt++
+                delay(backoffMs(attempt))
+                continue
+            }
             try {
                 connection(url, market).collect { emit(it) }
             } catch (e: CancellationException) {
@@ -132,10 +140,13 @@ class MarketWebSocket(
     }
 
     companion object {
+        private const val TAG = "MarketWebSocket"
         const val BASE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
         private const val MAX_BACKOFF_SHIFT = 5
-        private val ALLOWED_STREAM_CHARS = ('a'..'z') + ('A'..'Z') + ('0'..'9') + charArrayOf('_', '@', '!', '.', '-')
+        // 必须用 listOf 而不是 charArrayOf：List<Char> + CharArray 会把数组整体当单个元素追加，
+        // 特殊字符全部丢失，导致所有流名被判非法（0.2.0 启动即崩的根因）
+        private val ALLOWED_STREAM_CHARS = ('a'..'z') + ('A'..'Z') + ('0'..'9') + listOf('_', '@', '!', '.', '-')
     }
 }
 

@@ -2,6 +2,7 @@ package com.waxilo.marketmonitor.di
 
 import android.content.Context
 import android.os.Build
+import android.util.Log
 import com.waxilo.marketmonitor.BuildConfig
 import com.waxilo.marketmonitor.data.alert.AlertEngine
 import com.waxilo.marketmonitor.data.alert.AlertNotifier
@@ -26,12 +27,15 @@ import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import com.waxilo.marketmonitor.domain.repository.WebhookRepository
 import com.waxilo.marketmonitor.data.local.room.MarketDatabase
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
+
+private const val TAG = "AppContainer"
 
 /**
  * 手工依赖容器（PRD 7 已定：不用 Hilt）。
@@ -42,7 +46,12 @@ class AppContainer(private val context: Context) {
     /** 供 UI 层查询系统状态（通知权限等），不用于创建新依赖。 */
     val appContext: Context get() = context
 
-    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /** 常驻协程作用域。必须挂 CoroutineExceptionHandler：后台协程的未捕获异常会直接杀死进程。 */
+    val appScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error ->
+            Log.e(TAG, "后台协程未捕获异常", error)
+        },
+    )
 
     /** 共享连接池：REST 与下载复用同一客户端（PRD 7 网络选型）。 */
     private val restClient: OkHttpClient by lazy {
