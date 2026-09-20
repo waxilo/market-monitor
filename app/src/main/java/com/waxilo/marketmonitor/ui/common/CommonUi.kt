@@ -12,9 +12,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -22,12 +26,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.ui.theme.DownRed
+import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
 import com.waxilo.marketmonitor.ui.theme.UpGreen
 
-/** 涨跌幅文本：带符号，色盲用户也能靠符号区分（PRD 可访问性）。 */
+/** 涨跌幅文本：带符号 + 等宽数字，色盲用户也能靠符号区分（PRD 可访问性）。 */
 @Composable
 fun ChangeText(
     changePercent: Double?,
@@ -43,12 +49,15 @@ fun ChangeText(
         text = PriceFormatter.formatChange(changePercent),
         modifier = modifier,
         color = color,
-        style = MaterialTheme.typography.bodyMedium,
+        style = PriceTextStyle.copy(fontSize = MaterialTheme.typography.bodyMedium.fontSize),
         textAlign = TextAlign.End,
     )
 }
 
-/** 单选分段控件，用于市场/页签/周期等少量互斥选项。 */
+/**
+ * 分段选择（市场/页签/周期等少量互斥选项）。
+ * 选中项用「容器色底 + 强调色字」，未选才用普通正文色，对比比纯黄色块更克制。
+ */
 @Composable
 fun <T> SegmentPicker(
     options: List<T>,
@@ -61,7 +70,7 @@ fun <T> SegmentPicker(
     Row(
         modifier = modifier
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .padding(2.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
@@ -70,19 +79,24 @@ fun <T> SegmentPicker(
             Box(
                 modifier = Modifier
                     .clip(shape)
-                    .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary
+                        else Color.Transparent,
+                    )
                     .clickable { onSelect(option) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     text = labelOf(option),
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.labelMedium,
                     color = if (isSelected) {
                         MaterialTheme.colorScheme.onPrimary
                     } else {
                         MaterialTheme.colorScheme.onSurface
                     },
+                    fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.SemiBold
+                    else androidx.compose.ui.text.font.FontWeight.Medium,
                 )
             }
         }
@@ -109,11 +123,12 @@ fun HintRow(
                 text = subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
         }
         if (onAction != null && actionLabel != null) {
-            Spacer(Modifier.height(14.dp))
-            OutlinedButton(onClick = onAction) { Text(actionLabel) }
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onAction) { Text(actionLabel) }
         }
     }
 }
@@ -126,8 +141,8 @@ fun OfflineBanner(text: String, modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxWidth()
             .background(DownRed.copy(alpha = 0.12f))
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        style = MaterialTheme.typography.labelMedium,
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurface,
     )
 }
@@ -145,7 +160,60 @@ fun LabelValueRow(label: String, value: String, modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(value, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+            ),
+            textAlign = TextAlign.End,
+        )
+    }
+}
+
+/**
+ * 页面顶部标题栏：二级页带返回键 + 标题 + 右侧动作；省略副标题时留空。
+ * 各页面复用，统一留白与层级。
+ */
+@Composable
+fun AppBar(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    actions: @Composable () -> Unit = {},
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+            }
+        } else {
+            Spacer(Modifier.width(4.dp))
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        actions()
     }
 }
 

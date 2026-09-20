@@ -11,7 +11,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
@@ -32,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRepeatMode
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.OfflineBanner
 import com.waxilo.marketmonitor.ui.common.SegmentPicker
 import com.waxilo.marketmonitor.ui.common.appViewModel
@@ -58,19 +58,10 @@ fun AlertEditorScreen(
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-            }
-            Text(
-                text = if (ruleId == null) "新建预警规则" else "编辑预警规则",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.titleLarge,
-            )
-        }
+        AppBar(
+            title = if (ruleId == null) "新建预警规则" else "编辑预警规则",
+            onBack = onBack,
+        )
 
         form.error?.let { OfflineBanner(it) }
 

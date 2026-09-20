@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Icon
@@ -30,6 +29,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.OfflineBanner
@@ -53,19 +53,16 @@ fun AlertsScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-            }
-            Text("价格预警", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            TextButton(onClick = onOpenWebhooks) { Text("推送端点") }
-            IconButton(onClick = onNewRule) {
-                Icon(Icons.Default.Add, contentDescription = "新建预警规则")
-            }
-        }
+        AppBar(
+            title = "价格预警",
+            onBack = onBack,
+            actions = {
+                TextButton(onClick = onOpenWebhooks) { Text("推送端点") }
+                IconButton(onClick = onNewRule) {
+                    Icon(Icons.Default.Add, contentDescription = "新建预警规则")
+                }
+            },
+        )
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),

@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -33,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.webhook.WebhookEndpoint
 import com.waxilo.marketmonitor.domain.webhook.WebhookTemplate
+import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.OfflineBanner
 import com.waxilo.marketmonitor.ui.common.ThinDivider
@@ -50,18 +50,15 @@ fun WebhookScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-            }
-            Text("Webhook 推送", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
-            IconButton(onClick = viewModel::openNew) {
-                Icon(Icons.Default.Add, contentDescription = "新增端点")
-            }
-        }
+        AppBar(
+            title = "Webhook 推送",
+            onBack = onBack,
+            actions = {
+                IconButton(onClick = viewModel::openNew) {
+                    Icon(Icons.Default.Add, contentDescription = "新增端点")
+                }
+            },
+        )
 
         state.notice?.let { text ->
             OfflineBanner(

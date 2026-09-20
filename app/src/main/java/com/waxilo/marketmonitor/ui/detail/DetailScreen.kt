@@ -41,6 +41,7 @@ import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
+import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.LabelValueRow
@@ -48,6 +49,7 @@ import com.waxilo.marketmonitor.ui.common.OfflineBanner
 import com.waxilo.marketmonitor.ui.common.SegmentPicker
 import com.waxilo.marketmonitor.ui.common.ThinDivider
 import com.waxilo.marketmonitor.ui.common.appViewModel
+import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
 
 /**
  * 详情页（PRD 4.1 第三级、4.2 图表）。
@@ -158,43 +160,38 @@ private fun Header(
     onCreateAlert: () -> Unit,
 ) {
     val watched = state.watched
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(state.title, style = MaterialTheme.typography.titleLarge)
-            Text(
-                text = "${state.id.symbol} · ${state.id.market.label}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            Text(state.price, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.End)
-            ChangeText(state.changePercent)
-        }
-        IconButton(onClick = onCreateAlert) {
-            Icon(Icons.Default.Notifications, contentDescription = "为该交易对建预警")
-        }
-        IconButton(onClick = onRefresh) {
-            Icon(Icons.Default.Refresh, contentDescription = "刷新")
-        }
-        IconButton(onClick = onToggleWatch) {
-            Icon(
-                imageVector = if (watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                contentDescription = if (watched) "取消自选" else "加为自选",
-                tint = if (watched) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-            )
-        }
-    }
+    AppBar(
+        title = state.title,
+        subtitle = "${state.id.symbol} · ${state.id.market.label}",
+        onBack = onBack,
+        actions = {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    state.price,
+                    style = PriceTextStyle.copy(fontSize = MaterialTheme.typography.titleLarge.fontSize),
+                    textAlign = TextAlign.End,
+                )
+                ChangeText(state.changePercent)
+            }
+            IconButton(onClick = onCreateAlert) {
+                Icon(Icons.Default.Notifications, contentDescription = "为该交易对建预警")
+            }
+            IconButton(onClick = onRefresh) {
+                Icon(Icons.Default.Refresh, contentDescription = "刷新")
+            }
+            IconButton(onClick = onToggleWatch) {
+                Icon(
+                    imageVector = if (watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    contentDescription = if (watched) "取消自选" else "加为自选",
+                    tint = if (watched) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+        },
+    )
 }
 
 @Composable
