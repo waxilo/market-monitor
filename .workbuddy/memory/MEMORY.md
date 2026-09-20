@@ -27,6 +27,10 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 - 基线：146 个单测，全绿（2026-09-20）。
 - `Dp.toPx()` 是 `Density` 扩展：非 `DrawScope`/非 `with(density)` 上下文里写 `12.dp.toPx(density)` 会**报 Unresolved reference**，必须 `with(density) { 12.dp.toPx() }`。
 - **adb 不在 PATH 上**：绝对路径 `C:/Users/sloan.wang/android-sdk/platform-tools/adb.exe`（见 `local.properties` 的 `sdk.dir`）。Bash 工具里裸 `adb`/`ls`/`sleep` 都 `command not found`。
+- **本机 Bash 工具缺失的 POSIX 工具清单**（用到就报 `command not found`）：`dirname`、`cat`、`uname`、`xargs`、`mkdir`、`sleep`、`seq`、`basename`、`wc`。`grep`/`sed`/`head`/`tail`/`ls`/`find`/`awk` 需加 `/usr/bin/` 前缀才可用。
+  - 循环不要写 `for i in $(seq 1 N)`，改写**字面列表** `for i in 1 2 3 ... N`。
+- **`git` 也不在 PATH 上**：`C:/Program Files/Git/cmd/git.exe`（注意路径含空格，**别把它赋给变量再用 `$G` 展开** —— 会 `C:/Program: No such file or directory`，每次都写完整引号路径）。
+- 用 `adb shell`/`cmd` 读回显的活别走 PowerShell（stdout 可能静默空，长得像「结果为空」）。
 
 ## UI 设计系统（2026-09-20 确立）
 风格：**极简杂志风 (minimal editorial)**。核心规则：
@@ -140,5 +144,41 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 `maxRightBlank(visible) = visible * (1 - MIN_VISIBLE_SHARE)`，与纵向 `panLimit` 同一套「不许拖成空屏」原则。
 该常量已上移到 **`ChartViewport.companion`**（`ValueRange.companion` 里是别名引用），两个方向共用。
 ⚠️ 它是 `Float`，`ValueRange.panLimit` 做 Double 乘法时要 `* MIN_VISIBLE_SHARE.toDouble()`。
+
+## 发版与应用内更新（2026-09-20 定案）
+
+### 发版流程
+1. `main` 的 CI 绿 → 改 `app/build.gradle.kts` 的 `versionCode`(+1) / `versionName`(语义化递增) → 同步 README 版本表。
+2. `git commit` → `git push origin main` → `git tag <版本>` → `git push origin <版本>`。
+3. tag 触发 `Release` workflow（`v*` 与裸版本号都可），产出 `market-monitor-<tag>.apk` + `.sha256` 边车。
+4. ⚠️ **发版前必须先 `git log`/`gh release list` 确认目标 tag 不存在** —— 曾差点重复发一个已存在的 `0.4.0`。也要确认「本次要发的改动真的提交了」（曾出现线上 tag 已存在、而所有新改动都还没 commit 的情况）。
+
+### tag 命名约定（影响更新判断）
+应用读 `releases/latest` 的 tag（**不带 `v` 前缀**）与 `versionName` 比较（`VersionCompare`）⇒ **优先打裸版本号 tag**，且 `versionName` 必须严格大于线上最新 tag。
+
+### ⚠️ 判断「某能力是否可用」必须找调用点，不能看到实现就认为在跑
+- 已知案例一：自研 Compose 图表实现完整但**零调用点**，详情页在用另一个 WebView WIP。
+- 已知案例二：`UpdateRepository.download()` + `ApkInstaller` 全实现好了，但 `SettingsViewModel` 只调 `checkManually` ⇒ UI 能「发现新版本」却**没有任何下载/安装入口**，整套 SHA-256 校验下载是死代码。
+- ⇒ `grep -rn "XXX(" app/src/main/java --include=*.kt` 确认调用点，是这类工作的固定前置步骤。
+
+### 更新链路的硬约束
+- 落盘目录必须是 **`cacheDir/updates/`**：`file_paths.xml` 里声明的就是 `cache-path updates/`，换目录 `FileProvider.getUriForFile` 直接抛 `IllegalArgumentException`。`AppContainer.updateDir` 与它强耦合。
+- `UpdateInfo.apkName` 是展示名与落盘名的**单一出处**，别在两处各写一份兜底逻辑。
+- 「安装未知应用」权限**无法应用内静默申请**（必须跳系统设置）⇒ 流程拆成可中断的两步：下载 / 安装。`ApkInstaller.install()` 返回 `Boolean`（false = 没权限，不是失败），`needInstallPermission` 状态引导去授权，**回来后保留 `downloadedApk` 直接重试，不重下**。
+- 重新检查更新时要清掉上一轮 `downloadedApk`（版本可能变了，旧的不能拿来装）。
+- 验证「权限是否真的授了」：`adb shell cmd appops get <pkg> REQUEST_INSTALL_PACKAGES`（直接调 `adb shell appops` 是 `inaccessible or not found`，要走 `cmd appops`）。
+
+### 更新链路核对脚本（免真机即可验证大半）
+`.workbuddy/tmp/verify-update-chain.mjs <当前版本>`：复刻应用侧逻辑 —— `releases/latest` → 版本比较 → 找 APK + `.sha256` 边车 → 可达性 → 流式下载算 SHA-256 比对。发版后跑一次可确认「会弹更新提示」+「产物完整」。
+
+### 装机验证的坑：签名不一致 ≠ 流程有 bug
+本地 debug 包用**本机 debug keystore**，CI 产物用 **CI 环境的 debug keystore**（两份不同证书）⇒ 在已装官方包的设备上覆盖安装会报「软件包与现有软件包存在冲突」，这是 Android 的预期行为。
+要复现完整安装，要么先卸载设备上的应用，要么让本地包签名与线上一致。**别把这当成更新功能坏了。**
+
+### 造「可更新」场景的做法
+临时把 `versionCode`/`versionName` 压到低于线上最新 tag（如 `6`/`0.4.1`），构建安装后即可对线上新版走完整流程。**验证完务必改回真实版本号并重新构建**。
+
+### 轮询下载进度时不要乱点屏幕
+边轮询边 `adb shell input tap` 会误触导航、打断观察窗口。**轮询只读文件体积**：`adb exec-out run-as <pkg> ls -l cache/updates`。
 
 
