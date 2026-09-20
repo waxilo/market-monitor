@@ -32,9 +32,9 @@
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.2.0` |
-| versionCode | `2` |
-| 最新 tag | `0.2.0` |
+| versionName | `0.2.1` |
+| versionCode | `3` |
+| 最新 tag | `0.2.1` |
 | 安装包 | GitHub Release `0.2.0` 的 `app-debug.apk`（debug 签名），边车 `app-debug.apk.sha256` |
 
 SHA-256：`bc5ea46a28fea1131f7336100742570a9f462eb9746d4ed915745c0002b243f1`（已与 GitHub 侧 digest 对过）。
