@@ -1201,11 +1201,11 @@ private fun ChartLegend(
  * 落在绘图区里是平移、落在刻度上是缩放，两者语义完全不同。用起点判定还顺带
  * 解决了「在刻度区横向划一下」——那种手势在这里没有意义，直接不响应。
  *
- * 双指的两个维度**各算各的因子**，不再合并：横向间距只驱动时间轴、纵向间距只驱动价格轴。
- * 早先双指只缩放时间轴，理由是「上下拉开时 dx 必然跟着变、纵向分量会被横向带偏」——
- * 那个结论只对「把两个分量混成一个因子」成立；分开算之后，上下拉开时 dx 基本不变，
- * 时间轴自然不动，纵向张合可以放心地独立驱动价格轴。
- * 纵向限定「两指都在绘图区」，是为了让刻度区里的捏合保持只缩放时间轴的旧行为。
+ * 双指缩放**只走一个轴**，和单指一样先定轴再锁死：横向间距的变化量与纵向间距的变化量
+ * 各自累积，谁先够 [ZOOM_LOCK_PX] 就锁定谁，整场手势只缩放那一个轴，绝不叠加。
+ * 叠加的代价是「用户控制不住」——上下拉开时手指不可能完全垂直对齐，带出的横向间距变化
+ * 会把时间轴一起缩了，两个轴同时动。纵向限定「两指都在绘图区」，
+ * 让刻度区里的捏合保持只缩放时间轴的旧行为。
  *
  * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
@@ -1256,6 +1256,12 @@ private suspend fun PointerInputScope.detectChartGestures(
         var travelled = 0f
         var previousDistanceX = 0f
         var previousDistanceY = 0f
+        /** 本场双指手势锁定的缩放轴；`null` = 还没定性。定性后整场只缩放这一个轴。 */
+        var zoomAxis: ChartGesture.Axis? = null
+        var zoomAccumX = 0f
+        var zoomAccumY = 0f
+        /** 上一帧的按下指头数：指头增减时旧间距与已定性的缩放轴都作废。 */
+        var pointerCount = 0
         var longPressActive = false
         /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
         var alertLineActive = false
@@ -1272,6 +1278,17 @@ private suspend fun PointerInputScope.detectChartGestures(
             pressed.forEach { change -> lastPositions[change.id] = change.position }
             // 每次事件都先消费，避免父滚动容器把纵向位移吃掉
             pressed.forEach { change -> change.consume() }
+
+            // 指头数一变（1↔2），上一场的两指间距与已定性的缩放轴都失去意义。
+            // 不丢的话，从双指抬成单指再按下第二根时，会拿旧间距算出因子，跳一大格。
+            if (pressed.size != pointerCount) {
+                pointerCount = pressed.size
+                previousDistanceX = 0f
+                previousDistanceY = 0f
+                zoomAxis = null
+                zoomAccumX = 0f
+                zoomAccumY = 0f
+            }
 
             // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
             if (alertLineMode && pressed.size == 1) {
@@ -1290,20 +1307,42 @@ private suspend fun PointerInputScope.detectChartGestures(
                 continue
             }
             if (pressed.size >= 2) {
-                // 横纵两个维度**各算各的因子**，互不干扰：
-                // - 横向间距 → 时间轴（拉开 = 可见根数变少 = 放大）；
-                // - 纵向间距 → 价格量程（拉开 = 量程变小 = K 线变高）。
-                // 上下拉开时 dx 基本不变，所以时间轴自然不动，不会像以前那样被横向带偏。
+                // 双指缩放**只走一个轴**：横向间距驱动时间轴，纵向间距驱动价格量程，
+                // 但两者不会同时生效 —— 先定性再锁死，整场手势只缩放定下来的那个轴。
+                //
+                // 允许叠加的话，上下拉开时手指不可能完全垂直对齐，带出的那点横向间距
+                // 变化会顺手把时间轴也缩了，两个轴一起动，用户根本控制不住（这就是
+                // 「无论上下拉还是左右拉，动的都是横坐标」的老毛病换个形式回来）。
                 val plot = geo()
                 val dx = abs(pressed[0].position.x - pressed[1].position.x)
                 val dy = abs(pressed[0].position.y - pressed[1].position.y)
-                ChartGesture.pinchFactor(previousDistanceX, dx)?.let { factor ->
-                    val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
-                    onZoom(factor, anchorX.coerceIn(0f, plot.plotWidthPx))
-                }
-                // 纵向只在**两指都落在绘图区**时生效：刻度区里的捏合仍然只缩放时间轴
-                if (pressed.all { it.position.x < plot.plotWidthPx }) {
-                    ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
+                // 首帧只建立基准（此时 previousDistance 已被指头数变化清成 0），不算因子
+                if (previousDistanceX > 0f && previousDistanceY > 0f) {
+                    zoomAccumX += dx - previousDistanceX
+                    zoomAccumY += dy - previousDistanceY
+                    if (zoomAxis == null) {
+                        val onPlot = pressed.all { it.position.x < plot.plotWidthPx }
+                        val locked = ChartGesture.axisLock(zoomAccumX, zoomAccumY, ZOOM_LOCK_PX)
+                        // 纵向缩放只在两指都落在绘图区时可用；刻度区里的捏合只能是横向
+                        zoomAxis = if (locked == ChartGesture.Axis.VERTICAL && !onPlot) {
+                            ChartGesture.Axis.HORIZONTAL
+                        } else {
+                            locked
+                        }
+                    }
+                    when (zoomAxis) {
+                        ChartGesture.Axis.HORIZONTAL -> ChartGesture
+                            .pinchFactor(previousDistanceX, dx)
+                            ?.let { factor ->
+                                val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
+                                onZoom(factor, anchorX.coerceIn(0f, plot.plotWidthPx))
+                            }
+
+                        ChartGesture.Axis.VERTICAL ->
+                            ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
+
+                        null -> Unit
+                    }
                 }
                 previousDistanceX = dx
                 previousDistanceY = dy
@@ -1313,11 +1352,6 @@ private suspend fun PointerInputScope.detectChartGestures(
             val deltaY = primary.position.y - previous.y
             if (deltaX != 0f || deltaY != 0f) {
                 travelled += abs(deltaX) + abs(deltaY)
-                // 两指间距归零：手指数量一变（1↔2），旧间距已无意义。
-                // 两样都要清 —— 只清横向的话，从双指抬成单指再按下第二根时，
-                // 纵向会拿上一场的旧间距算出因子，缩放瞬间跳一大格。
-                previousDistanceX = 0f
-                previousDistanceY = 0f
                 // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
                 if (axis == null) {
                     axisAccumX += deltaX
@@ -1360,6 +1394,14 @@ private const val RESET_BADGE_VERTICAL_PADDING_DP = 4f
 
 /** 单指方向锁的累计位移阈值（px）：手指刚按下时是斜着动的，先定性再应用。 */
 private const val DIRECTION_LOCK_PX = 12f
+
+/**
+ * 双指缩放的定轴阈值（两指间距的变化量，不是位移）。
+ *
+ * 比 [DIRECTION_LOCK_PX] 大一点：两指落下的位置本身就有抖动，
+ * 阈值太小会在手指还没真正拉开时就把轴定死。
+ */
+private const val ZOOM_LOCK_PX = 16f
 
 /**
  * 时间轴最多画几条。真正的条数还要受标签宽度约束（见 [TimeAxisLabels]），

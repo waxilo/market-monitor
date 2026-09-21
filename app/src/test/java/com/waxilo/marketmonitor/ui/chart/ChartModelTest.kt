@@ -1024,6 +1024,28 @@ class ChartModelTest {
     }
 
     @Test
+    fun `双指缩放按间距变化量定轴且只锁一个轴`() {
+        val lock = 16f
+        // 只上下拉开：纵向间距 +120，横向间距不动 → 锁纵向
+        assertEquals(
+            ChartGesture.Axis.VERTICAL,
+            ChartGesture.axisLock(accumX = 0f, accumY = 120f, threshold = lock),
+        )
+        // 只左右拉开 → 锁横向
+        assertEquals(
+            ChartGesture.Axis.HORIZONTAL,
+            ChartGesture.axisLock(accumX = 120f, accumY = 0f, threshold = lock),
+        )
+        // 斜着拉开：谁的变化量大听谁的，不会两个轴一起动
+        assertEquals(
+            ChartGesture.Axis.VERTICAL,
+            ChartGesture.axisLock(accumX = 30f, accumY = 90f, threshold = lock),
+        )
+        // 都没够阈值 → 不定轴，一个轴都不缩放
+        assertNull(ChartGesture.axisLock(accumX = 8f, accumY = -6f, threshold = lock))
+    }
+
+    @Test
     fun `每帧折算的根数与总根数变化一致`() {
         // 守恒：一帧的因子折算成根数 = bars * (factor - 1)；提交 + 余量必须等于它。
         // 取一个不跨阈值的因子，验证「本帧无提交、量全进余量」这一最基本的情形。
