@@ -805,6 +805,68 @@ class ChartModelTest {
     }
 
     @Test
+    fun `反向捏合第一帧就换向而不是先还清欠账`() {
+        // 快速张开一帧会攒下一笔**负**的欠账（几十根），此时手指反向合拢：
+        // 修复前这一帧仍提交 -1（继续放大），要连走好几帧才把欠账抵完才换向 ——
+        // 图上表现为「手已经往回收了，图还在放大」。
+        val fast = ChartGesture.accumulatePinch(remainder = 0f, factor = 0.8f, visibleBars = 120)
+        assertEquals("一帧最多一根", -1, fast.bars)
+        assertTrue("欠账应为负（可见根数要继续变少）", fast.remainder < -1f)
+
+        val reversed = ChartGesture.accumulatePinch(
+            remainder = fast.remainder,
+            factor = 1.2f,
+            visibleBars = 119,
+        )
+        assertEquals("反向第一帧就必须提交正的一根", 1, reversed.bars)
+        assertTrue("反向的折算量不能被旧欠账吃掉", reversed.remainder > 0f)
+    }
+
+    @Test
+    fun `本帧折算量为零时余量继续逐帧消化`() {
+        // 只有「本帧有明确的相反方向」才作废欠账。手指停住（factor == 1）时
+        // 方向信息为空，欠账仍要按每帧一根消化掉 —— 否则快速捏合松手前的那几根会凭空消失。
+        val step = ChartGesture.accumulatePinch(remainder = -8f, factor = 1f, visibleBars = 120)
+        assertEquals(-1, step.bars)
+        assertEquals(-7f, step.remainder, 1e-5f)
+    }
+
+    @Test
+    fun `快速张开后反向合拢图上必须立刻开始往回走`() {
+        // 逐帧复刻真实手势：张开 4 帧（每帧间距 +20%）→ 反向合拢 4 帧。
+        // 修复前第 5 帧（反向的第一帧）仍在继续放大，图上要过好几帧才回头。
+        var viewport = ChartViewport(120, 0)
+        var previousDistance = 0f
+        var remainder = 0f
+        val distances = listOf(200f, 240f, 288f, 346f, 415f, 346f, 288f, 240f, 200f)
+        val trail = mutableListOf<Int>()
+        distances.forEach { distance ->
+            ChartGesture.pinchFactor(previousDistance, distance)?.let { factor ->
+                val before = viewport.clamp(BARS).visibleBars
+                val step = ChartGesture.accumulatePinch(remainder, factor, before)
+                if (step.bars != 0) {
+                    viewport = viewport.zoom((before + step.bars).toFloat() / before, 0.5f, BARS)
+                    remainder = ChartGesture.reportApplied(
+                        step.remainder,
+                        step.bars,
+                        viewport.clamp(BARS).visibleBars - before,
+                    )
+                } else {
+                    remainder = step.remainder
+                }
+            }
+            previousDistance = distance
+            trail += viewport.clamp(BARS).visibleBars
+        }
+        // 索引 5 是反向的第一帧（间距从 415 回到 346），它必须比索引 4 更宽（开始往回走）
+        assertTrue(
+            "反向第一帧就该往回走，实际轨迹 $trail",
+            trail[5] > trail[4],
+        )
+        assertTrue("换向后应逐帧持续回走，实际轨迹 $trail", trail[8] > trail[5])
+    }
+
+    @Test
     fun `每帧最多提交一根且余量始终是未消耗的捏合量`() {
         // 关键认识：**余量不要求「小于一根」**。它记的是「手指已经捏了、但还没被
         // 施加到图上的量」。一帧快速张合可能产生十几根的量，而每帧只允许提交一根

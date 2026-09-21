@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -26,19 +27,13 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.BasicAlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -76,7 +71,6 @@ import com.waxilo.marketmonitor.ui.common.RangeBar
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.appViewModel
-import com.waxilo.marketmonitor.ui.common.rememberPriceFlash
 import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Motion
@@ -178,20 +172,6 @@ fun DetailScreen(
                 )
             }
         }
-
-        // 确认框宿主在最外层：两种形态下都可能弹（划线是在全屏里划的，但退出全屏的
-        // 那一下不该把已经拉出来的确认框吞掉）
-        val draft by viewModel.alertDraftPrice.collectAsStateWithLifecycle()
-        val price = draft
-        if (price != null) {
-            AlertDraftDialog(
-                price = price,
-                tickSize = state.tickSize,
-                currentPrice = state.price,
-                onDismiss = viewModel::dismissAlertDraft,
-                onCreate = viewModel::createAlertFromDraft,
-            )
-        }
     }
 }
 
@@ -229,7 +209,12 @@ private fun FullscreenController(active: Boolean) {
  * 全屏图表：整屏只有图，顶部一条窄操作栏。
  *
  * 「划线」不需要长按 —— 在这个模式下划线就是唯一目的，再要求长按只是多余一步；
- * 单指拖动直接移动告警线，松手弹确认框，双指缩放照旧可用。
+ * 单指拖动直接移动告警线，松手即按线相对现价的位置落一条上破/下破预警，双指缩放照旧可用。
+ *
+ * 换周期与改指标也在这里给到：全屏是横屏，竖屏那套控件（周期条、指标条）整块被图表顶掉了，
+ * 只剩一个「退出全屏」的话，用户每次想换个周期都得先退出、改完、再进来。
+ * 两者都做成**按需展开的底部浮层**而不是常驻行：横屏的纵向空间本来就该全给主图，
+ * 常驻一条会把蜡烛区压掉三分之一。
  */
 @Composable
 private fun FullscreenChart(
@@ -242,6 +227,8 @@ private fun FullscreenChart(
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线模式
     var alertMode by rememberSaveable { mutableStateOf(false) }
+    // 同样挂在全屏内部：两个面板都是「临时看一眼」，退出全屏没必要带着走
+    var panel by rememberSaveable { mutableStateOf(FullscreenPanel.NONE) }
 
     Box(modifier = Modifier.fillMaxSize().background(colors.paper)) {
         if (state.candles.isEmpty()) {
@@ -282,6 +269,22 @@ private fun FullscreenChart(
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 周期与指标是**互斥**的浮层：两个都摊开只会把图压没，切换时自然收掉另一个
+            FilterChip(
+                text = state.interval.label,
+                selected = panel == FullscreenPanel.INTERVAL,
+                onClick = { panel = panel.toggled(FullscreenPanel.INTERVAL) },
+            )
+            FilterChip(
+                text = "指标",
+                selected = panel == FullscreenPanel.INDICATOR,
+                onClick = { panel = panel.toggled(FullscreenPanel.INDICATOR) },
+            )
+            FilterChip(
+                text = "划线",
+                selected = alertMode,
+                onClick = { alertMode = !alertMode },
+            )
             if (alertLine != null) {
                 FilterChip(
                     text = "清除线",
@@ -289,11 +292,6 @@ private fun FullscreenChart(
                     onClick = viewModel::clearAlertLine,
                 )
             }
-            FilterChip(
-                text = "划线",
-                selected = alertMode,
-                onClick = { alertMode = !alertMode },
-            )
             IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = Icons.Default.Close,
@@ -304,9 +302,48 @@ private fun FullscreenChart(
             }
         }
 
+        // 浮层压在底部而不是顶部：顶部要留给图例带与上面那排按钮，
+        // 底部只有时间轴，被临时盖住不影响看形态。
+        if (panel != FullscreenPanel.NONE) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .background(colors.paper)
+                    .padding(bottom = Spacing.Sm),
+            ) {
+                Rule(inset = 0.dp)
+                when (panel) {
+                    FullscreenPanel.INTERVAL -> IntervalSelector(
+                        options = state.intervals,
+                        selected = state.interval,
+                        onSelect = { selected ->
+                            viewModel.selectInterval(selected)
+                            // 单选：选完就收起来，否则它一直压着时间轴
+                            panel = FullscreenPanel.NONE
+                        },
+                        compact = true,
+                    )
+
+                    FullscreenPanel.INDICATOR -> IndicatorBar(
+                        maChoices = state.maChoices,
+                        activeMa = state.maPeriods,
+                        showBoll = state.showBoll,
+                        subPanes = state.subPanes,
+                        onToggleMa = viewModel::toggleMaPeriod,
+                        onToggleBoll = viewModel::toggleBoll,
+                        onToggleSubPane = viewModel::toggleSubPane,
+                        compact = true,
+                    )
+
+                    FullscreenPanel.NONE -> Unit
+                }
+            }
+        }
+
         if (alertMode) {
             Text(
-                text = "上下拖动放置告警线，松手确认",
+                text = "上下拖动放置告警线 · 松手按线的位置自动判定上破/下破",
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(bottom = Spacing.Lg)
@@ -329,59 +366,13 @@ private fun FullscreenChart(
 }
 
 /**
- * 划线后的确认框：把「在哪个价位」与「上破还是下破」一次问清。
- *
- * 方向必须由用户当场选：划线的语义是「到这个价提醒我」，猜错方向的规则比没有规则更危险。
+ * 全屏底部的浮层面板。横屏里没有纵向空间给常驻控件，所以按需展开、再点一次收起。
  */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AlertDraftDialog(
-    price: BigDecimal,
-    tickSize: BigDecimal?,
-    currentPrice: String,
-    onDismiss: () -> Unit,
-    onCreate: (above: Boolean) -> Unit,
-) {
-    val colors = MarketTheme.colors
-    val label = PriceFormatter.format(price, tickSize)
-    BasicAlertDialog(onDismissRequest = onDismiss) {
-        Surface(shape = Radius.lgShape, color = colors.paper) {
-            Column(modifier = Modifier.fillMaxWidth().padding(Spacing.Lg)) {
-                Text(
-                    text = "设置为价格预警",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.ink,
-                )
-                Spacer(Modifier.height(Spacing.Xs))
-                Text(
-                    text = "划线价位 $label · 现价 $currentPrice",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.muted,
-                )
-                Spacer(Modifier.height(Spacing.Lg))
-                Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Sm)) {
-                    Button(
-                        onClick = { onCreate(true) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.up),
-                    ) {
-                        Text("上破提醒")
-                    }
-                    Button(
-                        onClick = { onCreate(false) },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = colors.down),
-                    ) {
-                        Text("下破提醒")
-                    }
-                }
-                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                    Text("取消", color = colors.muted)
-                }
-            }
-        }
-    }
-}
+private enum class FullscreenPanel { NONE, INTERVAL, INDICATOR }
+
+/** 点当前已展开的那个 = 收起，点另一个 = 换过去。 */
+private fun FullscreenPanel.toggled(target: FullscreenPanel): FullscreenPanel =
+    if (this == target) FullscreenPanel.NONE else target
 
 /**
  * 顶栏：返回 + 币种名 + 溢出菜单。
@@ -460,12 +451,11 @@ private fun DetailTopBar(
  * Hero 价格区：大字号价格 + 涨跌 + 24h 高低区间条。
  *
  * 这是详情页最重要的改动——价格是全屏最大的信息，必须占据最大的视觉权重。
- * 数字用负字距的等宽体，价格变动时整块底色闪一下（沿用列表的闪现语言）。
+ * 数字用负字距的等宽体，颜色随涨跌在绿/红之间平滑过渡。
  */
 @Composable
 private fun Hero(state: DetailUiState) {
     val colors = MarketTheme.colors
-    val flash = rememberPriceFlash(state.changePercent)
     val priceColor by animateColorAsState(
         targetValue = colors.forChange(state.changePercent),
         animationSpec = tween(Motion.BaseMs),
@@ -475,7 +465,6 @@ private fun Hero(state: DetailUiState) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(flash)
             .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
     ) {
         Text(
@@ -529,13 +518,45 @@ private fun Hero(state: DetailUiState) {
 private fun formatPriceFor(value: Double, state: DetailUiState): String =
     PriceFormatter.format(BigDecimal(value.toString()), state.tickSize)
 
+/** 横排控件带里的行内小标题：代替 [SectionOverline]，省掉一整行高度。 */
+@Composable
+private fun InlineLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MarketTheme.colors.muted,
+        maxLines = 1,
+    )
+}
+
 /** 周期选择：横向可滚的方块标签。选中态用反色块，与图表区的指标条语言统一。 */
 @Composable
 private fun IntervalSelector(
     options: List<CandleInterval>,
     selected: CandleInterval,
     onSelect: (CandleInterval) -> Unit,
+    compact: Boolean = false,
 ) {
+    if (compact) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            InlineLabel(text = "周期")
+            options.forEach { option ->
+                FilterChip(
+                    text = option.label,
+                    selected = option == selected,
+                    onClick = { onSelect(option) },
+                )
+            }
+        }
+        return
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
         SectionOverline(text = "周期")
         Spacer(Modifier.height(Spacing.Xs))
@@ -639,6 +660,10 @@ private fun chartHeight(): Dp {
  *
  * MA 与副图**都允许全不选**：MA 全关 = 裸 K 图，副图全关 = 只留主图。
  * 这是看图的基本需求，不做「至少留一个」的兜底。
+ *
+ * [compact] 给全屏横屏用：两行式（两条小标题 + 两行方块）在竖屏里很舒展，
+ * 到横屏会吃掉近 40% 屏高、把副图区整个盖住 —— 开副图却看不见副图，等于白开。
+ * 横排把分组小标题降级成行内标签，只留一条窄带压住时间轴。
  */
 @Composable
 private fun IndicatorBar(
@@ -649,7 +674,44 @@ private fun IndicatorBar(
     onToggleMa: (Int) -> Unit,
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
+    compact: Boolean = false,
 ) {
+    if (compact) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            InlineLabel(text = "叠加")
+            maChoices.forEach { period ->
+                FilterChip(
+                    text = "MA$period",
+                    selected = period in activeMa,
+                    onClick = { onToggleMa(period) },
+                )
+            }
+            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = Spacing.Xxs)
+                    .width(1.dp)
+                    .height(14.dp)
+                    .background(MarketTheme.colors.hairline),
+            )
+            InlineLabel(text = "副图")
+            SubPaneKind.entries.forEach { kind ->
+                FilterChip(
+                    text = kind.label,
+                    selected = kind in subPanes,
+                    onClick = { onToggleSubPane(kind) },
+                )
+            }
+        }
+        return
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
         SectionOverline(text = "叠加指标")
         Spacer(Modifier.height(Spacing.Xs))

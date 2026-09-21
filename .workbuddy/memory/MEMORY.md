@@ -155,6 +155,8 @@ cd "C:/Users/sloan.wang/Documents/Code/Tauri/market-monitor" && \
 - `release.yml`：decode `KEYSTORE_BASE64` → `$RUNNER_TEMP/signing/release.keystore` → 写 `$GITHUB_ENV` 的 `KEYSTORE_FILE` → `assembleRelease` → 指纹断言 → 产物 `app-release.apk`。
 - ❗**AGP 默认只做 v2/v3 签名，APK 里没有 `META-INF/*.RSA`** ⇒ 校验指纹**只能用 `apksigner verify --print-certs`**；`keytool -printcert -jarfile` 会报「不是已签名的 jar 文件」。`apksigner` 在 `$ANDROID_HOME/build-tools/<ver>/apksigner`。
 - `release.yml` 里用 `grep 'certificate SHA-256 digest' | sed 's/.*digest: *//' | tr -d ':\r' | tr 'A-Z' 'a-z'` 提指纹（本机实测 MATCH）。
+- ✅ **2026-09-20 已实测跑通**：Release run `35509771066` 全绿，CI 断言指纹 = `cf2e20c7…52f034`；产物 `.sha256` 复核一致；真机对旧构建 `install -r` 官方包 **Success**（修复前必失败）。
+- ⚠️ **匿名 GitHub API 60 次/小时会耗尽** ⇒ 核对 Release 产物用已登录的 `gh release view/download`，别走 `curl api.github.com`。
 
 ### 本地离线构建
 - 本机 `--offline` 跑 `assembleRelease` 会因 `lint-gradle` 未缓存失败 ⇒ 加 `-x lintVitalAnalyzeRelease -x lintVitalRelease`（**CI 上别加**，CI 有网）。

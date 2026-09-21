@@ -118,6 +118,15 @@ object ChartGesture {
      * 所以调用方在 `zoom()` 之后**必须**把真实生效的根数变化调 [reportApplied] 报回来，
      * 由它扣掉余量。只提交不校正 = 手感会慢慢跑偏。
      *
+     * ## 反向必须立刻换向（写错过一次，务必看）
+     *
+     * 每帧只提交一根意味着快速捏合会攒下一笔**同方向的欠账**（几十根）。
+     * 手指中途反向时，这笔欠账若继续参与抵扣，反向的前若干帧仍然提交旧方向的 -1/+1 ——
+     * 图上表现为「手指已经在往回收，图还在朝原方向继续跑」，越快的捏合越明显。
+     * 所以本帧折算量与余量**异号**时先把余量清零，反向第一帧就换向。
+     * 这与 `ValueRange.panLimit` 里「钳累积量而不是钳渲染结果」是同一类问题：
+     * 累积量本身带着方向，方向一变就必须作废。
+     *
      * @param remainder 上一帧留下的**根数**余量（不是对数）
      * @param factor 本帧的捏合因子（来自 [pinchFactor]）
      * @param visibleBars 当前可见根数（用于把因子折算成根数）
@@ -130,7 +139,11 @@ object ChartGesture {
         // 因此根数增量 = bars * (ratio - 1)。
         // 注意 ratio < 1（张开手指，间距变大）→ 增量为负 → 可见根数变少 = 放大。
         // 这与 TradingView 一致：张开 = 放大 = 看得更少更细；合拢 = 缩小 = 看得更多。
-        val total = remainder + (bars * (ratio - 1.0)).toFloat()
+        val folded = (bars * (ratio - 1.0)).toFloat()
+        // 异号 = 手指改了方向 → 旧方向的欠账作废（见上方「反向必须立刻换向」）。
+        // 本帧折算量为 0（factor == 1）时没有方向信息，余量原样结转继续逐帧消化。
+        val carried = if (remainder * folded < 0f) 0f else remainder
+        val total = carried + folded
         if (!total.isFinite()) return PinchBar(0, remainder)
         // 没攒够一根：本帧不缩放，余量留到下一帧（这是「缓慢捏合仍生效」的关键）
         val whole = total.toInt()

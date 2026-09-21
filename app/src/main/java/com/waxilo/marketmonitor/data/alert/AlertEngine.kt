@@ -6,6 +6,7 @@ import com.waxilo.marketmonitor.data.remote.WebhookSender
 import com.waxilo.marketmonitor.domain.alert.AlertDecision
 import com.waxilo.marketmonitor.domain.alert.AlertDirection
 import com.waxilo.marketmonitor.domain.alert.AlertEvaluator
+import com.waxilo.marketmonitor.domain.alert.AlertRepeatMode
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.alert.AlertText
@@ -95,8 +96,9 @@ class AlertEngine(
             val ticker = prices[SymbolId(rule.market, rule.symbol)] ?: return@forEach
             val previous = alerts.state(rule.id)
             val (decision, next) = AlertEvaluator.evaluate(rule, ticker.lastPrice, ticker.changePercent, now, previous)
-            if (decision is AlertDecision.Triggered) onTriggered(rule, decision)
-            if (changed(previous, next)) alerts.saveState(rule.id, next)
+            val retired = decision is AlertDecision.Triggered && onTriggered(rule, decision)
+            // 已退场的规则不能再写状态：deleteRule 连状态一起删了，回写等于凭空造出一行孤儿
+            if (!retired && changed(previous, next)) alerts.saveState(rule.id, next)
         }
     }
 
@@ -107,7 +109,13 @@ class AlertEngine(
             previous.lastTriggeredAt != next.lastTriggeredAt ||
             previous.fired != next.fired
 
-    private suspend fun onTriggered(rule: AlertRule, decision: AlertDecision.Triggered) {
+    /**
+     * 记录一次触发。返回 true 表示这条规则已经「用尽」并被移除。
+     *
+     * 单次规则命中即退场：留在列表里既不会再提醒（fired 闸门），又要用户手动清理，
+     * 是纯粹的残留物。记录与通知都做完才删，避免删库把还没发出去的通知一起带走。
+     */
+    private suspend fun onTriggered(rule: AlertRule, decision: AlertDecision.Triggered): Boolean {
         val message = AlertMessage(
             ruleId = rule.id,
             market = rule.market,
@@ -125,6 +133,9 @@ class AlertEngine(
         if (settings.current().notificationEnabled) notifier.notify(stored, rule)
         val delivery = deliver(rule, stored)
         if (delivery != WebhookDelivery.NONE) alerts.setDelivery(id, delivery)
+        if (rule.repeatMode != AlertRepeatMode.ONCE) return false
+        alerts.deleteRule(rule.id)
+        return true
     }
 
     /** 区间外条件下哪一侧越界由方向决定，消息里只记那一个阈值。 */

@@ -41,10 +41,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,37 +71,6 @@ import com.waxilo.marketmonitor.ui.theme.SectionOverlineStyle
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-
-/* ══════════════════════════════════════════════════════════════════════
- *  价格闪现
- * ══════════════════════════════════════════════════════════════════════ */
-
-/**
- * 涨跌闪现底色：对比上一帧的涨跌幅，数值真正变化时铺一层极淡的绿/红再快速淡出。
- * 只影响背景色、不动任何布局，因此刷新时 monospace 数字列保持对齐不动。
- * 首帧（从 null 初始化）记为当前值、不触发闪现。
- */
-@Composable
-fun rememberPriceFlash(changePercent: Double?): Color {
-    var prev by remember { mutableStateOf(changePercent) }
-    // 用 Float 通道承载闪现透明度，规避 Color 的 TwoWayConverter 推断问题
-    val alpha = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-    val changed = prev != changePercent
-    if (changed) {
-        val firstInit = prev == null
-        prev = changePercent
-        if (!firstInit) {
-            scope.launch {
-                alpha.snapTo(1f)
-                alpha.animateTo(0f, tween(durationMillis = Motion.SlowMs, easing = Motion.Standard))
-            }
-        }
-    }
-    val colors = MarketTheme.colors
-    val base = if ((changePercent ?: 0.0) > 0) colors.flashUp else colors.flashDown
-    return base.copy(alpha = base.alpha * alpha.value)
-}
 
 /* ══════════════════════════════════════════════════════════════════════
  *  涨跌文本

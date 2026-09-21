@@ -193,6 +193,20 @@ fun KlineChart(
     val alertRange by rememberUpdatedState(mainRange)
     val alertDrag by rememberUpdatedState(onAlertLineDrag)
     val alertCommit by rememberUpdatedState(onAlertLineCommit)
+    /**
+     * 绘图区几何、根数、序列与自动量程同样必须读**实时**值。
+     *
+     * 它们都是 `pointerInput` key 的候选，但**一个都不能真进 key**：key 一变协程就重启，
+     * 而手指还按着的话，新协程的 `awaitFirstDown` 等不到新的按下事件 —— 表现为
+     * 「图表卡住、怎么拖都不动」，松手重按才恢复。换周期、翻页、WS 推来一根新蜡烛
+     * 都会让根数变化，所以这个坑踩得非常频繁。
+     * 改走 `rememberUpdatedState` 后，key 只剩「划线模式」这个只由按钮切换的开关。
+     */
+    val liveGeo by rememberUpdatedState(geo)
+    val liveBarCount by rememberUpdatedState(barCount)
+    val liveSeries by rememberUpdatedState(series)
+    val liveAutoRange by rememberUpdatedState(autoRange)
+    val liveLoadMore by rememberUpdatedState(onLoadMore)
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
     val scheme = MaterialTheme.colorScheme
@@ -211,25 +225,24 @@ fun KlineChart(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                // ⚠️ visibleBars 绝不能进 key：双指缩放每提交一根它就变一次，
-                // key 一变 pointerInput 协程就重启 —— 当前手势直接作废
-                // （重启后的 awaitFirstDown 要等一次全新的按下，手指没抬起就永远等不到），
-                // 表现为「缩放像被打断，每次捏一下只动一根」。
-                // 回调里读的是 viewport / priceZoom / pricePan / 两个余量（都是 state，实时值），
-                // 以及 barCount 与 geo 的像素尺寸（手势期间不会变，留在 key 里兜住换数据/旋转）。
-                // alertLineMode 进 key 是安全的：它只由「划线」按钮切换，不可能在手势中途变，
-                // 不像 visibleBars 那样每帧都动（那个进 key 会把正在进行的缩放手势打断）。
-                .pointerInput(geo.plotWidthPx, geo.mainHeightPx, barCount, alertLineMode) {
+                // ⚠️ key 只能有 alertLineMode 这一个。
+                //
+                // 它是「划线」按钮切换的开关，不可能在手势中途变。其余一切（可见根数、
+                // 序列长度、绘图区像素尺寸）都会在手势进行中被数据更新改掉：key 一变
+                // pointerInput 协程就重启，当前手势直接作废 —— 重启后的 awaitFirstDown
+                // 要等一次全新的按下，手指没抬起就永远等不到。表现有两种：
+                // 「缩放被打断，每次捏一下只动一根」，以及「整块图卡住、怎么拖都不动」。
+                // 这些值改从上面的 live* 里读实时值。
+                .pointerInput(alertLineMode) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
-                        plotWidth = geo.plotWidthPx,
-                        plotTop = geo.mainTopPx,
-                        plotHeight = geo.mainHeightPx,
+                        geo = { liveGeo },
                         alertLineMode = alertLineMode,
                         onAlertLineDrag = { yPx ->
+                            val plot = liveGeo
                             val fraction =
-                                (yPx - geo.mainTopPx) / geo.mainHeightPx.coerceAtLeast(1f)
+                                (yPx - plot.mainTopPx) / plot.mainHeightPx.coerceAtLeast(1f)
                             // 量程是变动的（缩放/平移），必须走 rememberUpdatedState 读实时值，
                             // 否则这个回调会拿协程启动那一刻的旧量程换算，画出来的线跑偏
                             val price = alertRange.fromFraction(fraction)
@@ -241,20 +254,21 @@ fun KlineChart(
                             pinchRemainder = 0f
                         },
                         onPan = { deltaPx ->
-                            val slot = geo.slot(viewport.clamp(barCount).visibleBars)
+                            val bars = liveBarCount
+                            val slot = liveGeo.slot(viewport.clamp(bars).visibleBars)
                             // 换算成「整根 + 余量」：单帧位移通常不足一根，
                             // 逐帧取整会把零头全抹掉（历史上表现为横向完全拖不动）。
                             val step = ChartGesture.accumulateBarPan(barPanRemainder, deltaPx, slot)
                             barPanRemainder = step.remainder
                             if (step.bars != 0) {
-                                val moved = viewport.pan(step.bars.toFloat(), barCount)
+                                val moved = viewport.pan(step.bars.toFloat(), bars)
                                 viewport = moved
                                 // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）
-                                if (step.bars > 0 && moved.startIndex(barCount) == 0) {
-                                    val oldest = series.candles.firstOrNull()?.openTime ?: 0L
+                                if (step.bars > 0 && moved.startIndex(bars) == 0) {
+                                    val oldest = liveSeries.candles.firstOrNull()?.openTime ?: 0L
                                     if (oldest != oldestRequested) {
                                         oldestRequested = oldest
-                                        onLoadMore()
+                                        liveLoadMore()
                                     }
                                 }
                             }
@@ -262,7 +276,8 @@ fun KlineChart(
                         onZoom = { barFactor, anchorX ->
                             // 逐帧因子太小会被 zoom() 里的 roundToInt 抹平，
                             // 必须先把「不足一根」的零头攒起来（与横向平移同一套思路）。
-                            val before = viewport.clamp(barCount).visibleBars
+                            val bars = liveBarCount
+                            val before = viewport.clamp(bars).visibleBars
                             val step = ChartGesture.accumulatePinch(
                                 remainder = pinchRemainder,
                                 factor = barFactor,
@@ -271,12 +286,12 @@ fun KlineChart(
                             if (step.bars != 0) {
                                 viewport = viewport.zoom(
                                     barFactor = (before + step.bars).toFloat() / before,
-                                    anchorRatio = anchorX / geo.plotWidthPx,
-                                    barCount = barCount,
+                                    anchorRatio = anchorX / liveGeo.plotWidthPx,
+                                    barCount = bars,
                                 )
                                 // zoom() 内部 roundToInt，实际生效的根数未必等于请求的 step，
                                 // 差额必须退回余量，否则取整误差会逐帧累积成偏置。
-                                val applied = viewport.clamp(barCount).visibleBars - before
+                                val applied = viewport.clamp(bars).visibleBars - before
                                 pinchRemainder = ChartGesture.reportApplied(
                                     remainder = step.remainder,
                                     requestedBars = step.bars,
@@ -297,13 +312,14 @@ fun KlineChart(
                             // 钳的是累积量本身而不是渲染结果：否则拖到边界后 pricePan
                             // 还在涨，反向拖要先走完这段空行程才见效，手感像卡住了。
                             // 跨度取「缩放后」的量程（平移不改变跨度），与渲染时一致。
-                            val span = (autoRange.high - autoRange.low) * priceZoom
-                            val limit = autoRange.panLimit(autoRange, span)
+                            val range = liveAutoRange
+                            val span = (range.high - range.low) * priceZoom
+                            val limit = range.panLimit(range, span)
                             pricePan = (pricePan + deltaFraction).coerceIn(limit.start, limit.endInclusive)
                         },
                         onCrosshair = { position ->
                             crosshair = if (position == null) null else {
-                                val index = viewport.indexAt(position.x / geo.plotWidthPx, barCount)
+                                val index = viewport.indexAt(position.x / liveGeo.plotWidthPx, liveBarCount)
                                 if (index >= 0) Crosshair(index, position.y) else crosshair
                             }
                         },
@@ -368,10 +384,13 @@ fun KlineChart(
                 Modifier.align(Alignment.TopStart),
             )
             ChartLegend(
-                tooltip = remember(crosshair, barCount, interval, tickSize) {
+                // key 里必须是**蜡烛数据本身**而不是 barCount：最新一根蜡烛在收盘前
+                // 每 tick 都在变（开高低收/量都在动），但根数一直不变 —— 用 barCount 当 key
+                // 会让图例上的数字整根蜡烛期间冻住，看起来就是「图表不实时」。
+                tooltip = remember(crosshair, series.candles, interval, tickSize) {
                     ChartModel.tooltip(
                         series.candles,
-                        crosshair?.index ?: (barCount - 1),
+                        crosshair?.index ?: (series.size - 1),
                         interval,
                         tickSize,
                     )
@@ -1160,9 +1179,13 @@ private fun ChartLegend(
 private suspend fun PointerInputScope.detectChartGestures(
     longPressMs: Long,
     touchSlop: Float,
-    plotWidth: Float,
-    plotTop: Float,
-    plotHeight: Float,
+    /**
+     * 绘图区几何用**取值函数**而不是三个 Float 入参。
+     *
+     * 入参是启动那一刻的定值：这个协程的 key 只有「划线模式」，尺寸变了不会重启，
+     * 用定值就会拿旧尺寸换算落点（旋屏后划线直接跑偏）。取函数每次事件都读实时值。
+     */
+    geo: () -> ChartGeo,
     /** 划线模式：单指拖动直接移动告警线（见上方说明）。 */
     alertLineMode: Boolean,
     /** 划线过程中回调当前落点（未换算的 y 像素）。 */
@@ -1209,7 +1232,8 @@ private suspend fun PointerInputScope.detectChartGestures(
 
             // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
             if (alertLineMode && pressed.size == 1) {
-                val y = primary.position.y.coerceIn(plotTop, plotTop + plotHeight)
+                val plot = geo()
+                val y = primary.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
                 onAlertLineDrag(y)
                 alertLineActive = true
                 continue
@@ -1227,10 +1251,11 @@ private suspend fun PointerInputScope.detectChartGestures(
                 val dx = abs(pressed[0].position.x - pressed[1].position.x)
                 val dy = abs(pressed[0].position.y - pressed[1].position.y)
                 val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
+                val plot = geo()
                 ChartGesture.pinchFactor(previousDistanceX, dx)?.let { factor ->
-                    onZoom(factor, anchorX.coerceIn(0f, plotWidth))
+                    onZoom(factor, anchorX.coerceIn(0f, plot.plotWidthPx))
                 }
-                if (plotHeight > 0f) {
+                if (plot.mainHeightPx > 0f) {
                     // 垂直张开 = 量程变大（把价格压扁看全局），与水平方向直觉一致
                     ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
                 }
@@ -1255,9 +1280,12 @@ private suspend fun PointerInputScope.detectChartGestures(
                         onPan(deltaX)
                     }
 
-                    ChartGesture.Axis.VERTICAL -> if (plotHeight > 0f && abs(deltaY) > 0.1f) {
-                        // 手指下滑 = 量程下移（看更低价区），因此取正号
-                        onPricePan(deltaY / plotHeight)
+                    ChartGesture.Axis.VERTICAL -> {
+                        val height = geo().mainHeightPx
+                        if (height > 0f && abs(deltaY) > 0.1f) {
+                            // 手指下滑 = 量程下移（看更低价区），因此取正号
+                            onPricePan(deltaY / height)
+                        }
                     }
 
                     null -> Unit

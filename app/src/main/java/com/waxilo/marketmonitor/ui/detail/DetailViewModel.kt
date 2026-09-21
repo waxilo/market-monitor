@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
+import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
@@ -111,15 +112,20 @@ class DetailViewModel(
      */
     private val alertLine = MutableStateFlow<BigDecimal?>(null)
 
-    /** 松手后待确认的价位。非空即弹确认框；确认或取消都清空。 */
-    private val alertDraft = MutableStateFlow<BigDecimal?>(null)
+    /**
+     * 这条线对应的预警规则 id。
+     *
+     * 线是规则的**唯一入口**，所以两者必须绑定：再次拖动同一条线时改的是同一条规则
+     * （而不是每松一次手就多出一条），规则被删掉（触发完毕或用户在预警列表删除）时
+     * 线也要跟着消失。null 表示当前这条线还没落库。
+     */
+    private val alertLineRuleId = MutableStateFlow<Long?>(null)
 
     /** 一次性提示（创建成功之类）。3 秒后自动消失。 */
     private val noticeText = MutableStateFlow<String?>(null)
     private var noticeJob: Job? = null
 
     val alertLinePrice: StateFlow<BigDecimal?> = alertLine.asStateFlow()
-    val alertDraftPrice: StateFlow<BigDecimal?> = alertDraft.asStateFlow()
     val notice: StateFlow<String?> = noticeText.asStateFlow()
 
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
@@ -194,6 +200,14 @@ class DetailViewModel(
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
         // K 线流由详情页订阅、离开时退订，避免污染首页只需要的合并流
         viewModelScope.launch { interval.collect { selected -> repository.watchKlineUpdates(id, selected) } }
+        // 绑定的规则没了（单次触发后自动移除，或用户在预警列表里删了），线也要跟着消失 ——
+        // 留一条背后什么都没有的线，会让人以为预警还在跑
+        viewModelScope.launch {
+            alerts.rules().collect { rules ->
+                val bound = alertLineRuleId.value ?: return@collect
+                if (rules.none { it.id == bound }) clearAlertLine()
+            }
+        }
     }
 
     override fun onCleared() {
@@ -267,57 +281,86 @@ class DetailViewModel(
     }
 
     /**
-     * 手指离开：把落点对齐到 tickSize 再弹确认框。
+     * 手指离开：对齐 tickSize 后直接落库。
      *
      * 对齐是必须的 —— 校验器要求目标价是 tickSize 的整数倍，而手指落点换算出来的价格
-     * 几乎不可能正好落在刻度上，不处理的话用户每次划线都会收到「需为 tickSize 的整数倍」。
+     * 几乎不可能正好落在刻度上，不处理的话每次划线都会被精度校验挡下。
+     *
+     * 上破还是下破**由线相对于现价的位置自动判定**：线在现价上方 = 涨上去才碰到 = 上破，
+     * 反之 = 下破。这也让「把上破的线拖到现价下方」自然变成下破 —— 方向不是一次性的选择，
+     * 而是线本身的位置属性。
      */
     fun commitAlertLine() {
         val raw = alertLine.value ?: return
         val aligned = alignToTick(raw)
         alertLine.value = aligned
-        alertDraft.value = aligned
-    }
-
-    fun dismissAlertDraft() {
-        alertDraft.value = null
-    }
-
-    fun clearAlertLine() {
-        alertLine.value = null
-        alertDraft.value = null
+        val reference = referencePrice() ?: run {
+            showNotice("拿不到现价，暂时无法判定上破/下破")
+            return
+        }
+        val above = aligned >= reference
+        viewModelScope.launch { upsertAlertLineRule(aligned, above) }
     }
 
     /**
-     * 用划线价位建一条预警规则（PRD FR-3.1）。
-     * [above] 为 true 走上破，false 走下破 —— 划线的意义就是「到这个价提醒我」，
-     * 方向必须让用户当场选，猜错方向的规则比没有规则更危险。
+     * 只清线、不动预警。
+     *
+     * 用户可能是想「换个价位重划」，顺手删掉规则会让他在预警列表里白找一场；
+     * 真正想删规则的地方是预警列表。规则若已被删（触发完毕），这里自然什么也不做。
      */
-    fun createAlertFromDraft(above: Boolean) {
-        val price = alertDraft.value ?: return
-        alertDraft.value = null
+    fun clearAlertLine() {
+        alertLine.value = null
+        alertLineRuleId.value = null
+    }
+
+    /**
+     * 建/改这条线对应的规则。
+     *
+     * 有绑定就更新（保留 repeatMode / 冷却 / Webhook 等用户可能调过的字段），
+     * 没有就新建 —— 拖动同一个价位反复松手不该堆出一串规则。
+     */
+    private suspend fun upsertAlertLineRule(price: BigDecimal, above: Boolean) {
         val label = PriceFormatter.format(price, state.value.tickSize)
-        viewModelScope.launch {
-            try {
+        val condition = if (above) AlertCondition.ABOVE else AlertCondition.BELOW
+        val name = "${id.symbol} ${if (above) "上破" else "下破"} $label"
+        try {
+            val bound = alertLineRuleId.value
+            val existing = bound?.let { alerts.rule(it) }
+            val ruleId = if (existing != null) {
+                alerts.saveRule(existing.copy(name = name, condition = condition, threshold = price))
+                // 条件与价位都换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让
+                // 新条件一次都不提醒，wasSatisfied 也会把真正的「穿越」边沿吃掉。
+                alerts.saveState(existing.id, AlertState())
+                existing.id
+            } else {
                 alerts.saveRule(
                     AlertRule(
                         market = id.market,
                         symbol = id.symbol,
-                        name = "${id.symbol} ${if (above) "上破" else "下破"} $label",
-                        condition = if (above) AlertCondition.ABOVE else AlertCondition.BELOW,
+                        name = name,
+                        condition = condition,
                         threshold = price,
                         // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
                         createdAt = System.currentTimeMillis(),
                     ),
                 )
-                showNotice("已创建${if (above) "上破" else "下破"}预警 · $label")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                showNotice("预警创建失败：${e.displayMessage()}")
             }
+            alertLineRuleId.value = ruleId
+            showNotice("已设置${if (above) "上破" else "下破"}预警 · $label")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            showNotice("预警设置失败：${e.displayMessage()}")
         }
     }
+
+    /**
+     * 自动判定方向的参考价：优先用实时行情，拿不到（标的未加自选时没有 ticker 推送）
+     * 就退到图上最后一根蜡烛的收盘价 —— 它本身就是「最近成交价」的另一种表达。
+     */
+    private fun referencePrice(): BigDecimal? =
+        state.value.lastPrice?.let { BigDecimal(it.toString()) }
+            ?: chart.value.raw.lastOrNull()?.close
 
     /** 把价格对齐到交易规则的最小变动单位，避免建规则时被精度校验挡下。 */
     private fun alignToTick(price: BigDecimal): BigDecimal {

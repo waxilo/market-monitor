@@ -71,7 +71,6 @@ import com.waxilo.marketmonitor.ui.common.ListRow
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.Sparkline
 import com.waxilo.marketmonitor.ui.common.appViewModel
-import com.waxilo.marketmonitor.ui.common.rememberPriceFlash
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Motion
 import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
@@ -488,8 +487,6 @@ private fun TickerRowItem(
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // 涨跌闪现：价格真正变化时行背景短暂铺一层极淡的绿/红再淡出（纯背景，不挤压列布局）
-    val flash = rememberPriceFlash(row.changePercent)
     val colors = MarketTheme.colors
     val priceColor by animateColorAsState(
         targetValue = colors.forChange(row.changePercent),
@@ -549,9 +546,8 @@ private fun TickerRowItem(
             modifier = Modifier
                 .fillMaxWidth()
                 .offset { IntOffset(swipeOffset.floatValue.roundToInt(), dragOffsetY().roundToInt()) }
-                // 先铺不透明底色再叠闪现色：不透明底色是用来盖住下面红色按钮的
+                // 不透明底色：用来盖住下面左滑后露出的红色「移除」按钮
                 .background(colors.paper)
-                .background(flash)
                 .clickable {
                     if (revealed) {
                         // 已滑开时，点内容先收起，而不是跳详情
