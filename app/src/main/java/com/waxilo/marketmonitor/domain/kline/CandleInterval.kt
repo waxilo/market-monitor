@@ -67,6 +67,7 @@ data class CandleInterval(val minutes: Long, val official: OfficialInterval?) {
             CandleInterval(30, OfficialInterval.M30),
             CandleInterval(60, OfficialInterval.H1),
             CandleInterval(240, OfficialInterval.H4),
+            CandleInterval(480, OfficialInterval.H8),
             CandleInterval(1_440, OfficialInterval.D1),
             CandleInterval(10_080, OfficialInterval.W1),
         )
