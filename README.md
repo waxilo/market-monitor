@@ -51,9 +51,9 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.7` |
-| versionCode | `19` |
-| 最新 tag | `0.9.7` |
+| versionName | `0.9.8` |
+| versionCode | `20` |
+| 最新 tag | `0.9.8` |
 | 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
