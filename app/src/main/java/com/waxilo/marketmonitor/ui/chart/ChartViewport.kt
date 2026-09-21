@@ -155,7 +155,15 @@ data class ChartViewport(
     companion object {
         const val MIN_BARS = 15
         const val MAX_BARS = 600
-        const val DEFAULT_VISIBLE = 120
+
+        /**
+         * 默认可见根数。
+         *
+         * 取 60 而不是更宽：绘图区宽度约 906px（1080 屏减去 58dp 的价格刻度区），
+         * 120 根摊下来每根只有 7.5px、蜡烛实体约 5px，一眼看去整张图又密又小。
+         * 60 根每根约 15px，实体宽约 10px，形态看得清，一屏也仍够看出趋势。
+         */
+        const val DEFAULT_VISIBLE = 60
 
         /**
          * 平移/缩放后，可视区里至少要留给「真实数据」的比例（两个方向共用）。
