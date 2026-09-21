@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -50,9 +51,30 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
     val navController = rememberNavController()
     val openDetail: (SymbolId) -> Unit = { navController.navigate(Routes.detail(it)) }
 
+    /**
+     * 离开预警页。
+     *
+     * 从通知栏进入时预警页就是**起始页**，栈底就是它 —— `popBackStack()` 返回 false，
+     * 左上角箭头点了没反应，系统返回键还会直接退出应用，两条路都回不到行情主页。
+     * 所以退不动时改成「回家」：把预警页换成行情页，之后返回键才是正常的退出语义。
+     *
+     * 判断放在**调用时**而不是组合时：用户从预警页走进编辑页/Webhook 页时，
+     * 返回处理器仍在注册状态，那时 `previousBackStackEntry` 非空，应当照常 pop 一层。
+     */
+    val leaveAlerts: () -> Unit = {
+        if (navController.previousBackStackEntry == null) {
+            navController.navigate(Routes.MARKET) {
+                popUpTo(Routes.ALERTS) { inclusive = true }
+            }
+        } else {
+            navController.popBackStack()
+        }
+    }
+
     NavHost(
         navController = navController,
-        // 从通知栏进入时首帧就落在预警页，避免先闪一下行情列表
+        // 从通知栏进入时首帧就落在预警页，避免先闪一下行情列表。
+        // 代价是栈底没有行情页，返回要额外兜底 —— 见 [leaveAlerts]。
         startDestination = if (openAlerts) Routes.ALERTS else Routes.MARKET,
         modifier = modifier,
         // 克制转场：进入从右滑入 + 淡入，退出轻淡出；返回时反向滑回。
@@ -79,8 +101,11 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
             SettingsScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.ALERTS) {
+            // 系统返回键与左上角箭头走同一条路径。只在「预警页是起始页」时才需要接管，
+            // 否则会抢掉 NavController 正常的 pop（如预警页 → 行情页）。
+            BackHandler(enabled = openAlerts) { leaveAlerts() }
             AlertsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = leaveAlerts,
                 onOpenDetail = openDetail,
                 onNewRule = { navController.navigate(Routes.alertNew()) },
                 onEditRule = { navController.navigate(Routes.alertEdit(it)) },
