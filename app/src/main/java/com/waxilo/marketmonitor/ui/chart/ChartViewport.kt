@@ -24,9 +24,21 @@ import kotlin.math.roundToInt
  * 因为不碰像素与 Compose 类型，本类在 JVM 单测里可穷举。
  */
 data class ChartViewport(
-    val visibleBars: Int = DEFAULT_VISIBLE,
     /**
-     * 右端**越过最新一根**空出的根数。
+     * 可见根数（**浮点**）。
+     *
+     * 为什么不是 `Int`：双指缩放时手指是连续移动的，单帧折算出的根数变化远不到一根
+     * （可见 60 根时缓慢捏合一帧只有零点几根）。若把它取整，量化误差会让整张图
+     * 「几帧不动、突然跳一根」—— 一根 15px，跳一根就是肉眼可见的横向抖动；
+     * 快速捏合时又会被限成每帧一根，画面严重滞后于手指。改成浮点后
+     * [zoom] 不再取整，缩放是连续的。
+     *
+     * 取数据的下标仍必须是整数，所以 [window]/[plotRange] 内部才取整；
+     * 像素定位走 [plotStart] 这个浮点左端。
+     */
+    val visibleBars: Float = DEFAULT_VISIBLE,
+    /**
+     * 右端**越过最新一根**空出的根数（浮点，理由同 [visibleBars]）。
      *
      * - `0` = 窗口右端正好贴着最新价（默认）；
      * - `> 0` = 最右边是一个窗口左移的效果，最新一根被推到屏幕内偏左，
@@ -37,14 +49,16 @@ data class ChartViewport(
      * 历史上这里只允许 `>= 0`（把"看更早"当成"留白"），
      * 于是最新一根永远只能顶在最右边，往左拖不动。
      */
-    val rightOffset: Int = 0,
+    val rightOffset: Float = 0f,
 ) {
 
     /** 单屏最少 15 根（再多影线就糊成一条线），最多不超过序列长度与 [MAX_BARS]。 */
-    private fun visibleBound(barCount: Int): IntRange =
-        min(MIN_BARS, max(1, barCount))..min(max(1, barCount), MAX_BARS)
+    private fun minVisible(barCount: Int): Float = min(MIN_BARS, max(1, barCount)).toFloat()
 
-    private fun effectiveVisible(barCount: Int): Int = visibleBars.coerceIn(visibleBound(barCount))
+    private fun maxVisible(barCount: Int): Float = min(max(1, barCount), MAX_BARS).toFloat()
+
+    private fun effectiveVisible(barCount: Int): Float =
+        visibleBars.coerceIn(minVisible(barCount), maxVisible(barCount))
 
     /**
      * 右侧最多能留出多少根空白（让最新一根可以被推到屏幕中间偏左）。
@@ -53,8 +67,8 @@ data class ChartViewport(
      * [MIN_VISIBLE_SHARE] —— 与纵向平移的 `panLimit` 是同一套「不许拖成空屏」原则。
      * 不留这个上限的话，用户可以一路往左拖到只剩一片空白。
      */
-    private fun maxRightBlank(visible: Int): Int =
-        max(0, (visible * (1f - MIN_VISIBLE_SHARE)).toInt())
+    private fun maxRightBlank(visible: Float): Float =
+        max(0f, visible * (1f - MIN_VISIBLE_SHARE))
 
     /**
      * 把意图夹到 [barCount] 允许的范围内。每次查询前都会调用，
@@ -63,10 +77,28 @@ data class ChartViewport(
     fun clamp(barCount: Int): ChartViewport {
         val visible = effectiveVisible(barCount)
         // 左界：最多把窗口右端推到「只看得到 1 根」之前 —— 即移出 (barCount-visible) 根历史
-        val minOffset = -max(0, barCount - visible)
-        // 右界：最新一根被推到屏幕内偏左，右侧最多留 maxRightBlank 根空白
-        val offset = rightOffset.coerceIn(minOffset, maxRightBlank(visible))
+        val minOffset = -max(0f, barCount - visible)
+        // 右界：最新一根被推到屏幕内偏左，右侧最多留 maxRightBlank 根空白。
+        // 但**整段序列一屏就放得下**时不留白：此时屏幕里本来就没有多余空间，
+        // 留白只会把最老的那几根挤出左边界（新币的月线常常只有十几根）。
+        val maxOffset = if (barCount <= visible) 0f else maxRightBlank(visible)
+        val offset = rightOffset.coerceIn(minOffset, maxOffset)
         return copy(visibleBars = visible, rightOffset = offset)
+    }
+
+    /**
+     * 绘图区左端的**浮点**根下标（可为负、可越出序列末尾）。
+     *
+     * 与 [plotRange] 的分工：[plotRange] 取整、用来**取数据**（下标不能是小数）；
+     * 本函数不取整、用来**算像素** —— 可见根数是连续变化的，位置若按整数根算，
+     * 每变一根整张图就横向跳一个槽宽，那正是「捏合时抖动」。
+     *
+     * 窗口右端 = `barCount - 1 + rightOffset`，故左端 = 右端 - visibleBars + 1。
+     */
+    fun plotStart(barCount: Int): Float {
+        if (barCount <= 0) return 0f
+        val current = clamp(barCount)
+        return barCount + current.rightOffset - current.visibleBars
     }
 
     /**
@@ -75,12 +107,16 @@ data class ChartViewport(
      * 右侧留白（`rightOffset > 0`）时窗口右端会越出序列末根，
      * 本函数把它夹回末根 —— 所有**按索引取数据**的地方都用它（索引必须安全）。
      * 需要「含空白的完整绘图区」的地方用 [plotRange]。
+     *
+     * 两端都**向下取整**：左端 `floor` 能把左侧被裁掉一半的那根也纳进来（它确实可见），
+     * 右端 `floor` 恰好排除掉完全落在边界外的那根。
      */
     fun window(barCount: Int): IntRange {
         if (barCount <= 0) return 1..0
         val current = clamp(barCount)
-        val end = (barCount - 1 + current.rightOffset).coerceIn(0, barCount - 1)
-        val start = (end - current.visibleBars + 1).coerceIn(0, end)
+        val end = floor(barCount - 1 + current.rightOffset).toInt().coerceIn(0, barCount - 1)
+        val start = floor(barCount + current.rightOffset - current.visibleBars).toInt()
+            .coerceIn(0, end)
         return start..end
     }
 
@@ -93,8 +129,9 @@ data class ChartViewport(
     fun plotRange(barCount: Int): IntRange {
         if (barCount <= 0) return 1..0
         val current = clamp(barCount)
-        val end = barCount - 1 + current.rightOffset
-        return (end - current.visibleBars + 1)..end
+        val end = floor(barCount - 1 + current.rightOffset).toInt()
+        val start = floor(barCount + current.rightOffset - current.visibleBars).toInt()
+        return start..end
     }
 
     fun startIndex(barCount: Int): Int = plotRange(barCount).first
@@ -103,24 +140,30 @@ data class ChartViewport(
     /**
      * 平移：[deltaBars] > 0 表示手指往右移 = 看更早的数据（窗口左移）；
      * 负值表示手指往左移 = 把最新一根往屏幕里推，右侧露出空白。
+     *
+     * 不做任何取整 —— 单帧位移折算出来通常不足一根，取整会把零头全抹掉，
+     * 历史上表现为「横向完全拖不动」。浮点视窗天然没有这个问题。
      */
     fun pan(deltaBars: Float, barCount: Int): ChartViewport =
-        copy(rightOffset = rightOffset - deltaBars.roundToInt()).clamp(barCount)
+        copy(rightOffset = rightOffset - deltaBars).clamp(barCount)
 
     /**
      * 缩放：[barFactor] 为新可见根数 / 旧可见根数（双指张开 <1，捏合 >1）。
      * [anchorRatio] 为手势焦点在窗口内的横向位置（0 左端、1 右端），缩放时该处的蜡烛保持不动。
+     *
+     * 可见根数**不取整**（见 [visibleBars] 的说明）：取整会让缓慢捏合被量化成
+     * 「几帧不动、突然跳一根」。
      */
     fun zoom(barFactor: Float, anchorRatio: Float = 1f, barCount: Int): ChartViewport {
         val current = clamp(barCount)
-        if (barCount <= 0) return current
-        val target = (current.visibleBars * barFactor.coerceIn(0.05f, 20f)).roundToInt()
-            .coerceIn(visibleBound(barCount))
+        if (barCount <= 0 || !barFactor.isFinite() || barFactor <= 0f) return current
+        val target = (current.visibleBars * barFactor.coerceIn(0.05f, 20f))
+            .coerceIn(minVisible(barCount), maxVisible(barCount))
         // 当前绘图区左端 = (barCount - 1 + O) - V + 1 = barCount + O - V
         val start = barCount + current.rightOffset - current.visibleBars
         val ratio = anchorRatio.coerceIn(0f, 1f)
-        val anchor = start + (current.visibleBars * ratio).roundToInt()
-        val newStart = anchor - (target * ratio).roundToInt()
+        val anchor = start + current.visibleBars * ratio
+        val newStart = anchor - target * ratio
         // 反推 O'：新右端 newStart + target - 1 应等于 barCount - 1 + O'
         //   => O' = newStart + target - barCount
         return ChartViewport(target, newStart + target - barCount).clamp(barCount)
@@ -135,7 +178,9 @@ data class ChartViewport(
     fun fractionOf(index: Int, barCount: Int): Float {
         val range = plotRange(barCount)
         if (index !in range || range.last == range.first) return Float.NaN
-        return (index - range.first).toFloat() / range.last.minus(range.first).toFloat()
+        val span = clamp(barCount).visibleBars - 1f
+        if (span <= 0f) return Float.NaN
+        return (index - plotStart(barCount)) / span
     }
 
     /**
@@ -146,10 +191,11 @@ data class ChartViewport(
      */
     fun indexAt(fraction: Float, barCount: Int): Int {
         val range = plotRange(barCount)
-        if (range.first > range.last) return -1
-        val ratio = fraction.coerceIn(0f, 1f)
-        val raw = range.first + (ratio * (range.last - range.first)).roundToInt()
-        return raw.coerceIn(0, barCount - 1)
+        if (range.first > range.last || barCount <= 0) return -1
+        val span = clamp(barCount).visibleBars - 1f
+        if (span <= 0f) return range.first.coerceIn(0, barCount - 1)
+        val raw = plotStart(barCount) + fraction.coerceIn(0f, 1f) * span
+        return raw.roundToInt().coerceIn(0, barCount - 1)
     }
 
     companion object {
@@ -163,7 +209,7 @@ data class ChartViewport(
          * 120 根摊下来每根只有 7.5px、蜡烛实体约 5px，一眼看去整张图又密又小。
          * 60 根每根约 15px，实体宽约 10px，形态看得清，一屏也仍够看出趋势。
          */
-        const val DEFAULT_VISIBLE = 60
+        const val DEFAULT_VISIBLE = 60f
 
         /**
          * 平移/缩放后，可视区里至少要留给「真实数据」的比例（两个方向共用）。
@@ -175,10 +221,22 @@ data class ChartViewport(
         const val MIN_VISIBLE_SHARE = 0.25f
 
         /**
-         * 初始视窗：贴最新价、默认宽度。**与序列长度无关** ——
-         * 宽度会在 `clamp(barCount)` 里按实际根数收窄，因此拿到短序列也安全。
+         * 初始视窗在最新一根右侧留出的空白根数。
+         *
+         * 留 3 根：最新一根贴着右边缘时右边没有任何参照，正在走的那根蜡烛
+         * 等于压在边框上，看不到它后续还能往哪走；留一点空白既让最新一根
+         * 离开边框，也和真实交易软件的默认观感一致。
+         *
+         * 这只是**初始值**，用户随时可以左右拖动改掉（贴边就是 0）。
          */
-        fun initial(): ChartViewport = ChartViewport(DEFAULT_VISIBLE, 0)
+        const val DEFAULT_RIGHT_BLANK = 3f
+
+        /**
+         * 初始视窗：最新一根右侧留 [DEFAULT_RIGHT_BLANK] 根空白、默认宽度。
+         * **与序列长度无关** —— 宽度会在 `clamp(barCount)` 里按实际根数收窄，
+         * 因此拿到短序列也安全。
+         */
+        fun initial(): ChartViewport = ChartViewport(DEFAULT_VISIBLE, DEFAULT_RIGHT_BLANK)
     }
 }
 

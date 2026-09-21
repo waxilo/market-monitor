@@ -139,29 +139,6 @@ fun KlineChart(
      * 做一次性适配（新区间的价格范围该重新适配，但只需要发生一次，而不是每帧一次）。
      */
     var priceBase by remember(symbolKey, interval.storageKey) { mutableStateOf<ValueRange?>(null) }
-    /**
-     * 横向平移的「不足一根」余量（单位：根）。
-     *
-     * [ChartViewport.rightOffset] 是整数根数，而一次手势事件往往只移动几像素
-     * （除以 slot 后不足半根）。若直接把每帧的 `deltaPx / slot` 交给 `pan()`，
-     * `roundToInt()` 会把每帧的零头全部抹掉 —— 表现为「左右拖完全不动」。
-     * 所以把零头攒在这里，凑够一根才提交。
-     *
-     * 挂同一组 key：零头按「根数」计，换周期后每根的像素宽度变了，旧零头已无意义。
-     */
-    var barPanRemainder by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
-
-    /**
-     * 双指捏合的对数余量。
-     *
-     * 与 [barPanRemainder] 同一个道理，但作用在**乘性**的缩放上：
-     * `ChartViewport.zoom()` 最后要把可见根数 `roundToInt()`，
-     * 可见 120 根时缓慢张开一帧只让因子到 0.997，`120 * 0.997 ≈ 119.6`
-     * 取整又回到 120 —— 每帧都被抹平，手指慢慢捏就完全没反应。
-     * 这里把 `ln(factor)` 攒起来，凑够「一根可见变化」的对数当量再一次性提交。
-     */
-    var pinchRemainder by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
-
     val geo = remember(canvasSize, density, series.subPanes.size) {
         ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.LEGEND_HEIGHT_DP)
     }
@@ -179,12 +156,17 @@ fun KlineChart(
      */
     val dataWindow = remember(viewport, barCount) { viewport.window(barCount) }
     /**
-     * 绘图区区间（**含右侧留白，可能越出序列末尾**），用于所有横向定位。
+     * 绘图区横向几何（**含右侧留白，可能越出序列末尾**），用于所有横向定位。
      * 与 [dataWindow] 分开是因为两者在「最新 K 线左移留白」时起点不同：
      * 用错会让整排蜡烛横向错位。
      */
-    val plotRange = remember(viewport, barCount) { viewport.plotRange(barCount) }
-    val visibleBars = remember(viewport, barCount) { viewport.clamp(barCount).visibleBars }
+    val plot = remember(viewport, barCount) {
+        PlotGeometry(
+            indices = viewport.plotRange(barCount),
+            start = viewport.plotStart(barCount),
+            visibleBars = viewport.clamp(barCount).visibleBars,
+        )
+    }
     /** 主图自动量程（未叠加用户纵向缩放）。 */
     val autoRange = remember(series, dataWindow.first, dataWindow.last) {
         series.mainRange(dataWindow.first, dataWindow.last)
@@ -273,8 +255,6 @@ fun KlineChart(
                         },
                         onAlertLineCommit = { alertCommit() },
                         onGestureStart = {
-                            barPanRemainder = 0f
-                            pinchRemainder = 0f
                             // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
                             priceBase = liveAutoRange
                         },
@@ -282,15 +262,15 @@ fun KlineChart(
                         onPan = { deltaPx ->
                             val bars = liveBarCount
                             val slot = liveGeo.slot(viewport.clamp(bars).visibleBars)
-                            // 换算成「整根 + 余量」：单帧位移通常不足一根，
-                            // 逐帧取整会把零头全抹掉（历史上表现为横向完全拖不动）。
-                            val step = ChartGesture.accumulateBarPan(barPanRemainder, deltaPx, slot)
-                            barPanRemainder = step.remainder
-                            if (step.bars != 0) {
-                                val moved = viewport.pan(step.bars.toFloat(), bars)
+                            // 位移直接折成**小数根**交给 pan()：视窗是浮点的，
+                            // 单帧不足一根也照样生效，不需要再攒零头（旧版攒零头正是
+                            // 「拖动一格一格跳」的来源）。
+                            val deltaBars = ChartGesture.barDelta(deltaPx, slot)
+                            if (deltaBars != 0f) {
+                                val moved = viewport.pan(deltaBars, bars)
                                 viewport = moved
                                 // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）
-                                if (step.bars > 0 && moved.startIndex(bars) == 0) {
+                                if (deltaBars > 0f && moved.startIndex(bars) == 0) {
                                     val oldest = liveSeries.candles.firstOrNull()?.openTime ?: 0L
                                     if (oldest != oldestRequested) {
                                         oldestRequested = oldest
@@ -300,32 +280,13 @@ fun KlineChart(
                             }
                         },
                         onZoom = { barFactor, anchorX ->
-                            // 逐帧因子太小会被 zoom() 里的 roundToInt 抹平，
-                            // 必须先把「不足一根」的零头攒起来（与横向平移同一套思路）。
-                            val bars = liveBarCount
-                            val before = viewport.clamp(bars).visibleBars
-                            val step = ChartGesture.accumulatePinch(
-                                remainder = pinchRemainder,
-                                factor = barFactor,
-                                visibleBars = before,
+                            // 因子直接交给 zoom()：视窗是浮点的，`visibleBars` 不会被取整，
+                            // 缓慢捏合的零点几根也能逐帧体现，不需要再攒余量。
+                            viewport = viewport.zoom(
+                                barFactor = barFactor,
+                                anchorRatio = anchorX / liveGeo.plotWidthPx,
+                                barCount = liveBarCount,
                             )
-                            if (step.bars != 0) {
-                                viewport = viewport.zoom(
-                                    barFactor = (before + step.bars).toFloat() / before,
-                                    anchorRatio = anchorX / liveGeo.plotWidthPx,
-                                    barCount = bars,
-                                )
-                                // zoom() 内部 roundToInt，实际生效的根数未必等于请求的 step，
-                                // 差额必须退回余量，否则取整误差会逐帧累积成偏置。
-                                val applied = viewport.clamp(bars).visibleBars - before
-                                pinchRemainder = ChartGesture.reportApplied(
-                                    remainder = step.remainder,
-                                    requestedBars = step.bars,
-                                    appliedBars = applied,
-                                )
-                            } else {
-                                pinchRemainder = step.remainder
-                            }
                         },
                         onPriceZoom = { factor ->
                             // 用 autoRange 当基准算钳制边界，不能传当前量程（会越缩越跑）
@@ -363,8 +324,8 @@ fun KlineChart(
                 bottom = geo.mainTopPx + geo.mainHeightPx,
             ) {
                 drawGridAndAxes(geo, palette, mainRange, subRanges)
-                drawCandles(series, plotRange, visibleBars, geo, palette, mainRange)
-                drawOverlays(series, plotRange, visibleBars, geo, palette, mainRange)
+                drawCandles(series, plot, geo, palette, mainRange)
+                drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
                 drawAlertLine(alertLinePrice, geo, palette, mainRange)
             }
@@ -375,12 +336,10 @@ fun KlineChart(
                     right = geo.plotWidthPx,
                     bottom = geo.subTopOf(index) + geo.subHeightPx,
                 ) {
-                    drawSubPane(
-                        series, pane, plotRange, visibleBars, geo, palette, subRanges[index], index,
-                    )
+                    drawSubPane(series, pane, plot, geo, palette, subRanges[index], index)
                 }
             }
-            drawCrosshair(crosshair, plotRange, visibleBars, geo, palette)
+            drawCrosshair(crosshair, plot, geo, palette)
         }
 
         if (isReady) {
@@ -406,7 +365,7 @@ fun KlineChart(
             )
             SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
             TimeAxisLabels(
-                series, plotRange, visibleBars, geo, interval, density,
+                series, plot, geo, interval, density,
                 Modifier.align(Alignment.TopStart),
             )
             ChartLegend(
@@ -507,6 +466,21 @@ private data class ChartPalette(
 }
 
 /**
+ * 绘图区的横向几何：**整数**的索引区间 + **浮点**的窗口左端与可见根数。
+ *
+ * 两者缺一不可，也**不能合并**：
+ * - [indices] 用来取数据（下标不能是小数），右侧留白时还会越出序列末尾，
+ *   所以取数一律走 `getOrNull`；
+ * - [start] / [visibleBars] 用来算像素。双指缩放时可见根数是连续变化的，
+ *   若按整数根定位，每变一根整张图就横向跳一个槽宽 —— 那正是用户报的「捏合时抖动」。
+ */
+private data class PlotGeometry(
+    val indices: IntRange,
+    val start: Float,
+    val visibleBars: Float,
+)
+
+/**
  * 像素布局：价格刻度固定右侧、时间刻度固定底部，其余给蜡烛。
  * 有副图时主图占 [MAIN_SHARE]，全部副图等分剩余高度、共用横轴，
  * 因此左右边界天然对齐。
@@ -539,15 +513,15 @@ private data class ChartGeo(
     /** 尺寸可用（已量到且宽度足够放下一个像素以上的绘图区）。 */
     val isUsable: Boolean get() = measured && plotWidthPx > 1f
 
-    fun slot(visibleBars: Int): Float = plotWidthPx / max(1, visibleBars)
+    fun slot(visibleBars: Float): Float = plotWidthPx / max(1f, visibleBars)
 
     /** 一根蜡烛的横向中心；窗口起点左侧的蜡烛会落在画布外，由裁剪处理。 */
-    fun xOf(index: Int, start: Int, visibleBars: Int): Float =
-        (index - start + 0.5f) * slot(visibleBars)
+    fun xOf(index: Int, plot: PlotGeometry): Float =
+        (index - plot.start + 0.5f) * slot(plot.visibleBars)
 
     fun yOf(fraction: Float, top: Float, height: Float): Float = top + fraction * height
 
-    fun bodyWidth(visibleBars: Int): Float = (slot(visibleBars) * BODY_SHARE).coerceIn(1f, 26f)
+    fun bodyWidth(visibleBars: Float): Float = (slot(visibleBars) * BODY_SHARE).coerceIn(1f, 26f)
 
     /**
      * 主图顶边：图例之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，
@@ -635,21 +609,20 @@ private fun DrawScope.drawGridAndAxes(
 
 private fun DrawScope.drawCandles(
     series: ChartSeries,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     palette: ChartPalette,
     range: ValueRange,
 ) {
-    val slot = geo.slot(visibleBars)
-    val bodyWidth = geo.bodyWidth(visibleBars)
+    val slot = geo.slot(plot.visibleBars)
+    val bodyWidth = geo.bodyWidth(plot.visibleBars)
     val half = bodyWidth / 2f
-    // window 是 plotRange（含右侧留白，可能越出序列末尾），所以索引一律走 getOrNull：
+    // plot.indices 含右侧留白（可能越出序列末尾），所以索引一律走 getOrNull：
     // 右侧留白那几根没有数据，不画即可，不能让它崩掉。
-    for (i in window) {
+    for (i in plot.indices) {
         val candle = series.candles.getOrNull(i) ?: continue
         val color = if (candle.close >= candle.open) palette.up else palette.down
-        val x = geo.xOf(i, window.first, visibleBars)
+        val x = geo.xOf(i, plot)
         if (x < 0f || x > geo.plotWidthPx) continue
         val highY = geo.yOf(range.toFraction(candle.highDouble()), geo.mainTopPx, geo.mainHeightPx)
         val lowY = geo.yOf(range.toFraction(candle.lowDouble()), geo.mainTopPx, geo.mainHeightPx)
@@ -672,17 +645,16 @@ private fun DrawScope.drawCandles(
 
 private fun DrawScope.drawOverlays(
     series: ChartSeries,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     palette: ChartPalette,
     range: ValueRange,
 ) {
     series.overlay.bandFill?.let { (upper, lower) ->
-        bandPath(upper, lower, window, visibleBars, geo, range)?.let { drawPath(it, palette.band) }
+        bandPath(upper, lower, plot, geo, range)?.let { drawPath(it, palette.band) }
     }
     series.overlay.lines.forEach { line ->
-        val path = linePath(line.values, window, visibleBars, geo, range, geo.mainHeightPx, geo.mainTopPx)
+        val path = linePath(line.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
         if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.5f))
     }
 }
@@ -733,8 +705,7 @@ private fun DrawScope.drawAlertLine(
 private fun DrawScope.drawSubPane(
     series: ChartSeries,
     pane: SubPaneData,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     palette: ChartPalette,
     range: ValueRange,
@@ -743,9 +714,9 @@ private fun DrawScope.drawSubPane(
     val top = geo.subTopOf(paneIndex)
     val height = geo.subHeightPx
     pane.bars?.let { bars ->
-        val width = geo.bodyWidth(visibleBars)
+        val width = geo.bodyWidth(plot.visibleBars)
         val base = geo.yOf(range.toFraction(0.0.coerceIn(range.low, range.high)), top, height)
-        for (i in window) {
+        for (i in plot.indices) {
             val value = bars.getOrNull(i) ?: continue
             if (value.isNaN()) continue
             val y = geo.yOf(range.toFraction(value), top, height)
@@ -753,27 +724,26 @@ private fun DrawScope.drawSubPane(
             val color = if (candle == null || candle.close >= candle.open) palette.up else palette.down
             drawRect(
                 color = color.copy(alpha = 0.8f),
-                topLeft = Offset(geo.xOf(i, window.first, visibleBars) - width / 2f, min(y, base)),
+                topLeft = Offset(geo.xOf(i, plot) - width / 2f, min(y, base)),
                 size = androidx.compose.ui.geometry.Size(width, max(1f, abs(base - y))),
             )
         }
     }
     pane.lines.forEach { line ->
-        val path = linePath(line.values, window, visibleBars, geo, range, height, top)
+        val path = linePath(line.values, plot, geo, range, height, top)
         if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.2f))
     }
 }
 
 private fun DrawScope.drawCrosshair(
     crosshair: Crosshair?,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     palette: ChartPalette,
 ) {
     val mark = crosshair ?: return
-    if (mark.index !in window) return
-    val x = geo.xOf(mark.index, window.first, visibleBars)
+    if (mark.index !in plot.indices) return
+    val x = geo.xOf(mark.index, plot)
     val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 6f))
     drawLine(
         palette.crosshair.copy(alpha = 0.7f),
@@ -796,18 +766,17 @@ private fun DrawScope.drawCrosshair(
 
 private fun linePath(
     values: DoubleArray,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     range: ValueRange,
     height: Float,
     top: Float,
 ): Path? {
     var path: Path? = null
-    for (i in window) {
+    for (i in plot.indices) {
         val value = values.getOrNull(i) ?: continue
         if (value.isNaN()) continue
-        val x = geo.xOf(i, window.first, visibleBars)
+        val x = geo.xOf(i, plot)
         val y = geo.yOf(range.toFraction(value), top, height)
         val current = path
         if (current == null) path = Path().apply { moveTo(x, y) } else current.lineTo(x, y)
@@ -818,24 +787,23 @@ private fun linePath(
 private fun bandPath(
     upper: DoubleArray,
     lower: DoubleArray,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     range: ValueRange,
 ): Path? {
-    val points = window.filter {
+    val points = plot.indices.filter {
         !upper.getOrElse(it) { Double.NaN }.isNaN() && !lower.getOrElse(it) { Double.NaN }.isNaN()
     }
     if (points.size < 2) return null
     return Path().apply {
         points.forEachIndexed { order, i ->
-            val x = geo.xOf(i, window.first, visibleBars)
+            val x = geo.xOf(i, plot)
             val y = geo.yOf(range.toFraction(upper[i]), geo.mainTopPx, geo.mainHeightPx)
             if (order == 0) moveTo(x, y) else lineTo(x, y)
         }
         points.asReversed().forEach { i ->
             lineTo(
-                geo.xOf(i, window.first, visibleBars),
+                geo.xOf(i, plot),
                 geo.yOf(range.toFraction(lower[i]), geo.mainTopPx, geo.mainHeightPx),
             )
         }
@@ -1090,13 +1058,13 @@ private fun SubAxisLabels(
 @Composable
 private fun TimeAxisLabels(
     series: ChartSeries,
-    window: IntRange,
-    visibleBars: Int,
+    plot: PlotGeometry,
     geo: ChartGeo,
     interval: CandleInterval,
     density: Density,
     modifier: Modifier = Modifier,
 ) {
+    val window = plot.indices
     val count = window.count()
     if (count <= 1 || geo.plotWidthPx <= 1f) return
 
@@ -1121,7 +1089,7 @@ private fun TimeAxisLabels(
         var i = window.first
         while (i <= window.last) {
             val candle = series.candles.getOrNull(i) ?: break
-            add(geo.xOf(i, window.first, visibleBars) to candle.openTime)
+            add(geo.xOf(i, plot) to candle.openTime)
             i += step
         }
     }
