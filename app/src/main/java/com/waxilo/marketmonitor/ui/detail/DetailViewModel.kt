@@ -15,6 +15,7 @@ import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
+import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.common.displayMessage
 import kotlinx.coroutines.CancellationException
@@ -105,27 +106,46 @@ class DetailViewModel(
     private val chart = MutableStateFlow(ChartData())
 
     /**
-     * 划在图表上的告警线（价格原始值）。
+     * 正在拖动的那条线：手指未离开，价格只是临时状态。
      *
-     * 放在 ViewModel 而不是 `rememberSaveable`：全屏要横屏，旋屏会让 Activity 重建，
-     * 而 ViewModel 实例是保留的 —— 线不会因为转个屏就消失。
+     * [ruleId] 为 null 表示新划的线（还没落库）。放在 ViewModel 而不是 `rememberSaveable`：
+     * 全屏要横屏，旋屏会让 Activity 重建，而 ViewModel 实例是保留的。
      */
-    private val alertLine = MutableStateFlow<BigDecimal?>(null)
+    private data class AlertDrag(val ruleId: Long?, val price: BigDecimal)
 
-    /**
-     * 这条线对应的预警规则 id。
-     *
-     * 线是规则的**唯一入口**，所以两者必须绑定：再次拖动同一条线时改的是同一条规则
-     * （而不是每松一次手就多出一条），规则被删掉（触发完毕或用户在预警列表删除）时
-     * 线也要跟着消失。null 表示当前这条线还没落库。
-     */
-    private val alertLineRuleId = MutableStateFlow<Long?>(null)
+    private val alertDrag = MutableStateFlow<AlertDrag?>(null)
 
     /** 一次性提示（创建成功之类）。3 秒后自动消失。 */
     private val noticeText = MutableStateFlow<String?>(null)
     private var noticeJob: Job? = null
 
-    val alertLinePrice: StateFlow<BigDecimal?> = alertLine.asStateFlow()
+    /**
+     * 画在图表上的全部告警线。
+     *
+     * **直接由规则派生**，不另存一份：这样规则在预警列表里被删掉、或单次触发后被移除，
+     * 线就自动消失，不会出现「线还在、预警早没了」的假象；反过来在预警页改阈值，
+     * 回到详情页也能看到最新的那条线。拖动中的线覆盖掉对应规则的历史价位，
+     * 松手落库后覆盖就没意义了（派生值已经是新价位）。
+     *
+     * 只有 ABOVE/BELOW 这类带目标价的规则能画成一条线，区间/涨跌幅规则没有单一价位。
+     */
+    val alertLines: StateFlow<List<AlertPriceLine>> = combine(
+        alerts.rules(),
+        alertDrag,
+    ) { rules, drag ->
+        val own = rules.filter { it.market == id.market && it.symbol == id.symbol }
+            .mapNotNull { rule ->
+                val threshold = rule.threshold ?: return@mapNotNull null
+                AlertPriceLine(ruleId = rule.id, price = threshold.toDouble())
+            }
+        if (drag == null) own
+        else own.filterNot { it.ruleId == drag.ruleId } + AlertPriceLine(
+            ruleId = drag.ruleId,
+            price = drag.price.toDouble(),
+            dragging = true,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     val notice: StateFlow<String?> = noticeText.asStateFlow()
 
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
@@ -200,14 +220,6 @@ class DetailViewModel(
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
         // K 线流由详情页订阅、离开时退订，避免污染首页只需要的合并流
         viewModelScope.launch { interval.collect { selected -> repository.watchKlineUpdates(id, selected) } }
-        // 绑定的规则没了（单次触发后自动移除，或用户在预警列表里删了），线也要跟着消失 ——
-        // 留一条背后什么都没有的线，会让人以为预警还在跑
-        viewModelScope.launch {
-            alerts.rules().collect { rules ->
-                val bound = alertLineRuleId.value ?: return@collect
-                if (rules.none { it.id == bound }) clearAlertLine()
-            }
-        }
     }
 
     override fun onCleared() {
@@ -274,10 +286,15 @@ class DetailViewModel(
         viewModelScope.launch { settings.edit { it.copy(maPeriods = saved) } }
     }
 
-    /** 划线过程中每帧回调：只更新要画的那条线，不落库。 */
-    fun dragAlertLine(price: Double) {
+    /**
+     * 划线过程中每帧回调：只更新要画的那条线，不落库。
+     *
+     * [ruleId] 由图表判定按下时抓住的是哪条既有告警线（null = 新划的线），
+     * 一次拖拽过程中固定不变 —— 否则线拖过另一条线时会「换主角」。
+     */
+    fun dragAlertLine(ruleId: Long?, price: Double) {
         if (!price.isFinite()) return
-        alertLine.value = BigDecimal(price.toString())
+        alertDrag.value = AlertDrag(ruleId, BigDecimal(price.toString()))
     }
 
     /**
@@ -291,47 +308,53 @@ class DetailViewModel(
      * 而是线本身的位置属性。
      */
     fun commitAlertLine() {
-        val raw = alertLine.value ?: return
-        val aligned = alignToTick(raw)
-        alertLine.value = aligned
+        val drag = alertDrag.value ?: return
+        val aligned = alignToTick(drag.price)
         val reference = referencePrice() ?: run {
             showNotice("拿不到现价，暂时无法判定上破/下破")
             return
         }
         val above = aligned >= reference
-        viewModelScope.launch { upsertAlertLineRule(aligned, above) }
+        viewModelScope.launch {
+            if (upsertAlertLineRule(drag.ruleId, aligned, above)) alertDrag.value = null
+        }
     }
 
     /**
-     * 只清线、不动预警。
+     * 放弃当前正在划的新线（不落库），已有的告警线不受影响。
      *
-     * 用户可能是想「换个价位重划」，顺手删掉规则会让他在预警列表里白找一场；
-     * 真正想删规则的地方是预警列表。规则若已被删（触发完毕），这里自然什么也不做。
+     * 线本身由规则派生，所以这里没有什么「清除」可言 —— 要清的是预警列表里的规则；
+     * 拖动中途反悔才用得上这个（比如手滑划歪了）。
      */
-    fun clearAlertLine() {
-        alertLine.value = null
-        alertLineRuleId.value = null
+    fun cancelAlertDrag() {
+        alertDrag.value = null
     }
 
     /**
-     * 建/改这条线对应的规则。
+     * 建/改这条线对应的规则，成功返回 true。
      *
-     * 有绑定就更新（保留 repeatMode / 冷却 / Webhook 等用户可能调过的字段），
+     * 有 ruleId 就更新（保留 repeatMode / 冷却 / Webhook 等用户可能调过的字段），
      * 没有就新建 —— 拖动同一个价位反复松手不该堆出一串规则。
+     * 失败时保留拖动中的线，让用户能换个价位再试一次。
      */
-    private suspend fun upsertAlertLineRule(price: BigDecimal, above: Boolean) {
+    private suspend fun upsertAlertLineRule(
+        ruleId: Long?,
+        price: BigDecimal,
+        above: Boolean,
+    ): Boolean {
         val label = PriceFormatter.format(price, state.value.tickSize)
         val condition = if (above) AlertCondition.ABOVE else AlertCondition.BELOW
         val name = "${id.symbol} ${if (above) "上破" else "下破"} $label"
-        try {
-            val bound = alertLineRuleId.value
-            val existing = bound?.let { alerts.rule(it) }
-            val ruleId = if (existing != null) {
+        return try {
+            val existing = ruleId?.let { alerts.rule(it) }
+            if (existing != null) {
+                // 价位与方向都没变就别写：光标清零触发状态就会让一条已经响过的「单次」
+                // 预警重新响一次，而用户可能只是按住线又松手。
+                if (existing.threshold?.compareTo(price) == 0 && existing.condition == condition) return true
                 alerts.saveRule(existing.copy(name = name, condition = condition, threshold = price))
                 // 条件与价位都换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让
                 // 新条件一次都不提醒，wasSatisfied 也会把真正的「穿越」边沿吃掉。
                 alerts.saveState(existing.id, AlertState())
-                existing.id
             } else {
                 alerts.saveRule(
                     AlertRule(
@@ -345,12 +368,13 @@ class DetailViewModel(
                     ),
                 )
             }
-            alertLineRuleId.value = ruleId
             showNotice("已设置${if (above) "上破" else "下破"}预警 · $label")
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             showNotice("预警设置失败：${e.displayMessage()}")
+            false
         }
     }
 

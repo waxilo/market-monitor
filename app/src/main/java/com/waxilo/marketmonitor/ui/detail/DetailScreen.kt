@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -44,6 +43,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.addPath
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
@@ -57,6 +60,8 @@ import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
+import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
+import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
@@ -99,6 +104,8 @@ fun DetailScreen(
     },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // 提到这一层是因为竖屏图与全屏图都要画告警线：线由预警规则派生，在哪个模式下看都该一致
+    val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
     /**
      * 用 `rememberSaveable` 而不是普通 state：全屏要横屏，旋屏会让 Activity 重建，
      * 普通 state 会连同「正在全屏」一起丢掉，用户看到的是自动退出全屏。
@@ -109,7 +116,12 @@ fun DetailScreen(
 
     Box(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         if (fullscreen) {
-            FullscreenChart(state = state, viewModel = viewModel, onExit = { fullscreen = false })
+            FullscreenChart(
+                state = state,
+                alertLines = alertLines,
+                viewModel = viewModel,
+                onExit = { fullscreen = false },
+            )
         } else {
             Column(
                 modifier = Modifier
@@ -119,10 +131,8 @@ fun DetailScreen(
                 DetailTopBar(
                     state = state,
                     onBack = onBack,
-                    onRefresh = viewModel::refresh,
                     onToggleWatch = viewModel::toggleWatch,
                     onCreateAlert = onCreateAlert,
-                    onFullscreen = { fullscreen = true },
                 )
 
                 val error = state.error
@@ -142,7 +152,13 @@ fun DetailScreen(
                     onSelect = viewModel::selectInterval,
                 )
 
-                ChartArea(state = state, onLoadMore = viewModel::loadMore, onRetry = viewModel::refresh)
+                ChartArea(
+                    state = state,
+                    alertLines = alertLines,
+                    onLoadMore = viewModel::loadMore,
+                    onRetry = viewModel::refresh,
+                    onFullscreen = { fullscreen = true },
+                )
 
                 IndicatorBar(
                     maChoices = state.maChoices,
@@ -210,122 +226,110 @@ private fun FullscreenController(active: Boolean) {
  *
  * 「划线」不需要长按 —— 在这个模式下划线就是唯一目的，再要求长按只是多余一步；
  * 单指拖动直接移动告警线，松手即按线相对现价的位置落一条上破/下破预警，双指缩放照旧可用。
+ * 已有的告警线本来就画在图上，划线模式下按到它（容差 24dp）就是**改它对应的预警**，
+ * 而不是在它旁边又叠一条 —— 历史上设置的告警因此都能在这里直接调整。
  *
  * 换周期与改指标也在这里给到：全屏是横屏，竖屏那套控件（周期条、指标条）整块被图表顶掉了，
  * 只剩一个「退出全屏」的话，用户每次想换个周期都得先退出、改完、再进来。
- * 两者都做成**按需展开的底部浮层**而不是常驻行：横屏的纵向空间本来就该全给主图，
- * 常驻一条会把蜡烛区压掉三分之一。
+ * 周期是**常驻摊开**的一条（放在图表下方，不压时间轴）——换周期是全屏里最高频的动作，
+ * 每次都要先展开再选、选完又收起的话，连换两个周期就得点三次。
+ * 指标仍旧做成**按需展开的底部浮层**：它选项多、改得少，常驻会把蜡烛区压掉一大截。
  */
 @Composable
 private fun FullscreenChart(
     state: DetailUiState,
+    alertLines: List<AlertPriceLine>,
     viewModel: DetailViewModel,
     onExit: () -> Unit,
 ) {
     val colors = MarketTheme.colors
-    val alertLine by viewModel.alertLinePrice.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线模式
     var alertMode by rememberSaveable { mutableStateOf(false) }
-    // 同样挂在全屏内部：两个面板都是「临时看一眼」，退出全屏没必要带着走
-    var panel by rememberSaveable { mutableStateOf(FullscreenPanel.NONE) }
+    // 同样挂在全屏内部：面板只是「临时看一眼」，退出全屏没必要带着走
+    var indicatorOpen by rememberSaveable { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxSize().background(colors.paper)) {
-        if (state.candles.isEmpty()) {
-            HintRow(
-                title = "没有取到 K 线",
-                subtitle = state.error ?: "换个周期或重新加载试试",
-                actionLabel = "重新加载 →",
-                onAction = viewModel::refresh,
-                modifier = Modifier.align(Alignment.Center),
-            )
-        } else {
-            val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
-                ChartModel.build(
-                    candles = state.candles,
-                    maPeriods = state.maPeriods,
-                    showBoll = state.showBoll,
-                    subPanes = state.subPanes,
+    Column(modifier = Modifier.fillMaxSize().background(colors.paper)) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            if (state.candles.isEmpty()) {
+                HintRow(
+                    title = "没有取到 K 线",
+                    subtitle = state.error ?: "换个周期或重新加载试试",
+                    actionLabel = "重新加载 →",
+                    onAction = viewModel::refresh,
+                    modifier = Modifier.align(Alignment.Center),
                 )
-            }
-            KlineChart(
-                series = series,
-                interval = state.interval,
-                tickSize = state.tickSize,
-                symbolKey = state.id.storageKey,
-                onLoadMore = viewModel::loadMore,
-                alertLinePrice = alertLine?.toDouble(),
-                alertLineMode = alertMode,
-                onAlertLineDrag = viewModel::dragAlertLine,
-                onAlertLineCommit = viewModel::commitAlertLine,
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
-
-        Row(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(Spacing.Xs),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            // 周期与指标是**互斥**的浮层：两个都摊开只会把图压没，切换时自然收掉另一个
-            FilterChip(
-                text = state.interval.label,
-                selected = panel == FullscreenPanel.INTERVAL,
-                onClick = { panel = panel.toggled(FullscreenPanel.INTERVAL) },
-            )
-            FilterChip(
-                text = "指标",
-                selected = panel == FullscreenPanel.INDICATOR,
-                onClick = { panel = panel.toggled(FullscreenPanel.INDICATOR) },
-            )
-            FilterChip(
-                text = "划线",
-                selected = alertMode,
-                onClick = { alertMode = !alertMode },
-            )
-            if (alertLine != null) {
-                FilterChip(
-                    text = "清除线",
-                    selected = false,
-                    onClick = viewModel::clearAlertLine,
-                )
-            }
-            IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "退出全屏",
-                    modifier = Modifier.size(20.dp),
-                    tint = colors.ink,
-                )
-            }
-        }
-
-        // 浮层压在底部而不是顶部：顶部要留给图例带与上面那排按钮，
-        // 底部只有时间轴，被临时盖住不影响看形态。
-        if (panel != FullscreenPanel.NONE) {
-            Column(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .background(colors.paper)
-                    .padding(bottom = Spacing.Sm),
-            ) {
-                Rule(inset = 0.dp)
-                when (panel) {
-                    FullscreenPanel.INTERVAL -> IntervalSelector(
-                        options = state.intervals,
-                        selected = state.interval,
-                        onSelect = { selected ->
-                            viewModel.selectInterval(selected)
-                            // 单选：选完就收起来，否则它一直压着时间轴
-                            panel = FullscreenPanel.NONE
-                        },
-                        compact = true,
+            } else {
+                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
+                    ChartModel.build(
+                        candles = state.candles,
+                        maPeriods = state.maPeriods,
+                        showBoll = state.showBoll,
+                        subPanes = state.subPanes,
                     )
+                }
+                KlineChart(
+                    series = series,
+                    interval = state.interval,
+                    tickSize = state.tickSize,
+                    symbolKey = state.id.storageKey,
+                    onLoadMore = viewModel::loadMore,
+                    alertLines = alertLines,
+                    alertLineMode = alertMode,
+                    onAlertLineDrag = viewModel::dragAlertLine,
+                    onAlertLineCommit = { viewModel.commitAlertLine() },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
-                    FullscreenPanel.INDICATOR -> IndicatorBar(
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(Spacing.Xs),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    text = "指标",
+                    selected = indicatorOpen,
+                    onClick = { indicatorOpen = !indicatorOpen },
+                )
+                FilterChip(
+                    text = "划线",
+                    selected = alertMode,
+                    onClick = { alertMode = !alertMode },
+                )
+                // 只在「手上一笔新线还没落库」时出现：已有的告警线由规则派生，这里清不掉
+                // （删规则是预警列表的职责），能撤销的只有当前这一笔。
+                if (alertLines.any { it.dragging && it.ruleId == null }) {
+                    FilterChip(
+                        text = "取消划线",
+                        selected = false,
+                        onClick = viewModel::cancelAlertDrag,
+                    )
+                }
+                IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "退出全屏",
+                        modifier = Modifier.size(20.dp),
+                        tint = colors.ink,
+                    )
+                }
+            }
+
+            // 指标浮层压在图表底部而不是顶部：顶部要留给指标读数带与上面那排按钮，
+            // 底部只有时间轴，被临时盖住不影响看形态。
+            if (indicatorOpen) {
+                Column(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(colors.paper)
+                        .padding(bottom = Spacing.Sm),
+                ) {
+                    Rule(inset = 0.dp)
+                    IndicatorBar(
                         maChoices = state.maChoices,
                         activeMa = state.maPeriods,
                         showBoll = state.showBoll,
@@ -335,58 +339,56 @@ private fun FullscreenChart(
                         onToggleSubPane = viewModel::toggleSubPane,
                         compact = true,
                     )
-
-                    FullscreenPanel.NONE -> Unit
                 }
             }
-        }
 
-        if (alertMode) {
-            Text(
-                text = "上下拖动放置告警线 · 松手按线的位置自动判定上破/下破",
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = Spacing.Lg)
-                    .clip(Radius.fullShape)
-                    .background(colors.washStrong)
-                    .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.muted,
-                maxLines = 1,
+            if (alertMode) {
+                Text(
+                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 松手自动判定上破/下破",
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = Spacing.Lg)
+                        .clip(Radius.fullShape)
+                        .background(colors.washStrong)
+                        .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                    maxLines = 1,
+                )
+            }
+
+            // 提示浮在底部而不是顶部：顶部让给「划线 / 退出」按钮
+            AnimatedBanner(
+                visible = notice != null,
+                text = notice.orEmpty(),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Gutter),
             )
         }
 
-        // 提示浮在底部而不是顶部：顶部让给「划线 / 退出」按钮
-        AnimatedBanner(
-            visible = notice != null,
-            text = notice.orEmpty(),
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Gutter),
+        Rule(inset = 0.dp)
+        IntervalSelector(
+            options = state.intervals,
+            selected = state.interval,
+            onSelect = viewModel::selectInterval,
+            compact = true,
         )
     }
 }
 
 /**
- * 全屏底部的浮层面板。横屏里没有纵向空间给常驻控件，所以按需展开、再点一次收起。
- */
-private enum class FullscreenPanel { NONE, INTERVAL, INDICATOR }
-
-/** 点当前已展开的那个 = 收起，点另一个 = 换过去。 */
-private fun FullscreenPanel.toggled(target: FullscreenPanel): FullscreenPanel =
-    if (this == target) FullscreenPanel.NONE else target
-
-/**
- * 顶栏：返回 + 币种名 + 溢出菜单。
- * 三个高频动作（刷新/建预警/自选）收进菜单，只把「自选」的当前状态做成菜单图标本身
- * （未加自选时是空心星，加了是实心星），这样一眼能看出状态而不用展开菜单。
+ * 顶栏：返回 + 币种名 + 自选 + 溢出菜单。
+ *
+ * 「全屏」不在这里——它在图表左上角的角标上（见 [ChartArea]）：入口离图表越近越顺手，
+ * 而详情页要滚动才能看到图表，按钮钉在顶栏等于每次先得把页面翻回去。
+ * 「重新加载 K 线」也一并去掉：K 线本来就在实时刷新，手动重载只在取数失败时
+ * 由空状态的「重新加载」按钮提供，日常没有第二个入口。
  */
 @Composable
 private fun DetailTopBar(
     state: DetailUiState,
     onBack: () -> Unit,
-    onRefresh: () -> Unit,
     onToggleWatch: () -> Unit,
     onCreateAlert: () -> Unit,
-    onFullscreen: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     var menuOpen by remember { mutableStateOf(false) }
@@ -396,18 +398,6 @@ private fun DetailTopBar(
         onBack = onBack,
         large = false,
         actions = {
-            // 用文字而不是图标：material-icons-core 里没有全屏图标，
-            // 为它引入整个 icons-extended（上千个矢量）不值得
-            Text(
-                text = "全屏",
-                modifier = Modifier
-                    .clip(Radius.fullShape)
-                    .clickable(onClick = onFullscreen)
-                    .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
-                style = MaterialTheme.typography.labelLarge,
-                color = colors.ink,
-                maxLines = 1,
-            )
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = if (state.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -431,14 +421,6 @@ private fun DetailTopBar(
                         onClick = {
                             menuOpen = false
                             onCreateAlert()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("重新加载 K 线") },
-                        leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            onRefresh()
                         },
                     )
                 }
@@ -587,8 +569,10 @@ private fun IntervalSelector(
 @Composable
 private fun ChartArea(
     state: DetailUiState,
+    alertLines: List<AlertPriceLine>,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
+    onFullscreen: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     Box(
@@ -635,6 +619,13 @@ private fun ChartArea(
                     tickSize = state.tickSize,
                     symbolKey = state.id.storageKey,
                     onLoadMore = onLoadMore,
+                    // 只画不能拖：竖屏没有划线模式，调整预警走全屏
+                    alertLines = alertLines,
+                    cornerAction = ChartCornerAction(
+                        icon = FullscreenGlyph,
+                        description = "全屏看图",
+                        onClick = onFullscreen,
+                    ),
                 )
             }
         }
@@ -785,4 +776,26 @@ private fun StatsSection(stats: List<StatItem>) {
             }
         }
     }
+}
+
+/**
+ * 「全屏」角标：四向外翻的直角边框。
+ *
+ * 自己描路径而不用 `Icons.Default.Fullscreen` —— 那个矢量在 material-icons-extended 里，
+ * 为一个图标拖进上千个图标不划算，本应用只依赖 icons-core。
+ */
+private val FullscreenGlyph: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "Fullscreen",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f,
+    )
+        .addPath(
+            pathData = "M7,14H5v5h5v-2H7v-3zM5,10h2V7h3V5H5v5zM17,17h-3v2h5v-5h-2v3z" +
+                "M14,5v2h3v3h2V5h-5z",
+            fill = SolidColor(Color.Black),
+        )
+        .build()
 }

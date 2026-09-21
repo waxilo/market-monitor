@@ -437,9 +437,9 @@ class ChartModelTest {
         val series = ChartModel.build(candles(60), listOf(5), showBoll = true, subPanes = emptyList())
         assertNotNull(series.overlay.bandFill)
         // 三条线缺一不可：历史上只加了上下轨，中轨（SMA）画不出来
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.M" })
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.U" })
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.L" })
+        assertTrue(series.overlay.lines.any { it.label == "BOLL.MB" })
+        assertTrue(series.overlay.lines.any { it.label == "BOLL.UP" })
+        assertTrue(series.overlay.lines.any { it.label == "BOLL.DN" })
     }
 
     @Test
@@ -502,6 +502,58 @@ class ChartModelTest {
         val series = ChartModel.build(candles(60), listOf(30), showBoll = false, subPanes = emptyList())
         val range = series.mainRange(0, 59)
         assertTrue(range.high >= series.candles.last().high.toDouble())
+    }
+
+    /**
+     * 币安式的读数行：一条线一段文字，颜色由调用层按 role 解析。
+     * 这里只验文字，因为它替掉了原先常驻在左上角的整块 OHLC 图例，
+     * 「哪段数字属于哪条线」全靠 label 与配色，写坏了图上就说不清话了。
+     */
+    @Test
+    fun `主图读数逐条给出线名与数值`() {
+        val series = ChartModel.build(candles(60), listOf(5, 10), showBoll = false, subPanes = emptyList())
+        // 收盘线性递增：末根的 MA5 = 157，MA10 = 154.5
+        assertEquals(listOf("MA5: 157.00", "MA10: 154.50"), series.mainReadoutAt(59, 2).map { it.text })
+    }
+
+    @Test
+    fun `读数在指标尚未算出的位置给占位而不是零`() {
+        val series = ChartModel.build(candles(60), listOf(30), showBoll = false, subPanes = emptyList())
+        assertEquals(listOf("MA30: --"), series.mainReadoutAt(3, 2).map { it.text })
+    }
+
+    @Test
+    fun `大数值读数带千分位分组`() {
+        val series = ChartModel.build(candles(200, base = 50_000.0), listOf(5), showBoll = false, subPanes = emptyList())
+        // 末根收盘 50,199，MA5 取最后五根的中位 = 50,197
+        assertEquals(listOf("MA5: 50,197.00"), series.mainReadoutAt(199, 2).map { it.text })
+    }
+
+    @Test
+    fun `副图读数带参数名与各线数值`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5),
+            showBoll = false,
+            subPanes = listOf(SubPaneKind.MACD),
+        )
+        val readout = series.subReadoutAt(series.subPanes.single(), 59, 2).map { it.text }
+        // 柱值也要给：只报 DIF/DEA 的话用户看到红绿柱子却不知道那个数是多少
+        assertEquals("MACD(12,26,9)", readout.first())
+        assertTrue(readout.any { it.startsWith("DIF:") })
+        assertTrue(readout.any { it.startsWith("DEA:") })
+        assertTrue(readout.any { it.startsWith("MACD:") })
+    }
+
+    @Test
+    fun `VOL 读数给出该根的量`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5),
+            showBoll = false,
+            subPanes = listOf(SubPaneKind.VOLUME),
+        )
+        assertEquals(listOf("VOL: 10"), series.subReadoutAt(series.subPanes.single(), 10, 2).map { it.text })
     }
     // endregion
 

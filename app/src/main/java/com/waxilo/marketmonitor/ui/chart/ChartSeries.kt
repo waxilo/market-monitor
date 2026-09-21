@@ -13,8 +13,11 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。 */
-enum class LineRole { PRIMARY, SECONDARY, TERTIARY, ACCENT, UP, DOWN }
+/**
+ * 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。
+ * [LABEL] 不是一条线，只给读数行里那些中性文字（指标名、参数）用。
+ */
+enum class LineRole { PRIMARY, SECONDARY, TERTIARY, ACCENT, UP, DOWN, LABEL }
 
 /** 图上的一条折线（均线族、BOLL 上下轨、MACD 的 DIF/DEA…）。 */
 data class ChartLine(
@@ -22,6 +25,13 @@ data class ChartLine(
     val role: LineRole,
     val values: DoubleArray,
 )
+
+/**
+ * 读数行里的一个片段：文字 + 配色角色。
+ * 与折线共用 [LineRole]，于是「这个数字属于哪条线」由颜色直接说清，
+ * 不必再为每条线单独钉一行图例（那正是旧版左上角那一大块 OHLC 的来历）。
+ */
+data class ReadoutSegment(val text: String, val role: LineRole)
 
 /** 主图叠加：收盘价衍生出的均线与布林带。 */
 data class OverlayData(
@@ -38,7 +48,12 @@ data class SubPaneData(
     val fromZero: Boolean = false,
     val fixedRange: ValueRange? = null,
     val decimals: Int = PriceFormatter.DEFAULT_DECIMALS,
-    val legendAt: (Int) -> String = { "" },
+    /**
+     * 这块副图自己的读数行（币安式：参数名 + 各线数值，各自配色）。
+     * 入参是「蜡烛下标」与「价格小数位」：MACD 与价格同量级所以跟着价格走，
+     * RSI / KDJ 有界在 0~100，固定两位更稳。
+     */
+    val readoutAt: (Int, Int) -> List<ReadoutSegment> = { _, _ -> emptyList() },
 )
 
 /**
@@ -100,7 +115,30 @@ data class ChartSeries(
         if (low >= high) return ValueRange(low, high + 1.0)
         return ValueRange(low, high).padded(if (pane.fromZero) 0.0 else 0.08)
     }
+
+    /**
+     * 主图指标读数（币安式那一行彩色参数）。[index] 取十字光标所在根；
+     * 没有长按时调用方传末根，于是这行平时读的就是最新一根的数值。
+     */
+    fun mainReadoutAt(index: Int, priceDecimals: Int): List<ReadoutSegment> =
+        overlay.lines.map { line ->
+            ReadoutSegment(
+                "${line.label}: ${readoutNumber(line.values.getOrNull(index), priceDecimals)}",
+                line.role,
+            )
+        }
+
+    /**
+     * 单块副图的读数行。[index] 由调用方保证落在序列内（十字光标的下标已由视窗夹好）。
+     */
+    fun subReadoutAt(pane: SubPaneData, index: Int, priceDecimals: Int): List<ReadoutSegment> =
+        pane.readoutAt(index, priceDecimals)
 }
+
+/** 读数用的数字：千分位分组，缺值与 NaN 走统一占位而不是 0。 */
+private fun readoutNumber(value: Double?, decimals: Int): String =
+    if (value == null || value.isNaN()) PriceFormatter.NO_DATA
+    else String.format(Locale.US, "%,.${decimals}f", value)
 
 /**
  * 十字光标 tooltip（PRD FR-2.1：OHLC + 时间 + 涨幅）。
@@ -139,9 +177,9 @@ object ChartModel {
         } else {
             // 三条都要加：只加上下轨的话中轨（SMA）画不出来
             lines + listOf(
-                ChartLine("BOLL.M", LineRole.ACCENT, boll.middle),
-                ChartLine("BOLL.U", LineRole.ACCENT, boll.upper),
-                ChartLine("BOLL.L", LineRole.ACCENT, boll.lower),
+                ChartLine("BOLL.MB", LineRole.ACCENT, boll.middle),
+                ChartLine("BOLL.UP", LineRole.ACCENT, boll.upper),
+                ChartLine("BOLL.DN", LineRole.ACCENT, boll.lower),
             )
         }
         return ChartSeries(
@@ -200,7 +238,14 @@ object ChartModel {
                 lines = emptyList(),
                 bars = volumes,
                 fromZero = true,
-                legendAt = { i -> "量 ${PriceFormatter.formatQuantity(candles.getOrNull(i)?.volume)}" },
+                readoutAt = { i, _ ->
+                    listOf(
+                        ReadoutSegment(
+                            "VOL: ${PriceFormatter.formatQuantity(candles.getOrNull(i)?.volume)}",
+                            LineRole.LABEL,
+                        )
+                    )
+                },
             )
         }
 
@@ -213,8 +258,19 @@ object ChartModel {
                     ChartLine("DEA", LineRole.SECONDARY, macd.signal),
                 ),
                 bars = macd.histogram,
-                legendAt = { i ->
-                    "DIF ${num(macd.dif.getOrNull(i))} DEA ${num(macd.signal.getOrNull(i))}"
+                // MACD 与价格同量级，所以小数位跟着价格走；柱值按正负取涨跌色，
+                // 与画柱子用的是同一套语言。
+                readoutAt = { i, decimals ->
+                    val hist = macd.histogram.getOrNull(i)
+                    listOf(
+                        ReadoutSegment("MACD(${macdParams.first},${macdParams.second},${macdParams.third})", LineRole.LABEL),
+                        ReadoutSegment("DIF: ${readoutNumber(macd.dif.getOrNull(i), decimals)}", LineRole.PRIMARY),
+                        ReadoutSegment("DEA: ${readoutNumber(macd.signal.getOrNull(i), decimals)}", LineRole.SECONDARY),
+                        ReadoutSegment(
+                            "MACD: ${readoutNumber(hist, decimals)}",
+                            if (hist != null && hist < 0) LineRole.DOWN else LineRole.UP,
+                        ),
+                    )
                 },
             )
         }
@@ -225,7 +281,12 @@ object ChartModel {
                 title = "RSI($rsiPeriod)",
                 lines = listOf(ChartLine("RSI", LineRole.PRIMARY, rsi)),
                 fixedRange = ValueRange(0.0, 100.0),
-                legendAt = { i -> "RSI ${num(rsi.getOrNull(i))}" },
+                readoutAt = { i, _ ->
+                    listOf(
+                        ReadoutSegment("RSI($rsiPeriod)", LineRole.LABEL),
+                        ReadoutSegment("RSI: ${readoutNumber(rsi.getOrNull(i), 2)}", LineRole.PRIMARY),
+                    )
+                },
             )
         }
 
@@ -240,8 +301,13 @@ object ChartModel {
                     ChartLine("D", LineRole.SECONDARY, kdj.d),
                     ChartLine("J", LineRole.TERTIARY, kdj.j),
                 ),
-                legendAt = { i ->
-                    "K ${num(kdj.k.getOrNull(i))} D ${num(kdj.d.getOrNull(i))} J ${num(kdj.j.getOrNull(i))}"
+                readoutAt = { i, _ ->
+                    listOf(
+                        ReadoutSegment("KDJ(9,3,3)", LineRole.LABEL),
+                        ReadoutSegment("K: ${readoutNumber(kdj.k.getOrNull(i), 2)}", LineRole.PRIMARY),
+                        ReadoutSegment("D: ${readoutNumber(kdj.d.getOrNull(i), 2)}", LineRole.SECONDARY),
+                        ReadoutSegment("J: ${readoutNumber(kdj.j.getOrNull(i), 2)}", LineRole.TERTIARY),
+                    )
                 },
             )
         }
@@ -254,9 +320,6 @@ object ChartModel {
         20, 30 -> LineRole.TERTIARY
         else -> LineRole.ACCENT
     }
-
-    private fun num(value: Double?): String =
-        if (value == null || value.isNaN()) "--" else String.format(Locale.US, "%.4f", value)
 
     /** 日内周期显示到时分，日线及以上显示日期，避免十字光标读出无关字段。 */
     fun formatTime(epochMs: Long, intervalMinutes: Long): String {

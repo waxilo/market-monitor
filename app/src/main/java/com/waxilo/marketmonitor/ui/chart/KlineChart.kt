@@ -2,16 +2,22 @@ package com.waxilo.marketmonitor.ui.chart
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,16 +38,20 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
@@ -61,6 +71,22 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+
+/**
+ * 图上的一条告警价线。
+ *
+ * [ruleId] 为 null 表示**正在新建**、还没落库的那根。线的归属与含义（对应哪条规则、
+ * 能不能改）图表一概不管，只负责画出来并把落点报给调用方 ——
+ * 与 [ChartLine] 一样，这里只承载语义，不承载业务。
+ */
+data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
+
+/** 图表左上角的角标按钮（进/出全屏）。读数带会为它让出宽度。 */
+data class ChartCornerAction(
+    val icon: ImageVector,
+    val description: String,
+    val onClick: () -> Unit,
+)
 
 /**
  * 自研 K 线画布（PRD FR-2.1，已定不引入第三方图表库）。
@@ -84,19 +110,25 @@ fun KlineChart(
     downColor: Color = DownRed,
     onLoadMore: () -> Unit = {},
     /**
-     * 已划出的告警线（价格原始值）。由调用方持有：一条线是不是「已经建好预警」
-     * 只有调用方知道，图表只负责把它画出来。
+     * 该标的已有的告警价线（价格原始值），**始终绘制**：划线模式只是「能不能拖」的开关，
+     * 看不见自己设过的预警价、却要进到划线模式才能调，等于把线藏进了抽屉。
+     * 由调用方持有并保证已按标的过滤。
      */
-    alertLinePrice: Double? = null,
+    alertLines: List<AlertPriceLine> = emptyList(),
     /**
      * 划线模式：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
      * 双指缩放照旧（画线时同样需要能缩放看细节）。
      */
     alertLineMode: Boolean = false,
-    /** 划线过程中每帧回调当前落点（价格原始值），调用方据此实时更新 [alertLinePrice]。 */
-    onAlertLineDrag: (Double) -> Unit = {},
-    /** 手指离开：调用方此时读自己保存的 [alertLinePrice] 去弹确认框。 */
-    onAlertLineCommit: () -> Unit = {},
+    /**
+     * 划线过程中每帧回调「抓到的线 id（null = 新建）」与当前落点（价格原始值）。
+     * id 在按下那一刻定好，整场手势不再改：拖过另一根时跳过去会让线瞬间失控。
+     */
+    onAlertLineDrag: (Long?, Double) -> Unit = { _, _ -> },
+    /** 手指离开：调用方按同一 id 把新价写回那条规则（id 为 null 则新建规则）。 */
+    onAlertLineCommit: (Long?) -> Unit = {},
+    /** 左上角角标（进入全屏）。null 表示不画，读数带也就顶到最左。 */
+    cornerAction: ChartCornerAction? = null,
 ) {
     val density = LocalDensity.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -140,7 +172,7 @@ fun KlineChart(
      */
     var priceBase by remember(symbolKey, interval.storageKey) { mutableStateOf<ValueRange?>(null) }
     val geo = remember(canvasSize, density, series.subPanes.size) {
-        ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.LEGEND_HEIGHT_DP)
+        ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.READOUT_HEIGHT_DP)
     }
     /**
      * 「有数据 + 有尺寸」才允许绘制。
@@ -189,6 +221,7 @@ fun KlineChart(
     val alertRange by rememberUpdatedState(mainRange)
     val alertDrag by rememberUpdatedState(onAlertLineDrag)
     val alertCommit by rememberUpdatedState(onAlertLineCommit)
+    val liveAlertLines by rememberUpdatedState(alertLines)
     /**
      * 绘图区几何、根数、序列与自动量程同样必须读**实时**值。
      *
@@ -218,6 +251,25 @@ fun KlineChart(
         crosshair = scheme.onSurface,
     )
 
+    /**
+     * 已有告警线的像素落点，供手势就近抓取。
+     *
+     * 走 live* 而不是直接读 `geo` / `alertLines`：本函数被 `pointerInput` 协程捕获，
+     * 而协程只活到手势结束，期间量程与几何一直在变（缩放、来新蜡烛），
+     * 按下那一刻按旧值算落点就会抓错线、或者干脆凭空新建一根。
+     */
+    fun alertAnchors(): List<AlertLineAnchor> {
+        val plot = liveGeo
+        val range = alertRange
+        return liveAlertLines.map { line ->
+            AlertLineAnchor(
+                ruleId = line.ruleId,
+                yPx = plot.yOf(range.toFraction(line.price), plot.mainTopPx, plot.mainHeightPx),
+            )
+        }
+    }
+    val alertGrabPx = with(density) { ALERT_GRAB_WIDTH.toPx() }
+
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -244,16 +296,18 @@ fun KlineChart(
                         touchSlop = viewConfiguration.touchSlop,
                         geo = { liveGeo },
                         alertLineMode = alertLineMode,
-                        onAlertLineDrag = { yPx ->
+                        alertLineAnchors = ::alertAnchors,
+                        alertGrabPx = alertGrabPx,
+                        onAlertLineDrag = { id, yPx ->
                             val plot = liveGeo
                             val fraction =
                                 (yPx - plot.mainTopPx) / plot.mainHeightPx.coerceAtLeast(1f)
                             // 量程是变动的（缩放/平移），必须走 rememberUpdatedState 读实时值，
                             // 否则这个回调会拿协程启动那一刻的旧量程换算，画出来的线跑偏
                             val price = alertRange.fromFraction(fraction)
-                            if (price.isFinite()) alertDrag(price)
+                            if (price.isFinite()) alertDrag(id, price)
                         },
-                        onAlertLineCommit = { alertCommit() },
+                        onAlertLineCommit = { id -> alertCommit(id) },
                         onGestureStart = {
                             // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
                             priceBase = liveAutoRange
@@ -315,7 +369,7 @@ fun KlineChart(
         ) {
             if (!isReady) return@Canvas
             // 纵向缩放/平移会把 K 线推出量程，`toFraction` 只把结果夹到 [-0.5, 1.5]，
-            // 落在边界外的部分仍会被画出来 —— 于是 K 线跑到图例带和时间轴上去。
+            // 落在边界外的部分仍会被画出来 —— 于是 K 线跑到读数带和时间轴上去。
             // 用 clipRect 把每次绘制限制在本 pane 的矩形里，才是根治。
             clipRect(
                 left = 0f,
@@ -327,7 +381,7 @@ fun KlineChart(
                 drawCandles(series, plot, geo, palette, mainRange)
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
-                drawAlertLine(alertLinePrice, geo, palette, mainRange)
+                drawAlertLines(alertLines, geo, palette, mainRange)
             }
             series.subPanes.forEachIndexed { index, pane ->
                 clipRect(
@@ -369,44 +423,100 @@ fun KlineChart(
                 modifier = Modifier.align(Alignment.TopStart),
             )
             // 告警线也要给出价位：划线时手指底下若没有读数，落点全凭感觉
-            AlertLinePriceBadge(
-                price = alertLinePrice,
-                range = mainRange,
-                geo = geo,
-                density = density,
-                tickSize = tickSize,
-                modifier = Modifier.align(Alignment.TopStart),
-            )
+            alertLines.forEach { line ->
+                AlertLinePriceBadge(
+                    price = line.price,
+                    range = mainRange,
+                    geo = geo,
+                    density = density,
+                    tickSize = tickSize,
+                    modifier = Modifier.align(Alignment.TopStart),
+                )
+            }
             SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
             TimeAxisLabels(
                 series, plot, geo, interval, density,
                 Modifier.align(Alignment.TopStart),
             )
-            ChartLegend(
-                // key 里必须是**蜡烛数据本身**而不是 barCount：最新一根蜡烛在收盘前
-                // 每 tick 都在变（开高低收/量都在动），但根数一直不变 —— 用 barCount 当 key
-                // 会让图例上的数字整根蜡烛期间冻住，看起来就是「图表不实时」。
-                tooltip = remember(crosshair, series.candles, interval, tickSize) {
-                    ChartModel.tooltip(
-                        series.candles,
-                        crosshair?.index ?: (series.size - 1),
-                        interval,
-                        tickSize,
+
+            // ---- 左上角角标（进入 / 退出全屏） ----
+            // 放在图表而不是顶栏：详情页要滚动才能看到图表，入口钉在顶栏等于
+            // 每次先把页面翻回去。读数带因此整体右移，两者不抢位置。
+            cornerAction?.let { action ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(Spacing.Xxs)
+                        .size(CORNER_BUTTON_SIZE)
+                        .clip(Radius.fullShape)
+                        .clickable(onClick = action.onClick),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = action.icon,
+                        contentDescription = action.description,
+                        modifier = Modifier.size(18.dp),
+                        tint = MarketTheme.colors.muted,
                     )
+                }
+            }
+
+            // ---- 币安式的指标读数带 ----
+            // 有十字光标就读那一根，否则读最新一根：这一行是「指标现在多少」，
+            // 平时跟着最新价走、长按时跟着手指走。
+            val readoutIndex = crosshair?.index ?: (series.size - 1)
+            val priceDecimals = PriceFormatter.decimalsFor(tickSize)
+            // 有角标时读数带从它右边开始，可用宽度也就少掉这一段（副图读数在下方，不受影响）
+            val readoutStart =
+                if (cornerAction == null) Spacing.Sm else Spacing.Xxs + CORNER_BUTTON_SIZE + Spacing.Xs
+            val readoutWidth = with(density) { geo.plotWidthPx.toDp() } - readoutStart
+            IndicatorReadout(
+                segments = remember(series, readoutIndex, priceDecimals) {
+                    series.mainReadoutAt(readoutIndex, priceDecimals)
                 },
+                palette = palette,
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(start = Spacing.Sm, top = 4.dp),
-                legendMaxWidth = with(density) { geo.plotWidthPx.toDp() } - Spacing.Sm * 2,
+                    .padding(start = readoutStart, top = Spacing.Xxs)
+                    .widthIn(max = readoutWidth),
             )
+            val subReadouts = remember(series, readoutIndex, priceDecimals) {
+                series.subPanes.map { series.subReadoutAt(it, readoutIndex, priceDecimals) }
+            }
+            subReadouts.forEachIndexed { index, segments ->
+                IndicatorReadout(
+                    segments = segments,
+                    palette = palette,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(x = Spacing.Sm, y = with(density) { (geo.subTopOf(index) + 2f).toDp() })
+                        .widthIn(max = readoutWidth),
+                )
+            }
+
+            // ---- 十字光标详情浮层 ----
+            // OHLC 不再常驻：只有长按出十字光标时，才把对齐那根的数据浮在左上角，
+            // 松手即消失。常驻的那一大块会盖住左上那片蜡烛，而那里恰恰常出形态。
+            val mark = crosshair
+            if (mark != null) {
+                CrosshairDetail(
+                    tooltip = ChartModel.tooltip(series.candles, mark.index, interval, tickSize),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = Spacing.Sm,
+                            y = with(density) { (geo.readoutHeightPx + 2f).toDp() },
+                        ),
+                )
+            }
         }
         // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
         // 而且没有任何办法回去（双击复位这个手势不显眼）。
         // 位置选**绘图区左下角**：
         //   · 右侧不放 —— 最新/最该看的蜡烛就在右边，浮层压上去代价最大；
-        //   · 顶部不放 —— 图例带（开高低收/量）占满左上，且绘图区顶端往往是近期高点；
+        //   · 顶部不放 —— 指标读数带占满左上，且绘图区顶端往往是近期高点；
         //   · 左下角是整块图里信息密度最低的地方（左侧是历史蜡烛、下沿是最低价影线），
-        //     且天然离图例与时间轴都足够远。
+        //     且天然离读数带与时间轴都足够远。
         if (priceZoom != 1f || pricePan != 0f) {
             val badgeStyle = MaterialTheme.typography.labelSmall
             val badgeSize = remember(badgeStyle, density) {
@@ -476,6 +586,7 @@ private data class ChartPalette(
         LineRole.ACCENT -> lines.getOrElse(3) { grid }
         LineRole.UP -> up
         LineRole.DOWN -> down
+        LineRole.LABEL -> label
     }
 }
 
@@ -502,8 +613,8 @@ private data class PlotGeometry(
  * 副图数量可变（0~4），所以副图区域用「第几块」描述而不是单一起点/高度：
  * `subTopOf(i)` / `subHeightPx` 算出每块自己的矩形。
  *
- * 顶部额外预留 [LEGEND_HEIGHT_DP] 给图例（开高低收/量），
- * 否则图例是自由流的多行 Text，会直接压在蜡烛和网格上。
+ * 顶部额外预留 [READOUT_HEIGHT_DP] 给指标读数行（币安式的彩色参数），
+ * 否则读数是自由流的 Text，会直接压在蜡烛和网格上。
  */
 private data class ChartGeo(
     /**
@@ -518,8 +629,8 @@ private data class ChartGeo(
     val plotHeightPx: Float,
     val labelWidthPx: Float,
     val timeAxisHeightPx: Float,
-    /** 图例占用的高度；绘图区（含主图与副图）从这条线以下才开始。 */
-    val legendHeightPx: Float,
+    /** 指标读数带占用的高度；绘图区（含主图与副图）从这条线以下才开始。 */
+    val readoutHeightPx: Float,
     val mainHeightPx: Float,
     /** 副图块数；0 表示不显示副图。 */
     val subCount: Int,
@@ -538,13 +649,13 @@ private data class ChartGeo(
     fun bodyWidth(visibleBars: Float): Float = (slot(visibleBars) * BODY_SHARE).coerceIn(1f, 26f)
 
     /**
-     * 主图顶边：图例之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，
-     * 直接传 0f 会把曲线画到图例里。
+     * 主图顶边：读数带之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，
+     * 直接传 0f 会把曲线画到读数里。
      */
-    val plotTopPx: Float get() = legendHeightPx
+    val plotTopPx: Float get() = readoutHeightPx
 
     /** 绘图区（主图 + 全部副图）总高度。 */
-    val candlesHeightPx: Float get() = plotHeightPx - legendHeightPx
+    val candlesHeightPx: Float get() = plotHeightPx - readoutHeightPx
 
     /** 每块副图的高度（等分主图之外的区域）。 */
     val subHeightPx: Float
@@ -560,22 +671,22 @@ private data class ChartGeo(
         const val TIME_AXIS_HEIGHT_DP = 18f
 
         /**
-         * 图例区高度：4 行 labelSmall（时间行 + 开高 + 低收 + 量）≈ 4×13dp，
-         * 再加一点与绘图区的间距。行数变了必须同步改这里，否则图例又会压到蜡烛上。
+         * 指标读数带高度：最多两行 labelSmall（行高 15sp）再加与绘图区的间距。
+         * 行数上限变了必须同步改这里，否则读数又会压到蜡烛上。
          */
-        const val LEGEND_HEIGHT_DP = 62f
+        const val READOUT_HEIGHT_DP = 34f
 
-        fun of(size: IntSize, density: Density, subCount: Int, legendHeightDp: Float): ChartGeo =
+        fun of(size: IntSize, density: Density, subCount: Int, readoutHeightDp: Float): ChartGeo =
             with(density) {
                 val measured = size.width > 0 && size.height > 0
                 val label = AXIS_LABEL_WIDTH_DP.dp.toPx()
                 val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
-                val legend = legendHeightDp.dp.toPx()
+                val readout = readoutHeightDp.dp.toPx()
                 val plotWidth = max(1f, size.width.toFloat() - label)
                 val plotHeight = max(1f, size.height.toFloat() - timeAxis)
-                // 极端窄高比下先保住蜡烛区域，再夹图例区，避免把绘图区压没
-                val safeLegend = legend.coerceAtMost((plotHeight * 0.3f).coerceAtLeast(0f))
-                val candles = max(1f, plotHeight - safeLegend)
+                // 极端窄高比下先保住蜡烛区域，再夹读数带，避免把绘图区压没
+                val safeReadout = readout.coerceAtMost((plotHeight * 0.3f).coerceAtLeast(0f))
+                val candles = max(1f, plotHeight - safeReadout)
                 val main = if (subCount > 0) candles * MAIN_SHARE else candles
                 ChartGeo(
                     measured = measured,
@@ -583,7 +694,7 @@ private data class ChartGeo(
                     plotHeightPx = plotHeight,
                     labelWidthPx = label,
                     timeAxisHeightPx = timeAxis,
-                    legendHeightPx = safeLegend,
+                    readoutHeightPx = safeReadout,
                     mainHeightPx = main,
                     subCount = subCount,
                 )
@@ -692,28 +803,32 @@ private fun DrawScope.drawLastPrice(
 }
 
 /**
- * 已划出的告警线。
+ * 已有的告警线，一次一排。
  *
  * 与 [drawLastPrice] 用同一条换算链（`toFraction` → `yOf`），所以线所在的高度与右侧
- * 价格标上的数字严格对应。量程是被缩放过/平移过的，超出主图区就不画 —— 一条跑到图例带
+ * 价格标上的数字严格对应。量程是被缩放过/平移过的，超出主图区就不画 —— 一条跑到读数带
  * 或时间轴上的虚线只会让人以为刻度坏了。
+ *
+ * 只有正在拖的那根是不透明实色：其余各根属于「已经定好的参照」，压淡一档才不跟 K 线抢视线。
  */
-private fun DrawScope.drawAlertLine(
-    price: Double?,
+private fun DrawScope.drawAlertLines(
+    lines: List<AlertPriceLine>,
     geo: ChartGeo,
     palette: ChartPalette,
     range: ValueRange,
 ) {
-    if (price == null || !price.isFinite()) return
-    val y = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx)
-    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
-    drawLine(
-        color = palette.crosshair,
-        start = Offset(0f, y),
-        end = Offset(geo.plotWidthPx, y),
-        strokeWidth = 2f,
-        pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
-    )
+    lines.forEach { line ->
+        if (!line.price.isFinite()) return@forEach
+        val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
+        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+        drawLine(
+            color = if (line.dragging) palette.crosshair else palette.crosshair.copy(alpha = STATIC_ALERT_ALPHA),
+            start = Offset(0f, y),
+            end = Offset(geo.plotWidthPx, y),
+            strokeWidth = if (line.dragging) 2f else 1.5f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+        )
+    }
 }
 
 private fun DrawScope.drawSubPane(
@@ -1035,10 +1150,11 @@ private fun AxisLabel(
 }
 
 /**
- * 副图的右侧纵轴刻度 + 左上角标题。
+ * 副图的右侧纵轴刻度。
  *
- * 副图是多选可变的（0~4 块），所以标题必须画，否则用户看到两条线不知道哪个是 MACD；
- * 刻度只在每块副图自己的高度里取 2 条，避免小块副图被数字塞满。
+ * 每块副图自己的名字与参数（`MACD(12,26,9)`）不再画在这里 —— 它已经并进左上角
+ * 那条读数行了（见 [IndicatorReadout]）。刻度只在每块副图自己的高度里取 2 条，
+ * 避免小块副图被数字塞满。
  */
 @Composable
 private fun SubAxisLabels(
@@ -1057,19 +1173,9 @@ private fun SubAxisLabels(
     }
     val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
 
-    panes.forEachIndexed { index, pane ->
+    panes.forEachIndexed { index, _ ->
         val range = ranges.getOrNull(index) ?: return@forEachIndexed
         val top = geo.subTopOf(index)
-        Text(
-            text = pane.title,
-            modifier = modifier.offset(
-                x = SUB_PANE_TITLE_INSET_DP.dp,
-                y = with(density) { (top + SUB_PANE_TITLE_INSET_DP).toDp() },
-            ),
-            style = style,
-            color = labelColor,
-            maxLines = 1,
-        )
         // 取首尾两条刻度：副图块普遍矮，画满会糊；挨太近时同样丢掉下面那条
         // （间距判断同样必须取绝对值，理由见 PriceAxisLabels）
         val lines = range.gridLines(count = 2)
@@ -1166,38 +1272,85 @@ private fun TimeAxisLabels(
     }
 }
 
+/**
+ * 一行彩色指标读数（币安式：`MA5: 84,647.20  MA10: …  BOLL.UP: …`）。
+ * 每个片段与它所描述的那条折线同色，于是「这个数字属于哪条线」不必再靠一整块图例来说明。
+ *
+ * 用 [androidx.compose.ui.text.AnnotatedString] 而不是 `Row` + 一堆 `Text`：
+ * 纯文字不吃指针事件，读数带因此不会把顶部那一带的平移/长按手势从图表手里抢走。
+ */
 @Composable
-private fun ChartLegend(
-    tooltip: CandleTooltip?,
-    legendMaxWidth: Dp,
+private fun IndicatorReadout(
+    segments: List<ReadoutSegment>,
+    palette: ChartPalette,
     modifier: Modifier = Modifier,
 ) {
-    if (tooltip == null) return
-    Column(modifier = modifier.widthIn(max = legendMaxWidth)) {
+    if (segments.isEmpty()) return
+    Text(
+        text = remember(segments, palette) {
+            buildAnnotatedString {
+                segments.forEachIndexed { index, segment ->
+                    if (index > 0) append("  ")
+                    withStyle(SpanStyle(color = palette.roleColor(segment.role))) {
+                        append(segment.text)
+                    }
+                }
+            }
+        },
+        modifier = modifier,
+        style = MaterialTheme.typography.labelSmall,
+        maxLines = READOUT_MAX_LINES,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/**
+ * 十字光标详情浮层：长按到哪根就读哪根的 OHLC。
+ *
+ * 半透明底 + 描边，浮在读数带下方。之所以只在长按时出现：OHLC 常驻时这块文字
+ * 常年压着左上那片蜡烛，而左上是近期高点与形态最常待的地方。
+ */
+@Composable
+private fun CrosshairDetail(
+    tooltip: CandleTooltip?,
+    modifier: Modifier = Modifier,
+) {
+    val tip = tooltip ?: return
+    val colors = MarketTheme.colors
+    val changeColor = if (tip.up) colors.upSoft else colors.downSoft
+    Column(
+        modifier = modifier
+            .clip(Radius.smShape)
+            .background(colors.paper.copy(alpha = 0.92f))
+            .border(1.dp, colors.hairline, Radius.smShape)
+            .padding(horizontal = Spacing.Xs, vertical = Spacing.Xxs),
+    ) {
+        DetailRow(label = "时间", value = tip.time)
+        DetailRow(label = "开", value = tip.open)
+        DetailRow(label = "高", value = tip.high)
+        DetailRow(label = "低", value = tip.low)
+        DetailRow(label = "收", value = tip.close, valueColor = changeColor)
+        DetailRow(label = "涨跌", value = tip.changeText, valueColor = changeColor)
+        DetailRow(label = "量", value = tip.volume)
+    }
+}
+
+/** 浮层里的一行：标签列定宽，好让右边的数字对齐成一列。 */
+@Composable
+private fun DetailRow(label: String, value: String, valueColor: Color? = null) {
+    val colors = MarketTheme.colors
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xxs)) {
         Text(
-            text = tooltip.time + "  " + tooltip.changeText,
+            text = label,
+            modifier = Modifier.width(DETAIL_LABEL_WIDTH),
             style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = colors.muted,
             maxLines = 1,
         )
-        // 拆成「开/高」与「低/收」两行：单行四个价格在 8 位数字时会顶到价格轴，
-        // 拆开后每行长度腰斩，再窄的屏也放得下。
         Text(
-            text = "开 ${tooltip.open} 高 ${tooltip.high}",
+            text = value,
             style = MaterialTheme.typography.labelSmall,
-            color = if (tooltip.up) UpGreen else DownRed,
-            maxLines = 1,
-        )
-        Text(
-            text = "低 ${tooltip.low} 收 ${tooltip.close}",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (tooltip.up) UpGreen else DownRed,
-            maxLines = 1,
-        )
-        Text(
-            text = "量 ${tooltip.volume}",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = valueColor ?: colors.ink,
             maxLines = 1,
         )
     }
@@ -1245,10 +1398,14 @@ private suspend fun PointerInputScope.detectChartGestures(
     geo: () -> ChartGeo,
     /** 划线模式：单指拖动直接移动告警线（见上方说明）。 */
     alertLineMode: Boolean,
-    /** 划线过程中回调当前落点（未换算的 y 像素）。 */
-    onAlertLineDrag: (yPx: Float) -> Unit,
-    /** 手指离开且本场手势划过线时回调一次，调用方据此弹确认。 */
-    onAlertLineCommit: () -> Unit,
+    /** 已有告警线的像素落点，按下那一刻用它就近抓取。 */
+    alertLineAnchors: () -> List<AlertLineAnchor>,
+    /** 抓住已有线的容差（像素）。超出就当「在这里新建一根」。 */
+    alertGrabPx: Float,
+    /** 划线过程中回调「抓到的线 id（null = 新建）」与未换算的 y 像素。 */
+    onAlertLineDrag: (Long?, Float) -> Unit,
+    /** 手指离开且本场手势划过线时回调一次，带同一 id，调用方据此落库。 */
+    onAlertLineCommit: (Long?) -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
     /** 每次手势结束时回调一次，用于把手势期间冻结的量交还给实时值。 */
@@ -1284,6 +1441,8 @@ private suspend fun PointerInputScope.detectChartGestures(
         var longPressActive = false
         /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
         var alertLineActive = false
+        /** 本场手势锁定的那条线；`null` = 新建一根。判定只做一次，整场不再改。 */
+        var alertGrabbedId: Long? = null
         // 单指方向锁：null 表示还没定，锁定后本次手势不再改
         var axis: ChartGesture.Axis? = null
         var axisAccumX = 0f
@@ -1313,8 +1472,13 @@ private suspend fun PointerInputScope.detectChartGestures(
             if (alertLineMode && pressed.size == 1) {
                 val plot = geo()
                 val y = primary.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
-                onAlertLineDrag(y)
-                alertLineActive = true
+                if (!alertLineActive) {
+                    // 抓哪根只在按下时定一次。逐帧重判的话，把手里的线拖过另一根时
+                    // 会突然「换手」——手指没动，动的却是另一条预警的阈值。
+                    alertGrabbedId = alertLineAnchors().closestAlertLine(y, alertGrabPx)
+                    alertLineActive = true
+                }
+                onAlertLineDrag(alertGrabbedId, y)
                 continue
             }
             if (!longPressActive && pressed.size == 1) {
@@ -1399,10 +1563,32 @@ private suspend fun PointerInputScope.detectChartGestures(
                 }
             }
         }
-        if (alertLineActive) onAlertLineCommit()
+        if (alertLineActive) onAlertLineCommit(alertGrabbedId)
         onCrosshair(null)
         onGestureEnd()
     }
+}
+
+/** 一条已有告警线在主图上的像素落点，手势按它决定抓哪根。 */
+internal data class AlertLineAnchor(val ruleId: Long?, val yPx: Float)
+
+/**
+ * 按 y 像素就近取一条线，超出 [slopPx] 返回 null（= 在这里新建一根）。
+ *
+ * 只做纵向距离：划线要改的是价格，手指横向落在哪儿无关紧要 ——
+ * 判进绘图区的话，贴着线右端点一下就变成新建一根了。
+ */
+internal fun List<AlertLineAnchor>.closestAlertLine(yPx: Float, slopPx: Float): Long? {
+    var best: Long? = null
+    var bestDistance = Float.MAX_VALUE
+    forEach { anchor ->
+        val distance = abs(anchor.yPx - yPx)
+        if (distance <= slopPx && distance < bestDistance) {
+            bestDistance = distance
+            best = anchor.ruleId
+        }
+    }
+    return best
 }
 
 /** 「刻度已缩放 · 复位」小标的文案与左右内边距（用于实测宽度）。 */
@@ -1434,11 +1620,31 @@ private const val TIME_LABEL_MIN_GAP_DP = 10f
 /** 纵轴相邻刻度之间至少要留的垂直间隙（dp）。 */
 private const val AXIS_LABEL_MIN_GAP_DP = 4f
 
-/** 副图标题距绘图区左边缘的内缩（dp）。 */
-private const val SUB_PANE_TITLE_INSET_DP = 6f
+/**
+ * 指标读数带最多几行。两行是「MA 三条 + BOLL 三条」在一台窄屏手机上刚好放不下的
+ * 经验值；再多就开始压蜡烛了，宁可省略尾部（[TextOverflow.Ellipsis]）。
+ */
+private const val READOUT_MAX_LINES = 2
+
+/** 十字光标详情浮层里标签列的宽度：让右边的数字对齐成一列。 */
+private val DETAIL_LABEL_WIDTH = 28.dp
 
 /** 十字光标价格标的水平内边距（dp）。 */
 private const val PRICE_BADGE_PAD_H_DP = 5f
 
 /** 十字光标价格标的垂直内边距（dp）。 */
 private const val PRICE_BADGE_PAD_V_DP = 2f
+
+/** 已有的告警线（非正在拖的那根）的不透明度：参照线不该和 K 线争视线。 */
+private const val STATIC_ALERT_ALPHA = 0.45f
+
+/** 左上角角标按钮的边长；读数带按它让位。 */
+private val CORNER_BUTTON_SIZE = 32.dp
+
+/**
+ * 划线的抓取容差：按下点离某根线在这个范围内就算抓它，否则新建一根。
+ *
+ * 比手指触摸半径略大 —— 屏幕上那根 1.5dp 的虚线根本按不准，
+ * 容差太小会让「微调已有预警」变成「凭空多出一条新预警」。
+ */
+private val ALERT_GRAB_WIDTH = 24.dp
