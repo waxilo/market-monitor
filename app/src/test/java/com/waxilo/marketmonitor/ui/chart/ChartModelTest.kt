@@ -988,6 +988,42 @@ class ChartModelTest {
     }
 
     @Test
+    fun `双指纵向拉开是把价格量程收窄K线变高`() {
+        // 上下拉开：纵向间距 100 → 200。复用 pinchFactor 得到 < 1 的因子，
+        // 乘到价格量程上即为「量程变小 = K 线纵向变高」—— 与时间轴的拉开语义一致。
+        val base = ValueRange(100.0, 200.0)
+        val spread = ChartGesture.pinchFactor(previous = 100f, current = 200f)!!
+        assertTrue("拉开应得到小于 1 的因子，实际 $spread", spread < 1f)
+        val zoomed = base.scaled(spread, base)
+        assertTrue(
+            "拉开后量程应变小（K 线变高），实际跨度 ${zoomed.high - zoomed.low}",
+            zoomed.high - zoomed.low < base.high - base.low,
+        )
+        // 不动点仍是中位价，纵向缩放不会让整张图跑掉
+        assertEquals(150.0, zoomed.center, 1e-6)
+    }
+
+    @Test
+    fun `双指纵向合拢是把价格量程放宽K线变矮`() {
+        val base = ValueRange(100.0, 200.0)
+        val pinched = ChartGesture.pinchFactor(previous = 200f, current = 100f)!!
+        assertTrue("合拢应得到大于 1 的因子，实际 $pinched", pinched > 1f)
+        val zoomed = base.scaled(pinched, base)
+        assertTrue(
+            "合拢后量程应变大（K 线变矮），实际跨度 ${zoomed.high - zoomed.low}",
+            zoomed.high - zoomed.low > base.high - base.low,
+        )
+    }
+
+    @Test
+    fun `横向间距不变时时间轴因子为一不影响时间轴`() {
+        // 双指只上下拉开、横向间距保持 300 不变：时间轴拿到的因子必须是 1，
+        // 否则「上下拉伸动的却是横坐标」的老问题会以另一种形式回来。
+        val barFactor = ChartGesture.pinchFactor(previous = 300f, current = 300f)!!
+        assertEquals(1f, barFactor, 1e-6f)
+    }
+
+    @Test
     fun `每帧折算的根数与总根数变化一致`() {
         // 守恒：一帧的因子折算成根数 = bars * (factor - 1)；提交 + 余量必须等于它。
         // 取一个不跨阈值的因子，验证「本帧无提交、量全进余量」这一最基本的情形。

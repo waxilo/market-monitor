@@ -128,6 +128,18 @@ fun KlineChart(
     /** 纵向平移（占主图高度的比例）。手指上滑看更低价区。 */
     var pricePan by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
     /**
+     * 手势进行期间**冻结**的价格基准量程；`null` = 用实时的自动量程。
+     *
+     * 自动量程是由「可见数据窗口」算出来的，而横向平移/缩放会改可见窗口 ——
+     * 基准若跟着逐帧重算，缩放过程中价格轴就会随可见区间一跳一跳；
+     * 手指上下拉开时难免带出一点横向间距变化，于是时间轴也缩放、价格轴跟着跳，
+     * 叠加起来正是用户报的「图表缩放时抖动」。
+     *
+     * 所以手势一开始就把基准钉死，整场手势价格轴绝对不动；松手后再交回自动量程
+     * 做一次性适配（新区间的价格范围该重新适配，但只需要发生一次，而不是每帧一次）。
+     */
+    var priceBase by remember(symbolKey, interval.storageKey) { mutableStateOf<ValueRange?>(null) }
+    /**
      * 横向平移的「不足一根」余量（单位：根）。
      *
      * [ChartViewport.rightOffset] 是整数根数，而一次手势事件往往只移动几像素
@@ -177,10 +189,12 @@ fun KlineChart(
     val autoRange = remember(series, dataWindow.first, dataWindow.last) {
         series.mainRange(dataWindow.first, dataWindow.last)
     }
-    val mainRange = remember(autoRange, priceZoom, pricePan) {
-        autoRange
-            .scaled(priceZoom, autoRange)
-            .panned(pricePan, autoRange)
+    /** 纵向缩放/平移的基准：手势中为冻结值，平时为自动量程（见 [priceBase]）。 */
+    val rangeBase = priceBase ?: autoRange
+    val mainRange = remember(rangeBase, priceZoom, pricePan) {
+        rangeBase
+            .scaled(priceZoom, rangeBase)
+            .panned(pricePan, rangeBase)
     }
     val subRanges = remember(series, dataWindow.first, dataWindow.last) {
         series.subPanes.map { series.subRange(it, dataWindow.first, dataWindow.last) }
@@ -206,6 +220,8 @@ fun KlineChart(
     val liveBarCount by rememberUpdatedState(barCount)
     val liveSeries by rememberUpdatedState(series)
     val liveAutoRange by rememberUpdatedState(autoRange)
+    /** 纵向平移的钳制基准也要用冻结值，否则手势中基准一变，`pricePan` 会被反复重新钳。 */
+    val liveRangeBase by rememberUpdatedState(rangeBase)
     val liveLoadMore by rememberUpdatedState(onLoadMore)
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
@@ -259,7 +275,10 @@ fun KlineChart(
                         onGestureStart = {
                             barPanRemainder = 0f
                             pinchRemainder = 0f
+                            // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
+                            priceBase = liveAutoRange
                         },
+                        onGestureEnd = { priceBase = null },
                         onPan = { deltaPx ->
                             val bars = liveBarCount
                             val slot = liveGeo.slot(viewport.clamp(bars).visibleBars)
@@ -319,7 +338,7 @@ fun KlineChart(
                             // 钳的是累积量本身而不是渲染结果：否则拖到边界后 pricePan
                             // 还在涨，反向拖要先走完这段空行程才见效，手感像卡住了。
                             // 跨度取「缩放后」的量程（平移不改变跨度），与渲染时一致。
-                            val range = liveAutoRange
+                            val range = liveRangeBase
                             val span = (range.high - range.low) * priceZoom
                             val limit = range.panLimit(range, span)
                             pricePan = (pricePan + deltaFraction).coerceIn(limit.start, limit.endInclusive)
@@ -1174,16 +1193,19 @@ private fun ChartLegend(
  * - **单指横向**（起点在绘图区）→ 平移时间轴（看更早/更晚）；
  * - **单指纵向**（起点在绘图区）→ 平移价格刻度（手指上滑 = 看更低价区）；
  * - **单指纵向**（起点在右侧价格刻度区）→ 缩放价格刻度，**向上拖 = K 线变高**；
- * - **双指** → **只**缩放时间轴；
+ * - **双指横向张合**（任意位置）→ 缩放时间轴，拉开 = 放大；
+ * - **双指纵向张合**（两指都在绘图区）→ 缩放价格量程，拉开 = K 线变高；
  * - **长按** → 十字光标。
  *
  * 价格刻度区的纵向拖动必须**按起点**区分，不能按主方向：同一个纵向位移，
  * 落在绘图区里是平移、落在刻度上是缩放，两者语义完全不同。用起点判定还顺带
  * 解决了「在刻度区横向划一下」——那种手势在这里没有意义，直接不响应。
  *
- * 双指**不再**参与价格刻度缩放：两指张合时 x 间距必然也跟着变（手指很难保持垂直对齐），
- * 于是纵向张合会被横向分量带偏，用户看到的是「无论上下拉还是左右拉，动的都是横坐标」。
- * 价格刻度改由刻度区拖动独占，两个维度彻底分开。
+ * 双指的两个维度**各算各的因子**，不再合并：横向间距只驱动时间轴、纵向间距只驱动价格轴。
+ * 早先双指只缩放时间轴，理由是「上下拉开时 dx 必然跟着变、纵向分量会被横向带偏」——
+ * 那个结论只对「把两个分量混成一个因子」成立；分开算之后，上下拉开时 dx 基本不变，
+ * 时间轴自然不动，纵向张合可以放心地独立驱动价格轴。
+ * 纵向限定「两指都在绘图区」，是为了让刻度区里的捏合保持只缩放时间轴的旧行为。
  *
  * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
@@ -1210,6 +1232,8 @@ private suspend fun PointerInputScope.detectChartGestures(
     onAlertLineCommit: () -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
+    /** 每次手势结束时回调一次，用于把手势期间冻结的量交还给实时值。 */
+    onGestureEnd: () -> Unit,
     onPan: (deltaPx: Float) -> Unit,
     onZoom: (barFactor: Float, anchorX: Float) -> Unit,
     onPriceZoom: (factor: Float) -> Unit,
@@ -1231,6 +1255,7 @@ private suspend fun PointerInputScope.detectChartGestures(
         val lastPositions = mutableMapOf<Any, Offset>()
         var travelled = 0f
         var previousDistanceX = 0f
+        var previousDistanceY = 0f
         var longPressActive = false
         /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
         var alertLineActive = false
@@ -1265,22 +1290,34 @@ private suspend fun PointerInputScope.detectChartGestures(
                 continue
             }
             if (pressed.size >= 2) {
-                // 双指只缩放时间轴。纵向张合不参与：两指的 x 间距必然跟着变，
-                // 纵向分量永远会被横向带偏（见函数头注释）。
-                val dx = abs(pressed[0].position.x - pressed[1].position.x)
-                val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
+                // 横纵两个维度**各算各的因子**，互不干扰：
+                // - 横向间距 → 时间轴（拉开 = 可见根数变少 = 放大）；
+                // - 纵向间距 → 价格量程（拉开 = 量程变小 = K 线变高）。
+                // 上下拉开时 dx 基本不变，所以时间轴自然不动，不会像以前那样被横向带偏。
                 val plot = geo()
+                val dx = abs(pressed[0].position.x - pressed[1].position.x)
+                val dy = abs(pressed[0].position.y - pressed[1].position.y)
                 ChartGesture.pinchFactor(previousDistanceX, dx)?.let { factor ->
+                    val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
                     onZoom(factor, anchorX.coerceIn(0f, plot.plotWidthPx))
                 }
+                // 纵向只在**两指都落在绘图区**时生效：刻度区里的捏合仍然只缩放时间轴
+                if (pressed.all { it.position.x < plot.plotWidthPx }) {
+                    ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
+                }
                 previousDistanceX = dx
+                previousDistanceY = dy
                 continue
             }
             val deltaX = primary.position.x - previous.x
             val deltaY = primary.position.y - previous.y
             if (deltaX != 0f || deltaY != 0f) {
                 travelled += abs(deltaX) + abs(deltaY)
+                // 两指间距归零：手指数量一变（1↔2），旧间距已无意义。
+                // 两样都要清 —— 只清横向的话，从双指抬成单指再按下第二根时，
+                // 纵向会拿上一场的旧间距算出因子，缩放瞬间跳一大格。
                 previousDistanceX = 0f
+                previousDistanceY = 0f
                 // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
                 if (axis == null) {
                     axisAccumX += deltaX
@@ -1311,6 +1348,7 @@ private suspend fun PointerInputScope.detectChartGestures(
         }
         if (alertLineActive) onAlertLineCommit()
         onCrosshair(null)
+        onGestureEnd()
     }
 }
 
