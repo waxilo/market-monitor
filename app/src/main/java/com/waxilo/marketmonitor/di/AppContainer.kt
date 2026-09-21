@@ -191,7 +191,7 @@ class AppContainer(private val context: Context) {
                 client = downloadClient,
                 owner = BuildConfig.UPDATE_OWNER,
                 repo = BuildConfig.UPDATE_REPO,
-                proxyPrefix = { settingsSnapshot.value.updateProxyPrefix },
+                mirror = { settingsSnapshot.value.updateMirror },
             ),
             abiPreferences = Build.SUPPORTED_ABIS.toList(),
         )

@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +17,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -24,6 +31,9 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -34,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
+import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.Section
@@ -126,15 +137,15 @@ fun SettingsScreen(
                 Section(title = "更新") {
                     SwitchRow("启动时自动检查", state.autoUpdateCheck, viewModel::setAutoUpdateCheck)
                     Rule()
-                    ValueRow(
-                        label = "下载加速前缀",
-                        value = state.updateProxyPrefix,
-                        placeholder = "https://gh-proxy.com/",
-                        onValue = viewModel::setUpdateProxyPrefix,
-                        valueWidth = 200.dp,
+                    DropdownRow(
+                        label = "下载加速站",
+                        options = UpdateMirror.entries.toList(),
+                        selected = state.updateMirror,
+                        labelOf = { it.label },
+                        onSelect = viewModel::setUpdateMirror,
                     )
                     Text(
-                        text = "前缀拼在更新包地址前，留空直连 GitHub；仅影响下载，不改变检查更新的接口。",
+                        text = "加速站同时用于检查更新与下载；某一站不通时会自动回退到直连和其他站。开 VPN 检查更新报 403，就是 GitHub 拒了你的出口 IP，选一个加速站即可。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -299,6 +310,72 @@ private fun SegmentRow(label: String, content: @Composable () -> Unit) {
             color = MarketTheme.colors.ink,
         )
         Box(modifier = Modifier.width(168.dp)) { content() }
+    }
+}
+
+/**
+ * 只读下拉框：标签在左、当前值在右，点开选一个。
+ *
+ * 没用 M3 的 `ExposedDropdownMenuBox`——那是一只自带边框 + 浮动标签的输入框，
+ * 而本页刻意不留边框（见文件头）。也没用分段控件：加速站有 5 个选项且标签长短不一，
+ * 排成一行会把值挤到看不清。
+ */
+@Composable
+private fun <T> DropdownRow(
+    label: String,
+    options: List<T>,
+    selected: T,
+    labelOf: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    val colors = MarketTheme.colors
+    var open by remember { mutableStateOf(false) }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { open = true }
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.ink,
+        )
+        Box {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = labelOf(selected),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = "展开选项",
+                    modifier = Modifier.size(20.dp),
+                    tint = colors.muted,
+                )
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(labelOf(option)) },
+                        trailingIcon = {
+                            if (option == selected) {
+                                Icon(Icons.Default.Check, contentDescription = null)
+                            }
+                        },
+                        onClick = {
+                            open = false
+                            onSelect(option)
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 

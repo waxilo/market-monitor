@@ -15,6 +15,7 @@ import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
@@ -60,7 +61,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
             futuresRestMirror = this[Keys.FUTURES_MIRROR] ?: d.futuresRestMirror,
             wsMirror = this[Keys.WS_MIRROR] ?: d.wsMirror,
-            updateProxyPrefix = this[Keys.UPDATE_PROXY] ?: d.updateProxyPrefix,
+            updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
             autoUpdateCheck = this[Keys.AUTO_UPDATE] ?: d.autoUpdateCheck,
             dismissedVersion = this[Keys.DISMISSED] ?: d.dismissedVersion,
         )
@@ -85,7 +86,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.SPOT_MIRROR] = spotRestMirror
         prefs[Keys.FUTURES_MIRROR] = futuresRestMirror
         prefs[Keys.WS_MIRROR] = wsMirror
-        prefs[Keys.UPDATE_PROXY] = updateProxyPrefix
+        prefs[Keys.UPDATE_PROXY] = updateMirror.key
         prefs[Keys.AUTO_UPDATE] = autoUpdateCheck
         prefs[Keys.DISMISSED] = dismissedVersion
     }

@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.domain.repository
 
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -41,11 +42,10 @@ data class AppSettings(
     val futuresRestMirror: String = "",
     val wsMirror: String = "",
     /**
-     * 更新包下载加速前缀（PRD FR-6.2 国内网络加速）。
-     * 语义是「拼在原始地址前」，如 `https://gh-proxy.com/https://github.com/...`；
-     * 空串表示直连 GitHub。只影响更新包与校验值下载，不影响 API 检查。
+     * 更新加速站（PRD FR-6.2 国内网络加速）。默认直连 GitHub。
+     * 既作用于更新包与校验值的下载，也作用于检查更新的 API —— 见 [UpdateMirror.apiChain]。
      */
-    val updateProxyPrefix: String = "",
+    val updateMirror: UpdateMirror = UpdateMirror.NATIVE,
     val autoUpdateCheck: Boolean = true,
     /** 用户点「以后再说」的版本号，低于或等于该版本不再提示。 */
     val dismissedVersion: String = "",

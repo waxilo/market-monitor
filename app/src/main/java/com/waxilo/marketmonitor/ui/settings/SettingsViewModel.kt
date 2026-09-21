@@ -8,6 +8,7 @@ import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
+import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -27,8 +28,8 @@ data class SettingsUiState(
     val webhookEnabled: Boolean = true,
     val alertPollingSeconds: Int = 5,
     val autoUpdateCheck: Boolean = true,
-    /** 更新包下载加速前缀；空串表示直连 GitHub。 */
-    val updateProxyPrefix: String = "",
+    /** 更新加速站；NATIVE 表示直连 GitHub。 */
+    val updateMirror: UpdateMirror = UpdateMirror.NATIVE,
     val versionName: String = BuildConfig.VERSION_NAME,
     /** 检查更新的结果：null 表示未检查或进行中。 */
     val updateInfo: UpdateInfo? = null,
@@ -70,7 +71,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         webhookEnabled = it.webhookEnabled,
                         alertPollingSeconds = it.alertPollingSeconds,
                         autoUpdateCheck = it.autoUpdateCheck,
-                        updateProxyPrefix = it.updateProxyPrefix,
+                        updateMirror = it.updateMirror,
                     )
                 }
             }
@@ -135,10 +136,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         persist { s -> s.copy(autoUpdateCheck = v) }
     }
 
-    fun setUpdateProxyPrefix(v: String) {
-        val trimmed = v.trim()
-        backing.update { it.copy(updateProxyPrefix = trimmed) }
-        persist { s -> s.copy(updateProxyPrefix = trimmed) }
+    fun setUpdateMirror(v: UpdateMirror) {
+        backing.update { it.copy(updateMirror = v) }
+        persist { s -> s.copy(updateMirror = v) }
     }
 
     /** DataStore 写入是 suspend，在后台作用域持久化，不阻塞 UI（UI 已即时回应用户改动）。 */
