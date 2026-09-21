@@ -344,6 +344,20 @@ fun KlineChart(
 
         if (isReady) {
             PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
+            // 最新价那条虚线必须自带读数：它回答的是「现在多少钱」，而右侧刻度是 1-2-5 阶梯，
+            // 最近的一条刻度离它往往还有一段距离，靠目测估价没有意义。
+            // 画在刻度之后 —— 它要盖住同高的那条刻度文字（这正是交易软件的通行做法）；
+            // 又排在十字光标/告警线之前 —— 那两个跟着手指走，被压住就看不见了。
+            LastPriceBadge(
+                series = series,
+                range = mainRange,
+                geo = geo,
+                density = density,
+                tickSize = tickSize,
+                upColor = upColor,
+                downColor = downColor,
+                modifier = Modifier.align(Alignment.TopStart),
+            )
             // 十字光标的横向读数：长按只画一条线而不给价位，用户无从知道线落在哪，
             // 而「这是哪个价位」正是划线的全部意义（全屏里还要据此建预警线）。
             CrosshairPriceBadge(
@@ -909,6 +923,38 @@ private fun AlertLinePriceBadge(
 }
 
 /**
+ * 最新价标签：贴在右侧价格轴上、与最新价那条虚线同高同色。
+ *
+ * 换算链与 `drawLastPrice` 完全一致（`toFraction` → `yOf`），显示条件也一致 ——
+ * 量程被缩放/平移把最新价挤出主图时，虚线与标签一起消失，不会剩一个没有线可指的
+ * 孤立数字。标签底色取涨跌色，用的还是画蜡烛那两支颜色，所以它与虚线永远同色。
+ */
+@Composable
+private fun LastPriceBadge(
+    series: ChartSeries,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    tickSize: BigDecimal?,
+    upColor: Color,
+    downColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    val last: Kline = series.candles.lastOrNull() ?: return
+    val y = geo.yOf(range.toFraction(last.closeDouble()), geo.mainTopPx, geo.mainHeightPx)
+    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
+    PriceTag(
+        yPx = y,
+        range = range,
+        geo = geo,
+        density = density,
+        tickSize = tickSize,
+        accent = if (last.close >= last.open) upColor else downColor,
+        modifier = modifier,
+    )
+}
+
+/**
  * 贴在右侧价格轴上、与 [yPx] 同高的价格标。
  *
  * 取值走 [ValueRange.fromFraction]——正是 `drawCandles` 里 `toFraction` 的逆运算，
@@ -922,6 +968,11 @@ private fun PriceTag(
     density: Density,
     tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
+    /**
+     * 标签底色。默认中性墨色 —— 十字光标与告警线都跟涨跌无关；
+     * 最新价传涨跌色，让它与同高的那条虚线一眼能对上。
+     */
+    accent: Color? = null,
 ) {
     val bottom = geo.mainTopPx + geo.mainHeightPx
     // 落到副图上时不画：那里既没有横线，冒一个孤立读数只会误导
@@ -949,7 +1000,7 @@ private fun PriceTag(
                 y = with(density) { (y - textSize.height / 2f - padV).toDp() },
             )
             .clip(Radius.xsShape)
-            .background(colors.ink)
+            .background(accent ?: colors.ink)
             .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
         style = style,
         color = colors.paper,
