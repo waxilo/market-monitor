@@ -8,7 +8,6 @@ import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -55,16 +54,40 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     init {
         viewModelScope.launch {
             settings.current().let {
-                backing.value = SettingsUiState(
-                    themeMode = it.themeMode,
-                    quoteAsset = it.quoteAsset,
-                    notificationEnabled = it.notificationEnabled,
-                    soundEnabled = it.soundEnabled,
-                    vibrateEnabled = it.vibrateEnabled,
-                    webhookEnabled = it.webhookEnabled,
-                    alertPollingSeconds = it.alertPollingSeconds,
-                    autoUpdateCheck = it.autoUpdateCheck,
-                )
+                // 只覆盖设置类字段：更新类字段由下面那个订阅负责镜像。
+                // 这里若整体 `backing.value = SettingsUiState(...)`，就会把订阅刚填进去的
+                // 「发现新版本 / 下载进度」再清成 null —— DataStore 读取比 StateFlow 订阅慢，
+                // 顺序上必然后到，于是表现为「切回设置页卡片消失」。
+                backing.update { s ->
+                    s.copy(
+                        themeMode = it.themeMode,
+                        quoteAsset = it.quoteAsset,
+                        notificationEnabled = it.notificationEnabled,
+                        soundEnabled = it.soundEnabled,
+                        vibrateEnabled = it.vibrateEnabled,
+                        webhookEnabled = it.webhookEnabled,
+                        alertPollingSeconds = it.alertPollingSeconds,
+                        autoUpdateCheck = it.autoUpdateCheck,
+                    )
+                }
+            }
+        }
+        // 更新相关的状态（检查结果 / 下载进度 / 已下载的包）全部是**应用级**的，
+        // 见 UpdateCenter。这里只做镜像：下载期间离开设置页时本 ViewModel 会被清除，
+        // 但检查与下载继续；再回来时是新的 ViewModel，靠这次订阅就能立刻显示
+        // 「发现新版本 0.9.1 · 已下载 42%」而不是一张空白的初始界面。
+        viewModelScope.launch {
+            container.updateCenter.state.collect { s ->
+                backing.update {
+                    it.copy(
+                        updateInfo = s.info,
+                        updating = s.checking,
+                        downloadProgress = s.progress,
+                        downloadedApk = s.apk,
+                        updateError = s.error,
+                        needInstallPermission = s.needInstallPermission,
+                    )
+                }
             }
         }
     }
@@ -114,66 +137,25 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { settings.edit(transform) }
     }
 
-    /** 显式检查更新（PRD FR-6.1 手动触发需反馈结果）。 */
+    /**
+     * 显式检查更新（PRD FR-6.1 手动触发需反馈结果）。
+     *
+     * 检查本身也交给应用级 [com.waxilo.marketmonitor.data.repository.UpdateCenter]：
+     * 结果要与下载产物同生共死（换了版本，上一轮下好的包就不能再装），
+     * 而且切页面回来时那张「发现新版本」卡片必须还在。
+     */
     fun checkUpdate() {
-        viewModelScope.launch {
-            backing.update {
-                // 重新检查时丢掉上一轮已下载的包：可能换了版本，旧的不能拿来装
-                it.copy(updating = true, updateError = null, downloadProgress = null, downloadedApk = null)
-            }
-            try {
-                val info = container.updateRepository.checkManually(BuildConfig.VERSION_NAME)
-                backing.update { it.copy(updateInfo = info, updating = false) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                backing.update { it.copy(updateError = e.message ?: "检查更新失败", updating = false) }
-            }
-        }
+        container.updateCenter.check(BuildConfig.VERSION_NAME)
     }
 
-    /**
-     * 下载更新包并校验 SHA-256（PRD 4.6）。
-     *
-     * 落到 `cacheDir/updates/`：`file_paths.xml` 里声明的就是 `cache-path updates/`，
-     * 换目录会让 `FileProvider.getUriForFile` 直接抛 IllegalArgumentException。
-     *
-     * 校验与「能否应用内安装」的判定都在数据层，这里只负责把进度搬到 UI 上；
-     * 拿到不可信产物（缺 sha256）时数据层会抛错，UI 展示错误即可。
-     */
+    /** 请求下载更新包并校验 SHA-256（PRD 4.6）；实际下载在应用级作用域里跑。 */
     fun downloadUpdate() {
-        val info = backing.value.updateInfo ?: return
-        if (backing.value.downloadProgress != null) return
-        viewModelScope.launch {
-            backing.update { it.copy(downloadProgress = -1f, updateError = null, needInstallPermission = false) }
-            try {
-                val target = File(container.updateDir, info.apkName)
-                val file = container.updateRepository.download(info, target) { done, total ->
-                    val progress = if (total > 0L) (done.toFloat() / total) else -1f
-                    // 进度回调在 IO 线程，写入 StateFlow 是线程安全的
-                    backing.update { it.copy(downloadProgress = progress) }
-                }
-                backing.update { it.copy(downloadProgress = null, downloadedApk = file) }
-                installDownloaded()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                backing.update { it.copy(downloadProgress = null, updateError = e.message ?: "下载失败") }
-            }
-        }
+        container.updateCenter.download()
     }
 
-    /**
-     * 拉起系统安装器。
-     *
-     * 返回 false 只说明「没有安装未知应用的权限」（Android 8+ 必须用户显式授权），
-     * 这时把状态标成 [SettingsUiState.needInstallPermission]，由 UI 引导去授权页 ——
-     * 直接抛异常对用户没有任何可操作性。
-     */
+    /** 拉起系统安装器；缺「安装未知应用」权限时状态会被标成需授权，由 UI 引导。 */
     fun installDownloaded() {
-        val apk = backing.value.downloadedApk ?: return
-        val started = container.installer.install(apk)
-        backing.update { it.copy(needInstallPermission = !started) }
+        container.updateCenter.install()
     }
 
     /** 打开「允许安装未知应用」授权页。 */

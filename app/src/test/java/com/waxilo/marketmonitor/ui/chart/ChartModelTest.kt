@@ -940,6 +940,54 @@ class ChartModelTest {
     }
 
     @Test
+    fun `价格刻度向上拖是拉伸向下拖是收缩`() {
+        val height = 400f
+        // 向上拖：屏幕坐标 deltaY 为负 → 因子 < 1 → 量程变小 → K 线纵向变高
+        val up = ChartGesture.priceScaleFactor(deltaY = -40f, plotHeightPx = height)!!
+        assertTrue("向上拖应得到小于 1 的因子（量程变小 = K 线变高），实际 $up", up < 1f)
+        // 向下拖：因子 > 1 → 量程变大 → K 线被压扁
+        val down = ChartGesture.priceScaleFactor(deltaY = 40f, plotHeightPx = height)!!
+        assertTrue("向下拖应得到大于 1 的因子（量程变大 = K 线变矮），实际 $down", down > 1f)
+        // 同样距离的上拖与下拖互为倒数，手感在两个方向上对称
+        assertEquals(1f, up * down, 1e-5f)
+    }
+
+    @Test
+    fun `价格刻度缩放与分几帧拖无关`() {
+        // 乘性映射的意义：拖过的**总距离**决定缩放倍数，分几帧拖都一样。
+        // 线性映射做不到 —— 每帧按比例相加会随帧数漂移，慢拖与快拖结果不同。
+        val height = 400f
+        val oneShot = ChartGesture.priceScaleFactor(deltaY = -120f, plotHeightPx = height)!!
+        var product = 1f
+        repeat(10) { product *= ChartGesture.priceScaleFactor(deltaY = -12f, plotHeightPx = height)!! }
+        assertEquals(oneShot, product, 1e-4f)
+    }
+
+    @Test
+    fun `价格刻度缩放的单帧因子被钳在 e 的倒数到 e 之间`() {
+        // 异常位移（多指切换、坐标系跳变）不该让图瞬间缩放几十倍
+        val height = 400f
+        assertEquals(
+            1f / kotlin.math.E.toFloat(),
+            ChartGesture.priceScaleFactor(deltaY = -100_000f, plotHeightPx = height)!!,
+            1e-4f,
+        )
+        assertEquals(
+            kotlin.math.E.toFloat(),
+            ChartGesture.priceScaleFactor(deltaY = 100_000f, plotHeightPx = height)!!,
+            1e-4f,
+        )
+    }
+
+    @Test
+    fun `价格刻度缩放的非法输入返回 null`() {
+        assertNull(ChartGesture.priceScaleFactor(deltaY = -10f, plotHeightPx = 0f))
+        assertNull(ChartGesture.priceScaleFactor(deltaY = -10f, plotHeightPx = -5f))
+        assertNull(ChartGesture.priceScaleFactor(deltaY = Float.NaN, plotHeightPx = 400f))
+        assertNull(ChartGesture.priceScaleFactor(deltaY = Float.POSITIVE_INFINITY, plotHeightPx = 400f))
+    }
+
+    @Test
     fun `每帧折算的根数与总根数变化一致`() {
         // 守恒：一帧的因子折算成根数 = bars * (factor - 1)；提交 + 余量必须等于它。
         // 取一个不跨阈值的因子，验证「本帧无提交、量全进余量」这一最基本的情形。

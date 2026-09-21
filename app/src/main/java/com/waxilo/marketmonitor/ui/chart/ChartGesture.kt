@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.ui.chart
 
 import kotlin.math.abs
+import kotlin.math.exp
 
 /**
  * 图表手势的方向判定。抽成纯函数是为了能在 JVM 上直接断言 ——
@@ -43,6 +44,27 @@ object ChartGesture {
     fun pinchFactor(previous: Float, current: Float): Float? {
         if (previous <= 0f || current <= 0f) return null
         return (previous / current).coerceIn(MIN_RATIO, MAX_RATIO)
+    }
+
+    /**
+     * 拖动**价格刻度区**时的纵向位移换算成价格量程的缩放因子。
+     *
+     * 语义与 `ValueRange.scaled()` 的 factor 一致：**因子 < 1 = 量程变小 = K 线纵向变高**。
+     *
+     * 方向按用户指定：**向上拖（[deltaY] < 0）= 拉升 = K 线变高**，向下拖 = 收缩变矮。
+     * 取指数而不是线性：每帧位移都很小，指数映射保证「拖过的总距离」与「缩放倍数」
+     * 是一一对应的乘性关系 —— 分十帧拖 100px 与一帧拖 100px 结果完全相同，
+     * 而线性映射在跨越钳制边界时会丢掉已经走过的行程。
+     *
+     * 单帧因子钳在 `[1/e, e]`：一次事件的位移不可能超过一个绘图区高度，
+     * 万一上报了异常值（多指切换、坐标系跳变）也不至于让图瞬间缩放几十倍。
+     *
+     * @param deltaY 本帧纵向像素位移（屏幕坐标，向下为正）
+     * @param plotHeightPx 主图高度，用来把像素位移归一化成「拖了几屏」
+     */
+    fun priceScaleFactor(deltaY: Float, plotHeightPx: Float): Float? {
+        if (plotHeightPx <= 0f || !plotHeightPx.isFinite() || !deltaY.isFinite()) return null
+        return exp((deltaY / plotHeightPx).coerceIn(-1f, 1f))
     }
 
     /**

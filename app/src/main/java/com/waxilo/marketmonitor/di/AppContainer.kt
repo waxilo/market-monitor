@@ -19,6 +19,7 @@ import com.waxilo.marketmonitor.data.remote.ws.MarketWebSocket
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.ApkInstaller
 import com.waxilo.marketmonitor.data.repository.MarketRepositoryImpl
+import com.waxilo.marketmonitor.data.repository.UpdateCenter
 import com.waxilo.marketmonitor.data.repository.UpdateRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.WatchlistRepositoryImpl
 import com.waxilo.marketmonitor.domain.repository.AlertRepository
@@ -200,6 +201,19 @@ class AppContainer(private val context: Context) {
      * 走 cacheDir 而非 filesDir：更新包用完即弃，系统空间紧张时可以自行回收。
      */
     val updateDir: File get() = File(context.cacheDir, "updates")
+
+    /**
+     * 检查更新与下载都跑在 [appScope] 而不是某个 ViewModel 里 —— 用户切页面
+     * 不该打断下载，也不该让「发现新版本」的提示凭空消失，见 [UpdateCenter] 的说明。
+     */
+    val updateCenter: UpdateCenter by lazy {
+        UpdateCenter(
+            repository = updateRepository,
+            installer = installer,
+            dir = updateDir,
+            scope = appScope,
+        )
+    }
 
     /** 供 ViewModel 拉起「允许安装未知应用」授权页 —— 容器之外不该拿到 Context。 */
     fun startActivity(intent: Intent) {

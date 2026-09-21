@@ -225,15 +225,22 @@ fun KlineChart(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { canvasSize = it }
-                // ⚠️ key 只能有 alertLineMode 这一个。
+                // ⚠️ key 只能有这三样：划线开关、标的、周期。
                 //
-                // 它是「划线」按钮切换的开关，不可能在手势中途变。其余一切（可见根数、
+                // 它们是**只由用户点击改变**的量，不可能在手势中途变。其余一切（可见根数、
                 // 序列长度、绘图区像素尺寸）都会在手势进行中被数据更新改掉：key 一变
                 // pointerInput 协程就重启，当前手势直接作废 —— 重启后的 awaitFirstDown
                 // 要等一次全新的按下，手指没抬起就永远等不到。表现有两种：
                 // 「缩放被打断，每次捏一下只动一根」，以及「整块图卡住、怎么拖都不动」。
                 // 这些值改从上面的 live* 里读实时值。
-                .pointerInput(alertLineMode) {
+                //
+                // 标的与周期**必须**进 key，原因是另一回事：下面的视窗状态挂在
+                // `remember(symbolKey, interval.storageKey)` 上，换周期会**重建 MutableState**，
+                // 而本协程的闭包捕获的是创建那一刻的委托对象。key 不含周期时协程不重启，
+                // 手势就一直在写**已经被丢弃的旧 state**，渲染读的却是新 state ——
+                // 表现为「切换周期后图表固定死、怎么拖都不动」。首次进入时两者同时创建，
+                // 所以「从条目进来的图能拖」而「切过周期的图拖不动」。
+                .pointerInput(alertLineMode, symbolKey, interval.storageKey) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
@@ -1163,11 +1170,20 @@ private fun ChartLegend(
  * 不用 detectTransformGestures：它与自定义长按分属两个 pointerInput 链节点，
  * 抢占事件时行为依赖链顺序，缩放手势一旦改版就会被静默打断。
  *
- * 手势分区（按手指起点和主方向判定，不是靠控件位置）：
- * - **单指横向** → 平移时间轴（看更早/更晚）；
- * - **单指纵向** → 拉伸/压缩价格刻度（手指上滑 = 量程上移看更低价区）；
- * - **双指** → 横向张合缩放时间轴 + 纵向张合缩放价格刻度（两个维度同时生效）；
+ * 手势分区（按**手指起点**判定，不是靠主方向猜）：
+ * - **单指横向**（起点在绘图区）→ 平移时间轴（看更早/更晚）；
+ * - **单指纵向**（起点在绘图区）→ 平移价格刻度（手指上滑 = 看更低价区）；
+ * - **单指纵向**（起点在右侧价格刻度区）→ 缩放价格刻度，**向上拖 = K 线变高**；
+ * - **双指** → **只**缩放时间轴；
  * - **长按** → 十字光标。
+ *
+ * 价格刻度区的纵向拖动必须**按起点**区分，不能按主方向：同一个纵向位移，
+ * 落在绘图区里是平移、落在刻度上是缩放，两者语义完全不同。用起点判定还顺带
+ * 解决了「在刻度区横向划一下」——那种手势在这里没有意义，直接不响应。
+ *
+ * 双指**不再**参与价格刻度缩放：两指张合时 x 间距必然也跟着变（手指很难保持垂直对齐），
+ * 于是纵向张合会被横向分量带偏，用户看到的是「无论上下拉还是左右拉，动的都是横坐标」。
+ * 价格刻度改由刻度区拖动独占，两个维度彻底分开。
  *
  * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
@@ -1208,11 +1224,13 @@ private suspend fun PointerInputScope.detectChartGestures(
         // 新手势开始：把上一场遗留的「不足一根」零头清掉，
         // 否则上一场拖到一半松手，零头会算进下一场，手感上多出一小段跳动。
         onGestureStart()
+        // 起点落在右侧价格刻度区：纵向拖动在那里是「缩放价格刻度」而不是「平移」。
+        // 必须在按下时就定性并整场保持 —— 按主方向判会让同一段位移的语义随手指抖动切换。
+        val onPriceAxis = first.position.x >= geo().plotWidthPx
         // 自己记下每个指头上一次的位置：不依赖 positionChange，它在不同版本里签名动过
         val lastPositions = mutableMapOf<Any, Offset>()
         var travelled = 0f
         var previousDistanceX = 0f
-        var previousDistanceY = 0f
         var longPressActive = false
         /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
         var alertLineActive = false
@@ -1247,20 +1265,15 @@ private suspend fun PointerInputScope.detectChartGestures(
                 continue
             }
             if (pressed.size >= 2) {
-                // 双指：水平方向管时间轴缩放，垂直方向管价格刻度缩放，互不打架
+                // 双指只缩放时间轴。纵向张合不参与：两指的 x 间距必然跟着变，
+                // 纵向分量永远会被横向带偏（见函数头注释）。
                 val dx = abs(pressed[0].position.x - pressed[1].position.x)
-                val dy = abs(pressed[0].position.y - pressed[1].position.y)
                 val anchorX = (pressed[0].position.x + pressed[1].position.x) / 2f
                 val plot = geo()
                 ChartGesture.pinchFactor(previousDistanceX, dx)?.let { factor ->
                     onZoom(factor, anchorX.coerceIn(0f, plot.plotWidthPx))
                 }
-                if (plot.mainHeightPx > 0f) {
-                    // 垂直张开 = 量程变大（把价格压扁看全局），与水平方向直觉一致
-                    ChartGesture.pinchFactor(previousDistanceY, dy)?.let(onPriceZoom)
-                }
                 previousDistanceX = dx
-                previousDistanceY = dy
                 continue
             }
             val deltaX = primary.position.x - previous.x
@@ -1268,7 +1281,6 @@ private suspend fun PointerInputScope.detectChartGestures(
             if (deltaX != 0f || deltaY != 0f) {
                 travelled += abs(deltaX) + abs(deltaY)
                 previousDistanceX = 0f
-                previousDistanceY = 0f
                 // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
                 if (axis == null) {
                     axisAccumX += deltaX
@@ -1276,15 +1288,20 @@ private suspend fun PointerInputScope.detectChartGestures(
                     axis = ChartGesture.axisLock(axisAccumX, axisAccumY, DIRECTION_LOCK_PX)
                 }
                 when (axis) {
-                    ChartGesture.Axis.HORIZONTAL -> if (abs(deltaX) > 0.1f) {
+                    ChartGesture.Axis.HORIZONTAL -> if (!onPriceAxis && abs(deltaX) > 0.1f) {
                         onPan(deltaX)
                     }
 
                     ChartGesture.Axis.VERTICAL -> {
                         val height = geo().mainHeightPx
                         if (height > 0f && abs(deltaY) > 0.1f) {
-                            // 手指下滑 = 量程下移（看更低价区），因此取正号
-                            onPricePan(deltaY / height)
+                            if (onPriceAxis) {
+                                // 刻度区：向上拖（deltaY < 0）→ 因子 < 1 → 量程变小 → K 线变高
+                                ChartGesture.priceScaleFactor(deltaY, height)?.let(onPriceZoom)
+                            } else {
+                                // 绘图区：手指下滑 = 量程下移（看更低价区），因此取正号
+                                onPricePan(deltaY / height)
+                            }
                         }
                     }
 
