@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
@@ -124,6 +125,24 @@ fun SettingsScreen(
             item {
                 Section(title = "更新") {
                     SwitchRow("启动时自动检查", state.autoUpdateCheck, viewModel::setAutoUpdateCheck)
+                    Rule()
+                    ValueRow(
+                        label = "下载加速前缀",
+                        value = state.updateProxyPrefix,
+                        placeholder = "https://gh-proxy.com/",
+                        onValue = viewModel::setUpdateProxyPrefix,
+                        valueWidth = 200.dp,
+                    )
+                    Text(
+                        text = "前缀拼在更新包地址前，留空直连 GitHub；仅影响下载，不改变检查更新的接口。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Xs,
+                        ),
+                    )
                     Rule()
                     Row(
                         modifier = Modifier
@@ -227,6 +246,7 @@ private fun ValueRow(
     value: String,
     placeholder: String,
     onValue: (String) -> Unit,
+    valueWidth: Dp = 160.dp,
 ) {
     val colors = MarketTheme.colors
     Row(
@@ -241,7 +261,7 @@ private fun ValueRow(
             style = MaterialTheme.typography.bodyMedium,
             color = colors.ink,
         )
-        Box(modifier = Modifier.width(160.dp)) {
+        Box(modifier = Modifier.width(valueWidth)) {
             if (value.isEmpty()) {
                 Text(
                     text = placeholder,

@@ -60,6 +60,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
             futuresRestMirror = this[Keys.FUTURES_MIRROR] ?: d.futuresRestMirror,
             wsMirror = this[Keys.WS_MIRROR] ?: d.wsMirror,
+            updateProxyPrefix = this[Keys.UPDATE_PROXY] ?: d.updateProxyPrefix,
             autoUpdateCheck = this[Keys.AUTO_UPDATE] ?: d.autoUpdateCheck,
             dismissedVersion = this[Keys.DISMISSED] ?: d.dismissedVersion,
         )
@@ -84,6 +85,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.SPOT_MIRROR] = spotRestMirror
         prefs[Keys.FUTURES_MIRROR] = futuresRestMirror
         prefs[Keys.WS_MIRROR] = wsMirror
+        prefs[Keys.UPDATE_PROXY] = updateProxyPrefix
         prefs[Keys.AUTO_UPDATE] = autoUpdateCheck
         prefs[Keys.DISMISSED] = dismissedVersion
     }
@@ -112,6 +114,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val SPOT_MIRROR = stringPreferencesKey("spot_rest_mirror")
             val FUTURES_MIRROR = stringPreferencesKey("futures_rest_mirror")
             val WS_MIRROR = stringPreferencesKey("ws_mirror")
+            val UPDATE_PROXY = stringPreferencesKey("update_proxy_prefix")
             val AUTO_UPDATE = booleanPreferencesKey("auto_update_check")
             val DISMISSED = stringPreferencesKey("dismissed_version")
         }

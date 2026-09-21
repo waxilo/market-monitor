@@ -27,6 +27,8 @@ data class SettingsUiState(
     val webhookEnabled: Boolean = true,
     val alertPollingSeconds: Int = 5,
     val autoUpdateCheck: Boolean = true,
+    /** 更新包下载加速前缀；空串表示直连 GitHub。 */
+    val updateProxyPrefix: String = "",
     val versionName: String = BuildConfig.VERSION_NAME,
     /** 检查更新的结果：null 表示未检查或进行中。 */
     val updateInfo: UpdateInfo? = null,
@@ -68,6 +70,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         webhookEnabled = it.webhookEnabled,
                         alertPollingSeconds = it.alertPollingSeconds,
                         autoUpdateCheck = it.autoUpdateCheck,
+                        updateProxyPrefix = it.updateProxyPrefix,
                     )
                 }
             }
@@ -130,6 +133,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setAutoUpdateCheck(v: Boolean) {
         backing.update { it.copy(autoUpdateCheck = v) }
         persist { s -> s.copy(autoUpdateCheck = v) }
+    }
+
+    fun setUpdateProxyPrefix(v: String) {
+        val trimmed = v.trim()
+        backing.update { it.copy(updateProxyPrefix = trimmed) }
+        persist { s -> s.copy(updateProxyPrefix = trimmed) }
     }
 
     /** DataStore 写入是 suspend，在后台作用域持久化，不阻塞 UI（UI 已即时回应用户改动）。 */

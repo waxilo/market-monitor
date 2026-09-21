@@ -40,6 +40,12 @@ data class AppSettings(
     val spotRestMirror: String = "",
     val futuresRestMirror: String = "",
     val wsMirror: String = "",
+    /**
+     * 更新包下载加速前缀（PRD FR-6.2 国内网络加速）。
+     * 语义是「拼在原始地址前」，如 `https://gh-proxy.com/https://github.com/...`；
+     * 空串表示直连 GitHub。只影响更新包与校验值下载，不影响 API 检查。
+     */
+    val updateProxyPrefix: String = "",
     val autoUpdateCheck: Boolean = true,
     /** 用户点「以后再说」的版本号，低于或等于该版本不再提示。 */
     val dismissedVersion: String = "",

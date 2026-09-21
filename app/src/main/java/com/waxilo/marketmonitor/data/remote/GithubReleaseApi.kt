@@ -2,6 +2,7 @@ package com.waxilo.marketmonitor.data.remote
 
 import com.waxilo.marketmonitor.domain.update.ReleaseAsset
 import com.waxilo.marketmonitor.domain.update.ReleaseInfo
+import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -17,13 +18,20 @@ import kotlin.coroutines.coroutineContext
 /**
  * GitHub Releases 读取与产物下载（PRD 4.6 应用内更新）。
  * 未登录调用有 60 次/小时的额度，检查频率由设置项与启动节流控制。
+ *
+ * [proxyPrefix] 是设置里的下载加速前缀（PRD FR-6.2）：只作用于产物下载与校验值读取，
+ * API 检查始终保持直连——加速代理普遍只中转 github.com 的资产，代 API 反而更不稳。
  */
 class GithubReleaseApi(
     private val client: OkHttpClient,
     private val owner: String,
     private val repo: String,
     private val apiBase: String = "https://api.github.com",
+    private val proxyPrefix: () -> String = { "" },
 ) {
+
+    /** 产物地址套上加速前缀；前缀为空时原样直连。 */
+    private fun accelerated(url: String): String = UpdateMirror.apply(url, proxyPrefix())
 
     /** 最新正式版发布；GitHub 的 `latest` 已排除 draft 与 prerelease。 */
     suspend fun latestRelease(): ReleaseInfo {
@@ -34,7 +42,7 @@ class GithubReleaseApi(
     /** 读取 `.sha256` 边车文件，取第一个空白前的十六进制串。 */
     suspend fun sidecarChecksum(asset: ReleaseAsset): String? {
         val text = withContext(Dispatchers.IO) {
-            val request = Request.Builder().url(asset.downloadUrl).header("User-Agent", USER_AGENT).build()
+            val request = Request.Builder().url(accelerated(asset.downloadUrl)).header("User-Agent", USER_AGENT).build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw MarketApiException(response.code, 0, "读取校验值失败：HTTP ${response.code}")
                 response.body?.string().orEmpty()
@@ -58,7 +66,7 @@ class GithubReleaseApi(
             // 阻塞读不会自动响应取消，逐块检查协程状态，让用户离开页面能真正停止下载
             val job = coroutineContext[kotlinx.coroutines.Job]
             val request = Request.Builder()
-                .url(asset.downloadUrl)
+                .url(accelerated(asset.downloadUrl))
                 .header("User-Agent", USER_AGENT)
                 .header("Accept", "application/octet-stream")
                 .build()

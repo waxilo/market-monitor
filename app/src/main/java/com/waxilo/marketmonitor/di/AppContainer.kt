@@ -187,7 +187,12 @@ class AppContainer(private val context: Context) {
 
     val updateRepository: UpdateRepository by lazy {
         UpdateRepositoryImpl(
-            api = GithubReleaseApi(downloadClient, BuildConfig.UPDATE_OWNER, BuildConfig.UPDATE_REPO),
+            api = GithubReleaseApi(
+                client = downloadClient,
+                owner = BuildConfig.UPDATE_OWNER,
+                repo = BuildConfig.UPDATE_REPO,
+                proxyPrefix = { settingsSnapshot.value.updateProxyPrefix },
+            ),
             abiPreferences = Build.SUPPORTED_ABIS.toList(),
         )
     }
