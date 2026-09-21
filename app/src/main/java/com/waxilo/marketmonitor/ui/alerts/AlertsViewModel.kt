@@ -139,6 +139,19 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { alerts.acknowledgeAll() }
     }
 
+    /** 清空触发记录（不可撤销，确认框在 UI 侧）。 */
+    fun clearMessages() {
+        viewModelScope.launch {
+            try {
+                alerts.clearMessages()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                errorMessage.value = e.displayMessage()
+            }
+        }
+    }
+
     private fun AlertRule.toRow(source: Sources): AlertRuleRow {
         val ticker = source.prices[SymbolId(this.market, this.symbol)]
         return AlertRuleRow(

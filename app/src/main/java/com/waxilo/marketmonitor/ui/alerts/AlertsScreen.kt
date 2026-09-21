@@ -19,16 +19,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -138,6 +144,7 @@ fun AlertsScreen(
                     onOpenDetail(SymbolId(row.message.market, row.message.symbol))
                 },
                 onAcknowledgeAll = viewModel::acknowledgeAll,
+                onClear = viewModel::clearMessages,
             )
         }
     }
@@ -271,12 +278,14 @@ private fun MessageList(
     unread: Int,
     onClick: (AlertMessageRow) -> Unit,
     onAcknowledgeAll: () -> Unit,
+    onClear: () -> Unit,
 ) {
     if (rows.isEmpty()) {
         HintRow(title = "还没有触发记录", subtitle = "规则命中后，提醒会同时留在这里，保存最近 30 天")
         return
     }
     val colors = MarketTheme.colors
+    var confirmClear by remember { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
@@ -286,24 +295,74 @@ private fun MessageList(
                 MessageItem(row = row, onClick = { onClick(row) })
             }
         }
-        if (unread > 0) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(Spacing.Gutter)
-                    .clip(Radius.smShape)
-                    .background(colors.ink)
-                    .clickable(onClick = onAcknowledgeAll)
-                    .padding(horizontal = Spacing.Md, vertical = Spacing.Sm),
-            ) {
-                Text(
-                    text = "全部标记为已读",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = colors.paper,
-                )
+        Row(
+            modifier = Modifier.align(Alignment.BottomEnd).padding(Spacing.Gutter),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+        ) {
+            // 「清空」用安静的文字入口而不是第二颗胶囊：它不是常规动作，
+            // 而且点了还要弹确认，视觉上不该与「标记已读」这种随手动作同权重。
+            TextAction(text = "清空", onClick = { confirmClear = true }, color = colors.muted)
+            if (unread > 0) {
+                Box(
+                    modifier = Modifier
+                        .clip(Radius.smShape)
+                        .background(colors.ink)
+                        .clickable(onClick = onAcknowledgeAll)
+                        .padding(horizontal = Spacing.Md, vertical = Spacing.Sm),
+                ) {
+                    Text(
+                        text = "全部标记为已读",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = colors.paper,
+                    )
+                }
             }
         }
     }
+    if (confirmClear) {
+        ClearMessagesDialog(
+            onDismiss = { confirmClear = false },
+            onConfirm = {
+                confirmClear = false
+                onClear()
+            },
+        )
+    }
+}
+
+/**
+ * 清空的二次确认。
+ *
+ * 删除不可撤销，而「清空」两个字离列表太近、太容易顺手点到，所以必须问一句；
+ * 说明里强调**只删记录、不动规则** —— 用户最怕的正是「清了历史把预警也清了」。
+ * 不报「共 N 条」：列表只取最近 200 条，报出来的数字会比实际要删的少。
+ */
+@Composable
+private fun ClearMessagesDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    val colors = MarketTheme.colors
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        title = {
+            Text(text = "清空触发记录？", style = MaterialTheme.typography.titleLarge, color = colors.ink)
+        },
+        text = {
+            Text(
+                text = "将删除全部触发记录，无法恢复。预警规则不受影响，价格再次触达时仍会提醒。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.muted,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(text = "清空", color = colors.down, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(text = "取消", color = colors.muted) }
+        },
+    )
 }
 
 @Composable

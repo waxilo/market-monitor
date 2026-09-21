@@ -69,6 +69,13 @@ interface AlertRepository {
 
     suspend fun acknowledgeAll()
 
+    /**
+     * 清空全部触发记录。
+     *
+     * 只清历史，不动规则也不动规则的判定状态（已触发/冷却），否则单次预警会重新响一遍。
+     */
+    suspend fun clearMessages()
+
     suspend fun messagesWithDelivery(delivery: WebhookDelivery, limit: Int): List<AlertMessage>
 
     suspend fun setDelivery(id: Long, delivery: WebhookDelivery)

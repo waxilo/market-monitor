@@ -101,6 +101,8 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
 
     override suspend fun acknowledgeAll() = dao.acknowledgeAll()
 
+    override suspend fun clearMessages() = dao.deleteAllLogs()
+
     override suspend fun messagesWithDelivery(delivery: WebhookDelivery, limit: Int): List<AlertMessage> =
         dao.logsByWebhookStatus(delivery.code, limit).map { it.toDomain() }
 

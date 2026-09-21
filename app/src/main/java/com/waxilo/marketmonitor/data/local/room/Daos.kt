@@ -212,6 +212,11 @@ interface AlertDao {
     @Query("UPDATE alert_log SET acknowledged = 1 WHERE acknowledged = 0")
     suspend fun acknowledgeAll()
 
+    // 只删记录，不动 alert_state：规则的「已触发/冷却」判定状态与消息列表是两回事，
+    // 清空历史不该让单次预警重新响一遍。
+    @Query("DELETE FROM alert_log")
+    suspend fun deleteAllLogs()
+
     @Query("UPDATE alert_log SET webhookStatus = :status WHERE id = :id")
     suspend fun setWebhookStatus(id: Long, status: Int)
 
