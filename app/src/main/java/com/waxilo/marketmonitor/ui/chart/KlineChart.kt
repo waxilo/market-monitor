@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -38,12 +37,13 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -81,10 +81,16 @@ import kotlin.math.min
  */
 data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
 
-/** 图表左上角的角标按钮（进/出全屏）。读数带会为它让出宽度。 */
+/**
+ * 图表左上角的角标按钮（进/出全屏）。读数带会为它让出宽度。
+ *
+ * 图标由调用方以 composable 提供，而不是传 `ImageVector`：本应用只依赖 icons-core，
+ * 没有现成的全屏图标，而 Compose 1.10 起 `ImageVector.Builder.addPath` 只收
+ * `List<PathNode>`，手搓矢量没有比 `Canvas` 画四条角更稳的办法。
+ */
 data class ChartCornerAction(
-    val icon: ImageVector,
     val description: String,
+    val content: @Composable () -> Unit,
     val onClick: () -> Unit,
 )
 
@@ -449,15 +455,12 @@ fun KlineChart(
                         .padding(Spacing.Xxs)
                         .size(CORNER_BUTTON_SIZE)
                         .clip(Radius.fullShape)
+                        .semantics { contentDescription = action.description }
                         .clickable(onClick = action.onClick),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(
-                        imageVector = action.icon,
-                        contentDescription = action.description,
-                        modifier = Modifier.size(18.dp),
-                        tint = MarketTheme.colors.muted,
-                    )
+                    // 尺寸与着色都交给调用方：它才知道自己要画什么
+                    action.content()
                 }
             }
 

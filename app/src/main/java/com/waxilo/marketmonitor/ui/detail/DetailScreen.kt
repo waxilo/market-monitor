@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -43,10 +44,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.addPath
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
@@ -622,8 +621,8 @@ private fun ChartArea(
                     // 只画不能拖：竖屏没有划线模式，调整预警走全屏
                     alertLines = alertLines,
                     cornerAction = ChartCornerAction(
-                        icon = FullscreenGlyph,
                         description = "全屏看图",
+                        content = { FullscreenGlyph() },
                         onClick = onFullscreen,
                     ),
                 )
@@ -781,21 +780,30 @@ private fun StatsSection(stats: List<StatItem>) {
 /**
  * 「全屏」角标：四向外翻的直角边框。
  *
- * 自己描路径而不用 `Icons.Default.Fullscreen` —— 那个矢量在 material-icons-extended 里，
+ * 自己画而不用 `Icons.Default.Fullscreen` —— 那个矢量在 material-icons-extended 里，
  * 为一个图标拖进上千个图标不划算，本应用只依赖 icons-core。
  */
-private val FullscreenGlyph: ImageVector by lazy {
-    ImageVector.Builder(
-        name = "Fullscreen",
-        defaultWidth = 24.dp,
-        defaultHeight = 24.dp,
-        viewportWidth = 24f,
-        viewportHeight = 24f,
-    )
-        .addPath(
-            pathData = "M7,14H5v5h5v-2H7v-3zM5,10h2V7h3V5H5v5zM17,17h-3v2h5v-5h-2v3z" +
-                "M14,5v2h3v3h2V5h-5z",
-            fill = SolidColor(Color.Black),
+@Composable
+private fun FullscreenGlyph(modifier: Modifier = Modifier) {
+    val colors = MarketTheme.colors
+    Canvas(modifier.size(18.dp)) {
+        val stroke = size.width * 0.09f
+        // 线以端点为中心，不内缩的话描边会被画布切掉一半
+        val i = stroke / 2f
+        val left = i
+        val top = i
+        val right = size.width - i
+        val bottom = size.height - i
+        val arm = (right - left) * 0.3f
+        val corners = listOf(
+            Offset(left, top) to (Offset(left + arm, top) to Offset(left, top + arm)),
+            Offset(right, top) to (Offset(right - arm, top) to Offset(right, top + arm)),
+            Offset(left, bottom) to (Offset(left + arm, bottom) to Offset(left, bottom - arm)),
+            Offset(right, bottom) to (Offset(right - arm, bottom) to Offset(right, bottom - arm)),
         )
-        .build()
+        for ((origin, arms) in corners) {
+            drawLine(colors.muted, origin, arms.first, stroke)
+            drawLine(colors.muted, origin, arms.second, stroke)
+        }
+    }
 }
