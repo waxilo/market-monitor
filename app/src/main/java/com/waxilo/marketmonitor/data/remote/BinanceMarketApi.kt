@@ -175,14 +175,15 @@ class BinanceMarketApi(
             try {
                 return execute(url)
             } catch (e: MarketApiException) {
-                // 4xx 换域名也没用（参数或标的错误），直接上抛
-                if (e.httpCode in 400..499 && e.httpCode != 418 && e.httpCode != 429) throw e
+                if (!shouldTryNextHost(e)) throw e
                 lastError = e
             } catch (e: IOException) {
                 lastError = e
             }
         }
-        throw lastError ?: MarketApiException(0, 0, "${market.label}请求失败")
+        val tried = candidates.joinToString("、") { host -> host.substringAfter("//").substringBefore("/") }
+        throw lastError?.let { IOException("${market.label}行情请求失败：$tried 都不可用（${it.message}）", it) }
+            ?: MarketApiException(0, 0, "未配置 ${market.label} 接口域名")
     }
 
     private fun buildUrl(host: String, market: MarketType, path: String, query: Map<String, String>): HttpUrl? {
@@ -233,3 +234,16 @@ private fun Response.toApiError(body: String?): MarketApiException {
     val reason = if (parsed != null) "${parsed.code}: ${parsed.msg}" else "HTTP $code $message"
     return MarketApiException(code, parsed?.code ?: 0, reason)
 }
+
+/**
+ * 这个错误该换下一个域名再试，还是所有域名都会给同样的答案。
+ *
+ * 只有**币安亲口**拒了这个请求（响应体带业务码，如 -1121 标的不存在）才不必再试。
+ * 裸 404/403 多半是「这家不服务这个端点」或镜像侧的 CDN/地域拦截，换下一个域名才是正解。
+ * 早先按 HTTP 状态码段判断，于是用户在设置里填一个看着没错的镜像（比如把现货能直连的
+ * `data-api.binance.vision` 填进合约镜像 —— 合约端点在那儿就是 404），整条链在第一个域名
+ * 就断了，内置可直连域名根本没机会被试，用户看到的就是「不连 VPN 请求不到数据」。
+ * 418/429 是限频，换别的域名有机会，继续试。
+ */
+internal fun shouldTryNextHost(error: MarketApiException): Boolean =
+    error.binanceCode != 0 || error.httpCode == 418 || error.httpCode == 429

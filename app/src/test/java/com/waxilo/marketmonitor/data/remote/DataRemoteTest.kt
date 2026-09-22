@@ -117,3 +117,52 @@ class WsParserTest {
         assertEquals(0, WsParser.parse("""{"data":{"e":"24hrMiniTicker","symbol":"X"}}""", MarketType.SPOT, 0L).size)
     }
 }
+
+/**
+ * 多域名容灾的判定规则。
+ *
+ * 关键场景是「镜像回的内容不像币安」：裸 404/403 必须继续往下一个域名试，
+ * 否则设置里一个填错的镜像就会把内置可直连域名一起拖死（表现即「不连 VPN 没有行情」）。
+ */
+class RestHostFallbackTest {
+
+    @Test
+    fun `镜像的裸 404 要继续回退而不是当参数错误`() {
+        val notFound = MarketApiException(404, 0, "HTTP 404 Not Found")
+        assertTrue(shouldTryNextHost(notFound))
+        assertTrue(shouldTryNextHost(MarketApiException(403, 0, "HTTP 403 Forbidden")))
+    }
+
+    @Test
+    fun `限频无论哪个域名都可能不同所以也回退`() {
+        assertTrue(shouldTryNextHost(MarketApiException(429, 0, "HTTP 429")))
+        assertTrue(shouldTryNextHost(MarketApiException(429, -1003, "Too many requests")))
+        assertTrue(shouldTryNextHost(MarketApiException(418, 0, "HTTP 418")))
+    }
+
+    @Test
+    fun `币安自己拒掉的请求换域名也没用`() {
+        // -1121 = 标的不存在：每个域名都会给同样的答案，继续试只是白烧权重
+        assertTrue(!shouldTryNextHost(MarketApiException(400, -1121, "-1121: Invalid symbol")))
+        assertTrue(!shouldTryNextHost(MarketApiException(400, -1102, "-1102: MANDATORY_PARAMETER_MISSING")))
+    }
+
+    @Test
+    fun `现货首位是可直连的行情专用域`() {
+        val hosts = DefaultRestHosts().hostsFor(MarketType.SPOT)
+        assertEquals("https://data-api.binance.vision", hosts.first())
+        assertTrue("api.binance.com" in hosts)
+    }
+
+    @Test
+    fun `用户镜像排在前面但内置域名一个都不能少`() {
+        val hosts = DefaultRestHosts(
+            futuresMirror = { "https://mirror.example.com/, https://mirror2.example.com" },
+        ).hostsFor(MarketType.FUTURES)
+        assertEquals("https://mirror.example.com", hosts[0])
+        assertEquals("https://mirror2.example.com", hosts[1])
+        // 用户把现货那个可直连域填进合约镜像：它对合约端点回 404，但官方合约域必须还在链上
+        assertTrue("https://data-api.binance.vision" !in hosts)
+        assertEquals("https://fapi.binance.com", hosts.last())
+    }
+}

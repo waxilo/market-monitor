@@ -105,6 +105,43 @@ fun SettingsScreen(
                         placeholder = "USDT",
                         onValue = viewModel::setQuoteAsset,
                     )
+                    Rule()
+                    ValueRow(
+                        label = "现货备用域名",
+                        value = state.spotRestMirror,
+                        placeholder = "留空即可",
+                        onValue = viewModel::setSpotRestMirror,
+                        valueWidth = 200.dp,
+                    )
+                    Rule()
+                    ValueRow(
+                        label = "合约备用域名",
+                        value = state.futuresRestMirror,
+                        placeholder = "fapi 不通时才需要",
+                        onValue = viewModel::setFuturesRestMirror,
+                        valueWidth = 200.dp,
+                    )
+                    Rule()
+                    ValueRow(
+                        label = "推送备用域名",
+                        value = state.wsMirror,
+                        placeholder = "wss://…",
+                        onValue = viewModel::setWsMirror,
+                        valueWidth = 200.dp,
+                    )
+                    Text(
+                        text = "逗号分隔、按顺序依次尝试，前面的是自己加的、后面才是内置域名。" +
+                            "现货与推送已带大陆可直连的官方行情域（data-api / data-stream），一般留空即可；" +
+                            "合约官方只有 fapi.binance.com，网络打不开时要么走代理、要么在这里填一个可用镜像。" +
+                            "填错不会连累内置域名 —— 一家不通就换下一家。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            top = Spacing.Xs,
+                        ),
+                    )
                 }
             }
 
