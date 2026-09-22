@@ -160,6 +160,8 @@ class DetailViewModel(
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
+        /** 周期条上摊开的方块，顺序即展示顺序（用户可通过「＋」管理）。 */
+        val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
     )
 
     val state: StateFlow<DetailUiState> = combine(
@@ -190,6 +192,7 @@ class DetailViewModel(
                 StatItem("所属市场", id.market.label),
             ),
             interval = selected,
+            intervals = data.intervals,
             candles = KlineAggregator.aggregate(data.raw, selected),
             maPeriods = data.maPeriods,
             showBoll = data.showBoll,
@@ -243,8 +246,25 @@ class DetailViewModel(
                 maPeriods = saved.maPeriods.sorted(),
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
+                // 周期条则相反：解析不出任何一项就当没设过，回落到默认集
+                intervals = saved.intervalKeys
+                    .split(',')
+                    .mapNotNull { key -> CandleInterval.fromStorageKey(key.trim()) }
+                    .distinctBy { it.storageKey }
+                    .ifEmpty { it.intervals },
             )
         }
+    }
+
+    /**
+     * 保存「＋」管理对话框产出的周期条列表：顺序即展示顺序。
+     * 拒绝空列表——周期条空了就没有换周期的入口，属于把自己锁在门外。
+     */
+    fun saveIntervals(next: List<CandleInterval>) {
+        if (next.isEmpty()) return
+        chart.update { it.copy(intervals = next) }
+        val saved = next.joinToString(",") { it.storageKey }
+        viewModelScope.launch { settings.edit { it.copy(intervalKeys = saved) } }
     }
 
     fun toggleWatch() {
@@ -321,13 +341,27 @@ class DetailViewModel(
     }
 
     /**
-     * 放弃当前正在划的新线（不落库），已有的告警线不受影响。
+     * 把一条告警线拖到右上角垃圾桶：删除它对应的规则，线随之从图上消失。
      *
-     * 线本身由规则派生，所以这里没有什么「清除」可言 —— 要清的是预警列表里的规则；
-     * 拖动中途反悔才用得上这个（比如手滑划歪了）。
+     * 线由规则派生，删除只能落到规则上 —— 这里就是预警列表那个删除按钮的同一条路径。
+     * [ruleId] 为 null 表示手上一笔还没落库的新线，拖进垃圾桶等同于放弃，无需删规则。
      */
-    fun cancelAlertDrag() {
-        alertDrag.value = null
+    fun deleteAlertLine(ruleId: Long?) {
+        if (ruleId == null) {
+            alertDrag.value = null
+            return
+        }
+        viewModelScope.launch {
+            try {
+                alerts.deleteRule(ruleId)
+                alertDrag.value = null
+                showNotice("已删除该告警线")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("删除失败：${e.displayMessage()}")
+            }
+        }
     }
 
     /**

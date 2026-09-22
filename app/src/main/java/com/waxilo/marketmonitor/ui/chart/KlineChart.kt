@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -54,6 +58,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.Kline
@@ -82,7 +87,7 @@ import kotlin.math.min
 data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
 
 /**
- * 图表左上角的角标按钮（进/出全屏）。读数带会为它让出宽度。
+ * 图表左下角的角标按钮（进/出全屏）。放在左下而不是左上：左上角要留给十字光标详情浮层。
  *
  * 图标由调用方以 composable 提供，而不是传 `ImageVector`：本应用只依赖 icons-core，
  * 没有现成的全屏图标，而 Compose 1.10 起 `ImageVector.Builder.addPath` 只收
@@ -133,6 +138,11 @@ fun KlineChart(
     onAlertLineDrag: (Long?, Double) -> Unit = { _, _ -> },
     /** 手指离开：调用方按同一 id 把新价写回那条规则（id 为 null 则新建规则）。 */
     onAlertLineCommit: (Long?) -> Unit = {},
+    /**
+     * 把线拖到右上角垃圾桶上松手：调用方删除该 id 对应的规则（id 为 null = 手上一笔
+     * 还没落库的新线，等同于放弃）。划线模式下右上角才会出现垃圾桶。
+     */
+    onAlertLineDelete: (Long?) -> Unit = {},
     /** 左上角角标（进入全屏）。null 表示不画，读数带也就顶到最左。 */
     cornerAction: ChartCornerAction? = null,
 ) {
@@ -177,8 +187,19 @@ fun KlineChart(
      * 做一次性适配（新区间的价格范围该重新适配，但只需要发生一次，而不是每帧一次）。
      */
     var priceBase by remember(symbolKey, interval.storageKey) { mutableStateOf<ValueRange?>(null) }
-    val geo = remember(canvasSize, density, series.subPanes.size) {
-        ChartGeo.of(canvasSize, density, series.subPanes.size, ChartGeo.READOUT_HEIGHT_DP)
+    /**
+     * 主读数带按「指标族」分行（MA 一族一行、BOLL 一族一行）：加一个指标就多占一行，
+     * 而不是把所有数值挤在同一行。行数只取决于开了哪些指标，与十字光标下标无关，
+     * 因此从 `overlay.lines` 的标签直接数出来，喂给顶部读数带的高度。
+     */
+    val mainReadoutLines = remember(series) {
+        val labels = series.overlay.lines.map { it.label }
+        (if (labels.any { it.startsWith("MA") }) 1 else 0) +
+            (if (labels.any { it.startsWith("BOLL") }) 1 else 0)
+    }
+    val readoutHeightDp = ChartGeo.readoutBandHeight(mainReadoutLines)
+    val geo = remember(canvasSize, density, series.subPanes.size, readoutHeightDp) {
+        ChartGeo.of(canvasSize, density, series.subPanes.size, readoutHeightDp)
     }
     /**
      * 「有数据 + 有尺寸」才允许绘制。
@@ -227,6 +248,7 @@ fun KlineChart(
     val alertRange by rememberUpdatedState(mainRange)
     val alertDrag by rememberUpdatedState(onAlertLineDrag)
     val alertCommit by rememberUpdatedState(onAlertLineCommit)
+    val alertDelete by rememberUpdatedState(onAlertLineDelete)
     val liveAlertLines by rememberUpdatedState(alertLines)
     /**
      * 绘图区几何、根数、序列与自动量程同样必须读**实时**值。
@@ -276,6 +298,31 @@ fun KlineChart(
     }
     val alertGrabPx = with(density) { ALERT_GRAB_WIDTH.toPx() }
 
+    /**
+     * 划线模式下，手指正把线悬在右上角垃圾桶上方 —— 用来高亮垃圾桶给反馈。
+     * 与 priceBase 等一样是「手势期间写、重组读」的内部态，不进气势 key，靠 remember 常驻。
+     */
+    var alertTrashHot by remember { mutableStateOf(false) }
+    val trashInsetPx = with(density) { SPACING_TRASH_INSET.toPx() }
+    val trashSizePx = with(density) { TRASH_BUTTON_SIZE.toPx() }
+    /**
+     * 右上角删除垃圾桶的命中矩形（画布像素），锚在**绘图区**（主图）的右上角。
+     * 放右上而不是右下：右下角是最新蜡烛与最新价标，正被盯着看，删除目标压在那儿代价最大；
+     * 而划线时右上角一般空着（十字光标浮层在左上，最新价读数在右侧轴上）。
+     * 只在划线模式下非空；与浮层里那个垃圾桶 Box 用同一套 geo + inset + size，
+     * 两者一旦错开就会「看着命中、松手却没删」。
+     *
+     * 读实时的 [liveGeo]（本函数被手势协程捕获，期间量程/尺寸一直在变）。
+     */
+    fun alertDeleteRect(): Rect? {
+        if (!alertLineMode) return null
+        val plot = liveGeo
+        if (!plot.isUsable) return null
+        val right = plot.plotWidthPx - trashInsetPx
+        val top = plot.mainTopPx + trashInsetPx
+        return Rect(left = right - trashSizePx, top = top, right = right, bottom = top + trashSizePx)
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -304,6 +351,7 @@ fun KlineChart(
                         alertLineMode = alertLineMode,
                         alertLineAnchors = ::alertAnchors,
                         alertGrabPx = alertGrabPx,
+                        alertDeleteRect = ::alertDeleteRect,
                         onAlertLineDrag = { id, yPx ->
                             val plot = liveGeo
                             val fraction =
@@ -314,6 +362,8 @@ fun KlineChart(
                             if (price.isFinite()) alertDrag(id, price)
                         },
                         onAlertLineCommit = { id -> alertCommit(id) },
+                        onAlertLineDelete = { id -> alertDelete(id) },
+                        onAlertLineOverTrash = { hot -> alertTrashHot = hot },
                         onGestureStart = {
                             // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
                             priceBase = liveAutoRange
@@ -445,14 +495,21 @@ fun KlineChart(
                 Modifier.align(Alignment.TopStart),
             )
 
-            // ---- 左上角角标（进入 / 退出全屏） ----
-            // 放在图表而不是顶栏：详情页要滚动才能看到图表，入口钉在顶栏等于
-            // 每次先把页面翻回去。读数带因此整体右移，两者不抢位置。
+            // ---- 角标（进入 / 退出全屏）：绘图区左下角 ----
+            // **不占左上角**：左上角要留给十字光标详情浮层，放那儿会把长按读数整块往下顶
+            // （用户报的「挤占 k 线数据弹窗」）。左下角信息密度最低，且离右上角的删除垃圾桶最远。
+            // 放在图表而不是顶栏：详情页要滚动才能看到图表，入口钉在顶栏等于每次先得翻页。
             cornerAction?.let { action ->
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .padding(Spacing.Xxs)
+                        .offset(
+                            x = CORNER_BUTTON_INSET,
+                            y = with(density) {
+                                ((geo.mainTopPx + geo.mainHeightPx) -
+                                    CORNER_BUTTON_SIZE.toPx() - CORNER_BUTTON_INSET.toPx()).toDp()
+                            },
+                        )
                         .size(CORNER_BUTTON_SIZE)
                         .clip(Radius.fullShape)
                         .semantics { contentDescription = action.description }
@@ -469,20 +526,29 @@ fun KlineChart(
             // 平时跟着最新价走、长按时跟着手指走。
             val readoutIndex = crosshair?.index ?: (series.size - 1)
             val priceDecimals = PriceFormatter.decimalsFor(tickSize)
-            // 有角标时读数带从它右边开始，可用宽度也就少掉这一段（副图读数在下方，不受影响）
-            val readoutStart =
-                if (cornerAction == null) Spacing.Sm else Spacing.Xxs + CORNER_BUTTON_SIZE + Spacing.Xs
-            val readoutWidth = with(density) { geo.plotWidthPx.toDp() } - readoutStart
-            IndicatorReadout(
-                segments = remember(series, readoutIndex, priceDecimals) {
-                    series.mainReadoutAt(readoutIndex, priceDecimals)
-                },
-                palette = palette,
+            // 角标已移到绘图区左下角，不再挤占顶部这一行，读数带从绘图区左沿起。
+            val readoutStart = Spacing.Sm
+            // 副图读数带只能铺到绘图区右沿（右侧价格轴的刻度与它同高，越界会压住数字）。
+            val subReadoutWidth = with(density) { geo.plotWidthPx.toDp() } - readoutStart
+            // 主读数带在**顶部读数带**这一区，而右侧价格轴从绘图区（readoutHeightPx）才开始，
+            // 所以这几行右上角是空的：铺满整宽，多出的那截轴宽刚好容下整族数值不截断。
+            val mainReadoutWidth = with(density) { canvasSize.width.toDp() } - readoutStart
+            // 按指标族拆行：MA 一族一行、BOLL 一族一行（顺序沿用 overlay 的 MA→BOLL）。
+            val mainGroups = remember(series, readoutIndex, priceDecimals) {
+                series.mainReadoutAt(readoutIndex, priceDecimals)
+                    .partition { it.text.startsWith("BOLL") }
+                    .let { (boll, ma) -> listOf(ma, boll).filter { it.isNotEmpty() } }
+            }
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(start = readoutStart, top = Spacing.Xxs)
-                    .widthIn(max = readoutWidth),
-            )
+                    .widthIn(max = mainReadoutWidth),
+            ) {
+                mainGroups.forEach { group ->
+                    IndicatorReadout(segments = group, palette = palette)
+                }
+            }
             val subReadouts = remember(series, readoutIndex, priceDecimals) {
                 series.subPanes.map { series.subReadoutAt(it, readoutIndex, priceDecimals) }
             }
@@ -493,7 +559,7 @@ fun KlineChart(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset(x = Spacing.Sm, y = with(density) { (geo.subTopOf(index) + 2f).toDp() })
-                        .widthIn(max = readoutWidth),
+                        .widthIn(max = subReadoutWidth),
                 )
             }
 
@@ -506,11 +572,45 @@ fun KlineChart(
                     tooltip = ChartModel.tooltip(series.candles, mark.index, interval, tickSize),
                     modifier = Modifier
                         .align(Alignment.TopStart)
+                        // 紧贴读数带下方即可：全屏角标已移到绘图区左下角，不再压这块左上角。
                         .offset(
                             x = Spacing.Sm,
                             y = with(density) { (geo.readoutHeightPx + 2f).toDp() },
                         ),
                 )
+            }
+
+            // ---- 划线模式的删除垃圾桶（绘图区右上角，仅拖动时浮现） ----
+            // 只在「手上有正在拖的线」时出现：不拖线时它是不可用的，常驻只会白占绘图区一角。
+            // 定位到**绘图区**右上角而不是整块画布（画布右上角会盖住指标读数带），
+            // 且与 alertDeleteRect() 严格同框，否则会出现「看着命中、松手却没删」。
+            // 它不是可点按钮而是**落点**：
+            // 不挂 clickable，指针事件穿透到下层 Canvas，由手势判定「线拖进来松手 = 删除」。
+            if (alertLineMode && alertLines.any { it.dragging }) {
+                val colors = MarketTheme.colors
+                val rect = alertDeleteRect()
+                if (rect != null) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .offset(
+                                x = with(density) { rect.left.toDp() },
+                                y = with(density) { rect.top.toDp() },
+                            )
+                            .size(TRASH_BUTTON_SIZE)
+                            .clip(Radius.fullShape)
+                            .background(if (alertTrashHot) DownRed else colors.washStrong)
+                            .semantics { contentDescription = "拖动告警线到此删除" },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(TRASH_ICON_SIZE),
+                            tint = if (alertTrashHot) Color.White else colors.muted,
+                        )
+                    }
+                }
             }
         }
         // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
@@ -539,10 +639,19 @@ fun KlineChart(
                 },
                 modifier = Modifier
                     .offset(
-                        x = Spacing.Sm,
+                        // 左下角现在也站着全屏角标：小标挪到角的右侧，且两者挂在同一条
+                        // 水平中线（角标的行中心）上，一高一低会显得散。
+                        x = with(density) {
+                            (Spacing.Sm.toPx() +
+                                if (cornerAction != null) CORNER_BUTTON_SIZE.toPx() + Spacing.Xs.toPx()
+                                else 0f
+                                ).toDp()
+                        },
                         y = with(density) {
-                            ((geo.mainTopPx + geo.mainHeightPx) - badgeHeightPx - Spacing.Xs.toPx())
-                                .toDp()
+                            ((geo.mainTopPx + geo.mainHeightPx) -
+                                CORNER_BUTTON_INSET.toPx() -
+                                CORNER_BUTTON_SIZE.toPx() / 2f -
+                                badgeHeightPx / 2f).toDp()
                         },
                     ),
             )
@@ -616,7 +725,7 @@ private data class PlotGeometry(
  * 副图数量可变（0~4），所以副图区域用「第几块」描述而不是单一起点/高度：
  * `subTopOf(i)` / `subHeightPx` 算出每块自己的矩形。
  *
- * 顶部额外预留 [READOUT_HEIGHT_DP] 给指标读数行（币安式的彩色参数），
+ * 顶部额外预留一截给指标读数带（币安式的彩色参数，高度由 [readoutBandHeight] 按指标行数算），
  * 否则读数是自由流的 Text，会直接压在蜡烛和网格上。
  */
 private data class ChartGeo(
@@ -673,11 +782,18 @@ private data class ChartGeo(
         const val AXIS_LABEL_WIDTH_DP = 58f
         const val TIME_AXIS_HEIGHT_DP = 18f
 
+        /** 单行读数占用的高度（与 [READOUT_LINE_HEIGHT] 对齐，单位 dp）。 */
+        const val READOUT_LINE_DP = 12f
+
+        /** 读数带顶部留白（`Spacing.Xxs` 那截），加在整叠读数行的上下。 */
+        const val READOUT_BAND_PAD_DP = 6f
+
         /**
-         * 指标读数带高度：最多两行 labelSmall（行高 15sp）再加与绘图区的间距。
-         * 行数上限变了必须同步改这里，否则读数又会压到蜡烛上。
+         * 顶部读数带高度：一族指标一行，故按行数线性增长（至少留一行）。
+         * 与 [READOUT_LINE_HEIGHT] 联动，改了字号/行高要同步改 [READOUT_LINE_DP]，否则读数会压到蜡烛上。
          */
-        const val READOUT_HEIGHT_DP = 34f
+        fun readoutBandHeight(lineCount: Int): Float =
+            READOUT_BAND_PAD_DP + READOUT_LINE_DP * lineCount.coerceAtLeast(1)
 
         fun of(size: IntSize, density: Density, subCount: Int, readoutHeightDp: Float): ChartGeo =
             with(density) {
@@ -960,7 +1076,7 @@ private fun PriceAxisLabels(
     modifier: Modifier = Modifier,
 ) {
     val decimals = PriceFormatter.decimalsFor(tickSize)
-    val style = MaterialTheme.typography.labelSmall
+    val style = rememberAxisTextStyle()
     val measurer = rememberTextMeasurer()
     val labelHeightPx = remember(style, density) {
         measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
@@ -1101,7 +1217,7 @@ private fun PriceTag(
     if (!price.isFinite()) return
 
     val colors = MarketTheme.colors
-    val style = MaterialTheme.typography.labelSmall
+    val style = rememberAxisTextStyle()
     val text = PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize))
     val measurer = rememberTextMeasurer()
     val textSize = remember(text, style, density) {
@@ -1169,7 +1285,7 @@ private fun SubAxisLabels(
 ) {
     if (panes.isEmpty() || geo.subHeightPx <= 1f) return
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val style = MaterialTheme.typography.labelSmall
+    val style = rememberAxisTextStyle()
     val measurer = rememberTextMeasurer()
     val labelHeightPx = remember(style, density) {
         measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
@@ -1289,6 +1405,13 @@ private fun IndicatorReadout(
     modifier: Modifier = Modifier,
 ) {
     if (segments.isEmpty()) return
+    // 读数带压到单行/族：labelSmall(11sp) 下 BOLL 三条就换行，把绘图区往下顶、还盖住上方蜡烛。
+    // 字号再降一档、收紧行高并收掉字距，让每一族指标稳定占一行（多族则各占一行，见调用处）。
+    val style = MaterialTheme.typography.labelSmall.copy(
+        fontSize = READOUT_FONT_SIZE,
+        lineHeight = READOUT_LINE_HEIGHT,
+        letterSpacing = 0.sp,
+    )
     Text(
         text = remember(segments, palette) {
             buildAnnotatedString {
@@ -1301,7 +1424,7 @@ private fun IndicatorReadout(
             }
         },
         modifier = modifier,
-        style = MaterialTheme.typography.labelSmall,
+        style = style,
         maxLines = READOUT_MAX_LINES,
         overflow = TextOverflow.Ellipsis,
     )
@@ -1405,10 +1528,19 @@ private suspend fun PointerInputScope.detectChartGestures(
     alertLineAnchors: () -> List<AlertLineAnchor>,
     /** 抓住已有线的容差（像素）。超出就当「在这里新建一根」。 */
     alertGrabPx: Float,
+    /**
+     * 右上角删除垃圾桶的命中矩形（划线模式下非空），用**取值函数**读实时画布尺寸。
+     * 拖线松手时手指落在其中 → 改调 [onAlertLineDelete] 而不是落库。
+     */
+    alertDeleteRect: () -> Rect?,
     /** 划线过程中回调「抓到的线 id（null = 新建）」与未换算的 y 像素。 */
     onAlertLineDrag: (Long?, Float) -> Unit,
     /** 手指离开且本场手势划过线时回调一次，带同一 id，调用方据此落库。 */
     onAlertLineCommit: (Long?) -> Unit,
+    /** 手指带着线悬在垃圾桶上又离开时回调一次，带同一 id，调用方据此删除规则。 */
+    onAlertLineDelete: (Long?) -> Unit,
+    /** 悬停状态变化：true = 手指正把线停在垃圾桶上方，浮层据此高亮给出反馈。 */
+    onAlertLineOverTrash: (Boolean) -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
     /** 每次手势结束时回调一次，用于把手势期间冻结的量交还给实时值。 */
@@ -1446,6 +1578,8 @@ private suspend fun PointerInputScope.detectChartGestures(
         var alertLineActive = false
         /** 本场手势锁定的那条线；`null` = 新建一根。判定只做一次，整场不再改。 */
         var alertGrabbedId: Long? = null
+        /** 松手那一刻手指是否悬在右上角垃圾桶上 —— 是则删除这条线而非落库。 */
+        var alertOverTrash = false
         // 单指方向锁：null 表示还没定，锁定后本次手势不再改
         var axis: ChartGesture.Axis? = null
         var axisAccumX = 0f
@@ -1474,12 +1608,20 @@ private suspend fun PointerInputScope.detectChartGestures(
             // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
             if (alertLineMode && pressed.size == 1) {
                 val plot = geo()
-                val y = primary.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
+                val raw = primary.position
+                val y = raw.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
                 if (!alertLineActive) {
                     // 抓哪根只在按下时定一次。逐帧重判的话，把手里的线拖过另一根时
                     // 会突然「换手」——手指没动，动的却是另一条预警的阈值。
                     alertGrabbedId = alertLineAnchors().closestAlertLine(y, alertGrabPx)
                     alertLineActive = true
+                }
+                // 命中判定用**未夹取的原始坐标**（真实手指位置），而不是跟手用的夹取 y：
+                // 垃圾桶锚在绘图区右上角，按真实落点判定最直观。线仍照常跟手 + 垃圾桶高亮。
+                val overTrash = alertDeleteRect()?.contains(raw) == true
+                if (overTrash != alertOverTrash) {
+                    alertOverTrash = overTrash
+                    onAlertLineOverTrash(overTrash)
                 }
                 onAlertLineDrag(alertGrabbedId, y)
                 continue
@@ -1566,7 +1708,12 @@ private suspend fun PointerInputScope.detectChartGestures(
                 }
             }
         }
-        if (alertLineActive) onAlertLineCommit(alertGrabbedId)
+        if (alertLineActive) {
+            // 松手在垃圾桶上 = 删除这条线（id 为 null 时等于放弃一笔未落库的新线），
+            // 否则照旧落库。两种情况收尾都要清掉高亮，别让它留在下一次手势上。
+            if (alertOverTrash) onAlertLineDelete(alertGrabbedId) else onAlertLineCommit(alertGrabbedId)
+            if (alertOverTrash) onAlertLineOverTrash(false)
+        }
         onCrosshair(null)
         onGestureEnd()
     }
@@ -1624,10 +1771,29 @@ private const val TIME_LABEL_MIN_GAP_DP = 10f
 private const val AXIS_LABEL_MIN_GAP_DP = 4f
 
 /**
- * 指标读数带最多几行。两行是「MA 三条 + BOLL 三条」在一台窄屏手机上刚好放不下的
- * 经验值；再多就开始压蜡烛了，宁可省略尾部（[TextOverflow.Ellipsis]）。
+ * 单族指标读数固定一行（如一整排 MA 挤在一行、BOLL 三条挤在一行）。
+ * 多族指标不再挤同一行，而是各占一行（见调用处按族拆分的 Column）；
+ * 某一族过宽时宁可省略尾部，也不在本行内换行。
  */
-private const val READOUT_MAX_LINES = 2
+private const val READOUT_MAX_LINES = 1
+
+/** 指标读数带的字号：比 labelSmall(11sp) 再小一档，让整族数值稳定落在一行。 */
+private val READOUT_FONT_SIZE = 9.sp
+
+/** 右侧纵轴文字的字号：与读数带同档，刻度数字不该在视觉上与蜡烛抢地方。 */
+private val AXIS_FONT_SIZE = 9.sp
+
+/** 纵轴刻度与价格标的共用文字样式（价格轴、副图轴、十字光标/最新价/告警线标）。 */
+@Composable
+private fun rememberAxisTextStyle(): TextStyle =
+    MaterialTheme.typography.labelSmall.copy(
+        fontSize = AXIS_FONT_SIZE,
+        lineHeight = 11.sp,
+        letterSpacing = 0.sp,
+    )
+
+/** 指标读数带的行高：与 [ChartGeo.READOUT_LINE_DP] 对齐，用来算读数带总高。 */
+private val READOUT_LINE_HEIGHT = 12.sp
 
 /** 十字光标详情浮层里标签列的宽度：让右边的数字对齐成一列。 */
 private val DETAIL_LABEL_WIDTH = 28.dp
@@ -1641,8 +1807,14 @@ private const val PRICE_BADGE_PAD_V_DP = 2f
 /** 已有的告警线（非正在拖的那根）的不透明度：参照线不该和 K 线争视线。 */
 private const val STATIC_ALERT_ALPHA = 0.45f
 
-/** 左上角角标按钮的边长；读数带按它让位。 */
-private val CORNER_BUTTON_SIZE = 32.dp
+/** 左下角角标按钮的边长。 */
+private val CORNER_BUTTON_SIZE = 26.dp
+
+/**
+ * 角标距绘图区左下角的内缩距离。取成和垃圾桶（[SPACING_TRASH_INSET]）一样的值，
+ * 让「进入全屏」与「拖线删除」这两个角对称地贴在同一高度上。
+ */
+private val CORNER_BUTTON_INSET = 12.dp
 
 /**
  * 划线的抓取容差：按下点离某根线在这个范围内就算抓它，否则新建一根。
@@ -1651,3 +1823,12 @@ private val CORNER_BUTTON_SIZE = 32.dp
  * 容差太小会让「微调已有预警」变成「凭空多出一条新预警」。
  */
 private val ALERT_GRAB_WIDTH = 24.dp
+
+/** 划线模式右上角删除垃圾桶的边长（含圆形背景）。 */
+private val TRASH_BUTTON_SIZE = 32.dp
+
+/** 垃圾桶图标本身的大小（小于外圈背景，留出内边距）。 */
+private val TRASH_ICON_SIZE = 16.dp
+
+/** 垃圾桶距绘图区右上沿的内缩距离；必须和 alertDeleteRect() 用同一值。 */
+private val SPACING_TRASH_INSET = 12.dp

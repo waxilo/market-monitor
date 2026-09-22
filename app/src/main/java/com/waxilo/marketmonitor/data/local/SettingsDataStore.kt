@@ -47,6 +47,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             quoteAsset = this[Keys.QUOTE] ?: d.quoteAsset,
             defaultMarket = MarketType.fromKey(this[Keys.MARKET] ?: d.defaultMarket.key),
             lastIntervalKey = this[Keys.INTERVAL] ?: d.lastIntervalKey,
+            intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
@@ -72,6 +73,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.QUOTE] = quoteAsset
         prefs[Keys.MARKET] = defaultMarket.key
         prefs[Keys.INTERVAL] = lastIntervalKey
+        prefs[Keys.INTERVAL_LIST] = intervalKeys
         prefs[Keys.MA] = maPeriods.joinToString(",")
         prefs[Keys.BOLL] = bollEnabled
         prefs[Keys.PANE] = subPaneKeys
@@ -99,6 +101,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val QUOTE = stringPreferencesKey("quote_asset")
             val MARKET = stringPreferencesKey("default_market")
             val INTERVAL = stringPreferencesKey("last_interval")
+            val INTERVAL_LIST = stringPreferencesKey("interval_list")
             val MA = stringPreferencesKey("ma_periods")
             val BOLL = booleanPreferencesKey("boll_enabled")
             val PANE = stringPreferencesKey("sub_pane")

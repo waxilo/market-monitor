@@ -310,6 +310,7 @@ fun FilterChip(
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val colors = MarketTheme.colors
     val bg by animateColorAsState(
@@ -327,19 +328,31 @@ fun FilterChip(
         animationSpec = tween(Motion.FastMs),
         label = "chipBorder",
     )
+    val textStyle = if (compact) {
+        MaterialTheme.typography.labelMedium.copy(
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            letterSpacing = 0.sp,
+        )
+    } else {
+        MaterialTheme.typography.labelMedium
+    }
     Box(
         modifier = modifier
             .clip(Radius.xsShape)
             .background(bg)
             .border(1.dp, border, Radius.xsShape)
             .clickable(onClick = onClick)
-            .defaultMinSize(minHeight = 32.dp)
-            .padding(horizontal = Spacing.Sm, vertical = 6.dp),
+            .defaultMinSize(minHeight = if (compact) 22.dp else 32.dp)
+            .padding(
+                horizontal = if (compact) Spacing.Xs else Spacing.Sm,
+                vertical = if (compact) 2.dp else 6.dp,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelMedium,
+            style = textStyle,
             color = fg,
             maxLines = 1,
         )

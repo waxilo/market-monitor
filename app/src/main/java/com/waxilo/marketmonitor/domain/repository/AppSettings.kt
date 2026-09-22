@@ -16,6 +16,11 @@ data class AppSettings(
     val defaultMarket: MarketType = MarketType.SPOT,
     /** 详情页记忆的周期（CandleInterval.storageKey）。 */
     val lastIntervalKey: String = "o:1d",
+    /**
+     * 周期条上摊开的方块（CandleInterval.storageKey，逗号分隔，**顺序即展示顺序**）。
+     * 空串 = 用 CandleInterval.quickPickPresets 默认集。格式同 [subPaneKeys]。
+     */
+    val intervalKeys: String = "",
     /** 主图均线周期。 */
     val maPeriods: List<Int> = listOf(5, 10, 30),
     /** 是否叠加布林带。 */

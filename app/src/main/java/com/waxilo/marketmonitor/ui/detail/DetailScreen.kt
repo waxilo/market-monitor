@@ -3,23 +3,30 @@ package com.waxilo.marketmonitor.ui.detail
 import android.content.pm.ActivityInfo
 import androidx.activity.compose.LocalActivity
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -27,6 +34,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -46,17 +55,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
+import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
@@ -74,6 +91,7 @@ import com.waxilo.marketmonitor.ui.common.MetricCell
 import com.waxilo.marketmonitor.ui.common.RangeBar
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SectionOverline
+import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -81,6 +99,7 @@ import com.waxilo.marketmonitor.ui.theme.Motion
 import com.waxilo.marketmonitor.ui.theme.Radius
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import java.math.BigDecimal
+import kotlin.math.roundToInt
 
 /**
  * 详情页（PRD 4.1 第三级、4.2 图表）。
@@ -110,6 +129,8 @@ fun DetailScreen(
      * 普通 state 会连同「正在全屏」一起丢掉，用户看到的是自动退出全屏。
      */
     var fullscreen by rememberSaveable { mutableStateOf(false) }
+    // 周期管理对话框：竖屏与全屏共用一个开关，挂在最外层免得两条分支各存一份
+    var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
 
     FullscreenController(active = fullscreen)
 
@@ -119,6 +140,7 @@ fun DetailScreen(
                 state = state,
                 alertLines = alertLines,
                 viewModel = viewModel,
+                onManageIntervals = { intervalManagerOpen = true },
                 onExit = { fullscreen = false },
             )
         } else {
@@ -149,6 +171,7 @@ fun DetailScreen(
                     options = state.intervals,
                     selected = state.interval,
                     onSelect = viewModel::selectInterval,
+                    onManage = { intervalManagerOpen = true },
                 )
 
                 ChartArea(
@@ -186,6 +209,18 @@ fun DetailScreen(
                     textAlign = TextAlign.Center,
                 )
             }
+        }
+
+        if (intervalManagerOpen) {
+            IntervalManagerDialog(
+                initial = state.intervals,
+                selected = state.interval,
+                onDismiss = { intervalManagerOpen = false },
+                onSave = {
+                    viewModel.saveIntervals(it)
+                    intervalManagerOpen = false
+                },
+            )
         }
     }
 }
@@ -239,6 +274,7 @@ private fun FullscreenChart(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
     viewModel: DetailViewModel,
+    onManageIntervals: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -249,6 +285,39 @@ private fun FullscreenChart(
     var indicatorOpen by rememberSaveable { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.paper)) {
+        // 顶端这一行同时承载「周期」与「指标 / 划线 / 退出」：横屏时底部要留给时间轴，
+        // 把这些开关浮在图表上会盖住 K 线；并入周期行后图表整块干净，且和竖屏「周期在图表上方」一致。
+        // 周期在左侧可横滚，右侧三个动作固定常驻（退出入口不能被滚走）。
+        IntervalSelector(
+            options = state.intervals,
+            selected = state.interval,
+            onSelect = viewModel::selectInterval,
+            onManage = onManageIntervals,
+            compact = true,
+            actions = {
+                FilterChip(
+                    text = "指标",
+                    selected = indicatorOpen,
+                    onClick = { indicatorOpen = !indicatorOpen },
+                    compact = true,
+                )
+                FilterChip(
+                    text = "划线",
+                    selected = alertMode,
+                    onClick = { alertMode = !alertMode },
+                    compact = true,
+                )
+                IconButton(onClick = onExit, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "退出全屏",
+                        modifier = Modifier.size(16.dp),
+                        tint = colors.ink,
+                    )
+                }
+            },
+        )
+        Rule(inset = 0.dp)
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             if (state.candles.isEmpty()) {
                 HintRow(
@@ -277,47 +346,12 @@ private fun FullscreenChart(
                     alertLineMode = alertMode,
                     onAlertLineDrag = viewModel::dragAlertLine,
                     onAlertLineCommit = { viewModel.commitAlertLine() },
+                    onAlertLineDelete = viewModel::deleteAlertLine,
                     modifier = Modifier.fillMaxSize(),
                 )
             }
 
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(Spacing.Xs),
-                horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                FilterChip(
-                    text = "指标",
-                    selected = indicatorOpen,
-                    onClick = { indicatorOpen = !indicatorOpen },
-                )
-                FilterChip(
-                    text = "划线",
-                    selected = alertMode,
-                    onClick = { alertMode = !alertMode },
-                )
-                // 只在「手上一笔新线还没落库」时出现：已有的告警线由规则派生，这里清不掉
-                // （删规则是预警列表的职责），能撤销的只有当前这一笔。
-                if (alertLines.any { it.dragging && it.ruleId == null }) {
-                    FilterChip(
-                        text = "取消划线",
-                        selected = false,
-                        onClick = viewModel::cancelAlertDrag,
-                    )
-                }
-                IconButton(onClick = onExit, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "退出全屏",
-                        modifier = Modifier.size(20.dp),
-                        tint = colors.ink,
-                    )
-                }
-            }
-
-            // 指标浮层压在图表底部而不是顶部：顶部要留给指标读数带与上面那排按钮，
+            // 指标浮层压在图表底部而不是顶部：顶部要留给指标读数带，
             // 底部只有时间轴，被临时盖住不影响看形态。
             if (indicatorOpen) {
                 Column(
@@ -343,7 +377,7 @@ private fun FullscreenChart(
 
             if (alertMode) {
                 Text(
-                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 松手自动判定上破/下破",
+                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 拖到右上角垃圾桶删除 · 松手自动判定上破/下破",
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = Spacing.Lg)
@@ -356,21 +390,13 @@ private fun FullscreenChart(
                 )
             }
 
-            // 提示浮在底部而不是顶部：顶部让给「划线 / 退出」按钮
+            // 提示浮在底部：顶部是指标读数带与最新蜡烛，浮层压上去代价最大
             AnimatedBanner(
                 visible = notice != null,
                 text = notice.orEmpty(),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Gutter),
             )
         }
-
-        Rule(inset = 0.dp)
-        IntervalSelector(
-            options = state.intervals,
-            selected = state.interval,
-            onSelect = viewModel::selectInterval,
-            compact = true,
-        )
     }
 }
 
@@ -510,31 +536,52 @@ private fun InlineLabel(text: String) {
     )
 }
 
-/** 周期选择：横向可滚的方块标签。选中态用反色块，与图表区的指标条语言统一。 */
+/**
+ * 周期选择：横向可滚的方块标签。选中态用反色块，与图表区的指标条语言统一。
+ * 行尾的「＋」打开周期管理对话框：自定义周期、删掉不看的、拖动排序。
+ */
 @Composable
 private fun IntervalSelector(
     options: List<CandleInterval>,
     selected: CandleInterval,
     onSelect: (CandleInterval) -> Unit,
+    onManage: () -> Unit,
     compact: Boolean = false,
+    /**
+     * 仅 compact 模式生效：钉在这一行**右侧**的固定控件（全屏里的「指标 / 划线 / 退出」）。
+     * 周期 chips 在左侧横向滚动，actions 不参与滚动、始终常驻可见——退出入口不能被滚走。
+     */
+    actions: (@Composable RowScope.() -> Unit)? = null,
 ) {
     if (compact) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            InlineLabel(text = "周期")
-            options.forEach { option ->
-                FilterChip(
-                    text = option.label,
-                    selected = option == selected,
-                    onClick = { onSelect(option) },
-                )
+            // 左侧：周期可横滚，占满剩余宽度
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                InlineLabel(text = "周期")
+                options.forEach { option ->
+                    FilterChip(
+                        text = option.label,
+                        selected = option == selected,
+                        onClick = { onSelect(option) },
+                        compact = true,
+                    )
+                }
+                FilterChip(text = "＋", selected = false, onClick = onManage, compact = true)
             }
+            // 右侧：固定动作区（不随周期滚动）
+            actions?.invoke(this)
         }
         return
     }
@@ -553,8 +600,10 @@ private fun IntervalSelector(
                     text = option.label,
                     selected = option == selected,
                     onClick = { onSelect(option) },
+                    compact = true,
                 )
             }
+            FilterChip(text = "＋", selected = false, onClick = onManage, compact = true)
         }
     }
 }
@@ -681,9 +730,10 @@ private fun IndicatorBar(
                     text = "MA$period",
                     selected = period in activeMa,
                     onClick = { onToggleMa(period) },
+                    compact = true,
                 )
             }
-            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
+            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             Box(
                 modifier = Modifier
                     .padding(horizontal = Spacing.Xxs)
@@ -697,12 +747,13 @@ private fun IndicatorBar(
                     text = kind.label,
                     selected = kind in subPanes,
                     onClick = { onToggleSubPane(kind) },
+                    compact = true,
                 )
             }
         }
         return
     }
-    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
+    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md, bottom = Spacing.Md)) {
         SectionOverline(text = "叠加指标")
         Spacer(Modifier.height(Spacing.Xs))
         Row(
@@ -717,9 +768,10 @@ private fun IndicatorBar(
                     text = "MA$period",
                     selected = period in activeMa,
                     onClick = { onToggleMa(period) },
+                    compact = true,
                 )
             }
-            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll)
+            FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
 
         Spacer(Modifier.height(Spacing.Md))
@@ -737,10 +789,253 @@ private fun IndicatorBar(
                     text = kind.label,
                     selected = kind in subPanes,
                     onClick = { onToggleSubPane(kind) },
+                    compact = true,
                 )
             }
         }
     }
+}
+
+/** 拖拽排序的行高：位移按它换算成交换次数，行必须定高才对得上。 */
+private val DRAG_ROW_HEIGHT = 44.dp
+
+/**
+ * 自定义周期的可选单位：按固定折算换成分钟数，再走 [CandleInterval.custom] 校验。
+ * 月按 30 天算——K 线聚合只有「分钟」这一个基准，没有日历月可言。
+ */
+private enum class CustomIntervalUnit(val label: String, val minutes: Long) {
+    Minute("分", 1L),
+    Hour("时", 60L),
+    Day("天", 60L * 24),
+    Week("周", 60L * 24 * 7),
+    Month("月", 60L * 24 * 30),
+}
+
+/**
+ * 周期条管理对话框：在草稿里增删排序，点「保存」才回写 ViewModel 并持久化。
+ *
+ * - 排序是整行长按拖动：手柄图标占一列不值当，长按起步也天然避开了外层滚动与
+ *   行的点击；拖动的 pointerInput 消费纵向事件，列表超过一屏要先滚到位再拖。
+ *   被拖行悬浮跟手，被它越过的行动画平移让出空位，松手才真正换位——
+ *   拖动途中就改列表会有「被吸走」的观感。
+ * - **当前选中的周期不可删**：删掉它会让「正在看的周期」从周期条上消失，图上显示
+ *   的周期与条上的方块对不上，比多留一个方块更迷惑。
+ * - 添加区在列表上方，只有「数字 + 单位」一条路：折成官方分钟数就加回官方周期，
+ *   其余由官方周期聚合而来（[CandleInterval.custom] 负责范围与整除校验）。
+ */
+@Composable
+private fun IntervalManagerDialog(
+    initial: List<CandleInterval>,
+    selected: CandleInterval,
+    onDismiss: () -> Unit,
+    onSave: (List<CandleInterval>) -> Unit,
+) {
+    // rows 用 remember 而不是 saveable：List<CandleInterval> 不可序列化，
+    // 全屏进出必旋屏，saveable 会在重建时直接抛异常。草稿丢了重开即是，代价可忽略。
+    var rows by remember { mutableStateOf(initial) }
+    var customMinutes by rememberSaveable { mutableStateOf("") }
+    var customUnit by rememberSaveable { mutableStateOf(CustomIntervalUnit.Minute) }
+    var hint by rememberSaveable { mutableStateOf<String?>(null) }
+    val colors = MarketTheme.colors
+    // 拖拽排序：行定高，位移按「拖了多少个行高」换算成交换次数
+    var draggingKey by remember { mutableStateOf<String?>(null) }
+    var dragOffsetPx by remember { mutableFloatStateOf(0f) }
+
+    fun append(target: CandleInterval) {
+        if (rows.any { it.storageKey == target.storageKey }) {
+            hint = "${target.label} 已在周期条上"
+            return
+        }
+        rows = rows + target
+        hint = null
+    }
+
+    fun move(from: Int, to: Int) {
+        rows = rows.toMutableList().apply { add(to, removeAt(from)) }
+    }
+
+    fun commitCustom() {
+        val count = customMinutes.trim().toLongOrNull()
+        val minutes = count?.let { it * customUnit.minutes }
+        // 官方周期没了快捷区，正好折出官方值的输入就是加回官方周期
+        val official = minutes?.let { m -> OfficialInterval.entries.firstOrNull { it.minutes == m } }
+        val target = official?.let(CandleInterval::of) ?: minutes?.let(CandleInterval::custom)
+        if (target == null) {
+            hint = "做不出这个周期：需 1 分钟～1 个月，且能被官方周期整除"
+        } else {
+            append(target)
+            customMinutes = ""
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        title = {
+            Text(text = "周期条", style = MaterialTheme.typography.titleLarge, color = colors.ink)
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    // 顺序不能反：heightIn 先定住视口，verticalScroll 才能算出滚动范围。
+                    // 反过来写时滚动范围恒为 0，周期加多了输入框会被裁掉。
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = "添加新周期",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                )
+                // 先挑单位再填数字：数字按单位折算成分钟，官方值加回官方、聚合值走 custom 校验
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xs),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+                ) {
+                    CustomIntervalUnit.entries.forEach { unit ->
+                        FilterChip(
+                            text = unit.label,
+                            selected = unit == customUnit,
+                            onClick = { customUnit = unit },
+                            compact = true,
+                        )
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(Radius.xsShape)
+                            .background(colors.wash)
+                            .padding(horizontal = Spacing.Xs, vertical = Spacing.Sm),
+                    ) {
+                        BasicTextField(
+                            value = customMinutes,
+                            onValueChange = { input -> customMinutes = input.filter { it.isDigit() } },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
+                            cursorBrush = SolidColor(colors.ink),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { commitCustom() }),
+                        )
+                    }
+                    TextAction("添加", ::commitCustom)
+                }
+                hint?.let {
+                    Text(
+                        text = it,
+                        modifier = Modifier.padding(top = Spacing.Xs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.down,
+                    )
+                }
+
+                Text(
+                    text = "长按条目拖动排序",
+                    modifier = Modifier.padding(top = Spacing.Md),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted.copy(alpha = 0.6f),
+                )
+                // 拖拽中的源槽位与当前目标槽位：被越过的行按它平移让位
+                val dragRowHPx = with(LocalDensity.current) { DRAG_ROW_HEIGHT.toPx() }
+                val dragFrom = draggingKey?.let { key ->
+                    rows.indexOfFirst { it.storageKey == key }
+                } ?: -1
+                val dragTo = if (dragFrom < 0) -1 else
+                    (dragFrom + (dragOffsetPx / dragRowHPx).roundToInt())
+                        .coerceIn(0, rows.lastIndex)
+
+                rows.forEachIndexed { index, option ->
+                    val dragging = option.storageKey == draggingKey
+                    // 让位：拖拽行划过的那几条整体挪一行高，空出目标槽；动画过渡防瞬移
+                    val shiftTarget = when {
+                        dragging || dragFrom < 0 -> 0f
+                        dragTo > dragFrom && index > dragFrom && index <= dragTo -> -dragRowHPx
+                        dragTo < dragFrom && index in dragTo until dragFrom -> dragRowHPx
+                        else -> 0f
+                    }
+                    val shift by animateFloatAsState(
+                        targetValue = shiftTarget,
+                        animationSpec = tween(150),
+                        label = "rowShift",
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(DRAG_ROW_HEIGHT)
+                            .zIndex(if (dragging) 1f else 0f)
+                            .graphicsLayer { translationY = if (dragging) dragOffsetPx else shift }
+                            .clip(Radius.xsShape)
+                            .background(if (dragging) colors.washStrong else Color.Transparent)
+                            .pointerInput(option.storageKey) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        draggingKey = option.storageKey
+                                        dragOffsetPx = 0f
+                                    },
+                                    onDragEnd = {
+                                        // 松手才真正换位：拖动途中列表纹丝不动，
+                                        // 免得越过一半行高的瞬间整行被「吸」到新槽位
+                                        val key = draggingKey
+                                        val from = rows.indexOfFirst { it.storageKey == key }
+                                        if (from >= 0) {
+                                            val rowH = with(density) { DRAG_ROW_HEIGHT.toPx() }
+                                            val steps = (dragOffsetPx / rowH).roundToInt()
+                                            if (steps != 0) {
+                                                move(from, (from + steps).coerceIn(0, rows.lastIndex))
+                                            }
+                                        }
+                                        draggingKey = null
+                                        dragOffsetPx = 0f
+                                    },
+                                    onDragCancel = {
+                                        draggingKey = null
+                                        dragOffsetPx = 0f
+                                    },
+                                ) { change, amount ->
+                                    change.consume()
+                                    val rowH = with(density) { DRAG_ROW_HEIGHT.toPx() }
+                                    val from = rows.indexOfFirst { it.storageKey == option.storageKey }
+                                    if (from < 0) return@detectDragGesturesAfterLongPress
+                                    // 钳在可移动范围内：首行拖不出上边界，尾行拖不出下边界
+                                    dragOffsetPx = (dragOffsetPx + amount.y)
+                                        .coerceIn(-from * rowH, (rows.lastIndex - from) * rowH)
+                                }
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = option.label,
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (option == selected) colors.ink else colors.muted,
+                        )
+                        IconButton(
+                            onClick = { rows = rows - option },
+                            enabled = rows.size > 1 && option != selected,
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "移除 ${option.label}",
+                                modifier = Modifier.size(16.dp),
+                                tint = colors.muted,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextAction("保存", onClick = { onSave(rows) }) },
+        dismissButton = { TextAction("取消", onDismiss, color = colors.muted) },
+    )
 }
 
 /**
@@ -786,7 +1081,7 @@ private fun StatsSection(stats: List<StatItem>) {
 @Composable
 private fun FullscreenGlyph(modifier: Modifier = Modifier) {
     val colors = MarketTheme.colors
-    Canvas(modifier.size(18.dp)) {
+    Canvas(modifier.size(14.dp)) {
         val stroke = size.width * 0.09f
         // 线以端点为中心，不内缩的话描边会被画布切掉一半
         val i = stroke / 2f
