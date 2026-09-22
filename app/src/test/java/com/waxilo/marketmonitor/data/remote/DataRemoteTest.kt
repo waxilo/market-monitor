@@ -151,7 +151,7 @@ class RestHostFallbackTest {
     fun `现货首位是可直连的行情专用域`() {
         val hosts = DefaultRestHosts().hostsFor(MarketType.SPOT)
         assertEquals("https://data-api.binance.vision", hosts.first())
-        assertTrue("api.binance.com" in hosts)
+        assertTrue("https://api.binance.com" in hosts)
     }
 
     @Test

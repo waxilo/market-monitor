@@ -246,4 +246,4 @@ private fun Response.toApiError(body: String?): MarketApiException {
  * 418/429 是限频，换别的域名有机会，继续试。
  */
 internal fun shouldTryNextHost(error: MarketApiException): Boolean =
-    error.binanceCode != 0 || error.httpCode == 418 || error.httpCode == 429
+    error.binanceCode == 0 || error.httpCode == 418 || error.httpCode == 429
