@@ -558,7 +558,7 @@ fun KlineChart(
                     palette = palette,
                     modifier = Modifier
                         .align(Alignment.TopStart)
-                        .offset(x = Spacing.Sm, y = with(density) { (geo.subTopOf(index) + 2f).toDp() })
+                        .offset(x = Spacing.Sm, y = with(density) { (geo.subReadoutTopOf(index) + 2f).toDp() })
                         .widthIn(max = subReadoutWidth),
                 )
             }
@@ -719,15 +719,23 @@ private data class PlotGeometry(
 
 /**
  * 像素布局：价格刻度固定右侧、时间刻度固定底部，其余给蜡烛。
- * 有副图时主图占 [MAIN_SHARE]，全部副图等分剩余高度、共用横轴，
- * 因此左右边界天然对齐。
+ * 有副图时每块副图固定 [SUB_PANE_HEIGHT_DP] 高（多开一块就多一块，不把已有的挤薄；
+ * 竖屏 ChartArea 据此加高整张图），主图吃剩下的、大小与副图块数无关；空间不够
+ * （全屏叠多块）时主图保底 [ChartGeo.MAIN_MIN_DP]，副图等比压缩。
  *
  * 副图数量可变（0~4），所以副图区域用「第几块」描述而不是单一起点/高度：
- * `subTopOf(i)` / `subHeightPx` 算出每块自己的矩形。
+ * `subReadoutTopOf(i)` 是那块读数行的位置，`subTopOf(i)` / `subHeightPx` 算出
+ * 每块自己的**绘图**矩形 —— 读数行之下，曲线不会再从字底下穿过去。
  *
  * 顶部额外预留一截给指标读数带（币安式的彩色参数，高度由 [readoutBandHeight] 按指标行数算），
  * 否则读数是自由流的 Text，会直接压在蜡烛和网格上。
  */
+/**
+ * 每块副图的固定高度（dp）。竖屏 ChartArea 按副图块数加高整张图时用的就是这个值，
+ * 所以放文件顶层而不是 ChartGeo 的伴生里 —— ChartGeo 是 private，常量却要跨文件共享。
+ */
+internal const val SUB_PANE_HEIGHT_DP = 110f
+
 private data class ChartGeo(
     /**
      * 画布是否已经量到真实尺寸。
@@ -746,6 +754,8 @@ private data class ChartGeo(
     val mainHeightPx: Float,
     /** 副图块数；0 表示不显示副图。 */
     val subCount: Int,
+    /** 每块副图顶部为读数行预留的高度；曲线从它下方才开始画。 */
+    val subReadoutPx: Float,
 ) {
     /** 尺寸可用（已量到且宽度足够放下一个像素以上的绘图区）。 */
     val isUsable: Boolean get() = measured && plotWidthPx > 1f
@@ -769,15 +779,27 @@ private data class ChartGeo(
     /** 绘图区（主图 + 全部副图）总高度。 */
     val candlesHeightPx: Float get() = plotHeightPx - readoutHeightPx
 
-    /** 每块副图的高度（等分主图之外的区域）。 */
+    /** 每块副图的高度（等分主图之外的区域，再减掉各自顶部的读数行）。 */
     val subHeightPx: Float
+        get() = (subRegionPx - subReadoutPx).coerceAtLeast(0f)
+
+    /** 每块副图整区高度（读数行 + 绘图区）。 */
+    private val subRegionPx: Float
         get() = if (subCount <= 0) 0f else (candlesHeightPx - mainHeightPx) / subCount
 
-    /** 第 [index] 块副图的顶边 Y。 */
-    fun subTopOf(index: Int): Float = plotTopPx + mainHeightPx + index * subHeightPx
+    /** 第 [index] 块副图读数行的顶边（在该块绘图区之上）。 */
+    fun subReadoutTopOf(index: Int): Float = plotTopPx + mainHeightPx + index * subRegionPx
+
+    /** 第 [index] 块副图绘图区的顶边（读数行之下）。 */
+    fun subTopOf(index: Int): Float = subReadoutTopOf(index) + subReadoutPx
 
     companion object {
-        const val MAIN_SHARE = 0.72f
+        /**
+         * 空间不够时（全屏叠多块副图）主图保底的高度（dp），其余等比压缩副图。
+         * 必须是**绝对值**而不是占比：竖屏容器随副图数变高，
+         * 占比保底会反过来把主图抬高，「主图大小与副图数量无关」就破了。
+         */
+        const val MAIN_MIN_DP = 150f
         const val BODY_SHARE = 0.66f
         const val AXIS_LABEL_WIDTH_DP = 58f
         const val TIME_AXIS_HEIGHT_DP = 18f
@@ -787,6 +809,9 @@ private data class ChartGeo(
 
         /** 读数带顶部留白（`Spacing.Xxs` 那截），加在整叠读数行的上下。 */
         const val READOUT_BAND_PAD_DP = 6f
+
+        /** 每块副图顶部为读数行预留的高度（dp）：一行读数 + 上下留白。 */
+        const val SUB_READOUT_DP = 16f
 
         /**
          * 顶部读数带高度：一族指标一行，故按行数线性增长（至少留一行）。
@@ -801,12 +826,19 @@ private data class ChartGeo(
                 val label = AXIS_LABEL_WIDTH_DP.dp.toPx()
                 val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
                 val readout = readoutHeightDp.dp.toPx()
+                val subReadout = SUB_READOUT_DP.dp.toPx()
                 val plotWidth = max(1f, size.width.toFloat() - label)
                 val plotHeight = max(1f, size.height.toFloat() - timeAxis)
                 // 极端窄高比下先保住蜡烛区域，再夹读数带，避免把绘图区压没
                 val safeReadout = readout.coerceAtMost((plotHeight * 0.3f).coerceAtLeast(0f))
                 val candles = max(1f, plotHeight - safeReadout)
-                val main = if (subCount > 0) candles * MAIN_SHARE else candles
+                // 每块副图固定高度、主图吃剩下的；剩余不够时主图保底 MAIN_MIN_DP，
+                // 副图退化为等分压缩（全屏叠 3~4 块就是这种情形）。
+                val subPane = SUB_PANE_HEIGHT_DP.dp.toPx()
+                val main = if (subCount > 0) {
+                    (candles - subCount * subPane)
+                        .coerceAtLeast(MAIN_MIN_DP.dp.toPx())
+                } else candles
                 ChartGeo(
                     measured = measured,
                     plotWidthPx = plotWidth,
@@ -816,6 +848,7 @@ private data class ChartGeo(
                     readoutHeightPx = safeReadout,
                     mainHeightPx = main,
                     subCount = subCount,
+                    subReadoutPx = subReadout,
                 )
             }
     }
@@ -1344,7 +1377,8 @@ private fun TimeAxisLabels(
     val count = window.count()
     if (count <= 1 || geo.plotWidthPx <= 1f) return
 
-    val style = MaterialTheme.typography.labelSmall
+    // 与纵轴同字号：横纵刻度是一套视觉语言，不该一边 9sp 一边 11sp。
+    val style = rememberAxisTextStyle()
     val measurer = rememberTextMeasurer()
     val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
 
@@ -1553,15 +1587,23 @@ private suspend fun PointerInputScope.detectChartGestures(
 ) {
     awaitEachGesture {
         val first = awaitFirstDown(requireUnconsumed = false)
-        // 立刻消费 down：图表落在 verticalScroll 的父容器里，
-        // 不抢占的话父容器会先开一个滚动手势，纵向拖动就变成翻页而不是调刻度。
-        first.consume()
-        // 新手势开始：把上一场遗留的「不足一根」零头清掉，
-        // 否则上一场拖到一半松手，零头会算进下一场，手感上多出一小段跳动。
-        onGestureStart()
         // 起点落在右侧价格刻度区：纵向拖动在那里是「缩放价格刻度」而不是「平移」。
         // 必须在按下时就定性并整场保持 —— 按主方向判会让同一段位移的语义随手指抖动切换。
         val onPriceAxis = first.position.x >= geo().plotWidthPx
+        // 起点落在副图区：那里的纵向拖动与主图无关，既不该平移主图价格，也不该被
+        // 图表吃掉 —— 让给父级滚动容器，页面照常上下翻。与 onPriceAxis 一样在按下时
+        // 定性、整场保持。
+        val plot0 = geo()
+        val onSubPane = !onPriceAxis &&
+            first.position.y >= plot0.plotTopPx + plot0.mainHeightPx
+        // 立刻消费 down：图表落在 verticalScroll 的父容器里，
+        // 不抢占的话父容器会先开一个滚动手势，纵向拖动就变成翻页而不是调刻度。
+        // 副图区起笔则反着来 —— 翻页正是我们要的，down 留给父容器。
+        // 划线模式例外：那时单指只服务于告警线，在哪儿起笔都必须抢。
+        if (!onSubPane || alertLineMode) first.consume()
+        // 新手势开始：把上一场遗留的「不足一根」零头清掉，
+        // 否则上一场拖到一半松手，零头会算进下一场，手感上多出一小段跳动。
+        onGestureStart()
         // 自己记下每个指头上一次的位置：不依赖 positionChange，它在不同版本里签名动过
         val lastPositions = mutableMapOf<Any, Offset>()
         var travelled = 0f
@@ -1591,8 +1633,13 @@ private suspend fun PointerInputScope.detectChartGestures(
             val primary = pressed.first()
             val previous = lastPositions[primary.id] ?: primary.position
             pressed.forEach { change -> lastPositions[change.id] = change.position }
-            // 每次事件都先消费，避免父滚动容器把纵向位移吃掉
-            pressed.forEach { change -> change.consume() }
+            // 每次事件都先消费，避免父滚动容器把纵向位移吃掉。
+            // 例外：副图区起笔的单指手势 —— 它的纵向位移本就归页面（上下滑翻整页）。
+            // 一旦锁定横向（要平移时间轴）、进入划线 / 长按十字光标 / 双指缩放，
+            // 说明这场的用途已经定性回图表，立刻收回消费权。
+            val handToPage = onSubPane && !alertLineMode && !longPressActive &&
+                pressed.size < 2 && axis != ChartGesture.Axis.HORIZONTAL
+            if (!handToPage) pressed.forEach { change -> change.consume() }
 
             // 指头数一变（1↔2），上一场的两指间距与已定性的缩放轴都失去意义。
             // 不丢的话，从双指抬成单指再按下第二根时，会拿旧间距算出因子，跳一大格。
@@ -1697,8 +1744,10 @@ private suspend fun PointerInputScope.detectChartGestures(
                             if (onPriceAxis) {
                                 // 刻度区：向上拖（deltaY < 0）→ 因子 < 1 → 量程变小 → K 线变高
                                 ChartGesture.priceScaleFactor(deltaY, height)?.let(onPriceZoom)
-                            } else {
-                                // 绘图区：手指下滑 = 量程下移（看更低价区），因此取正号
+                            } else if (!onSubPane) {
+                                // 绘图区：手指下滑 = 量程下移（看更低价区），因此取正号。
+                                // 副图区（onSubPane）图表什么都不做：那场纵向位移
+                                // 没被消费，父滚动容器已接手翻页。
                                 onPricePan(deltaY / height)
                             }
                         }

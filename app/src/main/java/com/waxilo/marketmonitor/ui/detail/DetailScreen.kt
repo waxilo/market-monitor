@@ -80,6 +80,7 @@ import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.KlineChart
+import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
@@ -260,6 +261,9 @@ private fun FullscreenController(active: Boolean) {
  *
  * 「划线」不需要长按 —— 在这个模式下划线就是唯一目的，再要求长按只是多余一步；
  * 单指拖动直接移动告警线，松手即按线相对现价的位置落一条上破/下破预警，双指缩放照旧可用。
+ * 划线是**一次性**的：松手落库或拖垃圾桶删除后都自动退出模式，单指拖动随即恢复平移画布，
+ * 画下一根要重新点「划线」——常驻模式会让「画完线想看别的区间」做不到
+ * （拖动落笔又是一根线）。
  * 已有的告警线本来就画在图上，划线模式下按到它（容差 24dp）就是**改它对应的预警**，
  * 而不是在它旁边又叠一条 —— 历史上设置的告警因此都能在这里直接调整。
  *
@@ -345,8 +349,17 @@ private fun FullscreenChart(
                     alertLines = alertLines,
                     alertLineMode = alertMode,
                     onAlertLineDrag = viewModel::dragAlertLine,
-                    onAlertLineCommit = { viewModel.commitAlertLine() },
-                    onAlertLineDelete = viewModel::deleteAlertLine,
+                    onAlertLineCommit = {
+                        viewModel.commitAlertLine()
+                        // 划线是一次性动作：落一根就退出模式，单指拖动立刻还给平移画布；
+                        // 画下一根需重新点「划线」。删除同样退出，见 onAlertLineDelete。
+                        alertMode = false
+                    },
+                    onAlertLineDelete = { id ->
+                        viewModel.deleteAlertLine(id)
+                        // 删一条也算「用完一次划线」：留在模式里只会让人误以为还能继续拖线
+                        alertMode = false
+                    },
                     modifier = Modifier.fillMaxSize(),
                 )
             }
@@ -377,7 +390,7 @@ private fun FullscreenChart(
 
             if (alertMode) {
                 Text(
-                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 拖到右上角垃圾桶删除 · 松手自动判定上破/下破",
+                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 拖到右上角垃圾桶删除 · 松手自动判定上破/下破 · 落一根或删一条即自动退出，继续请重新点「划线」",
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = Spacing.Lg)
@@ -609,7 +622,9 @@ private fun IntervalSelector(
 }
 
 /**
- * 图表区：高度按屏高自适应（屏高的 40%，钳制在 260–380dp）。
+ * 图表区：主图高度按屏高自适应（屏高的 40%，钳制在 260–400dp），
+ * 每开一块副图就在下方追加一整块 [SUB_PANE_HEIGHT_DP] ——
+ * 主图与已有的副图都不随块数被挤薄，多开只是把整张图拉长、页面往下滚着看。
  *
  * 固定 360dp 的问题是：在 6.1 寸以下的机器上，图表 + 统计区会超出一屏，
  * 用户必须滚动才能看到 24h 量能；而在折叠屏展开后 360dp 又显得矮。
@@ -626,7 +641,7 @@ private fun ChartArea(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(chartHeight())
+            .height(chartHeight(state.subPanes.size))
             .padding(top = Spacing.Sm),
     ) {
         when {
@@ -687,11 +702,12 @@ private fun ChartArea(
     }
 }
 
-/** 图表高度：屏高 40%，钳制到 [260, 400] dp。 */
+/** 图表高度：屏高 40%（钳制到 [260,400]dp）整块留给主图，每开一块副图再往下加一个副图高；
+ * 主图大小与副图块数无关。 */
 @Composable
-private fun chartHeight(): Dp {
+private fun chartHeight(subPaneCount: Int): Dp {
     val screenHeight = LocalConfiguration.current.screenHeightDp
-    return (screenHeight * 0.4f).coerceIn(260f, 400f).dp
+    return (screenHeight * 0.4f).coerceIn(260f, 400f).dp + (subPaneCount * SUB_PANE_HEIGHT_DP).dp
 }
 
 /**
