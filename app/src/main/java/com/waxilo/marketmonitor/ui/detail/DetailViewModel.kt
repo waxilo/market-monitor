@@ -148,6 +148,21 @@ class DetailViewModel(
 
     val notice: StateFlow<String?> = noticeText.asStateFlow()
 
+    private val alertLinesVisibleState = MutableStateFlow(true)
+
+    /**
+     * 图上的划线要不要画出来，由绘图区右上角那只眼睛控制。
+     *
+     * **不进 DataStore**（与均线/布林/副图那几个显示偏好不同）：藏线是「这一会儿想看干净
+     * 的 K 线」的临时动作，持久化下来会让下次冷启动的人以为预警被删了。
+     * 放在 ViewModel 而不是 `rememberSaveable`：全屏要横屏，旋屏会重建 Activity。
+     */
+    val alertLinesVisible: StateFlow<Boolean> = alertLinesVisibleState.asStateFlow()
+
+    fun toggleAlertLines() {
+        alertLinesVisibleState.update { !it }
+    }
+
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
     private data class ChartData(
         val raw: List<Kline> = emptyList(),

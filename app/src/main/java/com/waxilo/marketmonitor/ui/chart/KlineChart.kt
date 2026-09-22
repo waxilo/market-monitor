@@ -121,16 +121,25 @@ fun KlineChart(
     downColor: Color = DownRed,
     onLoadMore: () -> Unit = {},
     /**
-     * 该标的已有的告警价线（价格原始值），**始终绘制**：划线模式只是「能不能拖」的开关，
-     * 看不见自己设过的预警价、却要进到划线模式才能调，等于把线藏进了抽屉。
-     * 由调用方持有并保证已按标的过滤。
+     * 该标的已有的告警价线（价格原始值），由调用方持有并保证已按标的过滤。
+     * 显隐交给 [alertLinesVisible]，但**划线模式下始终绘制**：看不见自己设过的预警价、
+     * 却要进到划线模式才能调，等于把线藏进了抽屉。
      */
     alertLines: List<AlertPriceLine> = emptyList(),
     /**
-     * 划线模式：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
+     * 划线模式下：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
      * 双指缩放照旧（画线时同样需要能缩放看细节）。
      */
     alertLineMode: Boolean = false,
+    /**
+     * 划线是否画在图上（右上角那只眼睛控制）。仅在非划线模式下生效 ——
+     * 划线时线必须可见，否则是在拖一根看不见的线。
+     */
+    alertLinesVisible: Boolean = true,
+    /**
+     * 点右上角的眼睛时回调；null = 不画那只眼睛（标的没有预警线时也就没有可隐藏的东西）。
+     */
+    onToggleAlertLines: (() -> Unit)? = null,
     /**
      * 划线过程中每帧回调「抓到的线 id（null = 新建）」与当前落点（价格原始值）。
      * id 在按下那一刻定好，整场手势不再改：拖过另一根时跳过去会让线瞬间失控。
@@ -323,6 +332,14 @@ fun KlineChart(
         return Rect(left = right - trashSizePx, top = top, right = right, bottom = top + trashSizePx)
     }
 
+    /**
+     * 这一帧要不要画线（连同线右侧的价位标签）。
+     *
+     * 划线模式下无条件为真：眼睛关的是「平时嫌线挡着看形态」，不该顺手把要拖的那根也藏掉，
+     * 拖一根看不见的线等于盲操作。
+     */
+    val alertLinesShown = alertLinesVisible || alertLineMode
+
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -437,7 +454,7 @@ fun KlineChart(
                 drawCandles(series, plot, geo, palette, mainRange)
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
-                drawAlertLines(alertLines, geo, palette, mainRange)
+                if (alertLinesShown) drawAlertLines(alertLines, geo, palette, mainRange)
             }
             series.subPanes.forEachIndexed { index, pane ->
                 clipRect(
@@ -479,7 +496,8 @@ fun KlineChart(
                 modifier = Modifier.align(Alignment.TopStart),
             )
             // 告警线也要给出价位：划线时手指底下若没有读数，落点全凭感觉
-            alertLines.forEach { line ->
+            // 线不画时标签也不画 —— 只藏线不藏数字，右侧会凭空挂着一串来路不明的价位
+            if (alertLinesShown) alertLines.forEach { line ->
                 AlertLinePriceBadge(
                     price = line.price,
                     range = mainRange,
@@ -612,6 +630,37 @@ fun KlineChart(
                     }
                 }
             }
+
+            // ---- 划线显隐的眼睛（绘图区右上角） ----
+            // 与垃圾桶同角、且**互斥**：划线模式下线必然可见（见 alertLinesShown），
+            // 眼睛在那里是个永远无效开关，让位给垃圾桶正好免掉两枚控件叠在一起。
+            // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
+            // 它**要**挂 clickable（与上面的垃圾桶相反）：点它就该切显隐，
+            // 不该同时被下层画布当成一次拖动。
+            if (onToggleAlertLines != null && !alertLineMode && alertLines.isNotEmpty()) {
+                val colors = MarketTheme.colors
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .offset(
+                            x = with(density) { (geo.plotWidthPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
+                            y = with(density) { (geo.mainTopPx + trashInsetPx).toDp() },
+                        )
+                        .size(EYE_BUTTON_SIZE)
+                        .clip(Radius.fullShape)
+                        .background(colors.washStrong)
+                        .semantics {
+                            contentDescription = if (alertLinesVisible) "隐藏划线" else "显示划线"
+                        }
+                        .clickable(onClick = onToggleAlertLines),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    EyeGlyph(
+                        open = alertLinesVisible,
+                        tint = if (alertLinesVisible) colors.ink else colors.muted,
+                    )
+                }
+            }
         }
         // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
         // 而且没有任何办法回去（双击复位这个手势不显眼）。
@@ -654,6 +703,40 @@ fun KlineChart(
                                 badgeHeightPx / 2f).toDp()
                         },
                     ),
+            )
+        }
+    }
+}
+
+/**
+ * 划线显隐的「眼睛」：开 = 眼眶 + 瞳孔，关 = 再加一道斜杠。
+ *
+ * 自绘而不用 `Icons.Default.Visibility` —— 眼睛那对矢量在 material-icons-extended 里，
+ * 为一个图标拖进上千个不划算，本应用只依赖 icons-core（同 DetailScreen 的全屏角标）。
+ */
+@Composable
+private fun EyeGlyph(open: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(EYE_ICON_SIZE)) {
+        val stroke = size.width * 0.08f
+        val centerY = size.height / 2f
+        val halfWidth = size.width * 0.46f
+        val arch = size.height * 0.6f
+        // 上下两条对称的二次曲线拼出眼眶：二次曲线只走到控制点的一半高度，
+        // 所以 arch 要放大到 0.6 倍画高，眼睛才有 0.3 倍画高的实际半高
+        val outline = Path().apply {
+            moveTo(size.width / 2f - halfWidth, centerY)
+            quadraticBezierTo(size.width / 2f, centerY - arch, size.width / 2f + halfWidth, centerY)
+            quadraticBezierTo(size.width / 2f, centerY + arch, size.width / 2f - halfWidth, centerY)
+            close()
+        }
+        drawPath(outline, tint, style = Stroke(width = stroke))
+        drawCircle(tint, radius = size.width * 0.14f, center = Offset(size.width / 2f, centerY))
+        if (!open) {
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.14f, size.height * 0.12f),
+                end = Offset(size.width * 0.86f, size.height * 0.88f),
+                strokeWidth = stroke,
             )
         }
     }
@@ -1881,3 +1964,14 @@ private val TRASH_ICON_SIZE = 16.dp
 
 /** 垃圾桶距绘图区右上沿的内缩距离；必须和 alertDeleteRect() 用同一值。 */
 private val SPACING_TRASH_INSET = 12.dp
+
+/**
+ * 右上角划线显隐「眼睛」的外圈边长。
+ *
+ * 内缩沿用 [SPACING_TRASH_INSET]（和垃圾桶同角同内缩），但比它小一档、
+ * 与左下角的全屏角标 [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，占的绘图区越少越好。
+ */
+private val EYE_BUTTON_SIZE = 26.dp
+
+/** 眼睛图标本身的大小（小于外圈背景，留出内边距）。 */
+private val EYE_ICON_SIZE = 15.dp

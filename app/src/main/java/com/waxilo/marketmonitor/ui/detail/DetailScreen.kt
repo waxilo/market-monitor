@@ -32,12 +32,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -125,6 +122,8 @@ fun DetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     // 提到这一层是因为竖屏图与全屏图都要画告警线：线由预警规则派生，在哪个模式下看都该一致
     val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
+    // 同样共用一个开关：在竖屏把线藏了，进全屏不该又冒出来
+    val alertLinesVisible by viewModel.alertLinesVisible.collectAsStateWithLifecycle()
     /**
      * 用 `rememberSaveable` 而不是普通 state：全屏要横屏，旋屏会让 Activity 重建，
      * 普通 state 会连同「正在全屏」一起丢掉，用户看到的是自动退出全屏。
@@ -140,6 +139,7 @@ fun DetailScreen(
             FullscreenChart(
                 state = state,
                 alertLines = alertLines,
+                alertLinesVisible = alertLinesVisible,
                 viewModel = viewModel,
                 onManageIntervals = { intervalManagerOpen = true },
                 onExit = { fullscreen = false },
@@ -178,6 +178,8 @@ fun DetailScreen(
                 ChartArea(
                     state = state,
                     alertLines = alertLines,
+                    alertLinesVisible = alertLinesVisible,
+                    onToggleAlertLines = viewModel::toggleAlertLines,
                     onLoadMore = viewModel::loadMore,
                     onRetry = viewModel::refresh,
                     onFullscreen = { fullscreen = true },
@@ -277,6 +279,7 @@ private fun FullscreenController(active: Boolean) {
 private fun FullscreenChart(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
+    alertLinesVisible: Boolean,
     viewModel: DetailViewModel,
     onManageIntervals: () -> Unit,
     onExit: () -> Unit,
@@ -348,6 +351,8 @@ private fun FullscreenChart(
                     onLoadMore = viewModel::loadMore,
                     alertLines = alertLines,
                     alertLineMode = alertMode,
+                    alertLinesVisible = alertLinesVisible,
+                    onToggleAlertLines = viewModel::toggleAlertLines,
                     onAlertLineDrag = viewModel::dragAlertLine,
                     onAlertLineCommit = {
                         viewModel.commitAlertLine()
@@ -414,7 +419,10 @@ private fun FullscreenChart(
 }
 
 /**
- * 顶栏：返回 + 币种名 + 自选 + 溢出菜单。
+ * 顶栏：返回 + 币种名 + 自选 + 建预警。
+ *
+ * 动作直接摊开而不收进「三个点」：菜单里只有一项，多点一次只为展开一个空菜单，
+ * 而且那项（建预警）恰恰是详情页的主行动之一，藏起来等于没人用。
  *
  * 「全屏」不在这里——它在图表左上角的角标上（见 [ChartArea]）：入口离图表越近越顺手，
  * 而详情页要滚动才能看到图表，按钮钉在顶栏等于每次先得把页面翻回去。
@@ -429,7 +437,6 @@ private fun DetailTopBar(
     onCreateAlert: () -> Unit,
 ) {
     val colors = MarketTheme.colors
-    var menuOpen by remember { mutableStateOf(false) }
     AppBar(
         title = state.title,
         subtitle = "${state.id.symbol} · ${state.id.market.label}",
@@ -444,24 +451,13 @@ private fun DetailTopBar(
                     tint = if (state.watched) colors.accent else colors.muted,
                 )
             }
-            Box {
-                IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "更多操作",
-                        tint = colors.ink,
-                    )
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("为该交易对建预警") },
-                        leadingIcon = { Icon(Icons.Default.Notifications, contentDescription = null) },
-                        onClick = {
-                            menuOpen = false
-                            onCreateAlert()
-                        },
-                    )
-                }
+            IconButton(onClick = onCreateAlert, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Notifications,
+                    contentDescription = "为该交易对建预警",
+                    modifier = Modifier.size(20.dp),
+                    tint = colors.ink,
+                )
             }
         },
     )
@@ -633,6 +629,8 @@ private fun IntervalSelector(
 private fun ChartArea(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
+    alertLinesVisible: Boolean,
+    onToggleAlertLines: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onFullscreen: () -> Unit,
@@ -684,6 +682,8 @@ private fun ChartArea(
                     onLoadMore = onLoadMore,
                     // 只画不能拖：竖屏没有划线模式，调整预警走全屏
                     alertLines = alertLines,
+                    alertLinesVisible = alertLinesVisible,
+                    onToggleAlertLines = onToggleAlertLines,
                     cornerAction = ChartCornerAction(
                         description = "全屏看图",
                         content = { FullscreenGlyph() },
