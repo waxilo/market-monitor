@@ -9,8 +9,10 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import com.waxilo.marketmonitor.ui.common.displayMessage
 import com.waxilo.marketmonitor.ui.market.TickerRow
 import java.math.BigDecimal
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @Immutable
@@ -26,6 +29,12 @@ data class SearchUiState(
     val query: String = "",
     val rows: List<TickerRow> = emptyList(),
     val emptyReason: String? = null,
+    /** 正在后台同步该市场的交易规则：空列表此时是「等一等」而不是「去别处刷新」。 */
+    val syncing: Boolean = false,
+    /** 同步失败的原因。非空时页面给出就地「重新同步」按钮，不再把用户支到首页。 */
+    val syncError: String? = null,
+    /** 本地没有任何标的、且当前没在同步——页面上值得放一个重试入口。 */
+    val canRetry: Boolean = false,
 )
 
 /**
@@ -40,6 +49,15 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
 
     private val market = MutableStateFlow(MarketType.SPOT)
     private val query = MutableStateFlow("")
+
+    /** 交易规则同步的进行中/失败状态，供空列表时展示真实进度而不是误导性的「去首页刷新」。 */
+    private val sync = MutableStateFlow(SyncState())
+
+    private data class SyncState(
+        val market: MarketType? = null,
+        val syncing: Boolean = false,
+        val error: String? = null,
+    )
 
     private data class Candidate(
         val id: SymbolId,
@@ -76,7 +94,7 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    val state: StateFlow<SearchUiState> = combine(query, market, source) { text, selected, candidates ->
+    val state: StateFlow<SearchUiState> = combine(query, market, source, sync) { text, selected, candidates, syncState ->
         val keyword = text.trim()
         val matched = candidates
             .mapNotNull { candidate -> candidate.rank(keyword)?.let { candidate to it } }
@@ -101,12 +119,22 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
             )
             .take(MAX_RESULTS)
             .map { it.first.toRow() }
+        // 同步状态只对「它发起时的那个市场」有意义：切到另一市场后，旧市场的
+        // 失败信息不该顶在新市场的空列表上。
+        val syncForMarket = syncState.takeIf { it.market == selected }
+        val syncing = syncForMarket?.syncing == true
+        val syncError = syncForMarket?.error
         SearchUiState(
             market = selected,
             query = text,
             rows = matched,
+            syncing = syncing,
+            syncError = syncError,
+            canRetry = candidates.isEmpty() && !syncing,
             emptyReason = when {
-                candidates.isEmpty() -> "本地还没有该市场的标的，先回首页刷新一次行情"
+                candidates.isEmpty() && syncing -> "正在同步${selected.label}交易对，请稍候…"
+                candidates.isEmpty() && syncError != null -> "同步失败：$syncError"
+                candidates.isEmpty() -> "本地还没有该市场的标的，点下方按钮重新同步"
                 matched.isEmpty() && keyword.isNotEmpty() -> "没有匹配「$keyword」的交易对"
                 else -> null
             },
@@ -132,14 +160,31 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
     /**
      * 该市场还没同步过交易规则时后台补一次。
      * 用户可能从没在首页切到合约就直奔搜索，此时 Room 里没有合约标的，
-     * 不同步就永远搜不到东西；失败则放开标记，下次切换或重进页面可重试。
+     * 不同步就永远搜不到东西；失败则放开标记并记下原因，页面上就地重试。
+     * 同步状态只在列表真正为空时才值得展示——本地已有标的时静默失败无碍搜索。
      */
     private fun ensureInstruments(target: MarketType) {
         if (target in syncedMarkets) return
         syncedMarkets += target
         viewModelScope.launch {
-            if (runCatching { repository.syncInstruments(target) }.isFailure) syncedMarkets -= target
+            sync.update { SyncState(market = target, syncing = true) }
+            try {
+                repository.syncInstruments(target)
+                sync.update { SyncState(market = target) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                syncedMarkets -= target
+                sync.update { SyncState(market = target, error = e.displayMessage()) }
+            }
         }
+    }
+
+    /** 空列表时的就地重试：把当前市场重新交给 [ensureInstruments]。 */
+    fun retrySync() {
+        val target = market.value
+        syncedMarkets -= target
+        ensureInstruments(target)
     }
 
     fun onQueryChange(text: String) {

@@ -86,6 +86,8 @@ fun SearchScreen(
             HintRow(
                 title = state.emptyReason ?: "输入币种或交易对开始搜索",
                 subtitle = if (state.query.isEmpty()) "支持代码模糊匹配，如 BTC、ETH、SOL" else null,
+                actionLabel = if (state.canRetry) "重新同步交易对" else null,
+                onAction = if (state.canRetry) viewModel::retrySync else null,
             )
         } else {
             Text(
