@@ -13,6 +13,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -641,7 +642,9 @@ private fun IntervalSelector(
  * 常显而不是长按才出现：小条占的是读数带上方固定预留的一截，
  * 出现/消失不会把图上下顶一格。没长按就读最新一根，与读数带同语义、上下对读。
  * 字号与图上读数带同档（9sp 等宽）—— 同一套数字分两处出现，字号必须一致。
- * 两行固定分组而不是 FlowRow 流式：折行点会随数字宽度漂移，看起来忽乱忽齐。
+ * 竖排成四列而不是两行横排：横排时每格宽度随数字位数伸缩，上下两行的标签互相错位，
+ * 「时间」这类长值还会把后面的格子整体挤歪。按列堆叠后列宽取两格内容的较宽者，
+ * 上下天然对齐（开/收、高/量各归一列），行分组语义不变。
  * 水平起点与左内边距都不在这里挂：读数带容器已经给了左起点与行间隔。
  */
 @Composable
@@ -656,30 +659,37 @@ private fun CandleReadoutRow(state: DetailUiState, index: Int?) {
         lineHeight = 11.sp,
         letterSpacing = 0.sp,
     )
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(2.dp),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xs)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xs)) {
+        // 较上根 +x.xx%：前缀已在文案里，不再挂标签
+        ReadoutStack {
             ReadoutCell("时间", tip.time, style = style)
-            ReadoutCell("开", tip.open, style = style)
-            ReadoutCell("高", tip.high, style = style)
-            ReadoutCell("低", tip.low, style = style)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xs)) {
-            // 「较上根 +x.xx%」：前缀已在文案里，不再挂标签
             ReadoutCell(null, tip.changeText, valueColor = changeColor, style = style)
+        }
+        ReadoutStack {
+            ReadoutCell("开", tip.open, style = style)
             ReadoutCell("收", tip.close, valueColor = changeColor, style = style)
+        }
+        ReadoutStack {
+            ReadoutCell("高", tip.high, style = style)
             ReadoutCell("量", tip.volume, style = style)
         }
+        ReadoutStack {
+            ReadoutCell("低", tip.low, style = style)
+        }
     }
+}
+
+/** 详情小条的一列：上下两格共享列宽（取较宽者），保证跨行竖直对齐。 */
+@Composable
+private fun ReadoutStack(content: @Composable ColumnScope.() -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp), content = content)
 }
 
 /** 小条里的一格：标签浅色、数值墨色（涨跌格把数值色传进来）。 */
 @Composable
 private fun ReadoutCell(label: String?, value: String, valueColor: Color? = null, style: TextStyle) {
     val colors = MarketTheme.colors
-    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xxs)) {
         if (label != null) {
             Text(
                 text = label,
