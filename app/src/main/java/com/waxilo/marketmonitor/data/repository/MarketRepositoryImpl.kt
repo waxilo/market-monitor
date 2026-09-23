@@ -12,8 +12,6 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
-import com.waxilo.marketmonitor.domain.model.Position
-import com.waxilo.marketmonitor.domain.model.SpotBalance
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.domain.repository.KlinePage
@@ -162,16 +160,18 @@ class MarketRepositoryImpl(
      * 最后一根蜡烛的实时更新流：REST 轮询（原 WS `@kline` 推送已移除）。
      * 冷流，由详情页 flatMapLatest 驱动——换周期自动停旧起新，离开页面取消收集即停。
      * 只取最近 2 根、不落缓存：这是「盯当前这一根」的轻量流，历史序列另走 klines()。
-     * 自定义周期下 [CandleInterval.apiCode] 即基础周期码，推的是原始蜡烛，
-     * 展示前由上层与已加载序列一起交给 KlineAggregator 重聚合。
+     * 发射粒度与 UI 的已加载序列一致（= 全局基础周期，自定义 10m 推 5m）；
+     * 当前接口不原生给这一档时（如 Bitget 的 8h），按方言基础档多取几根现场聚合。
      */
     override fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline> = flow {
-        val code = interval.apiCode
-        if (code.isEmpty()) return@flow
+        val uiBaseMinutes = interval.baseInterval?.minutes ?: return@flow
+        val plan = planKline(id.market, uiBaseMinutes)
         var emitted: Kline? = null
         while (true) {
             val latest = try {
-                api.klines(id.market, id.symbol, code, limit = 2).lastOrNull()
+                api.klines(id.market, id.symbol, plan.fetchMinutes, limit = 2 * plan.ratio)
+                    .let { KlineAggregator.aggregate(it, uiBaseMinutes, plan.ratio) }
+                    .lastOrNull()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -193,13 +193,21 @@ class MarketRepositoryImpl(
         klineDao.clearMarket(market.key)
     }
 
-    override suspend fun positions(): List<Position> = api.positions()
+    /** 方言感知的取数计划：挑「能整除目标周期的最大原生周期」，缺的档位靠聚合补齐。 */
+    private data class KlinePlan(val fetchMinutes: Long, val ratio: Int)
 
-    override suspend fun spotBalances(): List<SpotBalance> = api.spotBalances()
+    private fun planKline(market: MarketType, minutes: Long): KlinePlan {
+        val base = api.supportedIntervalMinutes(market)
+            .filter { it <= minutes && minutes % it == 0L }
+            .maxOrNull() ?: minutes
+        return KlinePlan(base, (minutes / base).toInt().coerceAtLeast(1))
+    }
 
     /**
      * 拉取 + 聚合 + 落缓存。自定义周期请求基础周期数据后合并，
      * 缓存里存的是聚合结果，因此离线时也能按用户选的周期回读。
+     * 基础周期的挑选是方言感知的：目标周期即便在币安口径下是「官方」的
+     * （如 8h 之于 Bitget），当前接口不给这一档时也从更小档聚合出来。
      */
     private suspend fun fetchAndCache(
         id: SymbolId,
@@ -208,16 +216,16 @@ class MarketRepositoryImpl(
         startTime: Long?,
         endTime: Long?,
     ): KlinePage {
-        val base = interval.baseInterval ?: error("周期缺少基础周期")
-        // 聚合需要整数倍根数，多取一点避免最后一桶总是不够
-        val rawLimit = (limit.toLong() * interval.aggregateRatio)
-            .coerceAtMost(BinanceMarketApi.MAX_KLINE_LIMIT.toLong())
+        val plan = planKline(id.market, interval.minutes)
+        // 聚合需要整数倍根数，多取一点避免最后一桶总是不够；上限按当前接口的单次根数封顶
+        val rawLimit = (limit.toLong() * plan.ratio)
+            .coerceAtMost(api.maxKlineLimit(id.market).toLong())
             .toInt()
-        val raw = api.klines(id.market, id.symbol, base.apiCode, rawLimit, startTime, endTime)
+        val raw = api.klines(id.market, id.symbol, plan.fetchMinutes, rawLimit, startTime, endTime)
         val now = System.currentTimeMillis()
         val stamped = raw.map { if (it.closeTime > now) it.copy(closed = false) else it }
         val aggregated = KlineAggregator.dedupeByOpenTime(
-            KlineAggregator.aggregate(stamped, interval),
+            KlineAggregator.aggregate(stamped, interval.minutes, plan.ratio),
         )
         klineDao.upsertAll(aggregated.map { it.toEntity(id, interval.storageKey) })
         klineDao.trim(id.market.key, id.symbol, interval.storageKey, MAX_CACHED_KLINES)

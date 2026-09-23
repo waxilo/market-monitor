@@ -1,20 +1,19 @@
 package com.waxilo.marketmonitor.data.remote
 
+import com.waxilo.marketmonitor.data.remote.dialect.FuturesDialectAdapter
+import com.waxilo.marketmonitor.data.remote.dialect.FuturesDialects
 import com.waxilo.marketmonitor.data.remote.dto.ErrorResponseDto
 import com.waxilo.marketmonitor.data.remote.dto.ExchangeInfoDto
-import com.waxilo.marketmonitor.data.remote.dto.PositionRiskDto
-import com.waxilo.marketmonitor.data.remote.dto.SpotAccountDto
 import com.waxilo.marketmonitor.data.remote.dto.TickerDto
 import com.waxilo.marketmonitor.data.remote.dto.toDomain
 import com.waxilo.marketmonitor.data.remote.dto.toKline
+import com.waxilo.marketmonitor.domain.kline.OfficialInterval
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
-import com.waxilo.marketmonitor.domain.model.Position
-import com.waxilo.marketmonitor.domain.model.SpotBalance
-import com.waxilo.marketmonitor.domain.repository.ApiCredentials
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -25,8 +24,10 @@ import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import kotlin.coroutines.resume
@@ -92,8 +93,6 @@ class BinanceMarketApi(
     private val client: OkHttpClient,
     private val hosts: RestHosts = DefaultRestHosts(),
     private val json: Json = MarketJson.DEFAULT,
-    /** 签名接口（仓位/现货余额）用的币安 API 凭据；未配置时签名请求直接失败。 */
-    private val credentials: () -> ApiCredentials? = { null },
 ) {
 
     private val budgets = mapOf(
@@ -103,27 +102,61 @@ class BinanceMarketApi(
     )
 
     suspend fun ping(market: MarketType): Boolean = try {
-        get(market, "/ping", weight = 1)
+        if (market.isFutures) {
+            probeFutures(hosts.hostsFor(market).first())
+        } else {
+            get(market, "/ping", weight = 1)
+        }
         true
     } catch (e: IOException) {
         false
     }
 
+    /** 当前选定的合约行情接口（含方言）。 */
+    private fun futuresEndpoint(): FuturesEndpoint = FuturesEndpoints.of(hosts.hostsFor(MarketType.FUTURES).first())
+
     /**
-     * 对**指定 base URL** 做一次性连通探测（设置页「一键检测」），返回往返毫秒数。
-     * 不经回退链、不计权重：探测的是「这个域在这台设备上通不通」，
+     * 当前合约接口支持的 K 线周期分钟数。仓库层聚合时只从这张表里挑基础周期——
+     * 各家原生周期不一（Gate 没有 3m，Bitget 没有 8h），缺的档位由上层用更小周期聚合补齐。
+     */
+    fun supportedIntervalMinutes(market: MarketType): List<Long> =
+        if (market.isFutures) {
+            FuturesDialects.of(futuresEndpoint().dialect).intervalLadder.keys.sorted()
+        } else {
+            OfficialInterval.entries.map { it.minutes }
+        }
+
+    /** 单次 K 线请求根数上限（各家不同：OKX 300、Hyperliquid 500、币安系 1000）。 */
+    fun maxKlineLimit(market: MarketType): Int =
+        if (market.isFutures) {
+            FuturesDialects.of(futuresEndpoint().dialect).maxKlineLimit
+        } else {
+            MAX_KLINE_LIMIT
+        }
+
+    /**
+     * 对**指定候选接口**做一次性连通探测（弹窗「一键检测」并行调用），返回往返毫秒数。
+     * 按该候选的方言构造其原生探测请求（GET 或 Hyperliquid 的 POST）。
+     * 不经回退链、不计权重：探测的是「这个接口在这台设备上通不通」，
      * 失败时抛 IOException（超时/DNS/HTTP 错误），由调用方转成每行的失败文案。
      */
     suspend fun probeFutures(baseUrl: String): Long {
-        val url = (baseUrl.trimEnd('/') + MarketType.FUTURES.apiPrefix + "/ping")
-            .toHttpUrlOrNull()
-            ?: throw IOException("地址无效：$baseUrl")
+        val endpoint = FuturesEndpoints.of(baseUrl)
+        val request = FuturesDialects.of(endpoint.dialect).probe(endpoint.baseUrl)
         val started = System.currentTimeMillis()
-        execute(url)
+        executeText(request)
         return System.currentTimeMillis() - started
     }
 
     suspend fun exchangeInfo(market: MarketType, symbol: String? = null): List<InstrumentMeta> {
+        if (market.isFutures) {
+            val endpoint = futuresEndpoint()
+            val dialect = FuturesDialects.of(endpoint.dialect)
+            budgets.getValue(market).await(20)
+            val text = executeText(dialect.exchangeInfo(endpoint.baseUrl))
+            val all = dialect.parseExchangeInfo(text)
+            return symbol?.let { s -> all.filter { it.id.symbol == s } } ?: all
+        }
         val query = symbol?.let { mapOf("symbol" to it) }.orEmpty()
         val element = get(market, "/exchangeInfo", query, weight = 20)
         val dto = json.decodeFromJsonElement(ExchangeInfoDto.serializer(), element)
@@ -141,31 +174,49 @@ class BinanceMarketApi(
 
     /** 单个交易对的 24h 快照（详情页/预警轮询用，权重远低于全量）。 */
     suspend fun ticker(market: MarketType, symbol: String): MarketTicker? {
+        if (market.isFutures) {
+            val endpoint = futuresEndpoint()
+            val dialect = FuturesDialects.of(endpoint.dialect)
+            budgets.getValue(market).await(1)
+            val text = executeText(dialect.ticker(endpoint.baseUrl, symbol))
+            return dialect.parseTicker(text, symbol, System.currentTimeMillis())
+        }
         val element = get(market, "/ticker/24hr", mapOf("symbol" to symbol), weight = 1)
         return json.decodeFromJsonElement(TickerDto.serializer(), element)
             .toDomain(market, System.currentTimeMillis())
     }
 
     /**
-     * K 线。`intervalApiCode` 必须是官方周期码（自定义周期由仓库层聚合，见 FR-2.3）。
+     * K 线。`minutes` 是周期分钟数，必须落在 [supportedIntervalMinutes] 里
+     * （缺档位的聚合由仓库层负责，见 FR-2.3）。
      * `startTime` 与 `endTime` 二选一使用：往早期翻页时传 endTime。
      */
     suspend fun klines(
         market: MarketType,
         symbol: String,
-        intervalApiCode: String,
+        minutes: Long,
         limit: Int,
         startTime: Long? = null,
         endTime: Long? = null,
     ): List<Kline> {
+        val capped = limit.coerceIn(1, maxKlineLimit(market))
+        if (market.isFutures) {
+            val endpoint = futuresEndpoint()
+            val dialect = FuturesDialects.of(endpoint.dialect)
+            budgets.getValue(market).await(klineWeight(capped))
+            val text = executeText(dialect.klines(endpoint.baseUrl, symbol, minutes, capped, startTime, endTime))
+            return dialect.parseKlines(text, minutes)
+        }
+        val code = OfficialInterval.entries.firstOrNull { it.minutes == minutes }?.apiCode
+            ?: throw MarketApiException(0, 0, "现货不支持 ${minutes} 分钟周期")
         val query = buildMap {
             put("symbol", symbol)
-            put("interval", intervalApiCode)
-            put("limit", limit.coerceIn(1, MAX_KLINE_LIMIT).toString())
+            put("interval", code)
+            put("limit", capped.toString())
             startTime?.let { put("startTime", it.toString()) }
             endTime?.let { put("endTime", it.toString()) }
         }
-        val element = get(market, "/klines", query, weight = klineWeight(limit))
+        val element = get(market, "/klines", query, weight = klineWeight(capped))
         return array(element).mapNotNull { row ->
             (row as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toKline()
         }
@@ -180,31 +231,6 @@ class BinanceMarketApi(
 
     private fun array(element: JsonElement): List<JsonElement> =
         (element as? JsonArray)?.toList() ?: emptyList()
-
-    /**
-     * 用户当前的币安永续仓位（`/fapi/v2/positionRisk`，签名，weight 5）。
-     * 注意：仓位在币安，而合约**行情**走的是 Aster 公共域——两套独立账户，互不相干。
-     */
-    suspend fun positions(): List<Position> {
-        val cred = credentials()
-            ?: throw MarketApiException(0, 0, "未配置币安 API 凭据，无法查询仓位")
-        val element = getSigned(MarketType.FUTURES, "/fapi/v2/positionRisk", emptyMap(), weight = 5, credentials = cred)
-        return array(element).mapNotNull { row ->
-            runCatching {
-                json.decodeFromJsonElement(PositionRiskDto.serializer(), row).toDomain(MarketType.FUTURES)
-            }.getOrNull()
-        }
-    }
-
-    /** 用户现货余额（`/api/v3/account`，签名，weight 20），按持有量降序。 */
-    suspend fun spotBalances(): List<SpotBalance> {
-        val cred = credentials()
-            ?: throw MarketApiException(0, 0, "未配置币安 API 凭据，无法查询资产")
-        val element = getSigned(MarketType.SPOT, "/api/v3/account", emptyMap(), weight = 20, credentials = cred)
-        val dto = json.decodeFromJsonElement(SpotAccountDto.serializer(), element)
-        return dto.balances.mapNotNull { runCatching { it.toDomain() }.getOrNull() }
-            .sortedByDescending { it.quantity }
-    }
 
     private suspend fun get(
         market: MarketType,
@@ -239,45 +265,8 @@ class BinanceMarketApi(
         return base.newBuilder().apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
     }
 
-    /**
-     * 签名请求（TRADE/USER_DATA）。签名对象是**实际发出的那串 query**：
-     * 参数 + timestamp + recvWindow 按序拼好、HMAC 一次、原样追加 signature —— 中间
-     * 任何一环重新编码过，服务端按收到的原文重算签名就对不上（-11 系列错误）。
-     *
-     * 凭据只发往硬编码的币安官方主域：设置里的镜像域是用户手填的，可能根本不属于他，
-     * 把 X-MBX-APIKEY 和签名递过去等于把账户钥匙交给第三方。行情域名（含 Aster 合约域）
-     * 也不参与这里——仓位在币安，签名请求必须跟着币安走。
-     * `path` 为含版本前缀的完整路径（如 /fapi/v2/positionRisk）。
-     */
-    private suspend fun getSigned(
-        market: MarketType,
-        path: String,
-        query: Map<String, String>,
-        weight: Int,
-        credentials: ApiCredentials,
-    ): JsonElement {
-        val base = when (market) {
-            MarketType.SPOT -> "https://api.binance.com"
-            MarketType.FUTURES -> "https://fapi.binance.com"
-        }
-        val params = buildList {
-            query.forEach { (k, v) -> add(k to v) }
-            add("timestamp" to System.currentTimeMillis().toString())
-            // 默认 5000ms 太紧：手机时钟和服务器差两三秒就吃 -1021，放宽到 10s
-            add("recvWindow" to "10000")
-        }
-        val unsigned = BinanceSigner.queryString(params)
-        val signed = "$unsigned&signature=${BinanceSigner.hmacSha256Hex(credentials.secret, unsigned)}"
-        val url = (base + path + "?" + signed).toHttpUrlOrNull()
-            ?: throw MarketApiException(0, 0, "${market.label}签名请求构造失败")
-        budgets.getValue(market).await(weight)
-        return execute(url, credentials.key)
-    }
-
-    private suspend fun execute(url: HttpUrl, apiKey: String? = null): JsonElement {
-        val request = Request.Builder().url(url).header("Accept", "application/json")
-            .apply { apiKey?.let { header("X-MBX-APIKEY", it) } }
-            .build()
+    private suspend fun execute(url: HttpUrl): JsonElement {
+        val request = Request.Builder().url(url).header("Accept", "application/json").build()
         val text = client.newCall(request).awaitText()
         return try {
             json.parseToJsonElement(text)
@@ -286,9 +275,18 @@ class BinanceMarketApi(
         }
     }
 
+    /** 方言请求（GET 或 POST）原文发出、原文收回；解析交给各家适配器。 */
+    private suspend fun executeText(request: FuturesDialectAdapter.Request): String {
+        val builder = Request.Builder().url(request.url).header("Accept", "application/json")
+        request.postBody?.let { builder.post(it.toRequestBody(JSON_MEDIA_TYPE)) }
+        return client.newCall(builder.build()).awaitText()
+    }
+
     companion object {
         /** 币安单次请求上限。 */
         const val MAX_KLINE_LIMIT = 1000
+
+        private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 }
 

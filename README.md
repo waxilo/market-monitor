@@ -1,6 +1,7 @@
 # Market Monitor（行情监控）
 
 币安现货 + USDT-M 合约的行情监控 App：K 线图表、价格预警、Webhook 推送与应用内更新。
+只做行情与预警，不碰账户：没有任何签名/私有接口，也不需要填 API Key。
 需求与取舍见 [`docs/需求文档.md`](docs/需求文档.md)。
 
 ## 模块与现状
@@ -10,6 +11,8 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除） | `data/remote`、`data/local` | 已实现 |
+| 合约行情多接口（Aster/币安系/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid，设置页弹窗并行检测后点选） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对 |
+| 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |

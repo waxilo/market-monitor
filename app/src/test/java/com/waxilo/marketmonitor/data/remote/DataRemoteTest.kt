@@ -1,14 +1,11 @@
 package com.waxilo.marketmonitor.data.remote
 
-import com.waxilo.marketmonitor.data.remote.dto.SpotAccountDto
-import com.waxilo.marketmonitor.data.remote.dto.toDomain
 import com.waxilo.marketmonitor.domain.model.MarketType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.math.BigDecimal
 
 class RateBudgetTest {
 
@@ -121,32 +118,5 @@ class RestHostFallbackTest {
             listOf("https://fapi.asterdex.com"),
             DefaultRestHosts(futuresHost = { "" }).hostsFor(MarketType.FUTURES),
         )
-    }
-}
-
-/**
- * 现货账户 DTO 解析（/api/v3/account）。
- * 币安会返回账户里全部资产的零余额行，不滤掉的话 UI 会被几百行空资产淹没。
- */
-class SpotAccountDtoTest {
-
-    @Test
-    fun `零余额与坏数字的资产行被过滤，金额走 BigDecimal 不丢精度`() {
-        val element = MarketJson.DEFAULT.parseToJsonElement(
-            """
-            {"balances":[
-              {"asset":"BTC","free":"0.5","locked":"0.1"},
-              {"asset":"USDT","free":"0","locked":"0"},
-              {"asset":"","free":"9"},
-              {"asset":"ETH","free":"x"}
-            ]}
-            """.trimIndent(),
-        )
-        val dto = MarketJson.DEFAULT.decodeFromJsonElement(SpotAccountDto.serializer(), element)
-        val rows = dto.balances.mapNotNull { it.toDomain() }
-        assertEquals(1, rows.size)
-        assertEquals("BTC", rows[0].asset)
-        assertEquals(0, BigDecimal("0.6").compareTo(rows[0].quantity))
-        assertEquals(0, BigDecimal("0.5").compareTo(rows[0].available))
     }
 }

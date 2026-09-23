@@ -4,9 +4,6 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
-import com.waxilo.marketmonitor.domain.model.Position
-import com.waxilo.marketmonitor.domain.model.PositionSide
-import com.waxilo.marketmonitor.domain.model.SpotBalance
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
@@ -123,65 +120,3 @@ data class ErrorResponseDto(
     val code: Int = 0,
     val msg: String = "",
 )
-
-/**
- * `/v2/positionRisk` 单行（币安与 Aster 同构，金额全部是字符串）。
- * 字段给默认值：接口偶尔省略 0 值字段，缺省按「空仓位」处理。
- */
-@Serializable
-data class PositionRiskDto(
-    val symbol: String = "",
-    val positionAmt: String = "0",
-    val entryPrice: String = "0",
-    val markPrice: String = "0",
-    val unRealizedProfit: String = "0",
-    val notional: String = "0",
-    val leverage: String = "1",
-    val marginType: String = "",
-    val isolatedMargin: String = "0",
-    val liquidationPrice: String = "0",
-    val positionSide: String = "BOTH",
-)
-
-/** 空仓位（positionAmt 为 0）返回 null，让仓库层直接过滤。 */
-fun PositionRiskDto.toDomain(market: MarketType): Position? {
-    if (symbol.isBlank()) return null
-    val amt = positionAmt.toBigDecimalOrNull() ?: return null
-    if (amt.signum() == 0) return null
-    return Position(
-        id = SymbolId(market, symbol),
-        side = if (amt.signum() > 0) PositionSide.LONG else PositionSide.SHORT,
-        quantity = amt.abs(),
-        entryPrice = entryPrice.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        markPrice = markPrice.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        unrealizedPnl = unRealizedProfit.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        notional = notional.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        leverage = leverage.toIntOrNull() ?: 1,
-        marginType = marginType,
-        isolatedMargin = isolatedMargin.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        liquidationPrice = liquidationPrice.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-    )
-}
-
-/** `/api/v3/account` 里我们关心的部分：现货余额表。 */
-@Serializable
-data class SpotAccountDto(
-    val balances: List<SpotBalanceDto> = emptyList(),
-)
-
-@Serializable
-data class SpotBalanceDto(
-    val asset: String = "",
-    val free: String = "0",
-    val locked: String = "0",
-)
-
-/** 总量为 0 的资产行返回 null（币安会返回几百行零余额，全进 UI 没有意义）。 */
-fun SpotBalanceDto.toDomain(): SpotBalance? {
-    if (asset.isBlank()) return null
-    val free = free.toBigDecimalOrNull() ?: BigDecimal.ZERO
-    val locked = locked.toBigDecimalOrNull() ?: BigDecimal.ZERO
-    val total = free.add(locked)
-    if (total.signum() == 0) return null
-    return SpotBalance(asset = asset, quantity = total, available = free)
-}

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -39,7 +38,6 @@ import com.waxilo.marketmonitor.ui.alerts.AlertEditorScreen
 import com.waxilo.marketmonitor.ui.alerts.AlertsScreen
 import com.waxilo.marketmonitor.ui.detail.DetailScreen
 import com.waxilo.marketmonitor.ui.market.MarketScreen
-import com.waxilo.marketmonitor.ui.positions.PositionsScreen
 import com.waxilo.marketmonitor.ui.search.SearchScreen
 import com.waxilo.marketmonitor.ui.settings.SettingsScreen
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -55,7 +53,6 @@ object Routes {
     const val SETTINGS = "settings"
     const val ALERTS = "alerts"
     const val WEBHOOKS = "webhooks"
-    const val POSITIONS = "positions"
     const val DETAIL_TEMPLATE = "detail/{market}/{symbol}"
     const val ALERT_EDIT_TEMPLATE = "alert/edit/{ruleId}"
     const val ALERT_NEW_TEMPLATE = "alert/new?market={market}&symbol={symbol}"
@@ -69,13 +66,12 @@ object Routes {
         "alert/new?market=${market.key}&symbol=$symbol"
 }
 
-/** 底栏一级页：行情 / 预警 / 仓位 / 设置。二级页（详情/搜索/Webhook/预警编辑）不入底栏。 */
+/** 底栏一级页：行情 / 预警 / 设置。二级页（详情/搜索/Webhook/预警编辑）不入底栏。 */
 private data class BottomTab(val route: String, val label: String, val icon: ImageVector)
 
 private val BottomTabs = listOf(
     BottomTab(Routes.MARKET, "行情", Icons.Default.Home),
     BottomTab(Routes.ALERTS, "预警", Icons.Default.Notifications),
-    BottomTab(Routes.POSITIONS, "仓位", Icons.Default.Person),
     BottomTab(Routes.SETTINGS, "设置", Icons.Default.Settings),
 )
 
@@ -231,11 +227,6 @@ fun AppNavHost(
                 // 返回箭头只在「不是栈底」时出现：从通知直达预警页再切过来的设置页
                 // 没有可退的地方，底栏就是它的出口。
                 SettingsScreen(
-                    onBack = backAsTab,
-                )
-            }
-            composable(Routes.POSITIONS) {
-                PositionsScreen(
                     onBack = backAsTab,
                 )
             }

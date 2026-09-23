@@ -42,6 +42,8 @@ data class SettingsUiState(
     /** 一键检测结果：baseUrl → 结论；不在表里的即「未检测」。 */
     val probeResults: Map<String, ProbeOutcome> = emptyMap(),
     val probing: Boolean = false,
+    /** 正在检测中的接口（弹窗逐行转圈用）；一键检测时=全部，单行重测时=仅该域。 */
+    val probingUrls: Set<String> = emptySet(),
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
@@ -126,32 +128,54 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * 一键检测：对全部内置候选接口在本机**并行**各发一次 ping，结果逐行回填。
+     * 一键检测：对全部内置候选接口在本机**同时并行**各发一次探测（原生探测端点），
+     * 结果逐行独立回填——快的域先出结论，不被最慢的域整批拖等。
      * 连通性因网络环境（地区/代理）而异，开发机上的探测不作数，必须在用户设备上测——
      * 这正是把「选哪个接口」交给用户的原因。
      */
     fun detectEndpoints() {
         if (state.value.probing) return
-        backing.update { it.copy(probing = true, probeResults = emptyMap()) }
+        backing.update {
+            it.copy(
+                probing = true,
+                probeResults = emptyMap(),
+                probingUrls = FuturesEndpoints.ALL.map { e -> e.baseUrl }.toSet(),
+            )
+        }
         viewModelScope.launch {
             coroutineScope {
                 FuturesEndpoints.ALL.map { endpoint ->
-                    async {
-                        val outcome = runCatching { container.probeFuturesEndpoint(endpoint.baseUrl) }
-                            .fold(
-                                onSuccess = { ProbeOutcome.Reachable(it) as ProbeOutcome },
-                                onFailure = { e ->
-                                    // runCatching 会把取消也吞成「失败」：协程被撤就安静退出，
-                                    // 别给正在离开的页面写一条假的检测结论
-                                    if (e is CancellationException) throw e
-                                    ProbeOutcome.Failed(probeFailure(e))
-                                },
-                            )
-                        backing.update { s -> s.copy(probeResults = s.probeResults + (endpoint.baseUrl to outcome)) }
-                    }
+                    async { probeOneOutcome(endpoint.baseUrl) }
                 }.forEach { it.await() }
             }
-            backing.update { it.copy(probing = false) }
+            backing.update { it.copy(probing = false, probingUrls = emptySet()) }
+        }
+    }
+
+    /** 单行重测：只发这一个接口的探测，不牵动其他行。 */
+    fun probeOne(baseUrl: String) {
+        if (baseUrl in state.value.probingUrls) return
+        backing.update { it.copy(probingUrls = it.probingUrls + baseUrl) }
+        viewModelScope.launch { probeOneOutcome(baseUrl) }
+    }
+
+    /** 发一次探测并把结论回填到该域那一行（成功/失败都回填），随后摘掉该行的转圈。 */
+    private suspend fun probeOneOutcome(baseUrl: String) {
+        val outcome = runCatching { container.probeFuturesEndpoint(baseUrl) }
+            .fold(
+                onSuccess = { ProbeOutcome.Reachable(it) as ProbeOutcome },
+                onFailure = { e ->
+                    // runCatching 会把取消也吞成「失败」：协程被撤就安静退出，
+                    // 别给正在离开的页面写一条假的检测结论
+                    if (e is CancellationException) throw e
+                    ProbeOutcome.Failed(probeFailure(e))
+                },
+            )
+        backing.update { s ->
+            s.copy(
+                probeResults = s.probeResults + (baseUrl to outcome),
+                probingUrls = s.probingUrls - baseUrl,
+            )
         }
     }
 

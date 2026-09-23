@@ -11,10 +11,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -29,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +45,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
@@ -51,6 +58,7 @@ import com.waxilo.marketmonitor.ui.common.Section
 import com.waxilo.marketmonitor.ui.common.SegmentedControl
 import com.waxilo.marketmonitor.ui.common.StatusPill
 import com.waxilo.marketmonitor.ui.common.PillTone
+import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -76,6 +84,7 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = appViewModel { SettingsViewModel(it) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var sourcePickerOpen by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         AppBar(title = "设置", subtitle = "本地存储 · 无账号", onBack = onBack)
@@ -110,8 +119,33 @@ fun SettingsScreen(
 
             item {
                 Section(title = "合约行情接口") {
+                    val current = FuturesEndpoints.of(state.futuresHost)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { sourcePickerOpen = true }
+                            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = current.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MarketTheme.colors.ink,
+                            )
+                            Text(
+                                text = "${current.baseUrl.removePrefix("https://")} · ${current.note}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MarketTheme.colors.muted,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Spacer(Modifier.width(Spacing.Sm))
+                        TextAction("更换 / 检测", onClick = { sourcePickerOpen = true })
+                    }
                     Text(
-                        text = "永续合约行情只从选中的接口获取。点「一键检测」用当前网络（含代理）实测各接口的连通性与延迟，点一行即切换。币安合约与 Aster 是独立盘口，切换会清空合约缓存并重新同步交易对；仓位不受影响（始终走币安官方）。",
+                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -120,38 +154,6 @@ fun SettingsScreen(
                             bottom = Spacing.Sm,
                         ),
                     )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.Gutter)
-                            .padding(bottom = Spacing.Xs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = if (state.probing) "正在检测全部接口…" else "检测结果只对本机当前网络有效",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MarketTheme.colors.muted,
-                        )
-                        if (state.probing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = MarketTheme.colors.muted,
-                            )
-                        } else {
-                            TextAction("一键检测", viewModel::detectEndpoints)
-                        }
-                    }
-                    FuturesEndpoints.ALL.forEach { endpoint ->
-                        Rule()
-                        FuturesEndpointRow(
-                            endpoint = endpoint,
-                            selected = state.futuresHost == endpoint.baseUrl,
-                            outcome = state.probeResults[endpoint.baseUrl],
-                            onSelect = { viewModel.setFuturesHost(endpoint.baseUrl) },
-                        )
-                    }
                 }
             }
 
@@ -275,7 +277,7 @@ fun SettingsScreen(
             item {
                 Section(title = "关于") {
                     Text(
-                        text = "行情监控 · 现货数据来自币安公开接口；永续合约行情来自上方选定的接口（默认 Aster），仓位始终走币安官方。本应用不构成投资建议。",
+                        text = "行情监控 · 现货数据来自币安公开接口；永续合约行情来自上方弹窗选定的接口（默认 Aster）。本应用不构成投资建议。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -285,6 +287,19 @@ fun SettingsScreen(
                     )
                 }
             }
+        }
+
+        if (sourcePickerOpen) {
+            FuturesSourcePickerDialog(
+                state = state,
+                onSelect = { url ->
+                    viewModel.setFuturesHost(url)
+                    sourcePickerOpen = false
+                },
+                onDetectAll = viewModel::detectEndpoints,
+                onProbeOne = viewModel::probeOne,
+                onDismiss = { sourcePickerOpen = false },
+            )
         }
     }
 }
@@ -340,20 +355,115 @@ private fun ValueRow(
 }
 
 /**
- * 「合约行情接口」候选行：名称 + 域名在左，检测结论与选中态在右。
- * 整行可点即选中——候选就 5 个，不值得再套一层对话框。
+ * 合约行情接口选择弹窗。
+ *
+ * 候选有 12 个，且连通性强依赖本机当前网络（代理/地区差异极大），平铺在设置页里
+ * 只会把页面撑成一长列按钮。这里收进全屏弹窗：打开即**一次性并行**发起全部探测，
+ * 每行独立回填自己的结论——哪个先回来哪个先亮，不排队等待。点一行即选定并关闭。
  */
 @Composable
-private fun FuturesEndpointRow(
+private fun FuturesSourcePickerDialog(
+    state: SettingsUiState,
+    onSelect: (String) -> Unit,
+    onDetectAll: () -> Unit,
+    onProbeOne: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Dialog(onDismissRequest = onDismiss) {
+        // 弹窗内自己拉一轮检测，用户不必先点按钮才知道哪个能用。
+        LaunchedEffect(Unit) { onDetectAll() }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(colors.paper)
+                .statusBarsPadding()
+                .navigationBarsPadding(),
+        ) {
+            AppBar(
+                title = "合约行情接口",
+                subtitle = "K 线 / 24h 行情来源 · 切换后清空合约缓存",
+                large = false,
+                onBack = onDismiss,
+                actions = {
+                    TextAction(
+                        text = if (state.probing) "检测中…" else "全部重新检测",
+                        onClick = onDetectAll,
+                    )
+                },
+            )
+            Text(
+                text = "检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+            )
+            Rule()
+
+            val fastest = state.probeResults.values
+                .filterIsInstance<ProbeOutcome.Reachable>()
+                .minByOrNull { it.latencyMs }
+                ?.latencyMs
+
+            val (compatible, standalone) = FuturesEndpoints.ALL.partition { it.isBinanceCompatible }
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                sourceGroup("币安同构 · 共用币安盘口", compatible, state, fastest, onSelect, onProbeOne)
+                sourceGroup("独立盘口 · 各家自有协议", standalone, state, fastest, onSelect, onProbeOne)
+                item { Spacer(Modifier.height(Spacing.Xl)) }
+            }
+        }
+    }
+}
+
+private fun LazyListScope.sourceGroup(
+    title: String,
+    endpoints: List<FuturesEndpoint>,
+    state: SettingsUiState,
+    fastestMs: Long?,
+    onSelect: (String) -> Unit,
+    onProbeOne: (String) -> Unit,
+) {
+    item {
+        Column {
+            Spacer(Modifier.height(Spacing.Sm))
+            SectionOverline(text = title)
+        }
+    }
+    items(endpoints) { endpoint ->
+        FuturesSourceRow(
+            endpoint = endpoint,
+            selected = endpoint.baseUrl == state.futuresHost,
+            probing = endpoint.baseUrl in state.probingUrls,
+            outcome = state.probeResults[endpoint.baseUrl],
+            isFastest = fastestMs != null &&
+                (state.probeResults[endpoint.baseUrl] as? ProbeOutcome.Reachable)?.latencyMs == fastestMs,
+            onSelect = {
+                onSelect(endpoint.baseUrl)
+            },
+            onProbeOne = { onProbeOne(endpoint.baseUrl) },
+        )
+    }
+}
+
+/**
+ * 候选行：名称 + 域名在左，检测结论与选中态在右。整行可点即选定。
+ */
+@Composable
+private fun FuturesSourceRow(
     endpoint: FuturesEndpoint,
     selected: Boolean,
+    probing: Boolean,
     outcome: ProbeOutcome?,
+    isFastest: Boolean,
     onSelect: () -> Unit,
+    onProbeOne: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = Spacing.RowMinHeight)
             .clickable(onClick = onSelect)
             .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
         verticalAlignment = Alignment.CenterVertically,
@@ -373,16 +483,28 @@ private fun FuturesEndpointRow(
             )
         }
         Spacer(Modifier.width(Spacing.Sm))
-        when (outcome) {
-            is ProbeOutcome.Reachable -> StatusPill("${outcome.latencyMs}ms", PillTone.Positive)
-            is ProbeOutcome.Failed -> StatusPill(outcome.reason, PillTone.Negative)
-            null -> StatusPill("未检测", PillTone.Neutral)
+        if (probing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = colors.muted,
+            )
+        } else {
+            when (outcome) {
+                is ProbeOutcome.Reachable -> StatusPill(
+                    text = (if (isFastest) "最快 " else "") + "${outcome.latencyMs}ms",
+                    tone = PillTone.Positive,
+                )
+                is ProbeOutcome.Failed -> StatusPill(outcome.reason, PillTone.Negative)
+                null -> StatusPill("未检测", PillTone.Neutral)
+            }
+            TextAction("重测", onClick = onProbeOne, color = colors.muted)
         }
         if (selected) {
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = "使用中",
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.padding(start = Spacing.Xs).size(18.dp),
                 tint = colors.accent,
             )
         }
