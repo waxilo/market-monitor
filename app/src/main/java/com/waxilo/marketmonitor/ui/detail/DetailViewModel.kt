@@ -151,7 +151,7 @@ class DetailViewModel(
     private val alertLinesVisibleState = MutableStateFlow(true)
 
     /**
-     * 图上的划线要不要画出来，由绘图区右上角那只眼睛控制。
+     * 图上的划线要不要画出来，由绘图区右下角那只眼睛控制。
      *
      * **不进 DataStore**（与均线/布林/副图那几个显示偏好不同）：藏线是「这一会儿想看干净
      * 的 K 线」的临时动作，持久化下来会让下次冷启动的人以为预警被删了。

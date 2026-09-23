@@ -132,7 +132,7 @@ fun KlineChart(
      */
     alertLineMode: Boolean = false,
     /**
-     * 划线是否画在图上（右上角那只眼睛控制）。仅在非划线模式下生效 ——
+     * 划线是否画在图上（绘图区右下角那只眼睛控制）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
      */
     alertLinesVisible: Boolean = true,
@@ -631,11 +631,12 @@ fun KlineChart(
                 }
             }
 
-            // ---- 划线显隐的眼睛（绘图区右上角） ----
-            // 与垃圾桶同角、且**互斥**：划线模式下线必然可见（见 alertLinesShown），
-            // 眼睛在那里是个永远无效开关，让位给垃圾桶正好免掉两枚控件叠在一起。
+            // ---- 划线显隐的眼睛（绘图区右下角） ----
+            // 右下角是绘图区信息密度最低的角落：右上角要留给划线模式的删除垃圾桶，
+            // 左上角压着指标读数带，左下角站着全屏角标。
+            // 划线模式下不画：那时线必然可见（见 alertLinesShown），眼睛是个永远无效的开关。
             // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
-            // 它**要**挂 clickable（与上面的垃圾桶相反）：点它就该切显隐，
+            // 它**要**挂 clickable（与垃圾桶相反）：点它就该切显隐，
             // 不该同时被下层画布当成一次拖动。
             if (onToggleAlertLines != null && !alertLineMode && alertLines.isNotEmpty()) {
                 val colors = MarketTheme.colors
@@ -644,7 +645,7 @@ fun KlineChart(
                         .align(Alignment.TopStart)
                         .offset(
                             x = with(density) { (geo.plotWidthPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
-                            y = with(density) { (geo.mainTopPx + trashInsetPx).toDp() },
+                            y = with(density) { (geo.plotHeightPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
                         )
                         .size(EYE_BUTTON_SIZE)
                         .clip(Radius.fullShape)
@@ -1966,10 +1967,10 @@ private val TRASH_ICON_SIZE = 16.dp
 private val SPACING_TRASH_INSET = 12.dp
 
 /**
- * 右上角划线显隐「眼睛」的外圈边长。
+ * 绘图区右下角划线显隐「眼睛」的外圈边长。
  *
- * 内缩沿用 [SPACING_TRASH_INSET]（和垃圾桶同角同内缩），但比它小一档、
- * 与左下角的全屏角标 [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，占的绘图区越少越好。
+ * 内缩沿用 [SPACING_TRASH_INSET]（与右上角垃圾桶同内缩），大小与左下角的全屏角标
+ * [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，占的绘图区越少越好。
  */
 private val EYE_BUTTON_SIZE = 26.dp
 
