@@ -40,6 +40,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
@@ -103,6 +105,53 @@ fun SettingsScreen(
                         placeholder = "USDT",
                         onValue = viewModel::setQuoteAsset,
                     )
+                }
+            }
+
+            item {
+                Section(title = "合约行情接口") {
+                    Text(
+                        text = "永续合约行情只从选中的接口获取。点「一键检测」用当前网络（含代理）实测各接口的连通性与延迟，点一行即切换。币安合约与 Aster 是独立盘口，切换会清空合约缓存并重新同步交易对；仓位不受影响（始终走币安官方）。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Gutter)
+                            .padding(bottom = Spacing.Xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (state.probing) "正在检测全部接口…" else "检测结果只对本机当前网络有效",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MarketTheme.colors.muted,
+                        )
+                        if (state.probing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MarketTheme.colors.muted,
+                            )
+                        } else {
+                            TextAction("一键检测", viewModel::detectEndpoints)
+                        }
+                    }
+                    FuturesEndpoints.ALL.forEach { endpoint ->
+                        Rule()
+                        FuturesEndpointRow(
+                            endpoint = endpoint,
+                            selected = state.futuresHost == endpoint.baseUrl,
+                            outcome = state.probeResults[endpoint.baseUrl],
+                            onSelect = { viewModel.setFuturesHost(endpoint.baseUrl) },
+                        )
+                    }
                 }
             }
 
@@ -226,7 +275,7 @@ fun SettingsScreen(
             item {
                 Section(title = "关于") {
                     Text(
-                        text = "行情监控 · 现货数据来自币安、永续合约来自 Aster 的公开接口。本应用不构成投资建议。",
+                        text = "行情监控 · 现货数据来自币安公开接口；永续合约行情来自上方选定的接口（默认 Aster），仓位始终走币安官方。本应用不构成投资建议。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -285,6 +334,56 @@ private fun ValueRow(
                 textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
                 singleLine = true,
                 cursorBrush = SolidColor(colors.ink),
+            )
+        }
+    }
+}
+
+/**
+ * 「合约行情接口」候选行：名称 + 域名在左，检测结论与选中态在右。
+ * 整行可点即选中——候选就 5 个，不值得再套一层对话框。
+ */
+@Composable
+private fun FuturesEndpointRow(
+    endpoint: FuturesEndpoint,
+    selected: Boolean,
+    outcome: ProbeOutcome?,
+    onSelect: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = endpoint.label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.ink,
+            )
+            Text(
+                text = "${endpoint.baseUrl.removePrefix("https://")} · ${endpoint.note}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Spacer(Modifier.width(Spacing.Sm))
+        when (outcome) {
+            is ProbeOutcome.Reachable -> StatusPill("${outcome.latencyMs}ms", PillTone.Positive)
+            is ProbeOutcome.Failed -> StatusPill(outcome.reason, PillTone.Negative)
+            null -> StatusPill("未检测", PillTone.Neutral)
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = "使用中",
+                modifier = Modifier.size(18.dp),
+                tint = colors.accent,
             )
         }
     }

@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.domain.repository
 
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
@@ -44,8 +45,11 @@ data class AppSettings(
     val allowInsecureWebhook: Boolean = false,
     /** 备用域名，逗号分隔；为空表示仅用官方域名。 */
     val spotRestMirror: String = "",
-    val futuresRestMirror: String = "",
-    val wsMirror: String = "",
+    /**
+     * 用户选定的合约行情接口（[com.waxilo.marketmonitor.domain.model.FuturesEndpoints] 之一）。
+     * 合约行情只发往这一个域名，不再逐域回退试探；设置页一键检测后点选。
+     */
+    val futuresRestHost: String = FuturesEndpoints.DEFAULT_URL,
     /**
      * 更新加速站（PRD FR-6.2 国内网络加速）。默认直连 GitHub。
      * 既作用于更新包与校验值的下载，也作用于检查更新的 API —— 见 [UpdateMirror.apiChain]。

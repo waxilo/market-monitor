@@ -14,6 +14,7 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
@@ -60,8 +61,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             webhookEnabled = this[Keys.WEBHOOK] ?: d.webhookEnabled,
             allowInsecureWebhook = this[Keys.INSECURE] ?: d.allowInsecureWebhook,
             spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
-            futuresRestMirror = this[Keys.FUTURES_MIRROR] ?: d.futuresRestMirror,
-            wsMirror = this[Keys.WS_MIRROR] ?: d.wsMirror,
+            futuresRestHost = FuturesEndpoints.normalize(this[Keys.FUTURES_HOST]),
             updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
             autoUpdateCheck = this[Keys.AUTO_UPDATE] ?: d.autoUpdateCheck,
             dismissedVersion = this[Keys.DISMISSED] ?: d.dismissedVersion,
@@ -86,8 +86,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.WEBHOOK] = webhookEnabled
         prefs[Keys.INSECURE] = allowInsecureWebhook
         prefs[Keys.SPOT_MIRROR] = spotRestMirror
-        prefs[Keys.FUTURES_MIRROR] = futuresRestMirror
-        prefs[Keys.WS_MIRROR] = wsMirror
+        prefs[Keys.FUTURES_HOST] = futuresRestHost
         prefs[Keys.UPDATE_PROXY] = updateMirror.key
         prefs[Keys.AUTO_UPDATE] = autoUpdateCheck
         prefs[Keys.DISMISSED] = dismissedVersion
@@ -116,8 +115,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val WEBHOOK = booleanPreferencesKey("webhook_enabled")
             val INSECURE = booleanPreferencesKey("allow_insecure_webhook")
             val SPOT_MIRROR = stringPreferencesKey("spot_rest_mirror")
-            val FUTURES_MIRROR = stringPreferencesKey("futures_rest_mirror")
-            val WS_MIRROR = stringPreferencesKey("ws_mirror")
+            val FUTURES_HOST = stringPreferencesKey("futures_rest_host")
             val UPDATE_PROXY = stringPreferencesKey("update_proxy_prefix")
             val AUTO_UPDATE = booleanPreferencesKey("auto_update_check")
             val DISMISSED = stringPreferencesKey("dismissed_version")

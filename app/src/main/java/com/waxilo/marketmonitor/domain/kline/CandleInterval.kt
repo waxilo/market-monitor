@@ -45,7 +45,7 @@ data class CandleInterval(val minutes: Long, val official: OfficialInterval?) {
             return (minutes / base.minutes).toInt()
         }
 
-    /** REST / WS 请求参数。 */
+    /** REST 请求参数。 */
     val apiCode: String get() = baseInterval?.apiCode ?: ""
 
     /** 展示名：官方用其码，自定义按分钟数人性化（10m / 45m / 3h / 2d）。 */

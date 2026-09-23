@@ -2,9 +2,6 @@ package com.waxilo.marketmonitor.data.remote
 
 import com.waxilo.marketmonitor.data.remote.dto.SpotAccountDto
 import com.waxilo.marketmonitor.data.remote.dto.toDomain
-import com.waxilo.marketmonitor.data.remote.ws.WsEvent
-import com.waxilo.marketmonitor.data.remote.ws.WsParser
-import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -63,63 +60,6 @@ class RateBudgetTest {
     }
 }
 
-class WsParserTest {
-
-    private val miniTicker = """
-        {"stream":"btcusdt@miniTicker","data":{"e":"24hrMiniTicker","E":1789000000000,"s":"BTCUSDT",
-        "c":"65000.10","o":"64000.00","h":"66000.00","l":"63000.00","v":"1234.5","q":"80000000"}}
-    """.trimIndent()
-
-    private fun tickerOf(event: WsEvent): MarketTicker = (event as WsEvent.Ticker).ticker
-
-    @Test
-    fun `解析单交易对 miniTicker`() {
-        val ticker = tickerOf(WsParser.parse(miniTicker, MarketType.SPOT, 0L).single())
-        assertEquals("BTCUSDT", ticker.id.symbol)
-        assertEquals(MarketType.SPOT, ticker.id.market)
-        assertEquals(BigDecimal("65000.10"), ticker.lastPrice)
-        assertEquals(BigDecimal("64000.00"), ticker.openPrice)
-        assertEquals(1789000000000L, ticker.updatedAt)
-        assertEquals(1.56265625, ticker.changePercent, 1e-6)
-    }
-
-    @Test
-    fun `解析合并流的全量数组`() {
-        val frame = """{"stream":"!miniTicker@arr","data":[""" +
-            """{"e":"24hrMiniTicker","s":"ETHUSDT","c":"3000","o":"2900","h":"3100","l":"2800","v":"10","q":"30000"},""" +
-            """{"e":"24hrMiniTicker","s":"BNBUSDT","c":"600","o":"610","h":"620","l":"590","v":"5","q":"3000"}]}"""
-        val tickers = WsParser.parse(frame, MarketType.FUTURES, 42L).map { tickerOf(it) }
-        assertEquals(2, tickers.size)
-        assertEquals("ETHUSDT", tickers[0].id.symbol)
-        assertEquals(MarketType.FUTURES, tickers[1].id.market)
-        assertEquals(42L, tickers[1].updatedAt)
-        assertTrue(tickers[0].changePercent > 0)
-        assertTrue(tickers[1].changePercent < 0)
-    }
-
-    @Test
-    fun `解析 kline 流的未收盘蜡烛`() {
-        val frame = """
-            {"stream":"btcusdt@kline_1m","data":{"e":"kline","E":1789000001000,"s":"BTCUSDT","k":{
-            "t":1789000000000,"T":1789000059999,"o":"100","c":"105","h":"110","l":"99","v":"7","q":"700","n":42,"x":false}}}
-        """.trimIndent()
-        val event = WsParser.parse(frame, MarketType.SPOT, 0L).single() as WsEvent.KlineUpdate
-        assertEquals("BTCUSDT", event.symbol)
-        assertEquals(1789000000000L, event.kline.openTime)
-        assertEquals(BigDecimal("105"), event.kline.close)
-        assertEquals(42L, event.kline.trades)
-        assertTrue(!event.kline.closed)
-    }
-
-    @Test
-    fun `缺字段的坏帧与未知事件被丢弃`() {
-        assertEquals(0, WsParser.parse("not json", MarketType.SPOT, 0L).size)
-        assertEquals(0, WsParser.parse("""{"data":{"e":"accountUpdate"}}""", MarketType.SPOT, 0L).size)
-        assertEquals(0, WsParser.parse("""{"data":{"e":"24hrMiniTicker","s":"X"}}""", MarketType.SPOT, 0L).size)
-        assertEquals(0, WsParser.parse("""{"data":{"e":"24hrMiniTicker","symbol":"X"}}""", MarketType.SPOT, 0L).size)
-    }
-}
-
 /**
  * 多域名容灾的判定规则。
  *
@@ -157,16 +97,30 @@ class RestHostFallbackTest {
     }
 
     @Test
-    fun `用户镜像排在前面但内置域名一个都不能少`() {
-        val hosts = DefaultRestHosts(
-            futuresMirror = { "https://mirror.example.com/, https://mirror2.example.com" },
-        ).hostsFor(MarketType.FUTURES)
-        assertEquals("https://mirror.example.com", hosts[0])
-        assertEquals("https://mirror2.example.com", hosts[1])
-        // 用户把现货那个可直连域填进合约镜像：它对合约端点回 404，但官方合约域必须还在链上
-        assertTrue("https://data-api.binance.vision" !in hosts)
-        // 合约内置域已完全切到 Aster（fapi.binance.com 不再留在链尾污染缓存）
-        assertEquals("https://fapi.asterdex.com", hosts.last())
+    fun `合约只用用户选定的单一接口不再逐域回退`() {
+        // 默认：Aster 官方域，且链上只有这一个
+        assertEquals(
+            listOf("https://fapi.asterdex.com"),
+            DefaultRestHosts().hostsFor(MarketType.FUTURES),
+        )
+        // 用户选了币安合约域：只发往它，不追加别的域做回退
+        assertEquals(
+            listOf("https://fapi.binance.com"),
+            DefaultRestHosts(futuresHost = { "https://fapi.binance.com" }).hostsFor(MarketType.FUTURES),
+        )
+    }
+
+    @Test
+    fun `旧的脏值与空值都回落到默认接口`() {
+        // 老版本手填的镜像域不在候选清单里：规整回默认，而不是把未知域当合法接口用
+        assertEquals(
+            listOf("https://fapi.asterdex.com"),
+            DefaultRestHosts(futuresHost = { "https://mirror.example.com/" }).hostsFor(MarketType.FUTURES),
+        )
+        assertEquals(
+            listOf("https://fapi.asterdex.com"),
+            DefaultRestHosts(futuresHost = { "" }).hostsFor(MarketType.FUTURES),
+        )
     }
 }
 

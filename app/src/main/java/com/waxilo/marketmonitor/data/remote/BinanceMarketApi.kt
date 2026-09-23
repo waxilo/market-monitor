@@ -7,6 +7,7 @@ import com.waxilo.marketmonitor.data.remote.dto.SpotAccountDto
 import com.waxilo.marketmonitor.data.remote.dto.TickerDto
 import com.waxilo.marketmonitor.data.remote.dto.toDomain
 import com.waxilo.marketmonitor.data.remote.dto.toKline
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
@@ -31,39 +32,38 @@ import java.io.IOException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** REST 域名来源：设置里的镜像域优先，其后是官方域名（PRD 3.2 多域名容灾）。 */
+/** REST 域名来源：现货走镜像+官方回退链；合约只用用户选定的单一接口（PRD 3.2）。 */
 interface RestHosts {
     fun hostsFor(market: MarketType): List<String>
 }
 
 class DefaultRestHosts(
     private val spotMirror: () -> String = { "" },
-    private val futuresMirror: () -> String = { "" },
+    private val futuresHost: () -> String = { FuturesEndpoints.DEFAULT_URL },
 ) : RestHosts {
     override fun hostsFor(market: MarketType): List<String> = buildList {
-        val mirror = when (market) {
-            MarketType.SPOT -> spotMirror()
-            MarketType.FUTURES -> futuresMirror()
-        }
-        mirror.split(',').map { it.trim().removeSuffix("/") }
-            .filter { it.isNotEmpty() }
-            .let { addAll(it) }
         when (market) {
-            // data-api 是官方行情镜像，大陆网络可直连；放首位避免前面被墙的官方主域
-            // 逐个走完 connect/read 超时再兜底（那样会让每次加载都慢到看似“请求不到数据”）。
-            MarketType.SPOT -> addAll(
-                listOf(
-                    "https://data-api.binance.vision",
-                    "https://api.binance.com",
-                    "https://api1.binance.com",
-                    "https://api2.binance.com",
-                    "https://api3.binance.com",
-                ),
-            )
-            // 合约数据源已完全切到 Aster（REST 与币安 /fapi/v1 同构，大陆可直连）。
-            // 不再把 fapi.binance.com 留在链尾：两家是独立盘口，混进同一市场会污染
-            // (FUTURES, symbol) 的 K 线缓存；想用币安原生合约就在设置里填镜像域。
-            MarketType.FUTURES -> add("https://fapi.asterdex.com")
+            MarketType.SPOT -> {
+                spotMirror().split(',').map { it.trim().removeSuffix("/") }
+                    .filter { it.isNotEmpty() }
+                    .let { addAll(it) }
+                // data-api 是官方行情镜像，大陆网络可直连；放首位避免前面被墙的官方主域
+                // 逐个走完 connect/read 超时再兜底（那样会让每次加载都慢到看似“请求不到数据”）。
+                addAll(
+                    listOf(
+                        "https://data-api.binance.vision",
+                        "https://api.binance.com",
+                        "https://api1.binance.com",
+                        "https://api2.binance.com",
+                        "https://api3.binance.com",
+                    ),
+                )
+            }
+            // 合约行情不再逐域回退试探：候选清单内置在设置页（FuturesEndpoints），
+            // 用户在一键检测后点选一个，这里就只发往那一个。
+            // 币安合约与 Aster 是独立盘口，混用同一市场会污染 (FUTURES, symbol) 缓存，
+            // 切换接口时由设置页负责清合约缓存并重同步。
+            MarketType.FUTURES -> add(FuturesEndpoints.normalize(futuresHost()))
         }
     }.distinct()
 }
@@ -107,6 +107,20 @@ class BinanceMarketApi(
         true
     } catch (e: IOException) {
         false
+    }
+
+    /**
+     * 对**指定 base URL** 做一次性连通探测（设置页「一键检测」），返回往返毫秒数。
+     * 不经回退链、不计权重：探测的是「这个域在这台设备上通不通」，
+     * 失败时抛 IOException（超时/DNS/HTTP 错误），由调用方转成每行的失败文案。
+     */
+    suspend fun probeFutures(baseUrl: String): Long {
+        val url = (baseUrl.trimEnd('/') + MarketType.FUTURES.apiPrefix + "/ping")
+            .toHttpUrlOrNull()
+            ?: throw IOException("地址无效：$baseUrl")
+        val started = System.currentTimeMillis()
+        execute(url)
+        return System.currentTimeMillis() - started
     }
 
     suspend fun exchangeInfo(market: MarketType, symbol: String? = null): List<InstrumentMeta> {

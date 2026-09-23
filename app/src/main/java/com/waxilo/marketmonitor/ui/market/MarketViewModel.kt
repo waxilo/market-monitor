@@ -68,7 +68,7 @@ data class MarketUiState(
 
 /**
  * 行情首页状态（PRD FR-1.1 / FR-1.2）。
- * 数据来自仓库层的「Room 缓存 + WS 增量」合并流，界面本身不碰网络。
+ * 数据来自仓库层的 Room 缓存流（REST 轮询落库即驱动更新），界面本身不碰网络。
  */
 class MarketViewModel(private val container: AppContainer) : ViewModel() {
 
@@ -83,7 +83,7 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     /** 交易规则每个市场只需同步一次，重复请求只是白耗权重。 */
     private val syncedMarkets = mutableSetOf<MarketType>()
 
-    /** 定时自动拉取 24h 快照的任务：WS 在线时价格已实时，轮询仅兜底断线场景。 */
+    /** 定时自动拉取 24h 快照的任务：列表价格的主要更新通道（WS 已移除）。 */
     private var autoRefreshJob: Job? = null
 
     /** 串行化拖动排序的落库（见 [moveWatch] 的说明）。 */
@@ -93,7 +93,7 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
      * 迷你走势线数据：自选的「最近 24 根 1h 收盘价」。
      *
      * 单独放一个 StateFlow 而不是并进 500ms 的 tickers 流：走势线来自本地缓存、
-     * 变化极慢，如果每次 WS 刷新都重查一遍 Room 就是纯浪费。这里只在自选集合
+     * 变化极慢，如果每轮行情刷新都重查一遍 Room 就是纯浪费。这里只在自选集合
      * 变化或手动刷新时重算。
      */
     private val trends = MutableStateFlow<Map<SymbolId, List<Double>>>(emptyMap())
@@ -117,7 +117,7 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     private val sources = combine(activeMarket, quoteAsset) { market, quote -> market to quote }
         .flatMapLatest { (market, quote) ->
             combine(
-                // WS 推送是实时的，sample 500ms 让 UI 每 0.5 秒合并一次最新行情（PRD 4.3）
+                // Room 流在每次轮询落库时发射；sample 500ms 把高频更新合并成每 0.5 秒一次重绘（PRD 4.3）
                 repository.tickers(market, quote).sample(500),
                 watchlist.watchlist(market),
                 repository.instruments(market),
@@ -170,7 +170,6 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     fun selectMarket(target: MarketType) {
         if (activeMarket.value == target) return
         activeMarket.value = target
-        repository.selectMarket(target)
         refresh()
     }
 
@@ -227,8 +226,8 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * 定时自动拉取 24h 快照：让列表价格随定时器自动变动，无需手动刷新。
-     * WS 在线时数据本就实时，这里主要兜底「WS 断线」后的价格更新；
+     * 定时自动拉取 24h 快照：列表价格的唯一更新通道（WS 已移除），
+     * 让价格随定时器自动变动，无需手动刷新。
      * 不置 refreshing，避免与下拉刷新的指示器互相干扰。
      */
     private fun startAutoRefresh(refreshMs: Long = AUTO_REFRESH_MS) {

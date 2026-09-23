@@ -15,8 +15,6 @@ import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
 import com.waxilo.marketmonitor.data.remote.DefaultRestHosts
 import com.waxilo.marketmonitor.data.remote.GithubReleaseApi
 import com.waxilo.marketmonitor.data.remote.WebhookSender
-import com.waxilo.marketmonitor.data.remote.ws.DefaultWsHosts
-import com.waxilo.marketmonitor.data.remote.ws.MarketWebSocket
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.ApkInstaller
 import com.waxilo.marketmonitor.data.repository.MarketRepositoryImpl
@@ -72,16 +70,6 @@ class AppContainer(private val context: Context) {
             .build()
     }
 
-    /** WS 客户端需要长连接 + 心跳，超时策略与 REST 不同，因此单独一个实例。 */
-    private val wsClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .pingInterval(30, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.MILLISECONDS)
-            .applySystemProxy()
-            .build()
-    }
-
     /**
      * OkHttp 在 Android 上默认不读取系统（Wi-Fi）代理，导致全国性网络治理下走代理才能访问的
      * 交易所域名请求不到数据。这里把系统代理套用到客户端：系统未配置代理时保持直连不变。
@@ -127,15 +115,7 @@ class AppContainer(private val context: Context) {
     private val restHosts by lazy {
         DefaultRestHosts(
             spotMirror = { settingsSnapshot.value.spotRestMirror },
-            futuresMirror = { settingsSnapshot.value.futuresRestMirror },
-        )
-    }
-
-    private val wsHosts by lazy {
-        DefaultWsHosts(
-            // 只有一个 WS 镜像设置：应用内不会同时连两个市场（PRD 3.2）
-            spotMirror = { settingsSnapshot.value.wsMirror },
-            futuresMirror = { settingsSnapshot.value.wsMirror },
+            futuresHost = { settingsSnapshot.value.futuresRestHost },
         )
     }
 
@@ -148,24 +128,22 @@ class AppContainer(private val context: Context) {
         EncryptedBinanceCredentialStore.create(context)
     }
 
-    private val webSocket: MarketWebSocket by lazy { MarketWebSocket(wsClient, wsHosts) }
-
     val marketRepository: MarketRepositoryImpl by lazy {
         MarketRepositoryImpl(
             api = marketApi,
-            socket = webSocket,
             tickerDao = database.tickerDao(),
             instrumentDao = database.instrumentDao(),
             klineDao = database.klineDao(),
             watchlist = watchlistRepository,
-            scope = appScope,
-            initialMarket = settingsSnapshot.value.defaultMarket,
-        ).also { it.start() }
+        )
     }
 
     val watchlistRepository: WatchlistRepository by lazy {
         WatchlistRepositoryImpl(database.watchlistDao(), database)
     }
+
+    /** 设置页「一键检测」入口：在本机实测指定合约行情接口，返回往返毫秒，失败抛 IOException。 */
+    suspend fun probeFuturesEndpoint(baseUrl: String): Long = marketApi.probeFutures(baseUrl)
 
     val alertRepository: AlertRepository by lazy { AlertRepositoryImpl(database.alertDao()) }
 

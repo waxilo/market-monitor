@@ -4,11 +4,18 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.BuildConfig
+import com.waxilo.marketmonitor.data.remote.MarketApiException
 import com.waxilo.marketmonitor.di.AppContainer
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
+import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -16,12 +23,25 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+
+/** 单个合约行情接口的一键检测结果。 */
+sealed interface ProbeOutcome {
+    data class Reachable(val latencyMs: Long) : ProbeOutcome
+    data class Failed(val reason: String) : ProbeOutcome
+}
 
 /** 设置页状态：载入一次当前设置快照，编辑即时写入仓库。 */
 @Immutable
 data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val quoteAsset: String = "USDT",
+    /** 用户选定的合约行情接口（FuturesEndpoints 之一）。 */
+    val futuresHost: String = FuturesEndpoints.DEFAULT_URL,
+    /** 一键检测结果：baseUrl → 结论；不在表里的即「未检测」。 */
+    val probeResults: Map<String, ProbeOutcome> = emptyMap(),
+    val probing: Boolean = false,
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
@@ -64,6 +84,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                     s.copy(
                         themeMode = it.themeMode,
                         quoteAsset = it.quoteAsset,
+                        futuresHost = it.futuresRestHost,
                         notificationEnabled = it.notificationEnabled,
                         soundEnabled = it.soundEnabled,
                         vibrateEnabled = it.vibrateEnabled,
@@ -102,6 +123,57 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setQuoteAsset(v: String) {
         backing.update { it.copy(quoteAsset = v) }
         persist { s -> s.copy(quoteAsset = v.ifBlank { "USDT" }) }
+    }
+
+    /**
+     * 一键检测：对全部内置候选接口在本机**并行**各发一次 ping，结果逐行回填。
+     * 连通性因网络环境（地区/代理）而异，开发机上的探测不作数，必须在用户设备上测——
+     * 这正是把「选哪个接口」交给用户的原因。
+     */
+    fun detectEndpoints() {
+        if (state.value.probing) return
+        backing.update { it.copy(probing = true, probeResults = emptyMap()) }
+        viewModelScope.launch {
+            coroutineScope {
+                FuturesEndpoints.ALL.map { endpoint ->
+                    async {
+                        val outcome = runCatching { container.probeFuturesEndpoint(endpoint.baseUrl) }
+                            .fold(
+                                onSuccess = { ProbeOutcome.Reachable(it) as ProbeOutcome },
+                                onFailure = { e ->
+                                    // runCatching 会把取消也吞成「失败」：协程被撤就安静退出，
+                                    // 别给正在离开的页面写一条假的检测结论
+                                    if (e is CancellationException) throw e
+                                    ProbeOutcome.Failed(probeFailure(e))
+                                },
+                            )
+                        backing.update { s -> s.copy(probeResults = s.probeResults + (endpoint.baseUrl to outcome)) }
+                    }
+                }.forEach { it.await() }
+            }
+            backing.update { it.copy(probing = false) }
+        }
+    }
+
+    /**
+     * 选定合约行情接口：持久化并清空合约行情缓存。
+     * Aster 与币安合约是独立盘口，旧盘口的快照/蜡烛不清掉会和新数据混进
+     * 同一 (FUTURES, symbol) 画出假 K 线；交易对清单也一并清空，搜索页会向新接口重新同步。
+     */
+    fun setFuturesHost(url: String) {
+        val normalized = FuturesEndpoints.normalize(url)
+        if (normalized == state.value.futuresHost) return
+        backing.update { it.copy(futuresHost = normalized) }
+        persist { s -> s.copy(futuresRestHost = normalized) }
+        viewModelScope.launch { container.marketRepository.clearMarketCache(MarketType.FUTURES) }
+    }
+
+    /** 网络异常的长文案（堆栈味）在手机上没意义，折成一行短结论。 */
+    private fun probeFailure(t: Throwable): String = when (t) {
+        is MarketApiException -> "HTTP ${t.httpCode}"
+        is SocketTimeoutException -> "连接超时"
+        is UnknownHostException -> "域名解析失败"
+        else -> t.message?.takeIf { it.isNotBlank() } ?: "连不上"
     }
 
     fun setNotificationEnabled(v: Boolean) {

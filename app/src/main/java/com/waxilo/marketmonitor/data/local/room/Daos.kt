@@ -48,6 +48,10 @@ interface InstrumentDao {
     /** 下架标的清理：本轮同步时间戳早于上次同步即视为已消失。 */
     @Query("DELETE FROM instrument WHERE market = :market AND syncedAt < :before")
     suspend fun deleteStale(market: String, before: Long)
+
+    /** 切换合约行情接口时整市场清空：不同盘口的交易对清单不可混用。 */
+    @Query("DELETE FROM instrument WHERE market = :market")
+    suspend fun clear(market: String)
 }
 
 @Dao
@@ -132,6 +136,10 @@ interface KlineDao {
 
     @Query("DELETE FROM kline WHERE market = :market AND symbol = :symbol AND intervalKey = :intervalKey")
     suspend fun clearFor(market: String, symbol: String, intervalKey: String)
+
+    /** 切换合约行情接口时整市场清空：不同盘口的蜡烛混进同一 (market, symbol) 会画出假 K 线。 */
+    @Query("DELETE FROM kline WHERE market = :market")
+    suspend fun clearMarket(market: String)
 
     /** 只保留每个标的最近 N 根，防止长期累积撑爆存储（PRD 6 存储上限）。 */
     @Query(

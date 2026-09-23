@@ -15,8 +15,6 @@ enum class MarketType(
     val apiPrefix: String,
     /** 默认 REST 域名。 */
     val defaultRestHost: String,
-    /** 默认 WebSocket 域名。 */
-    val defaultWsHost: String,
     /** 展示名。 */
     val label: String,
     /** 数据来源的展示名（列表页脚注与设置页文案用）。 */
@@ -26,7 +24,6 @@ enum class MarketType(
         key = "SPOT",
         apiPrefix = "/api/v3",
         defaultRestHost = "https://api.binance.com",
-        defaultWsHost = "wss://data-stream.binance.vision",
         label = "现货",
         sourceName = "币安",
     ),
@@ -34,7 +31,6 @@ enum class MarketType(
         key = "FUTURES",
         apiPrefix = "/fapi/v1",
         defaultRestHost = "https://fapi.asterdex.com",
-        defaultWsHost = "wss://fstream.asterdex.com",
         label = "永续合约",
         sourceName = "Aster",
     ),

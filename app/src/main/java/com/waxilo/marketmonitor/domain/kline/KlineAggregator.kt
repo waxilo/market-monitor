@@ -43,7 +43,7 @@ object KlineAggregator {
         return result
     }
 
-    /** 同一根蜡烛被多次推送（WS 未收盘更新）时保留最新一次。 */
+    /** 同一根蜡烛被多次更新（未收盘的轮询推送）时保留最新一次。 */
     fun dedupeByOpenTime(klines: List<Kline>): List<Kline> {
         if (klines.size < 2) return klines
         val out = ArrayList<Kline>(klines.size)

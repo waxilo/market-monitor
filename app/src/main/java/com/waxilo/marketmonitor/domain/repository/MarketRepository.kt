@@ -24,7 +24,7 @@ data class KlinePage(
 )
 
 /**
- * 行情数据入口（PRD 3.1 / 3.2）。实现负责 REST+WS+缓存三者的优先级编排，
+ * 行情数据入口（PRD 3.1 / 3.2）。实现负责 REST+Room 缓存的编排（WS 链路已移除），
  * 上层只看到统一模型，不感知现货/合约差异。
  */
 interface MarketRepository {
@@ -46,7 +46,7 @@ interface MarketRepository {
      */
     suspend fun refreshTicker(id: SymbolId): MarketTicker?
 
-    /** 行情快照流：先回放缓存，随后由 WS 增量覆盖。 */
+    /** 行情快照流：Room 缓存的响应式视图，REST 轮询落库即驱动发射。 */
     fun tickers(market: MarketType, quoteAsset: String = "USDT"): Flow<List<MarketTicker>>
 
     fun ticker(id: SymbolId): Flow<MarketTicker?>
@@ -71,22 +71,20 @@ interface MarketRepository {
     ): KlinePage
 
     /**
-     * 最后一根蜡烛的实时更新流（WS `@kline`）。
+     * 最后一根蜡烛的实时更新流（REST 轮询实现，WS 链路已移除）。
      * 自定义周期下推的是基础周期原始蜡烛，展示前需与已加载序列一起交给 KlineAggregator.aggregate 重算。
+     * 冷流：收集即开始轮询，取消收集即停止。
      */
     fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline>
 
-    /**
-     * 让 WS 开始推送该交易对的 K 线（按 [CandleInterval.apiCode] 即基础周期）。
-     * 与 [klineUpdate] 配对：进入详情页订阅、离开时 [clearKlineUpdates]。
-     */
-    fun watchKlineUpdates(id: SymbolId, interval: CandleInterval)
-
-    /** 退订全部 K 线流，列表页只保留合并快照流。 */
-    fun clearKlineUpdates()
-
     /** 连通性探测，供设置页与容灾切换使用。 */
     suspend fun ping(market: MarketType): Boolean
+
+    /**
+     * 清空某市场的本地行情缓存（快照/交易对清单/K 线），自选与预警规则保留。
+     * 切换合约行情接口时调用：不同盘口（Aster vs 币安）的数据不可混进同一 (market, symbol)。
+     */
+    suspend fun clearMarketCache(market: MarketType)
 
     /**
      * 用户当前永续仓位（币安签名接口 /fapi/v2/positionRisk）。

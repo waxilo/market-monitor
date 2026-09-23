@@ -34,9 +34,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 预警检测中枢（PRD FR-3.2 / FR-3.3 / FR-4.2）。
  *
  * 三条链路分开跑：
- * - 观察：订阅启用标的的 ticker 流（WS 与缓存都从这里进来），逐条规则判定并落状态。
- * - 轮询：按设置间隔主动拉单个标的快照。WS 只有一条连接、且后台可能被系统断开，
- *   所以「推」不足以覆盖全部规则，这里保底。
+ * - 观察：订阅启用标的的 ticker 流（Room 缓存视图，随各页轮询落库而更新），逐条规则判定并落状态。
+ * - 轮询：按设置间隔主动拉单个标的快照。观察流依赖别人刷新，页面全退出时就没有源头，
+ *   所以这里独立保底。
  * - 补发：推送失败的 Webhook 在下一轮重试，避免一次网络抖动就永久丢通知。
  *
  * 生命周期跟随进程：进程被系统杀死后无法提醒，UI 必须显式告知该限制（PRD FR-3.2）。
@@ -175,7 +175,7 @@ class AlertEngine(
         timestampMs = message.triggeredAt,
     )
 
-    /** 主动轮询：权重 1/次，远低于全量快照，且覆盖 WS 未连接的市场。 */
+    /** 主动轮询：权重 1/次，远低于全量快照，且覆盖没有任何页面在刷新的标的。 */
     private suspend fun pollLoop() {
         while (true) {
             delay(pollIntervalMs())

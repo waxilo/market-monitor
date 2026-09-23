@@ -8,7 +8,6 @@ import com.waxilo.marketmonitor.domain.model.Position
 import com.waxilo.marketmonitor.domain.model.PositionSide
 import com.waxilo.marketmonitor.domain.model.SpotBalance
 import com.waxilo.marketmonitor.domain.model.SymbolId
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.math.BigDecimal
 
@@ -40,49 +39,16 @@ data class FilterDto(
     val stepSize: String? = null,
 )
 
-/** `/ticker/24hr` 与 WS `24hrMiniTicker` 的公共字段集合。 */
+/** `/ticker/24hr` 的字段集合（全量数组与单标的快照共用）。 */
 @Serializable
 data class TickerDto(
     val symbol: String = "",
-    /** miniTicker 连交易对也是短字段名 `s`。 */
-    val s: String? = null,
     val openPrice: String? = null,
     val highPrice: String? = null,
     val lowPrice: String? = null,
     val lastPrice: String? = null,
-    /** miniTicker 用 c/o/h/l/v/q 短字段名。 */
-    val c: String? = null,
-    val o: String? = null,
-    val h: String? = null,
-    val l: String? = null,
-    val v: String? = null,
-    val q: String? = null,
     val volume: String? = null,
     val quoteVolume: String? = null,
-    /** 事件产生时间（WS 有，REST 无）。 */
-    val E: Long? = null,
-)
-
-@Serializable
-data class WsKlineDto(
-    /** t / T 的 getter 同为 getT()，必须显式改名，否则 JVM 签名冲突。 */
-    @SerialName("t") val openTimeMs: Long = 0L,
-    @SerialName("T") val closeTimeMs: Long = 0L,
-    val o: String = "0",
-    val c: String = "0",
-    val h: String = "0",
-    val l: String = "0",
-    val v: String = "0",
-    val q: String = "0",
-    val n: Long = 0L,
-    val x: Boolean = false,
-)
-
-@Serializable
-data class WsKlineEventDto(
-    val s: String = "",
-    val E: Long? = null,
-    val k: WsKlineDto = WsKlineDto(),
 )
 
 /** 最近成交价，轮询兜底用（`/ticker/price`）。 */
@@ -107,22 +73,21 @@ fun SymbolDto.toDomain(market: MarketType): InstrumentMeta? {
     )
 }
 
-/** REST 全量快照与 WS 增量共用一条映射：短字段优先，缺失时回落到长字段名。 */
+/** REST 24hr 快照映射。 */
 fun TickerDto.toDomain(market: MarketType, fallbackUpdatedAt: Long): MarketTicker? {
-    val code = symbol.ifBlank { s.orEmpty() }
-    if (code.isBlank()) return null
-    val last = (lastPrice ?: c)?.toBigDecimalOrNull() ?: return null
+    if (symbol.isBlank()) return null
+    val last = lastPrice?.toBigDecimalOrNull() ?: return null
     // 缺 24h 开盘价时以最新价代位：宁可显示 0.00% 也不让整行消失
-    val open = (openPrice ?: o)?.toBigDecimalOrNull() ?: last
+    val open = openPrice?.toBigDecimalOrNull() ?: last
     return MarketTicker(
-        id = SymbolId(market, code),
+        id = SymbolId(market, symbol),
         lastPrice = last,
         openPrice = open,
-        highPrice = (highPrice ?: h)?.toBigDecimalOrNull() ?: last,
-        lowPrice = (lowPrice ?: l)?.toBigDecimalOrNull() ?: last,
-        volume = (volume ?: v)?.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        quoteVolume = (quoteVolume ?: q)?.toBigDecimalOrNull() ?: BigDecimal.ZERO,
-        updatedAt = E ?: fallbackUpdatedAt,
+        highPrice = highPrice?.toBigDecimalOrNull() ?: last,
+        lowPrice = lowPrice?.toBigDecimalOrNull() ?: last,
+        volume = volume?.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+        quoteVolume = quoteVolume?.toBigDecimalOrNull() ?: BigDecimal.ZERO,
+        updatedAt = fallbackUpdatedAt,
     )
 }
 

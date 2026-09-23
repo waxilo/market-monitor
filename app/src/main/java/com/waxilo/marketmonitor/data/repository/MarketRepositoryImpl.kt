@@ -6,9 +6,6 @@ import com.waxilo.marketmonitor.data.local.room.TickerDao
 import com.waxilo.marketmonitor.data.local.room.toDomain
 import com.waxilo.marketmonitor.data.local.room.toEntity
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
-import com.waxilo.marketmonitor.data.remote.ws.MarketWebSocket
-import com.waxilo.marketmonitor.data.remote.ws.Streams
-import com.waxilo.marketmonitor.data.remote.ws.WsEvent
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
@@ -23,73 +20,28 @@ import com.waxilo.marketmonitor.domain.repository.KlinePage
 import com.waxilo.marketmonitor.domain.repository.MarketRepository
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import java.io.IOException
 
 /**
  * 行情仓库（PRD 3.2）。编排规则：
- * - 列表快照：REST 全量 → 内存 + Room；WS `!miniTicker@arr` 只更新内存，
- *   每秒 1000 行不写库（会持续触发 Room 失效重查），冷启动用上次快照兜底。
+ * - 列表快照：REST 拉自选交易对 → Room；UI 通过 [tickerDao] 的 Room 流拿到更新。
+ *   （WS 链路已整体移除：代理/弱网下 WS 长连接反而不如短请求稳。）
  * - K 线：REST 拉基础周期 → 客户端聚合成目标周期 → 结果写缓存；失败时回读缓存并标记离线。
- * - 同一时刻只维持一个市场的一条 WS 连接，订阅集合按引用计数合并。
+ * - 最后一根蜡烛的实时更新由 [klineUpdate] 的 REST 轮询承担。
  */
 class MarketRepositoryImpl(
     private val api: BinanceMarketApi,
-    private val socket: MarketWebSocket,
     private val tickerDao: TickerDao,
     private val instrumentDao: InstrumentDao,
     private val klineDao: KlineDao,
     private val watchlist: WatchlistRepository,
-    private val scope: CoroutineScope,
-    initialMarket: MarketType = MarketType.SPOT,
 ) : MarketRepository {
-
-    private val liveTickers = MutableStateFlow<Map<SymbolId, MarketTicker>>(emptyMap())
-    private val klineStream = MutableSharedFlow<Pair<SymbolId, Kline>>(
-        extraBufferCapacity = 128,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
-
-    private val market = MutableStateFlow(initialMarket)
-    private val extraStreams = MutableStateFlow<List<String>>(emptyList())
-
-    /** 详情页订阅的 K 线流与列表页的合并流共用一条连接；市场切换时自动重连。 */
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    fun start() {
-        scope.launch {
-            market.flatMapLatest { target ->
-                // 只订阅当前市场自选交易对的 miniTicker 流，不再订阅全市场 !miniTicker@arr
-                val streams = combine(watchlist.watchlist(target), extraStreams) { watched, extras ->
-                    buildList {
-                        watched.forEach { add(Streams.miniTicker(it.symbol)) }
-                        addAll(extras)
-                    }.distinct()
-                }
-                socket.events(target, streams)
-            }.collect { event -> handle(market.value, event) }
-        }
-    }
-
-    /** 切换当前市场（首页 Tab）。K 线订阅由详情页自行增删。 */
-    fun selectMarket(target: MarketType) {
-        market.value = target
-    }
-
-    fun setWatchedStreams(names: List<String>) {
-        extraStreams.update { names.distinct() }
-    }
 
     override suspend fun syncInstruments(market: MarketType): Int {
         val syncedAt = System.currentTimeMillis()
@@ -121,34 +73,24 @@ class MarketRepositoryImpl(
 
     override suspend fun refreshTicker(id: SymbolId): MarketTicker? = try {
         val ticker = api.ticker(id.market, id.symbol)
-        if (ticker == null) {
-            null
-        } else {
-            tickerDao.upsertAll(listOf(ticker.toEntity()))
-            liveTickers.update { it + (id to ticker) }
-            ticker
-        }
+        if (ticker != null) tickerDao.upsertAll(listOf(ticker.toEntity()))
+        ticker
     } catch (e: CancellationException) {
         throw e
     } catch (e: IOException) {
         null
     }
 
+    /** 快照流即 Room 流：REST 轮询每次落库都会驱动一次发射，UI 侧自带合并节流。 */
     override fun tickers(market: MarketType, quoteAsset: String): Flow<List<MarketTicker>> =
-        combine(tickerDao.observeMarket(market.key), liveTickers) { cached, live ->
-            val merged = cached.mapNotNull { it.toDomain() }.associateBy { it.id }
-                .toMutableMap()
-            live.forEach { (id, ticker) -> if (id.market.key == market.key) merged[id] = ticker }
-            merged.values
+        tickerDao.observeMarket(market.key).map { rows ->
+            rows.mapNotNull { it.toDomain() }
                 .filter { it.id.symbol.endsWith(quoteAsset) }
                 .sortedByDescending { it.quoteVolume }
         }.distinctUntilChanged()
 
     override fun ticker(id: SymbolId): Flow<MarketTicker?> =
-        combine(
-            tickerDao.observeOne(id.market.key, id.symbol),
-            liveTickers.map { it[id] }.distinctUntilChanged(),
-        ) { cached, live -> live ?: cached?.toDomain() }
+        tickerDao.observeOne(id.market.key, id.symbol).map { it?.toDomain() }
 
     override suspend fun recentCloses(id: SymbolId, interval: CandleInterval, limit: Int): List<Double> {
         val marketKey = id.market.key
@@ -216,22 +158,40 @@ class MarketRepositoryImpl(
         null
     }
 
-    override fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline> =
-        klineStream.filter { it.first == id }.map { it.second }
-
-    override fun watchKlineUpdates(id: SymbolId, interval: CandleInterval) {
+    /**
+     * 最后一根蜡烛的实时更新流：REST 轮询（原 WS `@kline` 推送已移除）。
+     * 冷流，由详情页 flatMapLatest 驱动——换周期自动停旧起新，离开页面取消收集即停。
+     * 只取最近 2 根、不落缓存：这是「盯当前这一根」的轻量流，历史序列另走 klines()。
+     * 自定义周期下 [CandleInterval.apiCode] 即基础周期码，推的是原始蜡烛，
+     * 展示前由上层与已加载序列一起交给 KlineAggregator 重聚合。
+     */
+    override fun klineUpdate(id: SymbolId, interval: CandleInterval): Flow<Kline> = flow {
         val code = interval.apiCode
-        if (code.isEmpty()) return
-        // 连接是按市场的，订阅现货的合约标的收不到推送，所以先切连接
-        if (market.value != id.market) market.value = id.market
-        setWatchedStreams(listOf(Streams.kline(id.symbol, code)))
-    }
-
-    override fun clearKlineUpdates() {
-        setWatchedStreams(emptyList())
+        if (code.isEmpty()) return@flow
+        var emitted: Kline? = null
+        while (true) {
+            val latest = try {
+                api.klines(id.market, id.symbol, code, limit = 2).lastOrNull()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null // 网络抖动跳过本轮，下一轮再试；断线兜底由 UI 的离线标记负责
+            }
+            if (latest != null && latest != emitted) {
+                emitted = latest
+                emit(latest)
+            }
+            delay(KLINE_POLL_MS)
+        }
     }
 
     override suspend fun ping(market: MarketType): Boolean = api.ping(market)
+
+    override suspend fun clearMarketCache(market: MarketType) {
+        tickerDao.clear(market.key)
+        instrumentDao.clear(market.key)
+        klineDao.clearMarket(market.key)
+    }
 
     override suspend fun positions(): List<Position> = api.positions()
 
@@ -282,14 +242,6 @@ class MarketRepositoryImpl(
         return rows.sortedBy { it.openTime }.mapNotNull { it.toDomain() }
     }
 
-    private fun handle(target: MarketType, event: WsEvent) {
-        when (event) {
-            is WsEvent.Ticker -> liveTickers.update { it + (event.ticker.id to event.ticker) }
-            is WsEvent.KlineUpdate -> klineStream.tryEmit(SymbolId(target, event.symbol) to event.kline)
-            WsEvent.Reconnecting -> Unit
-        }
-    }
-
     /** 供 UI 标注「离线数据」：缓存最新一条与当前时间的差值。 */
     suspend fun isStale(market: MarketType, thresholdMs: Long = STALE_AFTER_MS): Boolean {
         val last = tickerDao.lastUpdatedAt(market.key)
@@ -305,5 +257,8 @@ class MarketRepositoryImpl(
         /** 每个「标的 × 周期」最多缓存的蜡烛根数。 */
         const val MAX_CACHED_KLINES = 1500
         const val STALE_AFTER_MS = 30_000L
+
+        /** 详情页最后一根蜡烛的 REST 轮询间隔。 */
+        const val KLINE_POLL_MS = 2_000L
     }
 }
