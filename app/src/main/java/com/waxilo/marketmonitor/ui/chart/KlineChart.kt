@@ -2,7 +2,6 @@ package com.waxilo.marketmonitor.ui.chart
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -23,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -87,7 +87,9 @@ import kotlin.math.min
 data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
 
 /**
- * 图表左下角的角标按钮（进/出全屏）。放在左下而不是左上：左上角要留给十字光标详情浮层。
+ * 图表左下角的角标按钮（进/出全屏）。放在左下而不是左上：左上角是指标读数带
+ * （连同其上方的 K 线详情小条），浮在图上会把整块读数往下顶（当年十字光标弹窗
+ * 也栽在这儿，如今弹窗已改成读数带上方的小条）。
  *
  * 图标由调用方以 composable 提供，而不是传 `ImageVector`：本应用只依赖 icons-core，
  * 没有现成的全屏图标，而 Compose 1.10 起 `ImageVector.Builder.addPath` 只收
@@ -132,12 +134,12 @@ fun KlineChart(
      */
     alertLineMode: Boolean = false,
     /**
-     * 划线是否画在图上（绘图区右下角那只眼睛控制）。仅在非划线模式下生效 ——
+     * 划线是否画在图上（主图右下角那只眼睛控制）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
      */
     alertLinesVisible: Boolean = true,
     /**
-     * 点右上角的眼睛时回调；null = 不画那只眼睛（标的没有预警线时也就没有可隐藏的东西）。
+     * 点主图右下角的眼睛时回调；null = 不画那只眼睛（标的没有预警线时也就没有可隐藏的东西）。
      */
     onToggleAlertLines: (() -> Unit)? = null,
     /**
@@ -154,6 +156,20 @@ fun KlineChart(
     onAlertLineDelete: (Long?) -> Unit = {},
     /** 左上角角标（进入全屏）。null 表示不画，读数带也就顶到最左。 */
     cornerAction: ChartCornerAction? = null,
+    /**
+     * 十字光标当前指到的 K 线下标；null = 没在长按。
+     *
+     * K 线详情（OHLC）不再浮在图上做弹窗 —— 弹窗那块字常年压着左上的蜡烛与形态。
+     * 下标交给调用方，由调用方做成常显小条塞进 [candleReadout]：
+     * 长按跟着手指读那一根，松手回到最新一根。
+     */
+    onCrosshairIndexChange: (Int?) -> Unit = {},
+    /**
+     * K 线详情小条：画在图表顶部、指标读数带的**正上方**，与读数带同一个容器 ——
+     * 两组数字上下对读，它读单根 K 线、读数带读指标。占用的高度按
+     * [CANDLE_READOUT_BAND_DP] 从绘图区顶部让出，不会压到蜡烛。
+     */
+    candleReadout: (@Composable () -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -170,6 +186,8 @@ fun KlineChart(
         mutableStateOf(ChartViewport.initial())
     }
     var crosshair by remember(symbolKey, interval.storageKey) { mutableStateOf<Crosshair?>(null) }
+    // 下标变化就同步给调用方的 K 线详情小条（长按换根 / 松手归 null 都走这里）
+    LaunchedEffect(crosshair?.index) { onCrosshairIndexChange(crosshair?.index) }
     var oldestRequested by remember { mutableLongStateOf(-1L) }
     // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
     val measurer = rememberTextMeasurer()
@@ -206,7 +224,9 @@ fun KlineChart(
         (if (labels.any { it.startsWith("MA") }) 1 else 0) +
             (if (labels.any { it.startsWith("BOLL") }) 1 else 0)
     }
-    val readoutHeightDp = ChartGeo.readoutBandHeight(mainReadoutLines)
+    val readoutHeightDp = ChartGeo.readoutBandHeight(mainReadoutLines) +
+        // 小条与读数带同容器：它的高度也计进读数带，绘图区整体下移
+        (if (candleReadout != null) CANDLE_READOUT_BAND_DP else 0f)
     val geo = remember(canvasSize, density, series.subPanes.size, readoutHeightDp) {
         ChartGeo.of(canvasSize, density, series.subPanes.size, readoutHeightDp)
     }
@@ -316,8 +336,9 @@ fun KlineChart(
     val trashSizePx = with(density) { TRASH_BUTTON_SIZE.toPx() }
     /**
      * 右上角删除垃圾桶的命中矩形（画布像素），锚在**绘图区**（主图）的右上角。
-     * 放右上而不是右下：右下角是最新蜡烛与最新价标，正被盯着看，删除目标压在那儿代价最大；
-     * 而划线时右上角一般空着（十字光标浮层在左上，最新价读数在右侧轴上）。
+     * 放右上而不是右下：右下角是最新蜡烛与最新价标，正被盯着看，删除目标压在那儿代价最大
+     * （那块地方平时也归划线显隐的眼睛）；而划线时右上角一般空着（左上角是指标读数带，
+     * 最新价读数在右侧轴上）。
      * 只在划线模式下非空；与浮层里那个垃圾桶 Box 用同一套 geo + inset + size，
      * 两者一旦错开就会「看着命中、松手却没删」。
      *
@@ -514,8 +535,9 @@ fun KlineChart(
             )
 
             // ---- 角标（进入 / 退出全屏）：绘图区左下角 ----
-            // **不占左上角**：左上角要留给十字光标详情浮层，放那儿会把长按读数整块往下顶
-            // （用户报的「挤占 k 线数据弹窗」）。左下角信息密度最低，且离右上角的删除垃圾桶最远。
+            // **不占左上角**：左上角是指标读数带，放那儿会把整块读数往下顶
+            // （当年浮在左上的十字光标弹窗被报过同样的「挤占 k 线数据弹窗」）。
+            // 左下角信息密度最低，且离右上角的删除垃圾桶最远。
             // 放在图表而不是顶栏：详情页要滚动才能看到图表，入口钉在顶栏等于每次先得翻页。
             cornerAction?.let { action ->
                 Box(
@@ -563,6 +585,11 @@ fun KlineChart(
                     .padding(start = readoutStart, top = Spacing.Xxs)
                     .widthIn(max = mainReadoutWidth),
             ) {
+                // K 线详情小条排在读数带正上方：同一个容器、同一个左起点，
+                // 上下两叠数字天然是「这一根 K 线 / 这些指标」的对读关系
+                if (candleReadout != null) {
+                    Box(modifier = Modifier.padding(bottom = Spacing.Xxs)) { candleReadout() }
+                }
                 mainGroups.forEach { group ->
                     IndicatorReadout(segments = group, palette = palette)
                 }
@@ -578,23 +605,6 @@ fun KlineChart(
                         .align(Alignment.TopStart)
                         .offset(x = Spacing.Sm, y = with(density) { (geo.subReadoutTopOf(index) + 2f).toDp() })
                         .widthIn(max = subReadoutWidth),
-                )
-            }
-
-            // ---- 十字光标详情浮层 ----
-            // OHLC 不再常驻：只有长按出十字光标时，才把对齐那根的数据浮在左上角，
-            // 松手即消失。常驻的那一大块会盖住左上那片蜡烛，而那里恰恰常出形态。
-            val mark = crosshair
-            if (mark != null) {
-                CrosshairDetail(
-                    tooltip = ChartModel.tooltip(series.candles, mark.index, interval, tickSize),
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        // 紧贴读数带下方即可：全屏角标已移到绘图区左下角，不再压这块左上角。
-                        .offset(
-                            x = Spacing.Sm,
-                            y = with(density) { (geo.readoutHeightPx + 2f).toDp() },
-                        ),
                 )
             }
 
@@ -631,9 +641,9 @@ fun KlineChart(
                 }
             }
 
-            // ---- 划线显隐的眼睛（绘图区右下角） ----
-            // 右下角是绘图区信息密度最低的角落：右上角要留给划线模式的删除垃圾桶，
-            // 左上角压着指标读数带，左下角站着全屏角标。
+            // ---- 划线显隐的眼睛（主图右下角） ----
+            // 贴着主图底沿：副图再怎么堆，眼睛都留在被藏的那条线所在的那块图上，
+            // 开关与被控对象同区。左下/左上分别站着全屏角标与指标读数带，右上归垃圾桶。
             // 划线模式下不画：那时线必然可见（见 alertLinesShown），眼睛是个永远无效的开关。
             // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
             // 它**要**挂 clickable（与垃圾桶相反）：点它就该切显隐，
@@ -645,11 +655,15 @@ fun KlineChart(
                         .align(Alignment.TopStart)
                         .offset(
                             x = with(density) { (geo.plotWidthPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
-                            y = with(density) { (geo.plotHeightPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
+                            y = with(density) {
+                                ((geo.mainTopPx + geo.mainHeightPx) - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp()
+                            },
                         )
                         .size(EYE_BUTTON_SIZE)
                         .clip(Radius.fullShape)
-                        .background(colors.washStrong)
+                        // 半透明底：它贴在蜡烛上，实心底等于在图里挖了一个洞；
+                        // 图标本体保持不透明，读「开/关」状态不能跟着一起淡
+                        .background(colors.washStrong.copy(alpha = 0.5f))
                         .semantics {
                             contentDescription = if (alertLinesVisible) "隐藏划线" else "显示划线"
                         }
@@ -1549,58 +1563,6 @@ private fun IndicatorReadout(
 }
 
 /**
- * 十字光标详情浮层：长按到哪根就读哪根的 OHLC。
- *
- * 半透明底 + 描边，浮在读数带下方。之所以只在长按时出现：OHLC 常驻时这块文字
- * 常年压着左上那片蜡烛，而左上是近期高点与形态最常待的地方。
- */
-@Composable
-private fun CrosshairDetail(
-    tooltip: CandleTooltip?,
-    modifier: Modifier = Modifier,
-) {
-    val tip = tooltip ?: return
-    val colors = MarketTheme.colors
-    val changeColor = if (tip.up) colors.upSoft else colors.downSoft
-    Column(
-        modifier = modifier
-            .clip(Radius.smShape)
-            .background(colors.paper.copy(alpha = 0.92f))
-            .border(1.dp, colors.hairline, Radius.smShape)
-            .padding(horizontal = Spacing.Xs, vertical = Spacing.Xxs),
-    ) {
-        DetailRow(label = "时间", value = tip.time)
-        DetailRow(label = "开", value = tip.open)
-        DetailRow(label = "高", value = tip.high)
-        DetailRow(label = "低", value = tip.low)
-        DetailRow(label = "收", value = tip.close, valueColor = changeColor)
-        DetailRow(label = "涨跌", value = tip.changeText, valueColor = changeColor)
-        DetailRow(label = "量", value = tip.volume)
-    }
-}
-
-/** 浮层里的一行：标签列定宽，好让右边的数字对齐成一列。 */
-@Composable
-private fun DetailRow(label: String, value: String, valueColor: Color? = null) {
-    val colors = MarketTheme.colors
-    Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xxs)) {
-        Text(
-            text = label,
-            modifier = Modifier.width(DETAIL_LABEL_WIDTH),
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.muted,
-            maxLines = 1,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelSmall,
-            color = valueColor ?: colors.ink,
-            maxLines = 1,
-        )
-    }
-}
-
-/**
  * 单指平移、双指缩放、长按出十字光标，全在一个手势循环里判定。
  * 不用 detectTransformGestures：它与自定义长按分属两个 pointerInput 链节点，
  * 抢占事件时行为依赖链顺序，缩放手势一旦改版就会被静默打断。
@@ -1928,8 +1890,12 @@ private fun rememberAxisTextStyle(): TextStyle =
 /** 指标读数带的行高：与 [ChartGeo.READOUT_LINE_DP] 对齐，用来算读数带总高。 */
 private val READOUT_LINE_HEIGHT = 12.sp
 
-/** 十字光标详情浮层里标签列的宽度：让右边的数字对齐成一列。 */
-private val DETAIL_LABEL_WIDTH = 28.dp
+/**
+ * K 线详情小条（[KlineChart] 的 candleReadout 槽）预留的高度：
+ * 两行 9sp 文本（行高 11）+ 行距 2 + 与读数带之间的留白 4。
+ * 小条本体是调用方传进来的 composable，画布猜不到它的尺寸，只能按约定夹表。
+ */
+private const val CANDLE_READOUT_BAND_DP = 28f
 
 /** 十字光标价格标的水平内边距（dp）。 */
 private const val PRICE_BADGE_PAD_H_DP = 5f
@@ -1967,9 +1933,9 @@ private val TRASH_ICON_SIZE = 16.dp
 private val SPACING_TRASH_INSET = 12.dp
 
 /**
- * 绘图区右下角划线显隐「眼睛」的外圈边长。
+ * 主图右下角划线显隐「眼睛」的外圈边长。
  *
- * 内缩沿用 [SPACING_TRASH_INSET]（与右上角垃圾桶同内缩），大小与左下角的全屏角标
+ * 内缩沿用 [SPACING_TRASH_INSET]（与右上角垃圾桶同值），大小与左下角的全屏角标
  * [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，占的绘图区越少越好。
  */
 private val EYE_BUTTON_SIZE = 26.dp

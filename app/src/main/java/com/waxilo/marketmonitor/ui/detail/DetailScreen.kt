@@ -58,11 +58,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -131,6 +133,12 @@ fun DetailScreen(
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     // 周期管理对话框：竖屏与全屏共用一个开关，挂在最外层免得两条分支各存一份
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
+    /**
+     * 十字光标下标，竖屏图与全屏图共用：K 线详情小条常显在图表顶部、读数带正上方，
+     * 长按跟着手指、松手回到最新一根（null）。图表内部已按标的/周期复位，
+     * 切页时它会以 null 回调一次，这里不必再挂 key。
+     */
+    var crosshairIndex by remember { mutableStateOf<Int?>(null) }
 
     FullscreenController(active = fullscreen)
 
@@ -183,6 +191,9 @@ fun DetailScreen(
                     onLoadMore = viewModel::loadMore,
                     onRetry = viewModel::refresh,
                     onFullscreen = { fullscreen = true },
+                    onCrosshairIndexChange = { crosshairIndex = it },
+                    // 小条不属于周期：它画进图表顶部、与指标读数带同一个容器，上下对读
+                    candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
                 )
 
                 IndicatorBar(
@@ -290,6 +301,8 @@ private fun FullscreenChart(
     var alertMode by rememberSaveable { mutableStateOf(false) }
     // 同样挂在全屏内部：面板只是「临时看一眼」，退出全屏没必要带着走
     var indicatorOpen by rememberSaveable { mutableStateOf(false) }
+    // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
+    var crosshairIndex by remember { mutableStateOf<Int?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.paper)) {
         // 顶端这一行同时承载「周期」与「指标 / 划线 / 退出」：横屏时底部要留给时间轴，
@@ -349,6 +362,9 @@ private fun FullscreenChart(
                     tickSize = state.tickSize,
                     symbolKey = state.id.storageKey,
                     onLoadMore = viewModel::loadMore,
+                    onCrosshairIndexChange = { crosshairIndex = it },
+                    // 与竖屏同位：图表顶部、读数带正上方的同一个容器
+                    candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
                     alertLines = alertLines,
                     alertLineMode = alertMode,
                     alertLinesVisible = alertLinesVisible,
@@ -618,6 +634,70 @@ private fun IntervalSelector(
 }
 
 /**
+ * K 线详情小条：画进图表顶部、指标读数带的**正上方**（同一个容器，见 KlineChart 的
+ * candleReadout 槽），替代从前浮在图上的十字光标弹窗。
+ *
+ * 弹窗那一大块常年压着左上那片蜡烛与形态；改成小条后图整块干净。
+ * 常显而不是长按才出现：小条占的是读数带上方固定预留的一截，
+ * 出现/消失不会把图上下顶一格。没长按就读最新一根，与读数带同语义、上下对读。
+ * 字号与图上读数带同档（9sp 等宽）—— 同一套数字分两处出现，字号必须一致。
+ * 两行固定分组而不是 FlowRow 流式：折行点会随数字宽度漂移，看起来忽乱忽齐。
+ * 水平起点与左内边距都不在这里挂：读数带容器已经给了左起点与行间隔。
+ */
+@Composable
+private fun CandleReadoutRow(state: DetailUiState, index: Int?) {
+    val colors = MarketTheme.colors
+    val tip = remember(state.candles, index, state.interval, state.tickSize) {
+        ChartModel.tooltip(state.candles, index ?: state.candles.lastIndex, state.interval, state.tickSize)
+    } ?: return
+    val changeColor = if (tip.up) colors.upSoft else colors.downSoft
+    val style = MaterialTheme.typography.labelSmall.copy(
+        fontSize = 9.sp,
+        lineHeight = 11.sp,
+        letterSpacing = 0.sp,
+    )
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xs)) {
+            ReadoutCell("时间", tip.time, style = style)
+            ReadoutCell("开", tip.open, style = style)
+            ReadoutCell("高", tip.high, style = style)
+            ReadoutCell("低", tip.low, style = style)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.Xs)) {
+            // 「较上根 +x.xx%」：前缀已在文案里，不再挂标签
+            ReadoutCell(null, tip.changeText, valueColor = changeColor, style = style)
+            ReadoutCell("收", tip.close, valueColor = changeColor, style = style)
+            ReadoutCell("量", tip.volume, style = style)
+        }
+    }
+}
+
+/** 小条里的一格：标签浅色、数值墨色（涨跌格把数值色传进来）。 */
+@Composable
+private fun ReadoutCell(label: String?, value: String, valueColor: Color? = null, style: TextStyle) {
+    val colors = MarketTheme.colors
+    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        if (label != null) {
+            Text(
+                text = label,
+                style = style,
+                color = colors.muted,
+                maxLines = 1,
+            )
+        }
+        Text(
+            text = value,
+            style = style,
+            color = valueColor ?: colors.ink,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
  * 图表区：主图高度按屏高自适应（屏高的 40%，钳制在 260–400dp），
  * 每开一块副图就在下方追加一整块 [SUB_PANE_HEIGHT_DP] ——
  * 主图与已有的副图都不随块数被挤薄，多开只是把整张图拉长、页面往下滚着看。
@@ -634,6 +714,8 @@ private fun ChartArea(
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
     onFullscreen: () -> Unit,
+    onCrosshairIndexChange: (Int?) -> Unit,
+    candleReadout: (@Composable () -> Unit)? = null,
 ) {
     val colors = MarketTheme.colors
     Box(
@@ -680,6 +762,8 @@ private fun ChartArea(
                     tickSize = state.tickSize,
                     symbolKey = state.id.storageKey,
                     onLoadMore = onLoadMore,
+                    onCrosshairIndexChange = onCrosshairIndexChange,
+                    candleReadout = candleReadout,
                     // 只画不能拖：竖屏没有划线模式，调整预警走全屏
                     alertLines = alertLines,
                     alertLinesVisible = alertLinesVisible,
