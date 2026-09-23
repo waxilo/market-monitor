@@ -79,9 +79,9 @@ object FuturesDialects {
 
 private fun parse(text: String): JsonElement = MarketJson.DEFAULT.parseToJsonElement(text)
 
-private fun JsonElement.asObject(): JsonObject = this as? JsonObject ?: JsonObject(emptyMap())
+private fun JsonElement?.asObject(): JsonObject = this as? JsonObject ?: JsonObject(emptyMap())
 
-private fun JsonElement.asArray(): List<JsonElement> = (this as? JsonArray)?.toList() ?: emptyList()
+private fun JsonElement?.asArray(): List<JsonElement> = (this as? JsonArray)?.toList() ?: emptyList()
 
 private fun JsonObject.str(key: String): String? = (this[key] as? JsonPrimitive)?.contentOrNull
 
