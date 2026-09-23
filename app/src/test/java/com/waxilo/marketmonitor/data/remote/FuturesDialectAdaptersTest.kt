@@ -317,7 +317,7 @@ class FuturesDialectAdaptersTest {
         )
         val url = mexc.klines("https://x", "BTCUSDT", 60, 100, null, 1_800_000_000_000L).url
         assertTrue(url, url.startsWith("https://x/api/v1/contract/kline/BTC_USDT?"))
-        assertTrue(url, url.contains("interval=Hour1"))
+        assertTrue(url, url.contains("interval=Min60"))
         assertTrue(url, !url.contains("limit="))
         // end=1.8e12s，窗口 = 100 × 60min
         assertTrue(url, url.contains("end=1800000000"))
