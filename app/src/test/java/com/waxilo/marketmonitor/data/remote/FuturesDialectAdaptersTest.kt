@@ -207,7 +207,7 @@ class FuturesDialectAdaptersTest {
     }
 
     @Test
-    fun `Bybit 蜡烛：第 6/7 列是基础量与成交额`() {
+    fun `Bybit 蜡烛：第 6、7 列是基础量与成交额`() {
         val klines = bybit.parseKlines(bybitKlinesText, 60)
         assertEquals(2, klines.size)
         assertBd("85000", klines.first().open)
