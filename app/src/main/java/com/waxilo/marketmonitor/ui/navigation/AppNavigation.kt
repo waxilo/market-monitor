@@ -47,7 +47,12 @@ object Routes {
 }
 
 @Composable
-fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
+fun AppNavHost(
+    openAlerts: Boolean = false,
+    /** 点预警通知进入时要直达的标的；null = 普通启动或落预警页。 */
+    startDetail: SymbolId? = null,
+    modifier: Modifier = Modifier,
+) {
     val navController = rememberNavController()
     val openDetail: (SymbolId) -> Unit = { navController.navigate(Routes.detail(it)) }
 
@@ -71,11 +76,35 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
         }
     }
 
+    /**
+     * 详情页的返回路径。
+     *
+     * 点预警通知直达时详情页就是**起始页**，与从通知栏进预警页同一处境：退不动时
+     * 「回家」换成行情页（见 [leaveAlerts]）。平时从行情页进来，正常 pop 一层。
+     *
+     * 起始页没法给模板路由填参（NavHost 无 startDestinationArgs），所以通知直达时
+     * 额外注册一条**具体**路由（见下方 composable(Routes.detail(...))）。
+     */
+    val leaveDetail: () -> Unit = {
+        val launchRoute = startDetail?.let { Routes.detail(it) }
+        if (navController.previousBackStackEntry == null && launchRoute != null) {
+            navController.navigate(Routes.MARKET) {
+                popUpTo(launchRoute) { inclusive = true }
+            }
+        } else {
+            navController.popBackStack()
+        }
+    }
+
     NavHost(
         navController = navController,
-        // 从通知栏进入时首帧就落在预警页，避免先闪一下行情列表。
-        // 代价是栈底没有行情页，返回要额外兜底 —— 见 [leaveAlerts]。
-        startDestination = if (openAlerts) Routes.ALERTS else Routes.MARKET,
+        // 从通知栏进入时首帧就落在目标页，避免先闪一下行情列表。
+        // 代价是栈底没有行情页，返回要额外兜底 —— 见 [leaveAlerts] 与 [leaveDetail]。
+        startDestination = when {
+            startDetail != null -> Routes.detail(startDetail)
+            openAlerts -> Routes.ALERTS
+            else -> Routes.MARKET
+        },
         modifier = modifier,
         // 克制转场：进入从右滑入 + 淡入，退出轻淡出；返回时反向滑回。
         enterTransition = { slideInHorizontally(tween(220)) { it / 3 } + fadeIn(tween(220)) },
@@ -139,6 +168,20 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
                 onBack = { navController.popBackStack() },
             )
         }
+        // 通知直达专用：具体路由（如 `detail/binance/BTCUSDT`）当起始页。
+        // 它比模板路由更具体，navigate 到同一标的时也会命中这里，两条路语义一致。
+        startDetail?.let { id ->
+            composable(Routes.detail(id)) {
+                // 起始页在栈底，pop 不动：系统返回键与左上角箭头都走「回家」，
+                // 非栈底时（从行情页点进来）leaveDetail 会正常 pop。
+                BackHandler { leaveDetail() }
+                DetailScreen(
+                    symbolId = id,
+                    onBack = leaveDetail,
+                    onCreateAlert = { navController.navigate(Routes.alertNew(id.market, id.symbol)) },
+                )
+            }
+        }
         composable(
             route = Routes.DETAIL_TEMPLATE,
             arguments = listOf(
@@ -152,7 +195,7 @@ fun AppNavHost(openAlerts: Boolean = false, modifier: Modifier = Modifier) {
             )
             DetailScreen(
                 symbolId = id,
-                onBack = { navController.popBackStack() },
+                onBack = leaveDetail,
                 onCreateAlert = { navController.navigate(Routes.alertNew(id.market, id.symbol)) },
             )
         }

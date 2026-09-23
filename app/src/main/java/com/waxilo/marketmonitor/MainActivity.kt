@@ -15,22 +15,38 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.lifecycleScope
 import com.waxilo.marketmonitor.data.alert.AlertNotifier
 import com.waxilo.marketmonitor.data.alert.notificationsAllowed
+import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.ui.navigation.AppNavHost
 import com.waxilo.marketmonitor.ui.theme.MarketMonitorTheme
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        // 点通知进入时直接落在预警页，不让用户先看到行情列表再跳一次
+        // 点通知进入时直接落在目标页，不让用户先看到行情列表再跳一次：
+        // 预警通知直达该标的的图表页（并把那条消息标记已读），监控常驻通知落预警页
         val openAlerts = intent?.getBooleanExtra(AlertNotifier.EXTRA_OPEN_ALERTS, false) == true
+        val detailMarket = intent?.getStringExtra(AlertNotifier.EXTRA_DETAIL_MARKET)
+        val detailSymbol = intent?.getStringExtra(AlertNotifier.EXTRA_DETAIL_SYMBOL).orEmpty()
+        val startDetail = if (!detailMarket.isNullOrEmpty() && detailSymbol.isNotEmpty()) {
+            SymbolId(MarketType.fromKey(detailMarket), detailSymbol)
+        } else null
+        // 消息 id 由 Room 自增，从 1 起；0 = 没带
+        val startMessageId = intent?.getLongExtra(AlertNotifier.EXTRA_ALERT_MESSAGE_ID, 0L)
+            ?.takeIf { it != 0L }
         requestNotificationPermissionIfNeeded()
         val container = appContainer()
         container.alertEngine.refreshMonitorService()
+        if (startMessageId != null) {
+            lifecycleScope.launch { container.alertRepository.acknowledge(startMessageId) }
+        }
         setContent {
             // 主题模式跟随设置（PRD 4.5）：SYSTEM 时由系统决定，否则强制浅/深。
             // 这里读的是同一个 DataStore，所以设置页一改就立即整树重组换肤。
@@ -43,6 +59,7 @@ class MainActivity : ComponentActivity() {
                 ) { innerPadding ->
                     AppNavHost(
                         openAlerts = openAlerts,
+                        startDetail = startDetail,
                         modifier = Modifier
                             .padding(innerPadding)
                             .background(MarketTheme.colors.paper),

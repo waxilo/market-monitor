@@ -82,11 +82,11 @@ class AlertNotifier(private val context: Context) {
             .setStyle(NotificationCompat.BigTextStyle().bigText(summary))
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-        contentIntent()?.let { builder.setContentIntent(it) }
+        detailContentIntent(message)?.let { builder.setContentIntent(it) }
         return builder.build()
     }
 
-    /** 点击通知打开消息中心（与导航路由使用同一串 extra）。 */
+    /** 点监控常驻通知打开消息中心（与导航路由使用同一串 extra）。 */
     private fun contentIntent(): PendingIntent? {
         val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
             ?: return null
@@ -95,6 +95,31 @@ class AlertNotifier(private val context: Context) {
         return PendingIntent.getActivity(
             context,
             REQUEST_CODE,
+            launch,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /**
+     * 点预警通知直达该标的的行情图表页。
+     *
+     * market/symbol 放进 extras，导航层据此把详情页作起始页（见 AppNavHost），
+     * 不再先落在预警列表让用户自己找那条消息。消息 id 一并带上：进入时顺手把这条
+     * 标记已读，免得人都到图表了，消息中心还挂着「未读」。
+     *
+     * requestCode 按消息取不同值：PendingIntent 只认「code + Intent 内容」，extras
+     * 不参与比较——共用一个 code 的话，新通知会把旧通知的点击目标悄悄改掉。
+     */
+    private fun detailContentIntent(message: AlertMessage): PendingIntent? {
+        val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: return null
+        launch.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        launch.putExtra(EXTRA_DETAIL_MARKET, message.market.key)
+        launch.putExtra(EXTRA_DETAIL_SYMBOL, message.symbol)
+        launch.putExtra(EXTRA_ALERT_MESSAGE_ID, message.id)
+        return PendingIntent.getActivity(
+            context,
+            notificationId(message.id),
             launch,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
@@ -128,6 +153,9 @@ class AlertNotifier(private val context: Context) {
 
     companion object {
         const val EXTRA_OPEN_ALERTS = "com.waxilo.marketmonitor.OPEN_ALERTS"
+        const val EXTRA_DETAIL_MARKET = "com.waxilo.marketmonitor.DETAIL_MARKET"
+        const val EXTRA_DETAIL_SYMBOL = "com.waxilo.marketmonitor.DETAIL_SYMBOL"
+        const val EXTRA_ALERT_MESSAGE_ID = "com.waxilo.marketmonitor.ALERT_MESSAGE_ID"
         const val CHANNEL_ALERT = "price_alerts_long_buzz"
         const val CHANNEL_ALERT_SILENT = "price_alerts_silent_v2"
         const val CHANNEL_MONITOR = "alert_monitor"
