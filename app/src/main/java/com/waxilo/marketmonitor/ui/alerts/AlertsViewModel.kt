@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.data.alert.notificationsAllowed
 import com.waxilo.marketmonitor.di.AppContainer
+import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertText
 import com.waxilo.marketmonitor.domain.model.MarketTicker
@@ -29,7 +30,12 @@ enum class AlertsTab(val label: String) {
     MESSAGES("消息"),
 }
 
-/** 规则列表一行：条件文案与现价都在领域层算好，Compose 只排版。 */
+/**
+ * 规则列表一行：条件文案与现价都在领域层算好，Compose 只排版。
+ *
+ * 卡片要摊开的所有字段都在这里算完：距离触发（文案 + 进度条比例）、提醒方式、
+ * 创建时间——这些以前只能点进编辑页才看得到。
+ */
 @Immutable
 data class AlertRuleRow(
     val rule: AlertRule,
@@ -38,6 +44,14 @@ data class AlertRuleRow(
     val currentPrice: String,
     val changePercent: Double?,
     val status: String,
+    /** 「距触发 x.xx%」/「已达触发位」；取不到现价时为 null。 */
+    val distanceText: String?,
+    /** 进度条填充比例 0..1；与 [distanceText] 同生同灭。 */
+    val progress: Float?,
+    /** 「响铃·振动 · 外部推送 ×2」这类提醒方式汇总。 */
+    val notify: String,
+    /** 创建时间（MM-dd HH:mm:ss）。 */
+    val created: String,
 )
 
 @Immutable
@@ -153,7 +167,8 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     private fun AlertRule.toRow(source: Sources): AlertRuleRow {
-        val ticker = source.prices[SymbolId(this.market, this.symbol)]
+        val ticker = source.prices[SymbolId(market, symbol)]
+        val (distanceText, progress) = distanceOf(this, ticker)
         return AlertRuleRow(
             rule = this,
             condition = AlertText.conditionLabel(this),
@@ -161,7 +176,47 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
             currentPrice = AlertText.priceText(ticker?.lastPrice),
             changePercent = ticker?.changePercent,
             status = statusOf(this, source),
+            distanceText = distanceText,
+            progress = progress,
+            notify = buildString {
+                append(
+                    when {
+                        playSound && vibrate -> "响铃·振动"
+                        playSound -> "仅响铃"
+                        vibrate -> "仅振动"
+                        else -> "静默"
+                    },
+                )
+                if (webhookIds.isNotEmpty()) append(" · 外部推送 ×${webhookIds.size}")
+            },
+            created = AlertText.timeOf(createdAt),
         )
+    }
+
+    /**
+     * 距触发还有多少：现价还要走百分之多少才碰到阈值，以及进度条填充比例。
+     *
+     * 进度条满格取 [DISTANCE_WINDOW] —— 再远也分不出「远」和「很远」，一律按 0 显示；
+     * 涨跌幅条件换算成同一量纲（24h 涨跌幅与阈值都是百分数）。
+     * 区间条件看**先碰到哪条边**，取两边距离的较小值。
+     */
+    private fun distanceOf(rule: AlertRule, ticker: MarketTicker?): Pair<String?, Float?> {
+        if (ticker == null) return null to null
+        val last = ticker.lastPrice.toDouble()
+        if (last <= 0.0) return null to null
+        val gap = when (rule.condition) {
+            AlertCondition.ABOVE -> rule.threshold?.let { (it.toDouble() - last) / last }
+            AlertCondition.BELOW -> rule.threshold?.let { (last - it.toDouble()) / last }
+            AlertCondition.OUT_OF_RANGE -> listOfNotNull(
+                rule.rangeLower?.let { (last - it.toDouble()) / last },
+                rule.rangeUpper?.let { (it.toDouble() - last) / last },
+            ).minOrNull()
+            AlertCondition.RISE_BY -> rule.changePercent?.let { (it.toDouble() - ticker.changePercent) / 100.0 }
+            AlertCondition.FALL_BY -> rule.changePercent?.let { (it.toDouble() + ticker.changePercent) / 100.0 }
+        } ?: return null to null
+        if (gap <= 0.0) return "已达触发位" to 1f
+        val text = "距触发 %.2f%%".format(gap * 100)
+        return text to (1f - (gap / DISTANCE_WINDOW).toFloat()).coerceIn(0f, 1f)
     }
 
     /** 最近触发时间从预索引的 Map 取，避免对每条规则扫一遍消息列表。 */
@@ -185,5 +240,8 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
 
     private companion object {
         const val MESSAGE_LIMIT = 200
+
+        /** 距离进度条的满量程：现价与阈值相差 10% 以内才谈「快到了」。 */
+        const val DISTANCE_WINDOW = 0.10
     }
 }

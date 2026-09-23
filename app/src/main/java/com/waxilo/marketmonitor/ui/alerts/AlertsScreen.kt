@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,7 +45,6 @@ import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.HintRow
-import com.waxilo.marketmonitor.ui.common.ListRow
 import com.waxilo.marketmonitor.ui.common.Banner
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SegmentedControl
@@ -59,10 +60,10 @@ import com.waxilo.marketmonitor.ui.theme.Spacing
 /**
  * 预警管理页（PRD FR-3.1 / FR-3.4）：规则与触发记录两个页签。
  *
- * 视觉上的两处补强：
- * 1. 规则行加了**触发距离进度条**——把「现价离目标价还有多远」画出来。
- *    只有文字时用户得自己心算，一根条能立刻判断这条规则是「快到了」还是「还早」；
- * 2. 「已启用/已停用」从灰色小字改成状态胶囊，扫一列时开关状态一眼可辨。
+ * 规则页是**三段式扁平行**（标题 / 条件+距触发进度 / 元信息），纸底 + 发丝线分隔，
+ * 与行情、搜索等列表页同一套视觉语言。以前这些字段要逐条点进编辑页才看得到，
+ * 列表只露个名称和条件；现在扫一屏就能回答「这条还差多少、会不会响、推不推外部、上次啥时候触发」。
+ * 整行可点仍然进编辑页，开关与删除就地操作。
  */
 @Composable
 fun AlertsScreen(
@@ -193,8 +194,11 @@ private fun RuleList(
 }
 
 /**
- * 规则行。
- * 左侧是名称 + 条件 + 触发进度，右侧是现价与开关，删除挂在行尾。
+ * 规则行：标题 / 条件+距触发进度 / 元信息 三段，扁平行 + 发丝线，与其余列表页同语言。
+ *
+ * 距离进度条把「现价离阈值还有多远」画出来——只有百分比文字时还得自己心算，
+ * 一根条能立刻判断这条规则是「快到了」还是「还早」（满量程见 ViewModel）。
+ * 删除挂在元信息区行尾而不是标题行：标题行已有开关，再挤一颗红色图标就是误删现场。
  */
 @Composable
 private fun RuleItem(
@@ -204,65 +208,140 @@ private fun RuleItem(
     onDelete: () -> Unit,
 ) {
     val colors = MarketTheme.colors
-    ListRow(onClick = onClick) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+    ) {
+        // ---- 标题区 ----
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = row.rule.name,
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            StatusPill(
+                text = if (row.rule.enabled) "监测中" else "已暂停",
+                tone = if (row.rule.enabled) PillTone.Positive else PillTone.Neutral,
+            )
+            Switch(
+                checked = row.rule.enabled,
+                onCheckedChange = onToggle,
+                // M3 开关默认尺寸在紧凑行里显得过大，整体缩到八成（触控区随之缩小）
+                modifier = Modifier
+                    .padding(start = Spacing.Xs)
+                    .graphicsLayer { scaleX = 0.8f; scaleY = 0.8f },
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Row {
+            Text(
+                text = "${row.rule.symbol} · ${row.rule.market.label}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "建于 ${row.created}",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+            )
+        }
+
+        Spacer(Modifier.height(Spacing.Xs))
+
+        // ---- 条件区：条件 + 现价，下面跟距离与进度条 ----
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = row.rule.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = row.condition,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = colors.ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
-                Spacer(Modifier.width(Spacing.Xs))
-                StatusPill(
-                    text = if (row.rule.enabled) "监测中" else "已暂停",
-                    tone = if (row.rule.enabled) PillTone.Positive else PillTone.Neutral,
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = row.repeat,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
                 )
             }
-            Spacer(Modifier.height(3.dp))
-            Text(
-                text = "${row.rule.symbol} · ${row.rule.market.label} · ${row.condition}",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(3.dp))
-            Text(
-                text = "${row.repeat} · ${row.status}",
-                style = MaterialTheme.typography.labelSmall,
-                color = colors.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(
+                modifier = Modifier.width(84.dp),
+                horizontalAlignment = Alignment.End,
+            ) {
+                Text(
+                    text = row.currentPrice,
+                    style = PriceTextStyle,
+                    color = colors.ink,
+                    maxLines = 1,
+                )
+                Spacer(Modifier.height(2.dp))
+                ChangeText(row.changePercent)
+            }
         }
-        Column(
-            modifier = Modifier.width(84.dp),
-            horizontalAlignment = Alignment.End,
-        ) {
+        row.progress?.let { progress ->
+            Spacer(Modifier.height(Spacing.Xs))
             Text(
-                text = row.currentPrice,
-                style = PriceTextStyle,
-                color = colors.ink,
-                maxLines = 1,
+                text = row.distanceText.orEmpty(),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (progress >= 1f) colors.accent else colors.muted,
             )
             Spacer(Modifier.height(3.dp))
-            ChangeText(row.changePercent)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .clip(Radius.fullShape)
+                    .background(colors.hairline),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(progress)
+                        .fillMaxHeight()
+                        .clip(Radius.fullShape)
+                        .background(colors.accent),
+                )
+            }
         }
-        Switch(
-            checked = row.rule.enabled,
-            onCheckedChange = onToggle,
-            modifier = Modifier.padding(start = Spacing.Xs),
+
+        Spacer(Modifier.height(Spacing.Xs))
+        Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(colors.hairline))
+        Spacer(Modifier.height(Spacing.Xs))
+
+        // ---- 元信息区：提醒方式一行，触发状态 + 删除一行 ----
+        Text(
+            text = row.notify,
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
-        IconButton(onClick = onDelete, modifier = Modifier.size(40.dp)) {
-            Icon(
-                imageVector = Icons.Default.Delete,
-                contentDescription = "删除规则",
-                modifier = Modifier.size(18.dp),
-                tint = colors.muted,
+        Spacer(Modifier.height(2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = row.status,
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "删除规则",
+                    modifier = Modifier.size(16.dp),
+                    tint = colors.muted,
+                )
+            }
         }
     }
 }
