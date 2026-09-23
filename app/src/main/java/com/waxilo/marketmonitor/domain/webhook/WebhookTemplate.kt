@@ -51,7 +51,9 @@ sealed interface RenderResult {
  */
 object WebhookTemplate {
 
-    private val PLACEHOLDER = Regex("""\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*}}""")
+    // 大括号两端都得转义：Android 的 Pattern 会把未转义的 `}` 当量词收尾，
+    // JVM 测试里放行但真机 <clinit> 直接 PatternSyntaxException。
+    private val PLACEHOLDER = Regex("""\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}""")
 
     val DEFAULT_PAYLOAD = """
 {
