@@ -520,7 +520,7 @@ enum class BannerTone { Neutral, Error, Success }
  * 页面顶部栏（编辑部风）。
  *
  * 与旧版的关键差异：
- * 1. 大标题用 displaySmall（30sp Bold）而不是 titleLarge，建立明确的刊头层级；
+ * 1. 大标题用 displaySmall（22sp Bold）而不是 titleLarge，建立明确的刊头层级；
  * 2. 返回键与动作区尺寸统一为 44dp，避免图标大小不一；
  * 3. 下划线默认不画——由页面自己决定是否用 [Rule]，因为首页头部下面是内容流而非功能区。
  */

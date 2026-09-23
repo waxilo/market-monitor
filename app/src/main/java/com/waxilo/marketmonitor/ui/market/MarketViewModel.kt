@@ -154,16 +154,16 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             val settings = container.settings.current()
             quoteAsset.value = settings.quoteAsset
-            // 当前仅展示现货：不再消费配置里的市场字段，避免存量「永续」配置导致空数据
-            selectMarket(MarketType.SPOT)
+            // 初始市场跟随设置；列表页顶部可随时切换 现货 / 永续合约
+            selectMarket(settings.defaultMarket)
             // selectMarket 在市场未变化时会提前返回（默认市场 SPOT == activeMarket SPOT），
             // 导致冷启动后 never 拉数据、界面停留在初始 loading。这里补一次首次加载。
             refresh()
             startAutoRefresh()
         }
-        // 自选集合一变走势线就要重算（新增的标的还没画过线）
+        // 自选集合或市场一变走势线就要重算（新增的标的还没画过线）
         viewModelScope.launch {
-            watchlist.watchlist(activeMarket.value).collect { reloadTrends() }
+            activeMarket.flatMapLatest { watchlist.watchlist(it) }.collect { reloadTrends() }
         }
     }
 

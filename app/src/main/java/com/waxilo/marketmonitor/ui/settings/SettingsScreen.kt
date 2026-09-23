@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -37,7 +36,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -72,7 +70,7 @@ import com.waxilo.marketmonitor.ui.theme.Spacing
  */
 @Composable
 fun SettingsScreen(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
     viewModel: SettingsViewModel = appViewModel { SettingsViewModel(it) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -105,43 +103,6 @@ fun SettingsScreen(
                         placeholder = "USDT",
                         onValue = viewModel::setQuoteAsset,
                     )
-                    Rule()
-                    ValueRow(
-                        label = "现货备用域名",
-                        value = state.spotRestMirror,
-                        placeholder = "留空即可",
-                        onValue = viewModel::setSpotRestMirror,
-                        valueWidth = 200.dp,
-                    )
-                    Rule()
-                    ValueRow(
-                        label = "合约备用域名",
-                        value = state.futuresRestMirror,
-                        placeholder = "fapi 不通时才需要",
-                        onValue = viewModel::setFuturesRestMirror,
-                        valueWidth = 200.dp,
-                    )
-                    Rule()
-                    ValueRow(
-                        label = "推送备用域名",
-                        value = state.wsMirror,
-                        placeholder = "wss://…",
-                        onValue = viewModel::setWsMirror,
-                        valueWidth = 200.dp,
-                    )
-                    Text(
-                        text = "逗号分隔、按顺序依次尝试，前面的是自己加的、后面才是内置域名。" +
-                            "现货与推送已带大陆可直连的官方行情域（data-api / data-stream），一般留空即可；" +
-                            "合约官方只有 fapi.binance.com，网络打不开时要么走代理、要么在这里填一个可用镜像。" +
-                            "填错不会连累内置域名 —— 一家不通就换下一家。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MarketTheme.colors.muted,
-                        modifier = Modifier.padding(
-                            start = Spacing.Gutter,
-                            end = Spacing.Gutter,
-                            top = Spacing.Xs,
-                        ),
-                    )
                 }
             }
 
@@ -152,8 +113,6 @@ fun SettingsScreen(
                     SwitchRow("声音提醒", state.soundEnabled, viewModel::setSoundEnabled)
                     Rule()
                     SwitchRow("振动", state.vibrateEnabled, viewModel::setVibrateEnabled)
-                    Rule()
-                    SwitchRow("Webhook 推送", state.webhookEnabled, viewModel::setWebhookEnabled)
                 }
             }
 
@@ -267,7 +226,7 @@ fun SettingsScreen(
             item {
                 Section(title = "关于") {
                     Text(
-                        text = "行情监控 · 数据来自币安公开接口。本应用不构成投资建议。",
+                        text = "行情监控 · 现货数据来自币安、永续合约来自 Aster 的公开接口。本应用不构成投资建议。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -326,7 +285,6 @@ private fun ValueRow(
                 textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
                 singleLine = true,
                 cursorBrush = SolidColor(colors.ink),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
             )
         }
     }

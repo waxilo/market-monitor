@@ -74,8 +74,8 @@ object Motion {
  * 而本设计系统需要「刊头 / 引题 / 正文 / 尾注」这类印刷概念，单独放一组更直白。
  */
 object FontSize {
-    /** 页面大标题（刊头）。 */
-    val Display = 30.sp
+    /** 页面大标题（刊头）。有了底栏导航后不必再靠巨型刊头撑层级，收小给内容让位。 */
+    val Display = 22.sp
 
     /** 详情页主价格：全 App 最大的数字。 */
     val HeroPrice = 42.sp

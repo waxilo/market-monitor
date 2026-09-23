@@ -25,20 +25,10 @@ data class SettingsUiState(
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
-    val webhookEnabled: Boolean = true,
     val alertPollingSeconds: Int = 5,
     val autoUpdateCheck: Boolean = true,
     /** 更新加速站；NATIVE 表示直连 GitHub。 */
     val updateMirror: UpdateMirror = UpdateMirror.NATIVE,
-    /**
-     * 行情备用域名（逗号分隔，排在内置域名之前）。
-     *
-     * 一直存在但没有入口，于是「合约打不开」的用户连自救的口子都没有：合约官方只公布
-     * fapi.binance.com，网络不通时要么走代理要么自填镜像，而后者在界面上无处可填。
-     */
-    val spotRestMirror: String = "",
-    val futuresRestMirror: String = "",
-    val wsMirror: String = "",
     val versionName: String = BuildConfig.VERSION_NAME,
     /** 检查更新的结果：null 表示未检查或进行中。 */
     val updateInfo: UpdateInfo? = null,
@@ -77,13 +67,9 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         notificationEnabled = it.notificationEnabled,
                         soundEnabled = it.soundEnabled,
                         vibrateEnabled = it.vibrateEnabled,
-                        webhookEnabled = it.webhookEnabled,
                         alertPollingSeconds = it.alertPollingSeconds,
                         autoUpdateCheck = it.autoUpdateCheck,
                         updateMirror = it.updateMirror,
-                        spotRestMirror = it.spotRestMirror,
-                        futuresRestMirror = it.futuresRestMirror,
-                        wsMirror = it.wsMirror,
                     )
                 }
             }
@@ -133,11 +119,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         persist { s -> s.copy(vibrateEnabled = v) }
     }
 
-    fun setWebhookEnabled(v: Boolean) {
-        backing.update { it.copy(webhookEnabled = v) }
-        persist { s -> s.copy(webhookEnabled = v) }
-    }
-
     fun setAlertPollingSeconds(v: Int) {
         backing.update { it.copy(alertPollingSeconds = v) }
         persist { s -> s.copy(alertPollingSeconds = v) }
@@ -151,24 +132,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setUpdateMirror(v: UpdateMirror) {
         backing.update { it.copy(updateMirror = v) }
         persist { s -> s.copy(updateMirror = v) }
-    }
-
-    fun setSpotRestMirror(v: String) {
-        val trimmed = v.trim()
-        backing.update { it.copy(spotRestMirror = trimmed) }
-        persist { s -> s.copy(spotRestMirror = trimmed) }
-    }
-
-    fun setFuturesRestMirror(v: String) {
-        val trimmed = v.trim()
-        backing.update { it.copy(futuresRestMirror = trimmed) }
-        persist { s -> s.copy(futuresRestMirror = trimmed) }
-    }
-
-    fun setWsMirror(v: String) {
-        val trimmed = v.trim()
-        backing.update { it.copy(wsMirror = trimmed) }
-        persist { s -> s.copy(wsMirror = trimmed) }
     }
 
     /** DataStore 写入是 suspend，在后台作用域持久化，不阻塞 UI（UI 已即时回应用户改动）。 */

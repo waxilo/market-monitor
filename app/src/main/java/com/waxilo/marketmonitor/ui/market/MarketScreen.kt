@@ -10,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -25,9 +26,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,6 +60,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
@@ -96,8 +96,6 @@ import kotlin.math.roundToInt
 fun MarketScreen(
     onOpenDetail: (SymbolId) -> Unit,
     onOpenSearch: () -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenAlerts: () -> Unit,
     viewModel: MarketViewModel = appViewModel { MarketViewModel(it) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -110,13 +108,13 @@ fun MarketScreen(
                 IconButton(onClick = onOpenSearch) {
                     Icon(Icons.Default.Search, contentDescription = "搜索交易对")
                 }
-                IconButton(onClick = onOpenAlerts) {
-                    Icon(Icons.Default.Notifications, contentDescription = "价格预警")
-                }
-                IconButton(onClick = onOpenSettings) {
-                    Icon(Icons.Default.Settings, contentDescription = "设置")
-                }
             },
+        )
+
+        MarketSwitcher(
+            selected = state.market,
+            onSelect = viewModel::selectMarket,
+            modifier = Modifier.padding(horizontal = Spacing.Gutter),
         )
 
         if (state.rows.isNotEmpty()) {
@@ -141,6 +139,7 @@ fun MarketScreen(
                 state.rows.isEmpty() -> EmptyState(onOpenSearch)
                 else -> TickerList(
                     rows = state.rows,
+                    market = state.market,
                     onOpenDetail = onOpenDetail,
                     onRemove = viewModel::removeWatch,
                     onMove = viewModel::moveWatch,
@@ -360,6 +359,39 @@ private fun MarketPulse(advancing: Int, declining: Int) {
 }
 
 /**
+ * 市场切换胶囊（现货 / 永续合约）。列表页与搜索页共用。
+ *
+ * 自选、行情缓存、WS 订阅都以市场为维度隔离，切换即整体换数据源；
+ * 版面沿用「选中才给底色」的杂志风——未选中只留灰字，避免两处都抢注意力。
+ */
+@Composable
+internal fun MarketSwitcher(
+    selected: MarketType,
+    onSelect: (MarketType) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MarketTheme.colors
+    Row(
+        modifier = modifier.padding(vertical = Spacing.Sm),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Sm),
+    ) {
+        MarketType.entries.forEach { market ->
+            val isSelected = market == selected
+            Text(
+                text = market.label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (isSelected) colors.paper else colors.muted,
+                modifier = Modifier
+                    .clip(Radius.fullShape)
+                    .background(if (isSelected) colors.ink else colors.wash)
+                    .clickable { onSelect(market) }
+                    .padding(horizontal = Spacing.Md, vertical = 6.dp),
+            )
+        }
+    }
+}
+
+/**
  * 自选列表。拖动排序的**唯一真相源是数据库里的 position 列**，这里只做三件事：
  * 记住「谁在拖 / 拖了多远 / 谁被滑开」，把越过半格的那一刻翻译成一次 `move`。
  *
@@ -370,6 +402,7 @@ private fun MarketPulse(advancing: Int, declining: Int) {
 @Composable
 private fun TickerList(
     rows: List<TickerRow>,
+    market: MarketType,
     onOpenDetail: (SymbolId) -> Unit,
     onRemove: (SymbolId) -> Unit,
     onMove: (SymbolId, Int) -> Unit,
@@ -453,7 +486,7 @@ private fun TickerList(
         }
         item(key = "footer", contentType = "footer") {
             Text(
-                text = "数据来自币安公开接口 · 每 500ms 合并一次推送",
+                text = "数据来自${market.sourceName}公开接口 · 每 500ms 合并一次推送",
                 modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Lg),
                 style = MaterialTheme.typography.labelSmall,
                 color = MarketTheme.colors.muted,

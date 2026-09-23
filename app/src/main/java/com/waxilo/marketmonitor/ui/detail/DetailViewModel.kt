@@ -236,6 +236,9 @@ class DetailViewModel(
         }
         // 交易规则决定显示位数；首启可能还没落库，失败留给刷新兜底
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
+        // 报价头来自 ticker 流（Room + WS 自选推送）；未加自选的标的两路都是空的，
+        // 进页时补一次单标的 REST（weight 1），否则详情页顶部永远挂着「--」
+        viewModelScope.launch { runCatching { repository.refreshTicker(id) } }
         // K 线流由详情页订阅、离开时退订，避免污染首页只需要的合并流
         viewModelScope.launch { interval.collect { selected -> repository.watchKlineUpdates(id, selected) } }
     }

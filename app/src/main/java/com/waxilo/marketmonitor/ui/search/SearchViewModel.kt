@@ -113,12 +113,33 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SearchUiState())
 
+    /** 已同步过交易规则的市场：没同步过的市场搜索列表会是空的（标的来自 Room）。 */
+    private val syncedMarkets = mutableSetOf<MarketType>()
+
     init {
-        viewModelScope.launch { market.value = container.settings.current().defaultMarket }
+        viewModelScope.launch {
+            val target = container.settings.current().defaultMarket
+            market.value = target
+            ensureInstruments(target)
+        }
     }
 
     fun selectMarket(target: MarketType) {
         market.value = target
+        ensureInstruments(target)
+    }
+
+    /**
+     * 该市场还没同步过交易规则时后台补一次。
+     * 用户可能从没在首页切到合约就直奔搜索，此时 Room 里没有合约标的，
+     * 不同步就永远搜不到东西；失败则放开标记，下次切换或重进页面可重试。
+     */
+    private fun ensureInstruments(target: MarketType) {
+        if (target in syncedMarkets) return
+        syncedMarkets += target
+        viewModelScope.launch {
+            if (runCatching { repository.syncInstruments(target) }.isFailure) syncedMarkets -= target
+        }
     }
 
     fun onQueryChange(text: String) {

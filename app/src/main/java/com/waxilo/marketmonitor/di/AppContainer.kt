@@ -8,6 +8,7 @@ import android.util.Log
 import com.waxilo.marketmonitor.BuildConfig
 import com.waxilo.marketmonitor.data.alert.AlertEngine
 import com.waxilo.marketmonitor.data.alert.AlertNotifier
+import com.waxilo.marketmonitor.data.local.EncryptedBinanceCredentialStore
 import com.waxilo.marketmonitor.data.local.EncryptedWebhookStore
 import com.waxilo.marketmonitor.data.local.SettingsDataStore
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
@@ -24,6 +25,7 @@ import com.waxilo.marketmonitor.data.repository.UpdateRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.WatchlistRepositoryImpl
 import com.waxilo.marketmonitor.domain.repository.AlertRepository
 import com.waxilo.marketmonitor.domain.repository.AppSettings
+import com.waxilo.marketmonitor.domain.repository.BinanceCredentialRepository
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.UpdateRepository
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
@@ -137,7 +139,14 @@ class AppContainer(private val context: Context) {
         )
     }
 
-    private val marketApi: BinanceMarketApi by lazy { BinanceMarketApi(restClient, restHosts) }
+    private val marketApi: BinanceMarketApi by lazy {
+        BinanceMarketApi(restClient, restHosts, credentials = { binanceCredentials.credentials.value })
+    }
+
+    /** 币安 API 凭据含签名密钥，加密存储；懒建，理由同 [webhookRepository]。 */
+    val binanceCredentials: BinanceCredentialRepository by lazy {
+        EncryptedBinanceCredentialStore.create(context)
+    }
 
     private val webSocket: MarketWebSocket by lazy { MarketWebSocket(wsClient, wsHosts) }
 

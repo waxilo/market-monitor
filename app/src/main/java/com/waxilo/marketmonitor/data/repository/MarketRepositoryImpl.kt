@@ -15,6 +15,8 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.Position
+import com.waxilo.marketmonitor.domain.model.SpotBalance
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.domain.repository.KlinePage
@@ -231,6 +233,10 @@ class MarketRepositoryImpl(
 
     override suspend fun ping(market: MarketType): Boolean = api.ping(market)
 
+    override suspend fun positions(): List<Position> = api.positions()
+
+    override suspend fun spotBalances(): List<SpotBalance> = api.spotBalances()
+
     /**
      * 拉取 + 聚合 + 落缓存。自定义周期请求基础周期数据后合并，
      * 缓存里存的是聚合结果，因此离线时也能按用户选的周期回读。
@@ -286,7 +292,12 @@ class MarketRepositoryImpl(
 
     /** 供 UI 标注「离线数据」：缓存最新一条与当前时间的差值。 */
     suspend fun isStale(market: MarketType, thresholdMs: Long = STALE_AFTER_MS): Boolean {
-        val last = tickerDao.lastUpdatedAt(market.key) ?: return true
+        val last = tickerDao.lastUpdatedAt(market.key)
+        if (last == null) {
+            // 该市场一条缓存都没有有两种可能：网络从没通过（自选非空，该报离线），
+            // 或自选本来就空着（没东西可拉，不该吓唬用户「网络中断」）
+            return watchlist.watchlist(market).first().isNotEmpty()
+        }
         return System.currentTimeMillis() - last > thresholdMs
     }
 

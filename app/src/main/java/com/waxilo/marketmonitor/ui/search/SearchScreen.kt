@@ -46,6 +46,7 @@ import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.ListRow
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.appViewModel
+import com.waxilo.marketmonitor.ui.market.MarketSwitcher
 import com.waxilo.marketmonitor.ui.market.TickerRow
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
@@ -73,6 +74,12 @@ fun SearchScreen(
             query = state.query,
             onQueryChange = viewModel::onQueryChange,
             onBack = onBack,
+        )
+
+        MarketSwitcher(
+            selected = state.market,
+            onSelect = viewModel::selectMarket,
+            modifier = Modifier.padding(horizontal = Spacing.Gutter),
         )
 
         if (state.rows.isEmpty()) {

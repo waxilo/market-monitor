@@ -5,6 +5,8 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.Position
+import com.waxilo.marketmonitor.domain.model.SpotBalance
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -85,6 +87,16 @@ interface MarketRepository {
 
     /** 连通性探测，供设置页与容灾切换使用。 */
     suspend fun ping(market: MarketType): Boolean
+
+    /**
+     * 用户当前永续仓位（币安签名接口 /fapi/v2/positionRisk）。
+     * 未配置凭据或请求失败时抛 [com.waxilo.marketmonitor.data.remote.MarketApiException]，
+     * 由页面自己区分「没配 key」与「网络/鉴权错误」。
+     */
+    suspend fun positions(): List<Position>
+
+    /** 用户现货余额（币安签名接口 /api/v3/account），已过滤零资产、按持有量降序。 */
+    suspend fun spotBalances(): List<SpotBalance>
 }
 
 /**

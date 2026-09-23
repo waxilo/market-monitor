@@ -1,5 +1,7 @@
 package com.waxilo.marketmonitor.data.remote
 
+import com.waxilo.marketmonitor.data.remote.dto.SpotAccountDto
+import com.waxilo.marketmonitor.data.remote.dto.toDomain
 import com.waxilo.marketmonitor.data.remote.ws.WsEvent
 import com.waxilo.marketmonitor.data.remote.ws.WsParser
 import com.waxilo.marketmonitor.domain.model.MarketTicker
@@ -163,6 +165,34 @@ class RestHostFallbackTest {
         assertEquals("https://mirror2.example.com", hosts[1])
         // 用户把现货那个可直连域填进合约镜像：它对合约端点回 404，但官方合约域必须还在链上
         assertTrue("https://data-api.binance.vision" !in hosts)
-        assertEquals("https://fapi.binance.com", hosts.last())
+        // 合约内置域已完全切到 Aster（fapi.binance.com 不再留在链尾污染缓存）
+        assertEquals("https://fapi.asterdex.com", hosts.last())
+    }
+}
+
+/**
+ * 现货账户 DTO 解析（/api/v3/account）。
+ * 币安会返回账户里全部资产的零余额行，不滤掉的话 UI 会被几百行空资产淹没。
+ */
+class SpotAccountDtoTest {
+
+    @Test
+    fun `零余额与坏数字的资产行被过滤，金额走 BigDecimal 不丢精度`() {
+        val element = MarketJson.DEFAULT.parseToJsonElement(
+            """
+            {"balances":[
+              {"asset":"BTC","free":"0.5","locked":"0.1"},
+              {"asset":"USDT","free":"0","locked":"0"},
+              {"asset":"","free":"9"},
+              {"asset":"ETH","free":"x"}
+            ]}
+            """.trimIndent(),
+        )
+        val dto = MarketJson.DEFAULT.decodeFromJsonElement(SpotAccountDto.serializer(), element)
+        val rows = dto.balances.mapNotNull { it.toDomain() }
+        assertEquals(1, rows.size)
+        assertEquals("BTC", rows[0].asset)
+        assertEquals(0, BigDecimal("0.6").compareTo(rows[0].quantity))
+        assertEquals(0, BigDecimal("0.5").compareTo(rows[0].available))
     }
 }

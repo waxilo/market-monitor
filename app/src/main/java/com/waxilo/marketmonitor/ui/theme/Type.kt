@@ -36,7 +36,7 @@ val AppTypography = Typography(
         fontFamily = Sans,
         fontWeight = FontWeight.Bold,
         fontSize = FontSize.Display,
-        lineHeight = 36.sp,
+        lineHeight = 28.sp,
         letterSpacing = (-0.6).sp,
     ),
     titleLarge = TextStyle(

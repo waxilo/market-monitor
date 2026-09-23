@@ -67,7 +67,7 @@ import com.waxilo.marketmonitor.ui.theme.Spacing
  */
 @Composable
 fun AlertsScreen(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)? = null,
     onOpenDetail: (SymbolId) -> Unit,
     onNewRule: () -> Unit,
     onEditRule: (Long) -> Unit,
