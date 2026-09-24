@@ -235,7 +235,6 @@ fun AppNavHost(
                 AlertsScreen(
                     onBack = backAsTab,
                     onOpenDetail = openDetail,
-                    onNewRule = { navController.navigate(Routes.alertNew()) },
                     onEditRule = { navController.navigate(Routes.alertEdit(it)) },
                     onOpenWebhooks = { navController.navigate(Routes.WEBHOOKS) },
                 )
@@ -278,6 +277,7 @@ fun AppNavHost(
                         symbolId = id,
                         onBack = leaveDetail,
                         onCreateAlert = { navController.navigate(Routes.alertNew(id.market, id.symbol)) },
+                        onEditRule = { navController.navigate(Routes.alertEdit(it)) },
                     )
                 }
             }
@@ -296,6 +296,7 @@ fun AppNavHost(
                     symbolId = id,
                     onBack = leaveDetail,
                     onCreateAlert = { navController.navigate(Routes.alertNew(id.market, id.symbol)) },
+                    onEditRule = { navController.navigate(Routes.alertEdit(it)) },
                 )
             }
         }

@@ -3,6 +3,8 @@ package com.waxilo.marketmonitor.domain.repository
 import com.waxilo.marketmonitor.domain.alert.AlertDirection
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertState
+import com.waxilo.marketmonitor.domain.alert.IndicatorLine
+import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.webhook.WebhookEndpoint
 import kotlinx.coroutines.flow.Flow
@@ -82,6 +84,18 @@ interface AlertRepository {
 
     /** 只保留近期记录，避免无限增长。 */
     suspend fun pruneMessages(olderThan: Long)
+
+    // ---- 指标划线（详情页划线管理）----
+
+    fun indicatorLines(): Flow<List<IndicatorLine>>
+
+    /** 新增或更新划线，返回 id。 */
+    suspend fun saveIndicatorLine(line: IndicatorLine): Long
+
+    suspend fun deleteIndicatorLine(id: Long)
+
+    /** 切换划线的告警方式；规则由引擎在下一个轮询周期挂上或回收。 */
+    suspend fun setIndicatorLineAlertMode(id: Long, mode: LineAlertMode)
 }
 
 interface WebhookRepository {

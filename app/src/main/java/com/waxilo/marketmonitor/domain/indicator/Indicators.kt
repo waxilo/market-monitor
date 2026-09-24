@@ -171,4 +171,35 @@ object Indicators {
     /** 主图均线族：返回 period → 序列，供图例逐项绘制。 */
     fun movingAverages(close: DoubleArray, periods: List<Int>): Map<Int, DoubleArray> =
         periods.filter { it > 0 }.associateWith { sma(close, it) }
+
+    /** BOLL 告警线的默认参数，与图上叠加指标保持同一套（N=20, K=2）。 */
+    const val BOLL_PERIOD = 20
+    const val BOLL_MULTIPLIER = 2.0
+
+    /** 末根收盘价上的 SMA：直接对最后 period 根求均值，省掉整条序列的分配。 */
+    fun latestMa(closes: DoubleArray, period: Int): Double? {
+        if (period <= 0 || closes.size < period) return null
+        var sum = 0.0
+        for (i in (closes.size - period) until closes.size) sum += closes[i]
+        return (sum / period).takeIf { it.isFinite() }
+    }
+}
+
+/**
+ * 均线带聚合：把多条均线的最新值当一个集合，取现价两侧最近的做上破/下破锚点。
+ *
+ * 等于现价的值两侧都不算（穿越判定是严格 ABOVE/BELOW，贴着线没有边沿可言）。
+ * 候选带成员标识（key → 值），选中哪个成员要回传给引擎做冷却记账。
+ */
+object MaBand {
+
+    /** 现价上方最近（上破锚点）与下方最近（下破锚点）的成员；不存在的一侧为 null。 */
+    fun pick(
+        candidates: List<Pair<String, Double>>,
+        price: Double,
+    ): Pair<Pair<String, Double>?, Pair<String, Double>?> {
+        val upper = candidates.filter { it.second > price }.minByOrNull { it.second }
+        val lower = candidates.filter { it.second < price }.maxByOrNull { it.second }
+        return upper to lower
+    }
 }

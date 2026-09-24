@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -61,15 +60,16 @@ import com.waxilo.marketmonitor.ui.theme.Spacing
  * 预警管理页（PRD FR-3.1 / FR-3.4）：规则与触发记录两个页签。
  *
  * 规则页是**三段式扁平行**（标题 / 条件+距触发进度 / 元信息），纸底 + 发丝线分隔，
- * 与行情、搜索等列表页同一套视觉语言。以前这些字段要逐条点进编辑页才看得到，
- * 列表只露个名称和条件；现在扫一屏就能回答「这条还差多少、会不会响、推不推外部、上次啥时候触发」。
- * 整行可点仍然进编辑页，开关与删除就地操作。
+ * 与行情、搜索等列表页同一套视觉语言。手动规则与指标划线挂的线都在这里展示
+ * （划线线带「划线」标记，只给开关与删除，编辑在详情页划线管理）。
+ * **本页不提供创建入口**：新建预警从行情详情页的预警图标进入，那里有标的上下文。
+ *
+ * 整行可点进编辑页（手动规则），开关与删除就地操作。
  */
 @Composable
 fun AlertsScreen(
     onBack: (() -> Unit)? = null,
     onOpenDetail: (SymbolId) -> Unit,
-    onNewRule: () -> Unit,
     onEditRule: (Long) -> Unit,
     onOpenWebhooks: () -> Unit,
     viewModel: AlertsViewModel = appViewModel { AlertsViewModel(it) },
@@ -82,11 +82,6 @@ fun AlertsScreen(
             title = "预警",
             subtitle = "规则与触发记录",
             onBack = onBack,
-            actions = {
-                IconButton(onClick = onNewRule, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Default.Add, contentDescription = "新建预警规则", tint = colors.ink)
-                }
-            },
         )
 
         Row(
@@ -99,7 +94,7 @@ fun AlertsScreen(
                 selected = state.tab,
                 labelOf = { it.label },
                 onSelect = viewModel::selectTab,
-                modifier = Modifier.width(180.dp),
+                modifier = Modifier.width(176.dp),
             )
             Text(
                 text = when {
@@ -131,10 +126,9 @@ fun AlertsScreen(
         when (state.tab) {
             AlertsTab.RULES -> RuleList(
                 rows = state.rules,
-                onClick = { onEditRule(it.rule.id) },
+                onClick = { row -> if (!row.indicator) onEditRule(row.rule.id) },
                 onToggle = viewModel::setEnabled,
                 onDelete = viewModel::delete,
-                onNewRule = onNewRule,
             )
 
             AlertsTab.MESSAGES -> MessageList(
@@ -157,14 +151,11 @@ private fun RuleList(
     onClick: (AlertRuleRow) -> Unit,
     onToggle: (Long, Boolean) -> Unit,
     onDelete: (Long) -> Unit,
-    onNewRule: () -> Unit,
 ) {
     if (rows.isEmpty()) {
         HintRow(
             title = "还没有预警规则",
-            subtitle = "为关心的交易对设置目标价，价格触达时在通知栏提醒",
-            actionLabel = "新建第一条规则 →",
-            onAction = onNewRule,
+            subtitle = "在行情详情页点预警图标可设目标价预警，点划线图标可管理指标划线",
         )
         return
     }
@@ -199,6 +190,9 @@ private fun RuleList(
  * 距离进度条把「现价离阈值还有多远」画出来——只有百分比文字时还得自己心算，
  * 一根条能立刻判断这条规则是「快到了」还是「还早」（满量程见 ViewModel）。
  * 删除挂在元信息区行尾而不是标题行：标题行已有开关，再挤一颗红色图标就是误删现场。
+ *
+ * 指标划线挂的线带「划线」标记：阈值跟随指标值，进编辑页改它是没有意义的，
+ * 所以这类行整行不响应点击，管理入口在详情页的划线面板。
  */
 @Composable
 private fun RuleItem(
@@ -211,7 +205,7 @@ private fun RuleItem(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = !row.indicator, onClick = onClick)
             .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
     ) {
         // ---- 标题区 ----
@@ -224,6 +218,10 @@ private fun RuleItem(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (row.indicator) {
+                StatusPill(text = "划线", tone = PillTone.Neutral)
+                Spacer(Modifier.width(Spacing.Xs))
+            }
             StatusPill(
                 text = if (row.rule.enabled) "监测中" else "已暂停",
                 tone = if (row.rule.enabled) PillTone.Positive else PillTone.Neutral,

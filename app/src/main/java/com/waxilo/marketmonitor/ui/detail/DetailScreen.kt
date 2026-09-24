@@ -1,10 +1,16 @@
 package com.waxilo.marketmonitor.ui.detail
 
 import android.content.pm.ActivityInfo
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -54,6 +60,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
@@ -71,14 +80,18 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
+import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
+import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
+import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
@@ -118,6 +131,7 @@ fun DetailScreen(
     symbolId: SymbolId,
     onBack: () -> Unit,
     onCreateAlert: () -> Unit,
+    onEditRule: (Long) -> Unit,
     viewModel: DetailViewModel = appViewModel(key = "detail:${symbolId.storageKey}") {
         DetailViewModel(it, symbolId)
     },
@@ -125,6 +139,12 @@ fun DetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     // 提到这一层是因为竖屏图与全屏图都要画告警线：线由预警规则派生，在哪个模式下看都该一致
     val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
+    // 「不告警」的划线画成灰参考曲线，同样两种视图都要画
+    val indicatorGuides by viewModel.indicatorGuides.collectAsStateWithLifecycle()
+    // 指标线模式均线带的两条灰色锚点水平线（引擎择近+冷却换锚），同样两种视图共用
+    val bandGuides by viewModel.bandGuides.collectAsStateWithLifecycle()
+    val indicatorLines by viewModel.indicatorLines.collectAsStateWithLifecycle()
+    val symbolRules by viewModel.symbolRules.collectAsStateWithLifecycle()
     // 同样共用一个开关：在竖屏把线藏了，进全屏不该又冒出来
     val alertLinesVisible by viewModel.alertLinesVisible.collectAsStateWithLifecycle()
     /**
@@ -134,6 +154,10 @@ fun DetailScreen(
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     // 周期管理对话框：竖屏与全屏共用一个开关，挂在最外层免得两条分支各存一份
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
+    // 铃铛预警整页与划线编辑框：IndicatorLine 不可序列化，旋屏丢了重开即是（同周期管理草稿）
+    var alertsPageOpen by rememberSaveable { mutableStateOf(false) }
+    var lineDialogOpen by remember { mutableStateOf(false) }
+    var lineEditing by remember { mutableStateOf<IndicatorLine?>(null) }
     /**
      * 十字光标下标，竖屏图与全屏图共用：K 线详情小条常显在图表顶部、读数带正上方，
      * 长按跟着手指、松手回到最新一根（null）。图表内部已按标的/周期复位，
@@ -142,12 +166,16 @@ fun DetailScreen(
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
 
     FullscreenController(active = fullscreen)
+    // 预警整页盖在详情页之上，系统返回键要先退这一层而不是整个详情页路由
+    BackHandler(enabled = alertsPageOpen) { alertsPageOpen = false }
 
     Box(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         if (fullscreen) {
             FullscreenChart(
                 state = state,
                 alertLines = alertLines,
+                indicatorGuides = indicatorGuides,
+                bandGuides = bandGuides,
                 alertLinesVisible = alertLinesVisible,
                 viewModel = viewModel,
                 onManageIntervals = { intervalManagerOpen = true },
@@ -163,7 +191,11 @@ fun DetailScreen(
                     state = state,
                     onBack = onBack,
                     onToggleWatch = viewModel::toggleWatch,
-                    onCreateAlert = onCreateAlert,
+                    onShowAlerts = { alertsPageOpen = true },
+                    onShowLines = {
+                        lineEditing = indicatorLines.firstOrNull()
+                        lineDialogOpen = true
+                    },
                 )
 
                 val error = state.error
@@ -187,6 +219,8 @@ fun DetailScreen(
                 ChartArea(
                     state = state,
                     alertLines = alertLines,
+                    indicatorGuides = indicatorGuides,
+                    bandGuides = bandGuides,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = viewModel::toggleAlertLines,
                     onLoadMore = viewModel::loadMore,
@@ -234,6 +268,45 @@ fun DetailScreen(
                 onSave = {
                     viewModel.saveIntervals(it)
                     intervalManagerOpen = false
+                },
+            )
+        }
+
+        // 本标的预警整页：从右往左滑入、盖住详情页（不再是底部弹层）。
+        // 挂在 Box 最外层作最上层子节点，返回键/左上角箭头都收在这页里。
+        AnimatedVisibility(
+            visible = alertsPageOpen,
+            enter = slideInHorizontally(tween(Motion.BaseMs, easing = Motion.Emphasized)) { it } +
+                fadeIn(tween(Motion.BaseMs)),
+            exit = slideOutHorizontally(tween(Motion.BaseMs, easing = Motion.Emphasized)) { it } +
+                fadeOut(tween(Motion.FastMs)),
+            modifier = Modifier.zIndex(1f),
+        ) {
+            SymbolAlertsPage(
+                symbolId = symbolId,
+                manualRules = symbolRules.filter { it.source != AlertRuleSource.INDICATOR },
+                onDismiss = { alertsPageOpen = false },
+                onNewRule = {
+                    alertsPageOpen = false
+                    onCreateAlert()
+                },
+                onEditRule = { id ->
+                    alertsPageOpen = false
+                    onEditRule(id)
+                },
+                onToggleRule = viewModel::setRuleEnabled,
+                onDeleteRule = viewModel::deleteRule,
+            )
+        }
+
+        if (lineDialogOpen) {
+            IndicatorLineDialog(
+                symbolId = symbolId,
+                initial = lineEditing,
+                onDismiss = { lineDialogOpen = false },
+                onSave = { line ->
+                    viewModel.saveIndicatorLine(line)
+                    lineDialogOpen = false
                 },
             )
         }
@@ -291,6 +364,8 @@ private fun FullscreenController(active: Boolean) {
 private fun FullscreenChart(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
+    indicatorGuides: List<IndicatorGuideLine>,
+    bandGuides: List<BandGuideLine>,
     alertLinesVisible: Boolean,
     viewModel: DetailViewModel,
     onManageIntervals: () -> Unit,
@@ -367,6 +442,8 @@ private fun FullscreenChart(
                     // 与竖屏同位：图表顶部、读数带正上方的同一个容器
                     candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
                     alertLines = alertLines,
+                    indicatorGuides = indicatorGuides,
+                    bandGuides = bandGuides,
                     alertLineMode = alertMode,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = viewModel::toggleAlertLines,
@@ -436,10 +513,15 @@ private fun FullscreenChart(
 }
 
 /**
- * 顶栏：返回 + 币种名 + 自选 + 建预警。
+ * 顶栏：返回 + 币种名 + 自选 + 指标划线 + 预警铃铛。
  *
- * 动作直接摊开而不收进「三个点」：菜单里只有一项，多点一次只为展开一个空菜单，
- * 而且那项（建预警）恰恰是详情页的主行动之一，藏起来等于没人用。
+ * 动作直接摊开而不收进「三个点」：菜单里只有一两项，多点一次只为展开一个空菜单，
+ * 而且那几项（预警、划线）恰恰是详情页的主行动之一，藏起来等于没人用。
+ *
+ * 铃铛打开本标的价格预警弹层（先看待有的，右上角再添新的）：预警页已不提供创建入口，
+ * 「给这个标的加个预警」就地完成，标的上下文也不用重新选。
+ * 划线图标打开独立的指标划线弹层：预警是「会响的规则」、划线是「图上跟着指标走的线」，
+ * 两件事各管各的入口，不混在一张列表里。
  *
  * 「全屏」不在这里——它在图表左上角的角标上（见 [ChartArea]）：入口离图表越近越顺手，
  * 而详情页要滚动才能看到图表，按钮钉在顶栏等于每次先得把页面翻回去。
@@ -451,7 +533,8 @@ private fun DetailTopBar(
     state: DetailUiState,
     onBack: () -> Unit,
     onToggleWatch: () -> Unit,
-    onCreateAlert: () -> Unit,
+    onShowAlerts: () -> Unit,
+    onShowLines: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     AppBar(
@@ -468,10 +551,18 @@ private fun DetailTopBar(
                     tint = if (state.watched) colors.accent else colors.muted,
                 )
             }
-            IconButton(onClick = onCreateAlert, modifier = Modifier.size(44.dp)) {
+            IconButton(
+                onClick = onShowLines,
+                modifier = Modifier
+                    .size(44.dp)
+                    .semantics { contentDescription = "管理该标的的指标划线" },
+            ) {
+                IndicatorLineGlyph(modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = onShowAlerts, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = Icons.Default.Notifications,
-                    contentDescription = "为该交易对建预警",
+                    contentDescription = "查看该标的的预警",
                     modifier = Modifier.size(20.dp),
                     tint = colors.ink,
                 )
@@ -719,6 +810,8 @@ private fun ReadoutCell(label: String?, value: String, valueColor: Color? = null
 private fun ChartArea(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
+    indicatorGuides: List<IndicatorGuideLine>,
+    bandGuides: List<BandGuideLine>,
     alertLinesVisible: Boolean,
     onToggleAlertLines: () -> Unit,
     onLoadMore: () -> Unit,
@@ -776,6 +869,8 @@ private fun ChartArea(
                     candleReadout = candleReadout,
                     // 只画不能拖：竖屏没有划线模式，调整预警走全屏
                     alertLines = alertLines,
+                    indicatorGuides = indicatorGuides,
+                    bandGuides = bandGuides,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = onToggleAlertLines,
                     cornerAction = ChartCornerAction(
@@ -1178,6 +1273,31 @@ private fun StatsSection(stats: List<StatItem>) {
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
+        }
+    }
+}
+
+/**
+ * 「指标划线」角标：一条上扬的折线。
+ *
+ * 自己画而不用 `Icons.Default.ShowChart` —— 那个矢量在 material-icons-extended 里，
+ * 为一个图标拖进上千个图标不划算，本应用只依赖 icons-core（同 [FullscreenGlyph]）。
+ */
+@Composable
+private fun IndicatorLineGlyph(modifier: Modifier = Modifier) {
+    val colors = MarketTheme.colors
+    Canvas(modifier.size(20.dp)) {
+        val stroke = size.width * 0.09f
+        // 线以端点为中心，不内缩的话描边会被画布切掉一半
+        val i = stroke / 2f
+        val points = listOf(
+            Offset(i, size.height * 0.80f),
+            Offset(size.width * 0.36f, size.height * 0.40f),
+            Offset(size.width * 0.58f, size.height * 0.62f),
+            Offset(size.width - i, i),
+        )
+        for ((from, to) in points.zipWithNext()) {
+            drawLine(colors.ink, from, to, stroke, cap = StrokeCap.Round)
         }
     }
 }

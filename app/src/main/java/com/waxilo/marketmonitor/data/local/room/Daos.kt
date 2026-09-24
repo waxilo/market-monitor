@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -202,6 +203,12 @@ interface AlertDao {
     @Upsert
     suspend fun upsertState(state: AlertStateEntity)
 
+    /** 规则可能刚被引擎退场/用户删除：同事务确认存在再写，避免给已删规则凭空造孤儿状态行。 */
+    @Transaction
+    suspend fun upsertStateIfRuleExists(state: AlertStateEntity) {
+        if (findRule(state.ruleId) != null) upsertState(state)
+    }
+
     @Query("DELETE FROM alert_state WHERE ruleId = :ruleId")
     suspend fun deleteState(ruleId: Long)
 
@@ -233,4 +240,18 @@ interface AlertDao {
 
     @Query("DELETE FROM alert_log WHERE triggeredAt < :before")
     suspend fun deleteLogsOlderThan(before: Long)
+
+    // ---- 指标划线 ----
+
+    @Query("SELECT * FROM indicator_line ORDER BY createdAt DESC")
+    fun observeIndicatorLines(): Flow<List<IndicatorLineEntity>>
+
+    @Upsert
+    suspend fun upsertIndicatorLine(line: IndicatorLineEntity): Long
+
+    @Query("DELETE FROM indicator_line WHERE id = :id")
+    suspend fun deleteIndicatorLine(id: Long)
+
+    @Query("UPDATE indicator_line SET alertMode = :mode WHERE id = :id")
+    suspend fun setIndicatorLineAlertMode(id: Long, mode: String)
 }

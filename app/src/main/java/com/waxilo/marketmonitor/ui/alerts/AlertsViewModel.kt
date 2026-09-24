@@ -7,7 +7,9 @@ import com.waxilo.marketmonitor.data.alert.notificationsAllowed
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
+import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertText
+import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.AlertMessage
@@ -52,6 +54,8 @@ data class AlertRuleRow(
     val notify: String,
     /** 创建时间（MM-dd HH:mm:ss）。 */
     val created: String,
+    /** 指标划线自动挂的线：编辑没有意义（阈值跟随划线），列表里只给开关与删除。 */
+    val indicator: Boolean,
 )
 
 @Immutable
@@ -100,13 +104,16 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val sources = combine(alerts.rules(), alerts.messages(MESSAGE_LIMIT)) { ruleList, logs ->
-        ruleList to logs
-    }.flatMapLatest { (ruleList, logs) ->
+    private val sources = combine(
+        alerts.rules(),
+        alerts.messages(MESSAGE_LIMIT),
+    ) { ruleList, logs ->
         val lastByRule = HashMap<Long, Long>(ruleList.size)
         logs.forEach { log -> lastByRule.putIfAbsent(log.ruleId, log.triggeredAt) }
-        repository.tickerSnapshots(ruleList.map { SymbolId(it.market, it.symbol) })
-            .map { prices -> Sources(ruleList, prices, logs, lastByRule) }
+        Sources(ruleList, emptyMap(), logs, lastByRule)
+    }.flatMapLatest { base ->
+        repository.tickerSnapshots(base.rules.map { SymbolId(it.market, it.symbol) })
+            .map { prices -> base.copy(prices = prices) }
     }
 
     val state: StateFlow<AlertsUiState> = combine(
@@ -117,6 +124,8 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
     ) { source, selectedTab, unread, error ->
         AlertsUiState(
             tab = selectedTab,
+            // 指标划线挂的线也进列表（带「划线」标记）：告警统一在一处看，
+            // 但它们的阈值跟随划线，编辑页不让进
             rules = source.rules.map { it.toRow(source) },
             messages = source.messages.map { it.toRow() },
             unread = unread,
@@ -133,10 +142,15 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch { alerts.setRuleEnabled(ruleId, enabled) }
     }
 
+    /** 删除规则；指标划线的线被删即表示不再要这个告警，把线的告警一并置关，否则引擎下一轮会重挂。 */
     fun delete(ruleId: Long) {
         viewModelScope.launch {
             try {
+                val rule = alerts.rule(ruleId)
                 alerts.deleteRule(ruleId)
+                rule?.takeIf { it.source == AlertRuleSource.INDICATOR }?.indicatorLineId?.let {
+                    alerts.setIndicatorLineAlertMode(it, LineAlertMode.OFF)
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -190,6 +204,7 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
                 if (webhookIds.isNotEmpty()) append(" · 外部推送 ×${webhookIds.size}")
             },
             created = AlertText.timeOf(createdAt),
+            indicator = this.source == AlertRuleSource.INDICATOR,
         )
     }
 

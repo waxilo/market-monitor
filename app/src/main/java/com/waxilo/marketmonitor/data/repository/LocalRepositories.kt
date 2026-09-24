@@ -10,6 +10,8 @@ import com.waxilo.marketmonitor.data.local.room.toEntity
 import com.waxilo.marketmonitor.data.local.room.toSymbolId
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertState
+import com.waxilo.marketmonitor.domain.alert.IndicatorLine
+import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.AlertMessage
@@ -88,7 +90,7 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
 
     override suspend fun state(ruleId: Long): AlertState = dao.findState(ruleId)?.toDomain() ?: AlertState()
 
-    override suspend fun saveState(ruleId: Long, state: AlertState) = dao.upsertState(state.toEntity(ruleId))
+    override suspend fun saveState(ruleId: Long, state: AlertState) = dao.upsertStateIfRuleExists(state.toEntity(ruleId))
 
     override fun messages(limit: Int): Flow<List<AlertMessage>> =
         dao.observeLogs(limit).map { rows -> rows.map { it.toDomain() } }
@@ -109,4 +111,20 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
     override suspend fun setDelivery(id: Long, delivery: WebhookDelivery) = dao.setWebhookStatus(id, delivery.code)
 
     override suspend fun pruneMessages(olderThan: Long) = dao.deleteLogsOlderThan(olderThan)
+
+    override fun indicatorLines(): Flow<List<IndicatorLine>> =
+        dao.observeIndicatorLines().map { rows -> rows.map { it.toDomain() } }
+
+    override suspend fun saveIndicatorLine(line: IndicatorLine): Long {
+        val entity = line.toEntity()
+        return if (line.id == 0L) dao.upsertIndicatorLine(entity.copy(id = 0L)) else {
+            dao.upsertIndicatorLine(entity)
+            line.id
+        }
+    }
+
+    override suspend fun deleteIndicatorLine(id: Long) = dao.deleteIndicatorLine(id)
+
+    override suspend fun setIndicatorLineAlertMode(id: Long, mode: LineAlertMode) =
+        dao.setIndicatorLineAlertMode(id, mode.key)
 }

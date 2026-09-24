@@ -88,6 +88,25 @@ import kotlin.math.min
 data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
 
 /**
+ * 指标划线「不告警」模式在图上的一条参考曲线：**跟着该线自己配置的 K 线周期走**，
+ * 逐根台阶式对齐到当前展示序列（不是定在某个价位的水平线）。
+ *
+ * [values] 与主图蜡烛逐根对齐（长度 = 序列长度，无值处 NaN），[label] 供读数带标注。
+ * 位置由调用方（DetailViewModel）用与引擎同一套指标纯函数算好。
+ * 与 [AlertPriceLine] 分开建模：告警线是可交互的「预警」，这条只是「指标在哪」。
+ */
+data class IndicatorGuideLine(val lineId: Long, val label: String, val values: DoubleArray)
+
+/**
+ * 指标线模式（OFF）均线带在图上的一条灰色锚点水平线。
+ *
+ * 与 [IndicatorGuideLine] 的逐根台阶线不同：均线带把所有成员的均线值合成一个集合，
+ * 图上只画现价上/下最近的两条水平线（锚点与换锚逻辑在 AlertEngine，这里只画结果）。
+ * [lineId] 只供调用方过滤归属，图表本身不解释。
+ */
+data class BandGuideLine(val lineId: Long, val price: Double)
+
+/**
  * 图表左下角的角标按钮（进/出全屏）。放在左下而不是左上：左上角是指标读数带
  * （连同其上方的 K 线详情小条），浮在图上会把整块读数往下顶（当年十字光标弹窗
  * 也栽在这儿，如今弹窗已改成读数带上方的小条）。
@@ -129,6 +148,18 @@ fun KlineChart(
      * 却要进到划线模式才能调，等于把线藏进了抽屉。
      */
     alertLines: List<AlertPriceLine> = emptyList(),
+    /**
+     * 指标划线里选了「不告警」的那几条：按各自配置的 K 线周期逐根画出的细灰参考曲线
+     * （跟着指标周期走，不是定死的水平线）。不参与拖拽与垃圾桶，只随 [alertLinesVisible]
+     * 那只眼睛显隐。划线模式下不画——那时单指属于告警线，图上再叠一层拖不动的灰线只会引人去拖它。
+     */
+    indicatorGuides: List<IndicatorGuideLine> = emptyList(),
+    /**
+     * 指标线（OFF）模式均线带在图上的锚点参考线：现价上方/下方最近成员各一条
+     * **灰色水平线**（引擎按集合择近 + 5 分钟冷却换锚算好，始终至多两条、不会响）。
+     * 与 [indicatorGuides] 同样只随眼睛显隐、不参与拖拽；划线模式下同样不画。
+     */
+    bandGuides: List<BandGuideLine> = emptyList(),
     /**
      * 划线模式下：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
      * 双指缩放照旧（画线时同样需要能缩放看细节）。
@@ -476,6 +507,11 @@ fun KlineChart(
                 drawCandles(series, plot, geo, palette, mainRange)
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
+                // 指标参考线先画：它只是背景参照，告警线压上来时以告警线为准
+                if (alertLinesVisible && !alertLineMode) {
+                    drawIndicatorGuides(indicatorGuides, series, plot, geo, palette, mainRange)
+                    drawBandGuides(bandGuides, geo, palette, mainRange)
+                }
                 if (alertLinesShown) drawAlertLines(alertLines, geo, palette, mainRange)
             }
             series.subPanes.forEachIndexed { index, pane ->
@@ -649,7 +685,9 @@ fun KlineChart(
             // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
             // 它**要**挂 clickable（与垃圾桶相反）：点它就该切显隐，
             // 不该同时被下层画布当成一次拖动。
-            if (onToggleAlertLines != null && !alertLineMode && alertLines.isNotEmpty()) {
+            if (onToggleAlertLines != null && !alertLineMode &&
+                (alertLines.isNotEmpty() || indicatorGuides.isNotEmpty() || bandGuides.isNotEmpty())
+            ) {
                 val colors = MarketTheme.colors
                 Box(
                     modifier = Modifier
@@ -1055,6 +1093,52 @@ private fun DrawScope.drawLastPrice(
         strokeWidth = 1f,
         pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
     )
+}
+
+/**
+ * 指标划线的「不告警」参考线：按各自配置的周期逐根台阶对齐的细灰线。
+ *
+ * 换算链与 [drawAlertLines] 一致（`toFraction` → `yOf`），NaN（指标窗口不足）跳过。
+ * 与告警线（虚线 + 可拖）刻意不同形态：一眼分出「这是指标参照」还是「这是会响的预警」。
+ */
+private fun DrawScope.drawIndicatorGuides(
+    guides: List<IndicatorGuideLine>,
+    series: ChartSeries,
+    plot: PlotGeometry,
+    geo: ChartGeo,
+    palette: ChartPalette,
+    range: ValueRange,
+) {
+    guides.forEach { guide ->
+        if (guide.values.size != series.size) return@forEach
+        val path = linePath(guide.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
+        if (path != null) drawPath(path, palette.label.copy(alpha = 0.7f), style = Stroke(width = 1f))
+    }
+}
+
+/**
+ * 指标线模式均线带的两条锚点水平线：灰色实线，比台阶参考线略粗一档 ——
+ * 它是「现价上下最近的那条均线」这个聚合结果，不是某条指标的逐根序列，
+ * 形态上必须和 [drawIndicatorGuides] 区分开。
+ * 换算链与 [drawAlertLines] 一致（`toFraction` → `yOf`），超出主图量程不画。
+ */
+private fun DrawScope.drawBandGuides(
+    guides: List<BandGuideLine>,
+    geo: ChartGeo,
+    palette: ChartPalette,
+    range: ValueRange,
+) {
+    guides.forEach { guide ->
+        if (!guide.price.isFinite()) return@forEach
+        val y = geo.yOf(range.toFraction(guide.price), geo.mainTopPx, geo.mainHeightPx)
+        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+        drawLine(
+            color = palette.label.copy(alpha = 0.85f),
+            start = Offset(0f, y),
+            end = Offset(geo.plotWidthPx, y),
+            strokeWidth = 1.5f,
+        )
+    }
 }
 
 /**

@@ -2,6 +2,7 @@ package com.waxilo.marketmonitor.domain.indicator
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.sqrt
@@ -116,5 +117,39 @@ class IndicatorsTest {
         assertEquals(setOf(3, 5), mas.keys)
         assertEquals(2.0, mas.getValue(3)[2], 1e-9)
         assertEquals(8.0, mas.getValue(5)[9], 1e-9)
+    }
+
+    @Test
+    fun `latestMa 取末根窗口均值 窗口不足与非法周期为空`() {
+        val closes = series(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+        assertEquals(9.0, Indicators.latestMa(closes, 3) ?: 0.0, 1e-9)
+        assertEquals(8.0, Indicators.latestMa(closes, 5) ?: 0.0, 1e-9)
+        assertNull(Indicators.latestMa(closes, 11))
+        assertNull(Indicators.latestMa(closes, 0))
+        assertNull(Indicators.latestMa(DoubleArray(5) { Double.NaN }, 3))
+    }
+
+    @Test
+    fun `MaBand pick 取现价上下最近值 等值两侧都不选`() {
+        val candidates = listOf("a" to 8.0, "b" to 12.0, "c" to 10.0, "d" to 15.0, "e" to 9.0)
+        val (upper, lower) = MaBand.pick(candidates, 10.0)
+        assertEquals("e" to 9.0, lower)
+        assertEquals("b" to 12.0, upper)
+    }
+
+    @Test
+    fun `MaBand pick 单侧为空`() {
+        val candidates = listOf("a" to 8.0, "b" to 9.0)
+        val (upper, lower) = MaBand.pick(candidates, 7.0)
+        assertEquals("a" to 8.0, upper)
+        assertNull(lower)
+
+        val (emptyUpper, emptyLower) = MaBand.pick(candidates, 9.0)
+        assertNull(emptyUpper)
+        assertEquals("a" to 8.0, emptyLower)
+
+        val (noneUpper, noneLower) = MaBand.pick(emptyList(), 1.0)
+        assertNull(noneUpper)
+        assertNull(noneLower)
     }
 }
