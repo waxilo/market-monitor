@@ -98,6 +98,13 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
      */
     private val trends = MutableStateFlow<Map<SymbolId, List<Double>>>(emptyMap())
 
+    /**
+     * 行情最近值缓存：行情流对个别交易对（杠杆代币等）偶发缺报，缺报的那一拍
+     * 自选行不能凭空消失——拖动排序的让位区间、滚动位置都依赖「行数恒等于自选数」。
+     * combine 在主线程收集，HashMap 无需加锁。
+     */
+    private val lastTickers = HashMap<SymbolId, MarketTicker>()
+
     private data class Flags(
         val loading: Boolean = true,
         val refreshing: Boolean = false,
@@ -114,18 +121,19 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    private val sources = combine(activeMarket, quoteAsset) { market, quote -> market to quote }
-        .flatMapLatest { (market, quote) ->
-            combine(
-                // Room 流在每次轮询落库时发射；sample 500ms 把高频更新合并成每 0.5 秒一次重绘（PRD 4.3）
-                repository.tickers(market, quote).sample(500),
-                watchlist.watchlist(market),
-                repository.instruments(market),
-                trends,
-            ) { tickers, watched, instruments, trendMap ->
-                Source(market, tickers, watched, instruments.associateBy { it.id }, trendMap)
-            }
+    private val sources = activeMarket.flatMapLatest { market ->
+        combine(
+            // Room 流在每次轮询落库时发射；sample 500ms 把高频更新合并成每 0.5 秒一次重绘（PRD 4.3）。
+            // quote 过滤传 null：自选行按 SymbolId 精确匹配，BNBUSDC/XRPTUSD 这类
+            // 非 USDT 报价的关注标的不能被滤掉（否则行永远缺数据）。
+            repository.tickers(market, null).sample(500),
+            watchlist.watchlist(market),
+            repository.instruments(market),
+            trends,
+        ) { tickers, watched, instruments, trendMap ->
+            Source(market, tickers, watched, instruments.associateBy { it.id }, trendMap)
         }
+    }
 
     val state: StateFlow<MarketUiState> = combine(sources, tab, flags) { source, selectedTab, current ->
         val watchedIds = source.watched.toSet()
@@ -134,9 +142,24 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         // 旧版对每个自选 id 做一次 tickers.firstOrNull（O(n·m)，自选多时每 500ms
         // 一次刷新就要扫几十万次比较）。这里把 tickers 先索引成 Map，整体降到 O(n+m)。
         val byId = HashMap<SymbolId, MarketTicker>(source.tickers.size)
-        source.tickers.forEach { byId[it.id] = it }
-        val rows = source.watched.mapNotNull { id -> byId[id] }
-            .map { ticker -> ticker.toRow(source, watchedIds) }
+        source.tickers.forEach { ticker ->
+            byId[ticker.id] = ticker
+            lastTickers[ticker.id] = ticker
+        }
+        // 缺报行不能被丢弃：用最近一次行情兜底，从未有行情的用占位行，
+        // 保证行数与顺序恒等于自选表（行凭空消失/回归会打乱滚动与拖动让位）
+        val rows = source.watched.map { id ->
+            (byId[id] ?: lastTickers[id])?.toRow(source, watchedIds)
+                ?: TickerRow(
+                    id = id,
+                    baseAsset = source.instruments[id]?.baseAsset ?: id.symbol,
+                    marketLabel = id.market.label,
+                    price = "…",
+                    changePercent = 0.0,
+                    quoteVolume = "—",
+                    watched = true,
+                )
+        }
         MarketUiState(
             market = source.market,
             tab = selectedTab,
@@ -170,6 +193,10 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     fun selectMarket(target: MarketType) {
         if (activeMarket.value == target) return
         activeMarket.value = target
+        // 记住本次选择：defaultMarket 即「上次使用的市场」，冷启动从这里恢复
+        viewModelScope.launch {
+            container.settings.edit { it.copy(defaultMarket = target) }
+        }
         refresh()
     }
 
@@ -189,11 +216,10 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * 拖动排序：把 [id] 落到 [toIndex]。
+     * 拖动排序落库：把 [id] 移到 [toIndex]。
      *
-     * 拖动过程中每越过一格就调一次，而 `move()` 是「读当前顺序 → 重排 → 整表写回」，
-     * 并发的两次调用若交错，最终顺序就不是手指的意图。Mutex 是公平（FIFO）的，
-     * 配合 launch 的先后顺序即可保证按手势发生的次序依次落库。
+     * 拖动过程中的换位全部在本地完成（见 TickerList 的 orderOverride），这里
+     * 只在拖动结束时收到一次最终位置，Mutex 串行化只是防御性的兜底。
      */
     fun moveWatch(id: SymbolId, toIndex: Int) {
         viewModelScope.launch {

@@ -44,8 +44,12 @@ interface MarketRepository {
      */
     suspend fun refreshTicker(id: SymbolId): MarketTicker?
 
-    /** 行情快照流：Room 缓存的响应式视图，REST 轮询落库即驱动发射。 */
-    fun tickers(market: MarketType, quoteAsset: String = "USDT"): Flow<List<MarketTicker>>
+    /**
+     * 行情快照流：Room 缓存的响应式视图，REST 轮询落库即驱动发射。
+     * [quoteAsset] 为 null 时不过滤报价资产——自选列表按 SymbolId 精确取行，
+     * 需要看到 BNBUSDC、XRPTUSD 这类非 USDT 报价的关注标的。
+     */
+    fun tickers(market: MarketType, quoteAsset: String? = "USDT"): Flow<List<MarketTicker>>
 
     fun ticker(id: SymbolId): Flow<MarketTicker?>
 

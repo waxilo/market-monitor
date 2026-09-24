@@ -3,6 +3,8 @@ package com.waxilo.marketmonitor.ui.market
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -42,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -392,12 +395,21 @@ internal fun MarketSwitcher(
 }
 
 /**
- * 自选列表。拖动排序的**唯一真相源是数据库里的 position 列**，这里只做三件事：
- * 记住「谁在拖 / 拖了多远 / 谁被滑开」，把越过半格的那一刻翻译成一次 `move`。
+ * 自选列表。长按拖动排序与「配置周期」对话框同款手感，三段式：
  *
- * 为什么不在本地先重排一遍再落库：列表数据来自 500ms 合并一次的行情流，
- * 本地乐观顺序会在下一次推送时被打回原样、手指底下的行跳回原位。
- * 直接落库则新顺序会从同一条流里回来，画面上不需要额外对齐逻辑。
+ * 1. **拖动中悬浮跟手**：被拖行按 [dragOffset] 直接平移，列表顺序纹丝不动——
+ *    途中就换序、再靠补偿抵消基准位移的做法在和布局重排赛跑（行情流重组、
+ *    布局帧交错都会让补偿差半拍），被拖行就会抖。周期对话框的结论是
+ *    「拖动途中改列表会有被吸走的观感」，这里同样成立。
+ * 2. **被越过的行动画让位**：按拖动量换算目标槽 [dragTo]，区间内的行以
+ *    tween(150) 平移一行让出空位，松手前谁都不真正换位。
+ * 3. **松手才换位 + 落库**：一次性重排 [orderOverride] 并调 [onMove]；
+ *    让位行的新槽位 = 让位后的视觉位置，所以落位瞬间 shift 要 snap 归零、
+ *    placement 动画要关一帧（[placementSuppressed]），否则 animateItem 会
+ *    把行先弹回旧槽再滑回来，重复一遍刚播完的动画。
+ *
+ * 本地乐观顺序不会被 500ms 行情流打回原样：rows 的**顺序**只由自选表决定，
+ * 行情推送只改内容不改序；落库回流后顺序与 override 一致，本地状态随即清空。
  */
 @Composable
 private fun TickerList(
@@ -415,38 +427,61 @@ private fun TickerList(
     /** 被左滑露出「移除」的条目 key（同一时刻只可能有一个）。 */
     var revealedKey by remember { mutableStateOf<String?>(null) }
     /**
-     * 拖动位移（px）。放进 [mutableFloatStateOf] 而不是普通 `var`：
+     * 被拖行的悬浮位移（px）。放进 [mutableFloatStateOf] 而不是普通 `var`：
      * 它每帧都在变，只有包成快照状态，`Modifier.offset { }` 里的读取才会
      * 只触发重新摆放、不触发整列表重组。
      */
     val dragOffset = remember { mutableFloatStateOf(0f) }
+    /** 换序落位的那一帧关掉 placement 动画：让位行已视觉就位，再播一遍会先弹回旧槽。 */
+    var placementSuppressed by remember { mutableStateOf(false) }
+    /** 松手换位后的本地乐观顺序；落库流回来即清空。 */
+    var orderOverride by remember { mutableStateOf<List<SymbolId>?>(null) }
+
+    /** 换位后的显示顺序：override 优先，order 之外的行（拖动中新增的自选）按原序补齐。 */
+    val displayRows = remember(rows, orderOverride) {
+        val order = orderOverride ?: return@remember rows
+        val byId = rows.associateBy { it.id }
+        order.mapNotNull { byId[it] } + rows.filter { it.id !in order.toSet() }
+    }
+
+    // 落库后的顺序从流里回来、与 override 一致 → 本地状态功成身退
+    LaunchedEffect(rows) {
+        val order = orderOverride ?: return@LaunchedEffect
+        if (rows.size == order.size && rows.map { it.id } == order) orderOverride = null
+    }
+
+    // 换序落位只保留一帧的无动画状态，下一帧恢复 placement 动画（服务删行收拢）
+    LaunchedEffect(placementSuppressed) {
+        if (placementSuppressed) {
+            withFrameNanos { }
+            placementSuppressed = false
+        }
+    }
 
     // 滚动一开始就把滑开的条目收回去：滑动中的列表还挂着一个按钮既难看也易误触
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) revealedKey = null
     }
 
-    /**
-     * 拖动中越过半格 → 落一次库。
-     *
-     * 命中判据是「被拖行的视觉中心落在谁的格子里」：视觉中心 = 原有偏移 + 拖动量 + 半行高。
-     * 落库后列表顺序会变，被拖行的基准位置也跟着变，因此要把这段基准位移从
-     * [dragOffset] 里减掉，手指底下的行才不会在换位瞬间跳一下。
-     */
-    fun handleDrag(id: SymbolId, key: String, dy: Float) {
-        val info = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
-        dragOffset.floatValue += dy
-        val center = info.offset + dragOffset.floatValue + info.size / 2f
-        val target = listState.layoutInfo.visibleItemsInfo.firstOrNull {
-            // 页脚不算数，越到页脚上按「最后一行」处理
-            it.key != key && it.index < rows.size &&
-                center >= it.offset && center < it.offset + it.size
-        } ?: return
-        if (target.index == info.index) return
-        val baseShift = (info.offset - target.offset).toFloat()
-        onMove(id, target.index)
-        dragOffset.floatValue += baseShift
-    }
+    // ---- 拖动中的派生量：被拖行停在原槽（from），目标槽按拖动量换算（to） ----
+    val layout = listState.layoutInfo
+    /** 被拖行的槽位。拖动途中不换序，所以整个拖动期间恒定。 */
+    val draggingIndex = draggingKey
+        ?.let { k -> displayRows.indexOfFirst { it.id.storageKey == k } }
+        ?.takeIf { layout.visibleItemsInfo.any { info -> info.index == it } }
+        ?: -1
+    /** 行高基准：取第一可见行情行的实测高（各行同模板等高），兜底 72dp。 */
+    val rowHPx = layout.visibleItemsInfo
+        .firstOrNull { it.index < displayRows.size }
+        ?.size?.toFloat() ?: with(density) { 72.dp.toPx() }
+    /** 被拖行按拖动量折算的目标槽位：跨过整行才算一步，半行内松手回原槽。 */
+    val draggingTo = if (draggingIndex < 0) -1 else
+        (draggingIndex + (dragOffset.floatValue / rowHPx).roundToInt())
+            .coerceIn(0, displayRows.lastIndex)
+
+    /** 槽位 [i] 的顶部偏移；行滚出视口时返回 null（让位动画随之回正）。 */
+    fun slotOffsetOf(i: Int): Int? =
+        layout.visibleItemsInfo.firstOrNull { it.index == i && it.index < displayRows.size }?.offset
 
     LazyColumn(
         state = listState,
@@ -454,16 +489,42 @@ private fun TickerList(
         contentPadding = PaddingValues(bottom = Spacing.Xl),
     ) {
         itemsIndexed(
-            items = rows,
+            items = displayRows,
             key = { _, row -> row.id.storageKey },
             contentType = { _, _ -> "ticker" },
-        ) { _, row ->
+        ) { index, row ->
             val key = row.id.storageKey
             val dragging = draggingKey == key
+            // 让位：被拖行划过的区间整体挪一行，动画过渡防瞬移。
+            // 让位量取相邻槽位的实测 offset 差，行高不均时也对得齐。
+            val shiftTarget = when {
+                draggingIndex < 0 || dragging -> 0f
+                draggingTo > draggingIndex && index > draggingIndex && index <= draggingTo -> {
+                    val to = slotOffsetOf(index - 1)
+                    val self = slotOffsetOf(index)
+                    if (to != null && self != null) (to - self).toFloat() else 0f
+                }
+                draggingTo < draggingIndex && index >= draggingTo && index < draggingIndex -> {
+                    val to = slotOffsetOf(index + 1)
+                    val self = slotOffsetOf(index)
+                    if (to != null && self != null) (to - self).toFloat() else 0f
+                }
+                else -> 0f
+            }
+            val shift by animateFloatAsState(
+                targetValue = shiftTarget,
+                // 拖动中让位走 tween；换序落位瞬间 snap 归零——此刻行的新槽位
+                // 恰好就是它让位时的视觉位置，平移过去才是对的，动画反而会抖
+                animationSpec = if (draggingKey != null) tween(150) else snap(),
+                label = "rowShift",
+            )
             TickerRowItem(
                 row = row,
                 dragging = dragging,
-                dragOffsetY = { dragOffset.floatValue },
+                // 只有被拖行才应用悬浮位移：这个 lambda 若无条件读 dragOffset，
+                // 所有行的内容层都会跟着手指平移，露出底下的红色「移除」垫层
+                dragOffsetY = { if (dragging) dragOffset.floatValue else 0f },
+                shiftY = { shift },
                 revealed = revealedKey == key,
                 onRevealChange = { open -> revealedKey = if (open) key else null },
                 onGestureStart = { if (revealedKey != key) revealedKey = null },
@@ -472,16 +533,38 @@ private fun TickerList(
                     draggingKey = key
                     dragOffset.floatValue = 0f
                 },
-                onDrag = { dy -> handleDrag(row.id, key, dy) },
+                onDrag = { dy ->
+                    if (draggingIndex >= 0) {
+                        // 首行拖不出上边界，尾行拖不出下边界
+                        dragOffset.floatValue = (dragOffset.floatValue + dy)
+                            .coerceIn(
+                                -draggingIndex * rowHPx,
+                                (displayRows.lastIndex - draggingIndex) * rowHPx,
+                            )
+                    }
+                },
                 onDragEnd = {
+                    val from = draggingIndex
+                    val to = draggingTo
                     draggingKey = null
                     dragOffset.floatValue = 0f
+                    if (from >= 0 && to >= 0 && from != to) {
+                        // 松手才真正换位：本地一次重排 + 一次落库
+                        val current = displayRows.map { it.id }.toMutableList()
+                        current.add(to, current.removeAt(from))
+                        orderOverride = current
+                        placementSuppressed = true
+                        onMove(row.id, to)
+                    }
                 },
                 onClick = { onOpenDetail(row.id) },
                 onRemove = { onRemove(row.id) },
-                // 拖动中不能开条目动画：动画在追「旧位置 → 新位置」的过程中
-                // 又叠上手指的位移，看起来就是一边被拖一边自己抖。
-                modifier = if (dragging) Modifier else Modifier.animateItem(),
+                // 拖动中不能开位置动画：被拖行自己跟手，让位行有自己的 tween。
+                // 换序落位那一帧也要关（见 placementSuppressed），否则 animateItem
+                // 不知道行已被手动让位，会从旧槽再滑一遍。
+                // 淡入/淡出始终关掉：滚动时新进入视口的行不该补一次淡入。
+                modifier = if (dragging || placementSuppressed) Modifier
+                else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
             )
         }
         item(key = "footer", contentType = "footer") {
@@ -510,6 +593,7 @@ private fun TickerRowItem(
     row: TickerRow,
     dragging: Boolean,
     dragOffsetY: () -> Float,
+    shiftY: () -> Float,
     revealed: Boolean,
     onRevealChange: (Boolean) -> Unit,
     onGestureStart: () -> Unit,
@@ -540,6 +624,15 @@ private fun TickerRowItem(
     var settleToken by remember { mutableIntStateOf(0) }
     val key = row.id.storageKey
 
+    // pointerInput(key) 的 lambda 只在 key 变化时重启；行每次重组传入的新回调闭包
+    // （捕获着最新的拖动派生量 draggingIndex/draggingTo/displayRows）它根本看不到。
+    // 不转这一手，长按拖动就永远跑在行挂载那一刻的旧闭包上——换位派生量全是 -1，
+    // 松手什么都不发生。
+    val currentGestureStart by rememberUpdatedState(onGestureStart)
+    val currentDragStart by rememberUpdatedState(onDragStart)
+    val currentDrag by rememberUpdatedState(onDrag)
+    val currentDragEnd by rememberUpdatedState(onDragEnd)
+
     // revealed 变化（自己被滑开、或被别行挤着关掉）与每次松手，都重新吸附到两端之一
     LaunchedEffect(revealed, settleToken) {
         if (settleToken == 0) return@LaunchedEffect
@@ -557,30 +650,39 @@ private fun TickerRowItem(
             // 被拖动的行压在邻居上面，否则它一移动就被后面的行盖住
             .zIndex(if (dragging) 1f else 0f),
     ) {
-        // 底层：左滑后露出的「移除」。始终参与组合（一次 Box + 一个 Text，代价可忽略），
-        // 收起时被上层不透明的内容完全遮住。
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(colors.down)
-                .clickable(enabled = revealed) { onRemove() },
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Text(
-                text = "移除",
-                modifier = Modifier.width(RemoveActionWidth),
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.paper,
-                textAlign = TextAlign.Center,
-            )
+        // 底层：左滑后露出的「移除」。只在横向滑开时参与组合——纵向长按拖动时
+        // 内容层会跟手离开原槽，垫层若常驻就会从空槽里裸露出来（红色一片）。
+        if (revealed || swipeOffset.floatValue < 0f) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(colors.down)
+                    .clickable(enabled = revealed) { onRemove() },
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Text(
+                    text = "移除",
+                    modifier = Modifier.width(RemoveActionWidth),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = colors.paper,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .offset { IntOffset(swipeOffset.floatValue.roundToInt(), dragOffsetY().roundToInt()) }
-                // 不透明底色：用来盖住下面左滑后露出的红色「移除」按钮
-                .background(colors.paper)
+                // 纵向 = 拖动悬浮位移 + 排序让位位移；横向 = 左滑位移
+                .offset {
+                    IntOffset(
+                        swipeOffset.floatValue.roundToInt(),
+                        (dragOffsetY() + shiftY()).roundToInt(),
+                    )
+                }
+                // 不透明底色：用来盖住下面左滑后露出的红色「移除」按钮；
+                // 被拖行换深一档的底色，悬浮的层次感和「配置周期」对话框一致
+                .background(if (dragging) colors.washStrong else colors.paper)
                 .clickable {
                     if (revealed) {
                         // 已滑开时，点内容先收起，而不是跳详情
@@ -593,10 +695,13 @@ private fun TickerRowItem(
                 // 手势节点排在 clickable 之后（更靠内），保证 Main 阶段先拿到事件，
                 // 定性为滑动/拖动后能立刻 consume 掉，clickable 自然让位
                 .pointerInput(key) {
+                    // 回调要经 rememberUpdatedState 转发且**在调用时才解引用**：
+                    // pointerInput 的 lambda 只在 key 变化时执行一次，把 currentDrag
+                    // 直接当参数传进去等于把「挂载那一刻」的闭包焊死在手势循环里。
                     detectRowGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
-                        onGestureStart = onGestureStart,
+                        onGestureStart = { currentGestureStart() },
                         onSwipe = { dx ->
                             swipeOffset.floatValue =
                                 (swipeOffset.floatValue + dx).coerceIn(-maxSwipePx, 0f)
@@ -605,9 +710,9 @@ private fun TickerRowItem(
                             onRevealChange(swipeOffset.floatValue <= -maxSwipePx / 2f)
                             settleToken++
                         },
-                        onDragStart = onDragStart,
-                        onDrag = onDrag,
-                        onDragEnd = onDragEnd,
+                        onDragStart = { currentDragStart() },
+                        onDrag = { dy -> currentDrag(dy) },
+                        onDragEnd = { currentDragEnd() },
                     )
                 },
         ) {
