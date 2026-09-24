@@ -62,6 +62,24 @@ val AccentYellow = Color(0xFFF0B90B)
 val OnAccentDark = Color(0xFF1B1200)
 
 /**
+ * 指标线色板：按 [com.waxilo.marketmonitor.ui.chart.LineRole] 的线位顺序取用。
+ *
+ * 取经典统计图表色板的中间调：饱和度统一压在中低档，与涨跌红绿拉开——
+ * 高饱和线压在 K 线上既抢蜡烛的注意力又显廉价，这套灰调彩在墨黑/纸白
+ * 两个主题下都耐看。八个色位刚好覆盖最满配置（MA 五期 + BOLL 三线），两两可辨。
+ */
+val ChartLineColors = listOf(
+    Color(0xFF5C8AC6), // PRIMARY    钢蓝（MA5）
+    Color(0xFFF09A3E), // SECONDARY  琥珀（MA10）
+    Color(0xFFE8C547), // TERTIARY   软黄（MA20）
+    Color(0xFF9D6FC0), // ACCENT     藕紫（MA30）
+    Color(0xFF5FBDB2), // QUATERNARY 青瓷（MA60）
+    Color(0xFFC9825E), // QUINARY    陶土（BOLL 中轨）
+    Color(0xFFD98CA6), // SENARY     藕粉（BOLL 上轨）
+    Color(0xFF9AA3AE), // OCTONARY   冷灰（BOLL 下轨）
+)
+
+/**
  * 主题实际取用的语义色集合。
  * 放进 [androidx.compose.runtime.CompositionLocal] 而不是塞进 Material3 的
  * colorScheme：M3 的角色命名（surfaceContainerHighest…）是为 Material 组件设计的，

@@ -66,6 +66,7 @@ import com.waxilo.marketmonitor.domain.model.closeDouble
 import com.waxilo.marketmonitor.domain.model.highDouble
 import com.waxilo.marketmonitor.domain.model.lowDouble
 import com.waxilo.marketmonitor.domain.model.openDouble
+import com.waxilo.marketmonitor.ui.theme.ChartLineColors
 import com.waxilo.marketmonitor.ui.theme.DownRed
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Radius
@@ -303,7 +304,7 @@ fun KlineChart(
         down = downColor,
         grid = scheme.outlineVariant,
         label = scheme.onSurfaceVariant,
-        lines = listOf(scheme.primary, scheme.tertiary, scheme.secondary, scheme.error),
+        lines = ChartLineColors,
         band = scheme.primary.copy(alpha = 0.08f),
         crosshair = scheme.onSurface,
     )
@@ -794,6 +795,10 @@ private data class ChartPalette(
         LineRole.SECONDARY -> lines.getOrElse(1) { grid }
         LineRole.TERTIARY -> lines.getOrElse(2) { grid }
         LineRole.ACCENT -> lines.getOrElse(3) { grid }
+        LineRole.QUATERNARY -> lines.getOrElse(4) { grid }
+        LineRole.QUINARY -> lines.getOrElse(5) { grid }
+        LineRole.SENARY -> lines.getOrElse(6) { grid }
+        LineRole.OCTONARY -> lines.getOrElse(7) { grid }
         LineRole.UP -> up
         LineRole.DOWN -> down
         LineRole.LABEL -> label

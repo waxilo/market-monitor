@@ -15,9 +15,14 @@ import java.util.Locale
 
 /**
  * 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。
+ * PRIMARY~OCTONARY 是八个互不相同的指标线色位（[com.waxilo.marketmonitor.ui.theme.ChartLineColors]），
+ * 刚好覆盖最满配置：MA 五期 + BOLL 三线。
  * [LABEL] 不是一条线，只给读数行里那些中性文字（指标名、参数）用。
  */
-enum class LineRole { PRIMARY, SECONDARY, TERTIARY, ACCENT, UP, DOWN, LABEL }
+enum class LineRole {
+    PRIMARY, SECONDARY, TERTIARY, ACCENT, QUATERNARY, QUINARY, SENARY, OCTONARY,
+    UP, DOWN, LABEL,
+}
 
 /** 图上的一条折线（均线族、BOLL 上下轨、MACD 的 DIF/DEA…）。 */
 data class ChartLine(
@@ -175,11 +180,12 @@ object ChartModel {
         val overlayLines = if (boll == null) {
             lines
         } else {
-            // 三条都要加：只加上下轨的话中轨（SMA）画不出来
+            // 三条都要加：只加上下轨的话中轨（SMA）画不出来；
+            // 三线各占一个色位，彼此与均线族都不同色
             lines + listOf(
-                ChartLine("BOLL.MB", LineRole.ACCENT, boll.middle),
-                ChartLine("BOLL.UP", LineRole.ACCENT, boll.upper),
-                ChartLine("BOLL.DN", LineRole.ACCENT, boll.lower),
+                ChartLine("BOLL.MB", LineRole.QUINARY, boll.middle),
+                ChartLine("BOLL.UP", LineRole.SENARY, boll.upper),
+                ChartLine("BOLL.DN", LineRole.OCTONARY, boll.lower),
             )
         }
         return ChartSeries(
@@ -317,8 +323,9 @@ object ChartModel {
     private fun roleFor(period: Int): LineRole = when (period) {
         5 -> LineRole.PRIMARY
         10 -> LineRole.SECONDARY
-        20, 30 -> LineRole.TERTIARY
-        else -> LineRole.ACCENT
+        20 -> LineRole.TERTIARY
+        30 -> LineRole.ACCENT
+        else -> LineRole.QUATERNARY
     }
 
     /** 日内周期显示到时分，日线及以上显示日期，避免十字光标读出无关字段。 */
