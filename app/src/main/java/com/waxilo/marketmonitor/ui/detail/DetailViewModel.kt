@@ -144,11 +144,11 @@ class DetailViewModel(
         alerts.indicatorLines(),
         alertDrag,
     ) { rules, lines, drag ->
-        // 划线规则挂的线在右侧价签上标身份（如「MA30 1h」）：几条均线挤在一起时，
-        // 光看价位认不出哪条是哪条；均线带成员每轮换锚，只能整体标「均线带」
+        // 划线规则挂的线在虚线左端标身份（如「1h MA30」）：几条均线挤在一起时，
+        // 光看右侧价位认不出哪条是哪条；均线带成员每轮换锚，只能整体标「均线带」
         val lineLabels = lines.associate { line ->
             line.id to when (line.kind) {
-                IndicatorKind.MA -> "MA${line.maPeriod} ${line.interval.label}"
+                IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}"
                 IndicatorKind.MA_BAND -> "均线带"
             }
         }

@@ -89,7 +89,7 @@ data class AlertPriceLine(
     val ruleId: Long?,
     val price: Double,
     val dragging: Boolean = false,
-    /** 指标划线规则挂的线在价签上多印一行标识（如「MA30 1h」）；手动预警价为 null。 */
+    /** 指标划线规则挂的线在虚线左端画名称胶囊（如「1h MA30」）；手动预警价为 null。 */
     val label: String? = null,
 )
 
@@ -568,9 +568,18 @@ fun KlineChart(
                     geo = geo,
                     density = density,
                     tickSize = tickSize,
-                    label = line.label,
                     modifier = Modifier.align(Alignment.TopStart),
                 )
+                line.label?.let { label ->
+                    AlertLineLeftTag(
+                        label = label,
+                        price = line.price,
+                        range = mainRange,
+                        geo = geo,
+                        density = density,
+                        modifier = Modifier.align(Alignment.TopStart),
+                    )
+                }
             }
             SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
             TimeAxisLabels(
@@ -1362,7 +1371,7 @@ private fun CrosshairPriceBadge(
 /**
  * 告警线的价格标。与十字光标的价格标同一套定位，只是 y 由**已保存的价格**反算 ——
  * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
- * 指标划线挂的线额外带 [label]（如「MA30 1h」），价签上方多印一行标识；手动预警价没有。
+ * 线的指标身份不标在这里（右缘只放价位），画在虚线左端（见 [AlertLineLeftTag]）。
  */
 @Composable
 private fun AlertLinePriceBadge(
@@ -1372,7 +1381,6 @@ private fun AlertLinePriceBadge(
     density: Density,
     tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
-    label: String? = null,
 ) {
     if (price == null || !price.isFinite()) return
     PriceTag(
@@ -1381,8 +1389,47 @@ private fun AlertLinePriceBadge(
         geo = geo,
         density = density,
         tickSize = tickSize,
-        title = label,
         modifier = modifier,
+    )
+}
+
+/**
+ * 虚线左端的指标名称胶囊（如「1h MA30」）：右侧价签只回答「多少钱」，
+ * 几条线挤在一起时「这是哪条」靠左端这颗认。跟着线与价签同显隐（眼睛开关/划线模式）。
+ */
+@Composable
+private fun AlertLineLeftTag(
+    label: String,
+    price: Double,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    modifier: Modifier = Modifier,
+) {
+    val y = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx)
+    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
+    val colors = MarketTheme.colors
+    val style = rememberPriceTagStyle()
+    val measurer = rememberTextMeasurer()
+    val textHeight = remember(label, style, density) {
+        measurer.measure(AnnotatedString(label), style, density = density).size.height.toFloat()
+    }
+    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
+    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
+    Text(
+        text = label,
+        modifier = modifier
+            .offset(
+                x = with(density) { 4.dp.toPx() },
+                // 与右侧价签同一套垂直居中：以虚线为中心
+                y = with(density) { (y - textHeight / 2f - padV).toDp() },
+            )
+            .clip(Radius.xsShape)
+            .background(colors.ink)
+            .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
+        style = style,
+        color = colors.paper,
+        maxLines = 1,
     )
 }
 
@@ -1437,8 +1484,6 @@ private fun PriceTag(
      * 最新价传涨跌色，让它与同高的那条虚线一眼能对上。
      */
     accent: Color? = null,
-    /** 价签上方的标识行（如「MA30 1h」）；null 时只有价格一行。 */
-    title: String? = null,
 ) {
     val bottom = geo.mainTopPx + geo.mainHeightPx
     // 落到副图上时不画：那里既没有横线，冒一个孤立读数只会误导
@@ -1450,10 +1495,7 @@ private fun PriceTag(
 
     val colors = MarketTheme.colors
     val style = rememberPriceTagStyle()
-    val text = buildString {
-        if (!title.isNullOrBlank()) appendLine(title)
-        append(PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize)))
-    }
+    val text = PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize))
     val measurer = rememberTextMeasurer()
     val textSize = remember(text, style, density) {
         measurer.measure(AnnotatedString(text), style, density = density).size
@@ -1473,8 +1515,7 @@ private fun PriceTag(
             .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
         style = style,
         color = colors.paper,
-        // 带标识行时两行（上标识、下价格），整体仍以横线为中心
-        maxLines = 2,
+        maxLines = 1,
     )
 }
 
