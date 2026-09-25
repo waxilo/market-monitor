@@ -85,7 +85,13 @@ import kotlin.math.min
  * 能不能改）图表一概不管，只负责画出来并把落点报给调用方 ——
  * 与 [ChartLine] 一样，这里只承载语义，不承载业务。
  */
-data class AlertPriceLine(val ruleId: Long?, val price: Double, val dragging: Boolean = false)
+data class AlertPriceLine(
+    val ruleId: Long?,
+    val price: Double,
+    val dragging: Boolean = false,
+    /** 指标划线规则挂的线在价签上多印一行标识（如「MA30 1h」）；手动预警价为 null。 */
+    val label: String? = null,
+)
 
 /**
  * 指标划线「不告警」模式在图上的一条参考曲线：**跟着该线自己配置的 K 线周期走**，
@@ -562,6 +568,7 @@ fun KlineChart(
                     geo = geo,
                     density = density,
                     tickSize = tickSize,
+                    label = line.label,
                     modifier = Modifier.align(Alignment.TopStart),
                 )
             }
@@ -1355,6 +1362,7 @@ private fun CrosshairPriceBadge(
 /**
  * 告警线的价格标。与十字光标的价格标同一套定位，只是 y 由**已保存的价格**反算 ——
  * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
+ * 指标划线挂的线额外带 [label]（如「MA30 1h」），价签上方多印一行标识；手动预警价没有。
  */
 @Composable
 private fun AlertLinePriceBadge(
@@ -1364,6 +1372,7 @@ private fun AlertLinePriceBadge(
     density: Density,
     tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
+    label: String? = null,
 ) {
     if (price == null || !price.isFinite()) return
     PriceTag(
@@ -1372,6 +1381,7 @@ private fun AlertLinePriceBadge(
         geo = geo,
         density = density,
         tickSize = tickSize,
+        title = label,
         modifier = modifier,
     )
 }
@@ -1427,6 +1437,8 @@ private fun PriceTag(
      * 最新价传涨跌色，让它与同高的那条虚线一眼能对上。
      */
     accent: Color? = null,
+    /** 价签上方的标识行（如「MA30 1h」）；null 时只有价格一行。 */
+    title: String? = null,
 ) {
     val bottom = geo.mainTopPx + geo.mainHeightPx
     // 落到副图上时不画：那里既没有横线，冒一个孤立读数只会误导
@@ -1437,8 +1449,11 @@ private fun PriceTag(
     if (!price.isFinite()) return
 
     val colors = MarketTheme.colors
-    val style = rememberAxisTextStyle()
-    val text = PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize))
+    val style = rememberPriceTagStyle()
+    val text = buildString {
+        if (!title.isNullOrBlank()) appendLine(title)
+        append(PriceFormatter.localeNumber(price, PriceFormatter.decimalsFor(tickSize)))
+    }
     val measurer = rememberTextMeasurer()
     val textSize = remember(text, style, density) {
         measurer.measure(AnnotatedString(text), style, density = density).size
@@ -1458,7 +1473,8 @@ private fun PriceTag(
             .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
         style = style,
         color = colors.paper,
-        maxLines = 1,
+        // 带标识行时两行（上标识、下价格），整体仍以横线为中心
+        maxLines = 2,
     )
 }
 
@@ -1976,6 +1992,11 @@ private fun rememberAxisTextStyle(): TextStyle =
         letterSpacing = 0.sp,
     )
 
+/** 价格标（最新价/十字光标/告警线）文字：比轴刻度再小一号，读数不该跟蜡烛抢视线。 */
+@Composable
+private fun rememberPriceTagStyle(): TextStyle =
+    rememberAxisTextStyle().copy(fontSize = 8.sp, lineHeight = 9.sp)
+
 /** 指标读数带的行高：与 [ChartGeo.READOUT_LINE_DP] 对齐，用来算读数带总高。 */
 private val READOUT_LINE_HEIGHT = 12.sp
 
@@ -1986,11 +2007,11 @@ private val READOUT_LINE_HEIGHT = 12.sp
  */
 private const val CANDLE_READOUT_BAND_DP = 28f
 
-/** 十字光标价格标的水平内边距（dp）。 */
-private const val PRICE_BADGE_PAD_H_DP = 5f
+/** 价格标（最新价/十字光标/告警线共用）的水平内边距（dp）。 */
+private const val PRICE_BADGE_PAD_H_DP = 3.5f
 
-/** 十字光标价格标的垂直内边距（dp）。 */
-private const val PRICE_BADGE_PAD_V_DP = 2f
+/** 价格标的垂直内边距（dp）。 */
+private const val PRICE_BADGE_PAD_V_DP = 1f
 
 /** 已有的告警线（非正在拖的那根）的不透明度：参照线不该和 K 线争视线。 */
 private const val STATIC_ALERT_ALPHA = 0.45f

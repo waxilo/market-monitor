@@ -141,18 +141,32 @@ class DetailViewModel(
      */
     val alertLines: StateFlow<List<AlertPriceLine>> = combine(
         alerts.rules(),
+        alerts.indicatorLines(),
         alertDrag,
-    ) { rules, drag ->
+    ) { rules, lines, drag ->
+        // 划线规则挂的线在右侧价签上标身份（如「MA30 1h」）：几条均线挤在一起时，
+        // 光看价位认不出哪条是哪条；均线带成员每轮换锚，只能整体标「均线带」
+        val lineLabels = lines.associate { line ->
+            line.id to when (line.kind) {
+                IndicatorKind.MA -> "MA${line.maPeriod} ${line.interval.label}"
+                IndicatorKind.MA_BAND -> "均线带"
+            }
+        }
         val own = rules.filter { it.market == id.market && it.symbol == id.symbol }
             .mapNotNull { rule ->
                 val threshold = rule.threshold ?: return@mapNotNull null
-                AlertPriceLine(ruleId = rule.id, price = threshold.toDouble())
+                AlertPriceLine(
+                    ruleId = rule.id,
+                    price = threshold.toDouble(),
+                    label = rule.indicatorLineId?.let(lineLabels::get),
+                )
             }
         if (drag == null) own
         else own.filterNot { it.ruleId == drag.ruleId } + AlertPriceLine(
             ruleId = drag.ruleId,
             price = drag.price.toDouble(),
             dragging = true,
+            label = own.firstOrNull { it.ruleId == drag.ruleId }?.label,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
