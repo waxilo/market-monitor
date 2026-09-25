@@ -148,11 +148,14 @@ class AlertEngine(
      * 是纯粹的残留物。记录与通知都做完才删，避免删库把还没发出去的通知一起带走。
      */
     private suspend fun onTriggered(rule: AlertRule, decision: AlertDecision.Triggered): Boolean {
+        // 冷却必须先于一切挂起点记账：record/通知/Webhook 可能耗时数秒，期间同步循环（5s 一轮）
+        // 会把锚点换到新成员头上——晚到的冷却会错杀无辜，被穿越的线反而贴着现价反复触发
+        startBandCooldown(rule)
         val message = AlertMessage(
             ruleId = rule.id,
             market = rule.market,
             symbol = rule.symbol,
-            alertName = rule.name,
+            alertName = indicatorAlertName(rule, decision),
             direction = decision.direction,
             price = decision.price,
             threshold = thresholdOf(rule, decision.direction),
@@ -173,13 +176,36 @@ class AlertEngine(
     }
 
     /**
+     * 指标划线预警的标题（通知栏与消息中心共用）：「BTCUSDT 上破 1h MA30均线264」。
+     * 均线带取本次穿越的那条成员线（[bandAnchors] 在挂规则时记好），认不出成员才退回整带标识；
+     * 手工价格预警等非划线规则仍用规则名。
+     */
+    private suspend fun indicatorAlertName(rule: AlertRule, decision: AlertDecision.Triggered): String {
+        val lineId = rule.indicatorLineId ?: return rule.name
+        val line = alerts.indicatorLines().first().firstOrNull { it.id == lineId } ?: return rule.name
+        val lineLabel = when (line.kind) {
+            IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}均线"
+            IndicatorKind.MA_BAND -> bandAnchors[lineId]?.get(rule.condition)
+                ?.let { memberKey -> LineMember.parse(memberKey.substringAfter('|')) }
+                ?.let { "${it.interval.label} MA${it.maPeriod}均线" }
+                ?: line.label
+        }
+        return AlertText.indicatorAlertName(
+            symbol = rule.symbol,
+            direction = decision.direction,
+            lineLabel = lineLabel,
+            threshold = thresholdOf(rule, decision.direction),
+        )
+    }
+
+    /**
      * 均线带成员被穿越即进冷却：刚穿过的线就在脚下/头顶，立刻当锚点只会画出贴着价、
      * 反复触发的假信号。锚点键在 [ensureBandRule] 改阈值之前记好，这里取的是触发那一刻的旧锚。
+     * [bandAnchors] 只由均线带链路（[ensureBandRule]/[syncBandDisplay]）填充，单周期线查不到键，
+     * 不必再查库判型；全程同步无挂起，才能在换锚窗口关闭前记到人头上。
      */
-    private suspend fun startBandCooldown(rule: AlertRule) {
+    private fun startBandCooldown(rule: AlertRule) {
         val lineId = rule.indicatorLineId ?: return
-        val line = alerts.indicatorLines().first().firstOrNull { it.id == lineId } ?: return
-        if (line.kind != IndicatorKind.MA_BAND) return
         val memberKey = bandAnchors[lineId]?.get(rule.condition) ?: return
         bandCooldownUntil[memberKey] = System.currentTimeMillis() + BAND_MEMBER_COOLDOWN_MS
     }

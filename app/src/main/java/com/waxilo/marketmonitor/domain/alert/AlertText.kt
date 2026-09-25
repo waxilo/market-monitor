@@ -37,6 +37,10 @@ object AlertText {
         AlertRepeatMode.REPEAT -> "每 ${rule.cooldownMinutes} 分钟重复"
     }
 
+    /** 指标划线预警的标题（通知栏与消息中心共用），如「BTCUSDT 上破 1h MA30均线264」；价格取线的阈值，补齐的零去掉。 */
+    fun indicatorAlertName(symbol: String, direction: AlertDirection, lineLabel: String, threshold: BigDecimal?): String =
+        "$symbol ${directionLabel(direction)} $lineLabel${compactPriceText(threshold)}"
+
     fun summary(message: AlertMessage): String {
         val threshold = message.threshold?.let { " ${priceText(it)}" }.orEmpty()
         val change = message.changePercent?.let { "，24h ${PriceFormatter.formatChange(it)}" }.orEmpty()
@@ -57,6 +61,10 @@ object AlertText {
 
     private fun percentText(percent: BigDecimal?): String =
         if (percent == null) PriceFormatter.NO_DATA else "${percent.toPlainString()}%"
+
+    /** 标题里的紧凑价格：「264.00」→「264」、「264.50」→「264.5」，低价币精度不变。 */
+    private fun compactPriceText(price: BigDecimal?): String =
+        priceText(price).trimEnd('0').trimEnd('.')
 
     // 通知栏在后台线程取文案、页面在主线程取，SimpleDateFormat 非线程安全，因此调用处加锁
     private val TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)

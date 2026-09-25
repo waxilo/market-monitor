@@ -271,8 +271,9 @@ class DetailViewModel(
         }
     }
 
+    /** 连 enabled 一起比：只拨启用开关的保存也是真实改动，漏掉它会让开关永远关不掉。 */
     private fun sameLineConfig(a: IndicatorLine, b: IndicatorLine): Boolean {
-        if (a.kind != b.kind || a.alertMode != b.alertMode) return false
+        if (a.kind != b.kind || a.alertMode != b.alertMode || a.enabled != b.enabled) return false
         return if (a.members.isNotEmpty() || b.members.isNotEmpty()) {
             a.members.toSet() == b.members.toSet()
         } else {

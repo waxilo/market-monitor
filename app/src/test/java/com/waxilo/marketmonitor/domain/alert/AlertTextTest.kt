@@ -40,6 +40,27 @@ class AlertTextTest {
     }
 
     @Test
+    fun `划线标题带均线字样且阈值去掉补齐的零`() {
+        assertEquals(
+            "BTCUSDT 上破 1h MA30均线264",
+            AlertText.indicatorAlertName("BTCUSDT", AlertDirection.ABOVE, "1h MA30均线", BigDecimal("264.00")),
+        )
+        assertEquals(
+            "BNBUSDT 下破 5m MA10均线601.5",
+            AlertText.indicatorAlertName("BNBUSDT", AlertDirection.BELOW, "5m MA10均线", BigDecimal("601.50")),
+        )
+        // 低价币保留自身精度，去零不会把它压成整数
+        assertEquals(
+            "PEPE 上破 1h MA20均线0.000001234568",
+            AlertText.indicatorAlertName("PEPE", AlertDirection.ABOVE, "1h MA20均线", BigDecimal("0.00000123456789")),
+        )
+        assertEquals(
+            "BTCUSDT 上破 1h MA30均线--",
+            AlertText.indicatorAlertName("BTCUSDT", AlertDirection.ABOVE, "1h MA30均线", null),
+        )
+    }
+
+    @Test
     fun `摘要与通知栏共用同一口径`() {
         val message = AlertMessage(
             ruleId = 1,
