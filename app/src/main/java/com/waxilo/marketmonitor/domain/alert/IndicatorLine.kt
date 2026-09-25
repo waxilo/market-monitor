@@ -66,6 +66,25 @@ data class BandAnchorDisplay(
 )
 
 /**
+ * 「预警」模式均线带的当前上下锚点：引擎每轮换锚后发布，
+ * 图上虚线左端标签与预警页标题据此标出「这条线是哪个周期的哪条均线」。
+ * null = 该侧本轮没有挂上线（池空/全在同侧，或引擎还没跑过第一轮）。
+ */
+data class BandAnchorInfo(
+    val lineId: Long,
+    val market: MarketType,
+    val symbol: String,
+    val upper: BandAnchorSide?,
+    val lower: BandAnchorSide?,
+)
+
+/** 锚点的一侧：挂上的成员，以及整池均线值高于（下侧为低于）最新价的条数（含冷却中的成员）。 */
+data class BandAnchorSide(
+    val member: LineMember,
+    val poolCount: Int,
+)
+
+/**
  * 详情页的一条指标划线（用户显式配置的指标线，取代旧的「指标告警条目」候选池设计）。
  *
  * 引擎为开了告警（[alertMode] != [LineAlertMode.OFF]）的线至多维护一条规则

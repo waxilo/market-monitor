@@ -9,8 +9,10 @@ import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertText
+import com.waxilo.marketmonitor.domain.alert.BandAnchorInfo
 import com.waxilo.marketmonitor.domain.alert.IndicatorKind
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
+import com.waxilo.marketmonitor.domain.alert.BandAnchorInfo
 import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.SymbolId
@@ -107,6 +109,8 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         val lastTriggeredAt: Map<Long, Long>,
         /** 划线按 id 索引：给划线规则把标题排成「BTCUSDT 1h MA30均线」。 */
         val lineById: Map<Long, IndicatorLine>,
+        /** 均线带当前锚点（引擎发布）：把上下破条目分别标到各自挂着的成员均线上。 */
+        val anchorByLine: Map<Long, BandAnchorInfo>,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -114,10 +118,18 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         alerts.rules(),
         alerts.messages(MESSAGE_LIMIT),
         alerts.indicatorLines(),
-    ) { ruleList, logs, lines ->
+        container.alertEngine.bandAnchorInfo,
+    ) { ruleList, logs, lines, anchors ->
         val lastByRule = HashMap<Long, Long>(ruleList.size)
         logs.forEach { log -> lastByRule.putIfAbsent(log.ruleId, log.triggeredAt) }
-        Sources(ruleList, emptyMap(), logs, lastByRule, lines.associateBy { it.id })
+        Sources(
+            ruleList,
+            emptyMap(),
+            logs,
+            lastByRule,
+            lines.associateBy { it.id },
+            anchors.associateBy { it.lineId },
+        )
     }.flatMapLatest { base ->
         repository.tickerSnapshots(base.rules.map { SymbolId(it.market, it.symbol) })
             .map { prices -> base.copy(prices = prices) }
@@ -245,6 +257,7 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
     /**
      * 卡片标题。划线规则的 [AlertRule.name] 是引擎对号用的稳定标识（「BTCUSDT 1h MA30 上破」），
      * 直接上卡片会读成半截句子，且尾部方向词与条件行重复；这里按线重排成「BTCUSDT 1h MA30均线」。
+     * 均线带的上下破各自挂在池里某条成员均线上（引擎每轮换锚），标题跟着标到成员头上。
      * 线被删但规则还没被引擎回收的短暂窗口查不到线，退回规则名。
      */
     private fun titleOf(rule: AlertRule, source: Sources): String {
@@ -252,7 +265,11 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         val line = rule.indicatorLineId?.let(source.lineById::get) ?: return rule.name
         val desc = when (line.kind) {
             IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}均线"
-            IndicatorKind.MA_BAND -> line.label
+            IndicatorKind.MA_BAND -> {
+                val anchor = source.anchorByLine[line.id]
+                val side = if (rule.condition == AlertCondition.ABOVE) anchor?.upper else anchor?.lower
+                side?.let { "${it.member.interval.label} MA${it.member.maPeriod}均线" } ?: line.label
+            }
         }
         return "${rule.symbol} $desc"
     }

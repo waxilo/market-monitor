@@ -142,14 +142,24 @@ class DetailViewModel(
     val alertLines: StateFlow<List<AlertPriceLine>> = combine(
         alerts.rules(),
         alerts.indicatorLines(),
+        engine.bandAnchorInfo,
         alertDrag,
-    ) { rules, lines, drag ->
+    ) { rules, lines, anchors, drag ->
         // 划线规则挂的线在虚线左端标身份（如「1h MA30」）：几条均线挤在一起时，
-        // 光看右侧价位认不出哪条是哪条；均线带成员每轮换锚，只能整体标「均线带」
-        val lineLabels = lines.associate { line ->
-            line.id to when (line.kind) {
+        // 光看右侧价位认不出哪条是哪条。均线带的虚线必定锚在池里某个周期的某条均线上
+        // （引擎每轮换锚后发布），标「15m MA10·上3」= 锚在 15m MA10、池中共 3 条高于现价
+        val lineById = lines.associateBy { it.id }
+        val anchorByLine = anchors.associateBy { it.lineId }
+        fun labelOf(rule: AlertRule): String? {
+            val line = rule.indicatorLineId?.let(lineById::get) ?: return null
+            return when (line.kind) {
                 IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}"
-                IndicatorKind.MA_BAND -> "均线带"
+                IndicatorKind.MA_BAND -> {
+                    val above = rule.condition == AlertCondition.ABOVE
+                    val side = (if (above) anchorByLine[line.id]?.upper else anchorByLine[line.id]?.lower)
+                        ?: return "均线带"
+                    "${side.member.interval.label} MA${side.member.maPeriod}·${if (above) "上" else "下"}${side.poolCount}"
+                }
             }
         }
         val own = rules.filter { it.market == id.market && it.symbol == id.symbol }
@@ -158,7 +168,7 @@ class DetailViewModel(
                 AlertPriceLine(
                     ruleId = rule.id,
                     price = threshold.toDouble(),
-                    label = rule.indicatorLineId?.let(lineLabels::get),
+                    label = labelOf(rule),
                 )
             }
         if (drag == null) own

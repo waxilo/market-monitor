@@ -13,6 +13,8 @@ import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.alert.AlertText
 import com.waxilo.marketmonitor.domain.alert.BandAnchorDisplay
+import com.waxilo.marketmonitor.domain.alert.BandAnchorInfo
+import com.waxilo.marketmonitor.domain.alert.BandAnchorSide
 import com.waxilo.marketmonitor.domain.alert.IndicatorKind
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.alert.LineAlertMode
@@ -82,6 +84,10 @@ class AlertEngine(
     /** 「指标线」模式均线带的实时锚点：引擎按轮询算，图上画灰色水平线（不挂规则）。 */
     private val _bandDisplayLines = MutableStateFlow<List<BandAnchorDisplay>>(emptyList())
     val bandDisplayLines = _bandDisplayLines.asStateFlow()
+
+    /** 「预警」模式均线带每轮换锚后的锚点信息：虚线左端标签与预警页标题据此标成员。 */
+    private val _bandAnchorInfo = MutableStateFlow<List<BandAnchorInfo>>(emptyList())
+    val bandAnchorInfo = _bandAnchorInfo.asStateFlow()
 
     private val started = AtomicBoolean(false)
     private val enabledRules = MutableStateFlow<List<AlertRule>>(emptyList())
@@ -258,6 +264,8 @@ class AlertEngine(
         // 划线删除/改回预警/改成别的类型时，灰线与上轮锚点值一并收掉
         _bandDisplayLines.update { list -> list.filter { it.lineId in offBandIds } }
         bandDisplayValues.entries.removeIf { it.key !in offBandIds }
+        // 锚点成员信息只服务于挂着虚线的带：停用/关告警/删除的线同步收掉，避免标题标着过期成员
+        _bandAnchorInfo.update { list -> list.filter { it.lineId in activeIds } }
     }
 
     /**
@@ -355,9 +363,35 @@ class AlertEngine(
         val price = (market.refreshTicker(id) ?: market.ticker(id).first())?.lastPrice ?: return
         val now = System.currentTimeMillis()
         bandCooldownUntil.entries.removeIf { it.value <= now }
-        val (upper, lower) = MaBand.pick(bandCandidates(line, id, now), price.toDouble())
+        val priceValue = price.toDouble()
+        val pool = bandCandidates(line, id)
+        val (upper, lower) = MaBand.pick(anchorable(pool, now), priceValue)
         ensureBandRule(line, id, AlertCondition.ABOVE, upper)
         ensureBandRule(line, id, AlertCondition.BELOW, lower)
+        publishBandAnchorInfo(line, upper, lower, pool, priceValue)
+    }
+
+    /**
+     * 发布本轮锚点：成员标识（周期+均线）给虚线左端标签与预警页标题认人，
+     * 条数按整池统计（上侧 = 高于现价的成员数，含冷却中的），贴价的一侧同取低于。
+     */
+    private fun publishBandAnchorInfo(
+        line: IndicatorLine,
+        upper: Pair<String, Double>?,
+        lower: Pair<String, Double>?,
+        pool: List<Pair<String, Double>>,
+        price: Double,
+    ) {
+        fun side(anchor: Pair<String, Double>?, count: Int): BandAnchorSide? =
+            anchor?.first?.substringAfter('|')?.let(LineMember::parse)?.let { BandAnchorSide(it, count) }
+        val info = BandAnchorInfo(
+            lineId = line.id,
+            market = line.market,
+            symbol = line.symbol,
+            upper = side(upper, pool.count { it.second > price }),
+            lower = side(lower, pool.count { it.second < price }),
+        )
+        _bandAnchorInfo.update { list -> list.filter { it.lineId != line.id } + info }
     }
 
     /**
@@ -377,7 +411,7 @@ class AlertEngine(
             previous[AlertCondition.BELOW]?.takeIf { priceValue <= it }
                 ?.let { coolBandMember(line.id, AlertCondition.BELOW, now) }
         }
-        val (upper, lower) = MaBand.pick(bandCandidates(line, id, now), priceValue)
+        val (upper, lower) = MaBand.pick(anchorable(bandCandidates(line, id), now), priceValue)
         val anchors = bandAnchors.getOrPut(line.id) { ConcurrentHashMap() }
         val values = bandDisplayValues.getOrPut(line.id) { ConcurrentHashMap() }
         // 记下本轮锚点：成员键供穿越时进冷却，数值供下一轮判断价格是否越过
@@ -398,22 +432,26 @@ class AlertEngine(
         bandCooldownUntil[memberKey] = now + BAND_MEMBER_COOLDOWN_MS
     }
 
-    /** 均线带的候选集合：冷却期外、能算出末根均线值的成员，键为可反查的冷却成员标识。 */
+    /**
+     * 均线带的候选集合（整个池）：能算出末根均线值的成员，键为可反查的冷却成员标识。
+     * 冷却中的成员也在池里——选锚时要剔除它们，但「现价上/下共几条均线」的条数要算上它们。
+     */
     private suspend fun bandCandidates(
         line: IndicatorLine,
         id: SymbolId,
-        now: Long,
     ): List<Pair<String, Double>> = line.members.mapNotNull { member ->
         // 单个成员拉取/计算失败只少一个候选值，不影响其余
         runCatching {
             if (member.maPeriod <= 0) return@runCatching null
-            val key = bandMemberKey(line.id, member)
-            if ((bandCooldownUntil[key] ?: 0L) > now) return@runCatching null
             val page = market.klines(id, member.interval, member.maPeriod + 2)
             val closes = DoubleArray(page.klines.size) { page.klines[it].close.toDouble() }
-            Indicators.latestMa(closes, member.maPeriod)?.let { key to it }
+            Indicators.latestMa(closes, member.maPeriod)?.let { bandMemberKey(line.id, member) to it }
         }.getOrNull()
     }
+
+    /** 剔除冷却中成员后的可锚集合。 */
+    private fun anchorable(pool: List<Pair<String, Double>>, now: Long): List<Pair<String, Double>> =
+        pool.filter { (bandCooldownUntil[it.first] ?: 0L) <= now }
 
     /** 挂/移/更新均线带在某一侧的规则；anchor 为 null 表示该侧无候选，规则退场。 */
     private suspend fun ensureBandRule(
