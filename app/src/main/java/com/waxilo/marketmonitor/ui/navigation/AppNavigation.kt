@@ -95,39 +95,33 @@ fun AppNavHost(
      * 离开预警页。
      *
      * 从通知栏进入时预警页就是**起始页**，栈底就是它 —— `popBackStack()` 返回 false，
-     * 左上角箭头点了没反应，系统返回键还会直接退出应用，两条路都回不到行情主页。
-     * 所以退不动时改成「回家」：把预警页换成行情页，之后返回键才是正常的退出语义。
-     *
-     * 判断放在**调用时**而不是组合时：用户从预警页走进编辑页/Webhook 页时，
-     * 返回处理器仍在注册状态，那时 `previousBackStackEntry` 非空，应当照常 pop 一层。
+     * 系统返回键会直接退出应用，回不到行情主页。所以退不动时改成「回家」：
+     * 把栈换成行情页，之后返回键才是正常的退出语义。
      */
     val leaveAlerts: () -> Unit = {
-        if (navController.previousBackStackEntry == null) {
+        if (!navController.popBackStack()) {
             navController.navigate(Routes.MARKET) {
                 popUpTo(Routes.ALERTS) { inclusive = true }
             }
-        } else {
-            navController.popBackStack()
         }
     }
 
     /**
      * 详情页的返回路径。
      *
-     * 点预警通知直达时详情页就是**起始页**，与从通知栏进预警页同一处境：退不动时
-     * 「回家」换成行情页（见 [leaveAlerts]）。平时从行情页进来，正常 pop 一层。
+     * 点预警通知直达时详情页就是**起始页**，与从通知栏进预警页同一处境：`popBackStack()`
+     * 退不动（返回 false）时「回家」换成行情页（见 [leaveAlerts]）。
+     * 从行情页点进来则照常 pop 一层。
      *
-     * 起始页没法给模板路由填参（NavHost 无 startDestinationArgs），所以通知直达时
-     * 额外注册一条**具体**路由（见下方 composable(Routes.detail(...))）。
+     * 不依赖起始页那条具体路由串（如 `detail/binance/BTCUSDT`）来判定：通知直达
+     * 未必总落在为它额外注册的那条具体路由上（进程重建等路径会命中模板路由），
+     * 那条路上「拼串相同」的判断会失效，退不动时点了返回什么也不发生。
      */
     val leaveDetail: () -> Unit = {
-        val launchRoute = startDetail?.let { Routes.detail(it) }
-        if (navController.previousBackStackEntry == null && launchRoute != null) {
+        if (!navController.popBackStack()) {
             navController.navigate(Routes.MARKET) {
-                popUpTo(launchRoute) { inclusive = true }
+                popUpTo(navController.graph.findStartDestination().id) { inclusive = true }
             }
-        } else {
-            navController.popBackStack()
         }
     }
 
@@ -292,6 +286,10 @@ fun AppNavHost(
                     market = MarketType.fromKey(entry.arguments?.getString("market") ?: MarketType.SPOT.key),
                     symbol = entry.arguments?.getString("symbol").orEmpty(),
                 )
+                // 系统返回键与左上角箭头同路。这里也注册兜底：通知直达未必总命中
+                // 上面那条具体路由（进程重建等路径会落到模板路由上），只在那边注册
+                // 会让这种详情页的系统返回键直接退出应用。
+                BackHandler { leaveDetail() }
                 DetailScreen(
                     symbolId = id,
                     onBack = leaveDetail,
