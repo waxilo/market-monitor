@@ -9,6 +9,8 @@ import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertText
+import com.waxilo.marketmonitor.domain.alert.IndicatorKind
+import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.SymbolId
@@ -41,6 +43,8 @@ enum class AlertsTab(val label: String) {
 @Immutable
 data class AlertRuleRow(
     val rule: AlertRule,
+    /** 卡片标题：手动规则即规则名；划线条目排成「BTCUSDT 1h MA30均线」。 */
+    val title: String,
     val condition: String,
     val repeat: String,
     val currentPrice: String,
@@ -101,16 +105,19 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
          * 而该函数在每次价格推送时都会随 state 重算——预索引成 Map 后降为 O(1) 查表。
          */
         val lastTriggeredAt: Map<Long, Long>,
+        /** 划线按 id 索引：给划线规则把标题排成「BTCUSDT 1h MA30均线」。 */
+        val lineById: Map<Long, IndicatorLine>,
     )
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val sources = combine(
         alerts.rules(),
         alerts.messages(MESSAGE_LIMIT),
-    ) { ruleList, logs ->
+        alerts.indicatorLines(),
+    ) { ruleList, logs, lines ->
         val lastByRule = HashMap<Long, Long>(ruleList.size)
         logs.forEach { log -> lastByRule.putIfAbsent(log.ruleId, log.triggeredAt) }
-        Sources(ruleList, emptyMap(), logs, lastByRule)
+        Sources(ruleList, emptyMap(), logs, lastByRule, lines.associateBy { it.id })
     }.flatMapLatest { base ->
         repository.tickerSnapshots(base.rules.map { SymbolId(it.market, it.symbol) })
             .map { prices -> base.copy(prices = prices) }
@@ -185,6 +192,7 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         val (distanceText, progress) = distanceOf(this, ticker)
         return AlertRuleRow(
             rule = this,
+            title = titleOf(this, source),
             condition = AlertText.conditionLabel(this),
             repeat = AlertText.repeatLabel(this),
             currentPrice = AlertText.priceText(ticker?.lastPrice),
@@ -232,6 +240,21 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         if (gap <= 0.0) return "已达触发位" to 1f
         val text = "距触发 %.2f%%".format(gap * 100)
         return text to (1f - (gap / DISTANCE_WINDOW).toFloat()).coerceIn(0f, 1f)
+    }
+
+    /**
+     * 卡片标题。划线规则的 [AlertRule.name] 是引擎对号用的稳定标识（「BTCUSDT 1h MA30 上破」），
+     * 直接上卡片会读成半截句子，且尾部方向词与条件行重复；这里按线重排成「BTCUSDT 1h MA30均线」。
+     * 线被删但规则还没被引擎回收的短暂窗口查不到线，退回规则名。
+     */
+    private fun titleOf(rule: AlertRule, source: Sources): String {
+        if (rule.source != AlertRuleSource.INDICATOR) return rule.name
+        val line = rule.indicatorLineId?.let(source.lineById::get) ?: return rule.name
+        val desc = when (line.kind) {
+            IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}均线"
+            IndicatorKind.MA_BAND -> line.label
+        }
+        return "${rule.symbol} $desc"
     }
 
     /** 最近触发时间从预索引的 Map 取，避免对每条规则扫一遍消息列表。 */

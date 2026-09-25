@@ -211,7 +211,7 @@ private fun RuleItem(
         // ---- 标题区 ----
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                text = row.rule.name,
+                text = row.title,
                 style = MaterialTheme.typography.titleMedium,
                 color = colors.ink,
                 maxLines = 1,
