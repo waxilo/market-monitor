@@ -1420,7 +1420,7 @@ private fun AlertLineLeftTag(
         text = label,
         modifier = modifier
             .offset(
-                x = with(density) { 4.dp.toPx() },
+                x = 4.dp,
                 // 与右侧价签同一套垂直居中：以虚线为中心
                 y = with(density) { (y - textHeight / 2f - padV).toDp() },
             )
