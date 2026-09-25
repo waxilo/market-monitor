@@ -12,7 +12,6 @@ import com.waxilo.marketmonitor.domain.alert.AlertText
 import com.waxilo.marketmonitor.domain.alert.BandAnchorInfo
 import com.waxilo.marketmonitor.domain.alert.IndicatorKind
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
-import com.waxilo.marketmonitor.domain.alert.BandAnchorInfo
 import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.SymbolId
