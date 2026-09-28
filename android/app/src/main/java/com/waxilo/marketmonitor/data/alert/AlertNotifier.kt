@@ -26,15 +26,23 @@ class AlertNotifier(private val context: Context) {
 
     init {
         // 渠道的振动样式一经创建就无法被应用覆盖（系统会把用户改过的设置视为最终值），
-        // 所以长震动必须换新的渠道 id；顺手删掉上一版的旧渠道，避免系统设置里出现重复项。
+        // 所以长震动与普通震动各占一条渠道 id；顺手删掉上一版的旧渠道，避免系统设置里出现重复项。
         LEGACY_CHANNELS.forEach(manager::deleteNotificationChannel)
         createChannel(
             CHANNEL_ALERT,
-            R.string.channel_alert_name,
+            R.string.channel_alert_long_name,
             R.string.channel_alert_desc,
             importance = NotificationManager.IMPORTANCE_HIGH,
             sound = true,
-            vibration = LONG_VIBRATION,
+            buzz = Buzz.LONG,
+        )
+        createChannel(
+            CHANNEL_ALERT_NORMAL,
+            R.string.channel_alert_normal_name,
+            R.string.channel_alert_desc,
+            importance = NotificationManager.IMPORTANCE_HIGH,
+            sound = true,
+            buzz = Buzz.DEFAULT,
         )
         createChannel(
             CHANNEL_ALERT_SILENT,
@@ -42,7 +50,7 @@ class AlertNotifier(private val context: Context) {
             R.string.channel_alert_desc,
             importance = NotificationManager.IMPORTANCE_DEFAULT,
             sound = false,
-            vibration = null,
+            buzz = Buzz.NONE,
         )
         createChannel(
             CHANNEL_MONITOR,
@@ -50,14 +58,21 @@ class AlertNotifier(private val context: Context) {
             R.string.channel_service_desc,
             importance = NotificationManager.IMPORTANCE_LOW,
             sound = false,
-            vibration = null,
+            buzz = Buzz.NONE,
         )
     }
 
-    /** 规则的响铃/振动都关掉时走静默渠道；系统级总开关在设置页与渠道里各有一层。 */
-    fun notify(message: AlertMessage, rule: AlertRule) {
+    /**
+     * 规则的响铃/振动都关掉时走静默渠道；否则按设置页的「长震动」开关在两条响铃渠道里选：
+     * 长震动用三轮长振，关闭后换默认节奏的短振（渠道样式改不了，只能换渠道）。
+     */
+    fun notify(message: AlertMessage, rule: AlertRule, longVibrate: Boolean) {
         if (!manager.areNotificationsEnabled()) return
-        val channel = if (rule.playSound || rule.vibrate) CHANNEL_ALERT else CHANNEL_ALERT_SILENT
+        val channel = when {
+            !(rule.playSound || rule.vibrate) -> CHANNEL_ALERT_SILENT
+            longVibrate -> CHANNEL_ALERT
+            else -> CHANNEL_ALERT_NORMAL
+        }
         manager.notify(notificationId(message.id), build(message, channel))
     }
 
@@ -131,18 +146,16 @@ class AlertNotifier(private val context: Context) {
         descRes: Int,
         importance: Int,
         sound: Boolean,
-        vibration: LongArray?,
+        buzz: Buzz,
     ) {
         val channel = NotificationChannel(id, context.getString(nameRes), importance).apply {
             description = context.getString(descRes)
             if (!sound) {
                 setSound(null, null)
             }
-            enableVibration(vibration != null)
-            if (vibration != null) {
-                // 长震动：首段静默后连续几轮长振，比默认的两下短促更能把人从睡梦里叫醒
-                vibrationPattern = vibration
-            }
+            enableVibration(buzz.enabled)
+            // 不给节奏就用系统默认（两下短振）；长震动是首段静默后连续三轮长振
+            buzz.pattern?.let { vibrationPattern = it }
             lockscreenVisibility = if (sound) Notification.VISIBILITY_PUBLIC else Notification.VISIBILITY_PRIVATE
         }
         manager.createNotificationChannel(channel)
@@ -156,17 +169,31 @@ class AlertNotifier(private val context: Context) {
         const val EXTRA_DETAIL_MARKET = "com.waxilo.marketmonitor.DETAIL_MARKET"
         const val EXTRA_DETAIL_SYMBOL = "com.waxilo.marketmonitor.DETAIL_SYMBOL"
         const val EXTRA_ALERT_MESSAGE_ID = "com.waxilo.marketmonitor.ALERT_MESSAGE_ID"
+
+        /** 长震动渠道。 */
         const val CHANNEL_ALERT = "price_alerts_long_buzz"
+
+        /** 普通（默认节奏）震动渠道：设置页关掉「长震动」后走这条。 */
+        const val CHANNEL_ALERT_NORMAL = "price_alerts_default_buzz"
         const val CHANNEL_ALERT_SILENT = "price_alerts_silent_v2"
         const val CHANNEL_MONITOR = "alert_monitor"
-
-        /** 长震动样式：立即开始、连续三轮长振（间隔 200ms），总时长约 3.2s。 */
-        private val LONG_VIBRATION = longArrayOf(0L, 900L, 200L, 900L, 200L, 900L)
 
         /** 上一版渠道（默认短震动），创建新渠道时一并清理。 */
         private val LEGACY_CHANNELS = listOf("price_alerts", "price_alerts_silent")
 
         private const val REQUEST_CODE = 4100
+    }
+
+    /** 渠道的振动样式：渠道建成后只能由用户在系统设置里改，所以三种样式各占一条渠道 id。 */
+    private enum class Buzz(val enabled: Boolean, val pattern: LongArray?) {
+        /** 不振动（静默 / 常驻通知）。 */
+        NONE(false, null),
+
+        /** 系统默认节奏（两下短振）。 */
+        DEFAULT(true, null),
+
+        /** 长震动：立即开始、连续三轮长振（间隔 200ms），总时长约 3.2s。 */
+        LONG(true, longArrayOf(0L, 900L, 200L, 900L, 200L, 900L)),
     }
 }
 

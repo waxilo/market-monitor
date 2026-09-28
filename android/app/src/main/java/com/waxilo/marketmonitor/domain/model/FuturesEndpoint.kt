@@ -31,10 +31,7 @@ data class FuturesEndpoint(
     /** 一行补充说明（盘口来源/可达性预期）。 */
     val note: String,
     val dialect: FuturesDialect,
-) {
-    /** 币安同构的候选共享币安盘口数据；其余各是独立盘口。 */
-    val isBinanceCompatible: Boolean get() = dialect == FuturesDialect.BINANCE
-}
+)
 
 object FuturesEndpoints {
 

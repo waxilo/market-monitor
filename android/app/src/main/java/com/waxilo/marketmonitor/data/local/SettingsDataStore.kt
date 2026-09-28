@@ -58,6 +58,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             notificationEnabled = this[Keys.NOTIFY] ?: d.notificationEnabled,
             soundEnabled = this[Keys.SOUND] ?: d.soundEnabled,
             vibrateEnabled = this[Keys.VIBRATE] ?: d.vibrateEnabled,
+            longVibrateEnabled = this[Keys.LONG_VIBRATE] ?: d.longVibrateEnabled,
             webhookEnabled = this[Keys.WEBHOOK] ?: d.webhookEnabled,
             allowInsecureWebhook = this[Keys.INSECURE] ?: d.allowInsecureWebhook,
             spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
@@ -83,6 +84,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.NOTIFY] = notificationEnabled
         prefs[Keys.SOUND] = soundEnabled
         prefs[Keys.VIBRATE] = vibrateEnabled
+        prefs[Keys.LONG_VIBRATE] = longVibrateEnabled
         prefs[Keys.WEBHOOK] = webhookEnabled
         prefs[Keys.INSECURE] = allowInsecureWebhook
         prefs[Keys.SPOT_MIRROR] = spotRestMirror
@@ -112,6 +114,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val NOTIFY = booleanPreferencesKey("notification_enabled")
             val SOUND = booleanPreferencesKey("sound_enabled")
             val VIBRATE = booleanPreferencesKey("vibrate_enabled")
+            val LONG_VIBRATE = booleanPreferencesKey("long_vibrate_enabled")
             val WEBHOOK = booleanPreferencesKey("webhook_enabled")
             val INSECURE = booleanPreferencesKey("allow_insecure_webhook")
             val SPOT_MIRROR = stringPreferencesKey("spot_rest_mirror")

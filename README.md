@@ -18,12 +18,13 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除） | `data/remote`、`data/local` | 已实现 |
-| 合约行情多接口（Aster/币安系/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid，设置页弹窗并行检测后点选） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对 |
+| 合约行情多接口（Aster/币安系/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对 |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（窄侧栏导航 + 自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
+| 桌面端合约多数据源（与 App 同一份 12 候选清单，顶栏「数据源」弹窗并行测速后点选，结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
 
 Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
 仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
@@ -60,7 +61,7 @@ cd android
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-桌面端（Tauri v2 + Vite/React，行情直连 Gate 现货/永续）：
+桌面端（Tauri v2 + Vite/React，现货走 Gate，合约在 12 个候选接口里测速点选）：
 
 ```bash
 cd desktop
@@ -74,6 +75,11 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 
 不在本地做发布构建：APK 与桌面端安装包都由 GitHub Actions 产出（见下）。
 本地 `tauri build` 只用于自检与冒烟，产物留在 `src-tauri/target/`，不要拿它顶掉 `/Applications` 里正在用的那份。
+
+桌面端的行情请求**全走宿主侧** `market_request`（`src-tauri/src/market.rs`），不用 webview 的 `fetch`：
+除 Gate、Hyperliquid 与币安现货镜像外，其余接口都不回 `Access-Control-Allow-Origin`，webview 里读到的
+一定是 CORS 报错（宿主侧 reqwest 跟随系统代理，路由与浏览器一致）。Rust 只做搬运，周期映射、
+字段解析、业务码判定这些方言逻辑都在 `src/lib/dialects.ts`，判定结论与 App 的 `FuturesDialects.kt` 对齐。
 
 ### 桌面端交互约定（改之前先看这几条）
 
@@ -92,6 +98,11 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 - **图表纵向手势 = 平移价格刻度**（`PriceView` 的 `zoom`/`pan` 两个意图量），缩放只留给 Shift+滚轮；
   平移收口按**几何重叠**（可视区与数据区至少重叠 `min(可视跨度, 数据跨度) × 25%`），不按位移比例 ——
   后者在放大 12 倍时几乎拖不动，缩小时又能把 K 线整屏拖出去。
+- **换合约数据源 = 换盘口，缓存与视图一起作废**：弹窗里的 `setFuturesSource` 只改选择并广播，
+  清缓存与重取靠两条线 —— `api.ts` 在模块加载时注册的 `onFuturesSourceChange`（清 `instrumentCache`），
+  以及各取数 hook 的 `useSourceKey(market)` 依赖（现货恒为 `''`）。别把源写进 symbol：
+  自选/搜索/图表一律用 Gate 形态的 `BTC_USDT`，`BTCUSDT`、`BTC-USDT-SWAP`、`BTC` 这些只出现在方言层内部。
+  悬浮窗是另一套 React 实例，只在它那 4s 的 localStorage 轮询里跟进（记得保留 `syncFuturesSource()`）。
 
 ## 当前版本
 

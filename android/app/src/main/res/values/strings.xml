@@ -9,7 +9,8 @@
     <string name="market_futures">合约</string>
 
     <!-- 通知渠道 -->
-    <string name="channel_alert_name">价格预警</string>
+    <string name="channel_alert_long_name">价格预警（长震动）</string>
+    <string name="channel_alert_normal_name">价格预警（普通震动）</string>
     <string name="channel_alert_desc">价格触达时产生的提醒</string>
     <string name="channel_alert_silent_name">价格预警（静默）</string>
     <string name="channel_service_name">后台行情监测</string>

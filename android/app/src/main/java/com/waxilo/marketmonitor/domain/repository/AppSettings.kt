@@ -40,6 +40,8 @@ data class AppSettings(
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
+    /** 预警通知是否用长震动（三轮长振）；关闭后走系统默认节奏的短振。 */
+    val longVibrateEnabled: Boolean = true,
     val webhookEnabled: Boolean = true,
     /** 允许局域网 http 端点，仅调试用（PRD FR-4.1）。 */
     val allowInsecureWebhook: Boolean = false,

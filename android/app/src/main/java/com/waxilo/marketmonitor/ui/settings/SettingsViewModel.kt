@@ -47,6 +47,7 @@ data class SettingsUiState(
     val notificationEnabled: Boolean = true,
     val soundEnabled: Boolean = true,
     val vibrateEnabled: Boolean = true,
+    val longVibrateEnabled: Boolean = true,
     val alertPollingSeconds: Int = 5,
     val autoUpdateCheck: Boolean = true,
     /** 更新加速站；NATIVE 表示直连 GitHub。 */
@@ -90,6 +91,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         notificationEnabled = it.notificationEnabled,
                         soundEnabled = it.soundEnabled,
                         vibrateEnabled = it.vibrateEnabled,
+                        longVibrateEnabled = it.longVibrateEnabled,
                         alertPollingSeconds = it.alertPollingSeconds,
                         autoUpdateCheck = it.autoUpdateCheck,
                         updateMirror = it.updateMirror,
@@ -213,6 +215,11 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setVibrateEnabled(v: Boolean) {
         backing.update { it.copy(vibrateEnabled = v) }
         persist { s -> s.copy(vibrateEnabled = v) }
+    }
+
+    fun setLongVibrateEnabled(v: Boolean) {
+        backing.update { it.copy(longVibrateEnabled = v) }
+        persist { s -> s.copy(longVibrateEnabled = v) }
     }
 
     fun setAlertPollingSeconds(v: Int) {

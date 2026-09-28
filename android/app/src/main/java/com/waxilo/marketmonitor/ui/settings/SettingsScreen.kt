@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -58,7 +57,6 @@ import com.waxilo.marketmonitor.ui.common.Section
 import com.waxilo.marketmonitor.ui.common.SegmentedControl
 import com.waxilo.marketmonitor.ui.common.StatusPill
 import com.waxilo.marketmonitor.ui.common.PillTone
-import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -164,6 +162,18 @@ fun SettingsScreen(
                     SwitchRow("声音提醒", state.soundEnabled, viewModel::setSoundEnabled)
                     Rule()
                     SwitchRow("振动", state.vibrateEnabled, viewModel::setVibrateEnabled)
+                    Rule()
+                    SwitchRow("长震动", state.longVibrateEnabled, viewModel::setLongVibrateEnabled)
+                    Text(
+                        text = "关闭后按系统默认节奏短振，不再三轮长振。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
                 }
             }
 
@@ -406,45 +416,45 @@ private fun FuturesSourcePickerDialog(
                 .minByOrNull { it.latencyMs }
                 ?.latencyMs
 
-            val (compatible, standalone) = FuturesEndpoints.ALL.partition { it.isBinanceCompatible }
+            // 整体按检测结论排序：能连的按延迟升序在最上面，连不上的沉底，未检测其次。
+            // 探测结果逐条回填，快的域自然先浮上来，不被最慢的域拖住。
+            val ordered = FuturesEndpoints.ALL.sortedWith(
+                compareBy<FuturesEndpoint>(
+                    { state.probeResults[it.baseUrl].sortRank() },
+                    { state.probeResults[it.baseUrl].latencyOrMax() },
+                )
+            )
             LazyColumn(modifier = Modifier.fillMaxSize()) {
-                sourceGroup("币安同构 · 共用币安盘口", compatible, state, fastest, onSelect, onProbeOne)
-                sourceGroup("独立盘口 · 各家自有协议", standalone, state, fastest, onSelect, onProbeOne)
+                items(ordered, key = { it.baseUrl }) { endpoint ->
+                    FuturesSourceRow(
+                        endpoint = endpoint,
+                        selected = endpoint.baseUrl == state.futuresHost,
+                        probing = endpoint.baseUrl in state.probingUrls,
+                        outcome = state.probeResults[endpoint.baseUrl],
+                        isFastest = fastest != null &&
+                            (state.probeResults[endpoint.baseUrl] as? ProbeOutcome.Reachable)?.latencyMs == fastest,
+                        onSelect = {
+                            onSelect(endpoint.baseUrl)
+                        },
+                        onProbeOne = { onProbeOne(endpoint.baseUrl) },
+                    )
+                }
                 item { Spacer(Modifier.height(Spacing.Xl)) }
             }
         }
     }
 }
 
-private fun LazyListScope.sourceGroup(
-    title: String,
-    endpoints: List<FuturesEndpoint>,
-    state: SettingsUiState,
-    fastestMs: Long?,
-    onSelect: (String) -> Unit,
-    onProbeOne: (String) -> Unit,
-) {
-    item {
-        Column {
-            Spacer(Modifier.height(Spacing.Sm))
-            SectionOverline(text = title)
-        }
-    }
-    items(endpoints) { endpoint ->
-        FuturesSourceRow(
-            endpoint = endpoint,
-            selected = endpoint.baseUrl == state.futuresHost,
-            probing = endpoint.baseUrl in state.probingUrls,
-            outcome = state.probeResults[endpoint.baseUrl],
-            isFastest = fastestMs != null &&
-                (state.probeResults[endpoint.baseUrl] as? ProbeOutcome.Reachable)?.latencyMs == fastestMs,
-            onSelect = {
-                onSelect(endpoint.baseUrl)
-            },
-            onProbeOne = { onProbeOne(endpoint.baseUrl) },
-        )
-    }
+/** 排序名次：通的 0、连不上的 1、未检测的 2。 */
+private fun ProbeOutcome?.sortRank(): Int = when (this) {
+    is ProbeOutcome.Reachable -> 0
+    is ProbeOutcome.Failed -> 1
+    null -> 2
 }
+
+/** 同类排序键：只有通的有真实延迟，其余给最大值沉到本档末尾。 */
+private fun ProbeOutcome?.latencyOrMax(): Long =
+    (this as? ProbeOutcome.Reachable)?.latencyMs ?: Long.MAX_VALUE
 
 /**
  * 候选行：名称 + 域名在左，检测结论与选中态在右。整行可点即选定。
