@@ -1,3 +1,4 @@
+mod market;
 mod update;
 
 use tauri::{
@@ -201,6 +202,7 @@ pub fn run() {
             switch_to_mini,
             switch_to_main,
             set_mini_rows,
+            market::market_request,
             update::check_update,
             update::start_update_download,
             update::get_update_download_state,

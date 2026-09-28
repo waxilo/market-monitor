@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MARKETS, MARKET_LABEL, type MarketType } from './lib/api';
+import { endpointOf, useFuturesSourceUrl } from './lib/sources';
 import { IS_TAURI, switchToMiniWindow } from './lib/tauri';
 import { useWindowDrag } from './lib/windowDrag';
 import { useWatchlist, type WatchItem } from './hooks/useWatchlist';
@@ -12,6 +13,7 @@ import { MarketList } from './components/MarketList';
 import { ChartView } from './components/ChartView';
 import { WindowChrome } from './components/WindowChrome';
 import { MiniWindowIcon } from './components/icons';
+import { SourcePanel } from './components/SourcePanel';
 import { UpdatePanel } from './components/UpdatePanel';
 import { useUpdate } from './hooks/useUpdate';
 
@@ -46,6 +48,9 @@ export default function App() {
   const sparks = useSparks(marketItems);
   const update = useUpdate();
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const futuresSource = useFuturesSourceUrl();
+  const sourceLabel = market === 'FUTURES' ? endpointOf(futuresSource).label : 'Gate';
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
 
   useEffect(() => {
@@ -141,7 +146,7 @@ export default function App() {
 
         <span className="grow" />
 
-        <span className="status" title={`数据源 Gate ${MARKET_LABEL[market]} · 只读`}>
+        <span className="status" title={`数据源 ${sourceLabel} ${MARKET_LABEL[market]} · 只读`}>
           <span className={`dot${online === false ? ' bad' : ''}`} />
           {marketItems.length === 0
             ? '无自选'
@@ -151,6 +156,13 @@ export default function App() {
                 ? '已连接'
                 : '断线'}
         </span>
+        <button
+          className="icon-btn"
+          onClick={() => setSourceOpen(true)}
+          title={`合约数据源：检测各接口延迟并切换（用完后自动收起）· 当前 ${sourceLabel}`}
+        >
+          数据源
+        </button>
         <button
           className="icon-btn icon-only"
           onClick={switchToMiniWindow}
@@ -197,6 +209,7 @@ export default function App() {
         />
       </main>
 
+      {sourceOpen && <SourcePanel onClose={() => setSourceOpen(false)} />}
       {updateOpen && <UpdatePanel controller={update} onClose={() => setUpdateOpen(false)} />}
     </div>
   );

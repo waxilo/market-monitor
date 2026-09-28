@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { fetchKlines, type Bar, type Instrument, type Ticker24h } from '../lib/api';
 import { SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
+import { useSourceKey } from '../lib/sources';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
 import type { WatchItem } from '../hooks/useWatchlist';
@@ -35,6 +36,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   const [candles, setCandles] = useState<Bar[]>([]);
   const market = item?.market;
   const symbol = item?.symbol;
+  // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
+  const source = useSourceKey(market);
 
   // 切换标的/周期：全量拉 300 根
   useEffect(() => {
@@ -52,7 +55,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     return () => {
       alive = false;
     };
-  }, [market, symbol, interval]);
+  }, [market, symbol, interval, source]);
 
   // 增量轮询：只取末根更新实时数据（App 的 K 线增量节奏是 2s）
   useEffect(() => {
@@ -77,7 +80,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       alive = false;
       clearInterval(timer);
     };
-  }, [market, symbol, interval]);
+  }, [market, symbol, interval, source]);
 
   function toggleMa(p: number) {
     setMaPeriods((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p].sort((a, b) => a - b)));

@@ -393,8 +393,12 @@ body {
   padding: 4px 10px;
   cursor: pointer;
 }
-.icon-btn:hover {
+.icon-btn:hover:not(:disabled) {
   color: var(--ink);
+}
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 /* 只有一个图标的按钮：方形，不然文字按钮的左右内边距会把图标撑偏 */
 .icon-btn.icon-only {
@@ -965,4 +969,74 @@ body {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* ── 数据源 ───────────────────────────────────────────────
+   候选行：左边名称 + 「域名 · 说明」，右边检测结论与选中勾。
+   行序整体按延迟排（快的在上），结论胶囊给固定最小宽，四行字面
+   （检测中… / 最快 128ms / 连接超时 / 未检测）来回切时不抖。 */
+.src-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+  padding: 6px var(--sp-xs);
+  border-bottom: 1px solid var(--hairline);
+  cursor: pointer;
+  transition: background var(--fast) var(--ease-standard);
+}
+.src-row:hover {
+  background: var(--wash);
+}
+.src-row.on {
+  background: var(--wash-strong);
+}
+.src-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.src-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.src-row.on .src-label {
+  color: var(--accent);
+}
+.src-sub {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.src-pill {
+  min-width: 78px;
+  text-align: center;
+}
+.src-retry {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.src-retry:hover {
+  color: var(--ink);
+  background: var(--wash-strong);
+}
+/* 常驻占位（选中打勾 / 未选中留白）：右侧三件套的宽度不随选中态变 */
+.src-check {
+  width: 14px;
+  flex: none;
+  text-align: center;
+  color: var(--accent);
+  font-size: 13px;
 }

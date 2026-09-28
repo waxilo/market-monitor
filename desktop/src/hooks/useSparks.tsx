@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchKlines } from '../lib/api';
+import { useSourceKey } from '../lib/sources';
 import { watchKey, type WatchItem } from './useWatchlist';
 
 const REFRESH_MS = 60_000;
@@ -10,10 +11,17 @@ export function useSparks(items: WatchItem[]) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const itemsKey = items.map(watchKey).join(',');
+  const source = useSourceKey(items[0]?.market);
+  const sourceRef = useRef(source);
 
   useEffect(() => {
     const list = itemsRef.current;
     let alive = true;
+    // 换数据源：旧源的 24h 走势不属于新盘口，清掉等重拉
+    if (sourceRef.current !== source) {
+      sourceRef.current = source;
+      setSparks({});
+    }
 
     async function load() {
       const results = await Promise.allSettled(
@@ -39,7 +47,7 @@ export function useSparks(items: WatchItem[]) {
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey]);
+  }, [itemsKey, source]);
 
   return sparks;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchTicker, type Ticker24h } from '../lib/api';
+import { useSourceKey } from '../lib/sources';
 import { watchKey, type WatchItem } from './useWatchlist';
 
 export interface TickerCell {
@@ -19,10 +20,19 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const itemsKey = items.map(watchKey).join(',');
+  // 调用方传进来的都是同一市场的条目，取第一条判断即可（现货恒为 ''）
+  const source = useSourceKey(items[0]?.market);
+  const sourceRef = useRef(source);
 
   useEffect(() => {
     const list = itemsRef.current;
     let alive = true;
+    // 换数据源：两个盘口的价不能混在一个格子里，旧价格表与闪现代际一起作废
+    if (sourceRef.current !== source) {
+      sourceRef.current = source;
+      prevRef.current = {};
+      setCells({});
+    }
     // 自选为空不是「断线」：没东西可轮询时保持未定状态，别把空列表说成网络故障
     if (list.length === 0) {
       setOnline(null);
@@ -62,7 +72,7 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey]);
+  }, [itemsKey, source]);
 
   return { cells, online };
 }

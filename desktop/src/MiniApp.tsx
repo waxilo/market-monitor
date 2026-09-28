@@ -6,6 +6,7 @@ import { useTickers } from './hooks/useTickers';
 import { useInstruments } from './hooks/useMarketData';
 import { changeClass, displaySymbol, formatChange, formatPrice } from './lib/format';
 import { IS_TAURI, resizeMiniRows, showMainWindow, switchToMainWindow } from './lib/tauri';
+import { syncFuturesSource } from './lib/sources';
 import { useWindowDrag } from './lib/windowDrag';
 import { CloseIcon, ExpandWindowIcon } from './components/icons';
 
@@ -42,6 +43,8 @@ export function MiniApp() {
     const timer = setInterval(() => {
       setMarket(readMarket());
       setItems(readWatchlist());
+      // 主窗里可能刚换了合约数据源：跟进后 useSourceKey 变化会带动取数重来
+      syncFuturesSource();
     }, SYNC_MS);
     return () => clearInterval(timer);
   }, []);

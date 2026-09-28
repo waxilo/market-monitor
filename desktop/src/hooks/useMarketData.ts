@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { fetchAllTickers, fetchInstruments, type Instrument, type MarketType, type Ticker24h } from '../lib/api';
+import { useSourceKey } from '../lib/sources';
 
-/** 该市场全部可交易标的（搜索的数据源）。接口在 api 层只取一次并缓存。 */
+/** 该市场全部可交易标的（搜索的数据源）。接口在 api 层只取一次并缓存；换源时缓存会被清掉。 */
 export function useInstruments(market: MarketType): Instrument[] {
   const [list, setList] = useState<Instrument[]>([]);
+  const source = useSourceKey(market);
 
   useEffect(() => {
     let alive = true;
@@ -16,7 +18,7 @@ export function useInstruments(market: MarketType): Instrument[] {
     return () => {
       alive = false;
     };
-  }, [market]);
+  }, [market, source]);
 
   return list;
 }
@@ -29,10 +31,13 @@ const SNAPSHOT_POLL_MS = 8000;
  */
 export function useMarketTickers(market: MarketType, enabled: boolean): Record<string, Ticker24h> {
   const [snapshot, setSnapshot] = useState<Record<string, Ticker24h>>({});
+  const source = useSourceKey(market);
 
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
+    // 换市场或换数据源：快照整表作废，留着会把上一批价格摆给搜索行
+    setSnapshot({});
 
     async function load() {
       try {
@@ -50,7 +55,7 @@ export function useMarketTickers(market: MarketType, enabled: boolean): Record<s
       alive = false;
       clearInterval(timer);
     };
-  }, [market, enabled]);
+  }, [market, enabled, source]);
 
   return snapshot;
 }
