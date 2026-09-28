@@ -2,7 +2,14 @@
 
 币安现货 + USDT-M 合约的行情监控 App：K 线图表、价格预警、Webhook 推送与应用内更新。
 只做行情与预警，不碰账户：没有任何签名/私有接口，也不需要填 API Key。
-需求与取舍见 [`docs/需求文档.md`](docs/需求文档.md)。
+需求与取舍见 [`docs/需求文档.md`](android/docs/需求文档.md)。
+
+## 仓库布局
+
+| 目录 | 内容 |
+| --- | --- |
+| `android/` | Gradle 工程根（App 端：`app/` 模块、wrapper、`keystore.properties`、`basedata/`、`docs/`） |
+| `desktop/` | 桌面端（Tauri v2 + Vite + React + TS），UI 风格对齐 App；托盘常驻 + 迷你悬浮窗 |
 
 ## 模块与现状
 
@@ -16,11 +23,13 @@
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
+| 桌面端（窄侧栏导航 + 自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 
 应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
 仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
 应用内更新会整体失效（届时的出路：只读 token（会被打进 APK，有泄露风险）、或把产物同步到可匿名读的地址）。
 数据层按「tag 比较 + `<apk>.sha256` 边车 + 流式校验」实现，改动这条读取路径时保持这三段不变。
+桌面端同源，差别只在发现方式与产物类型（见「桌面端发版流程」）。
 
 ## UI 设计系统
 
@@ -44,11 +53,40 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 ## 本地构建
 
 ```bash
+cd android
 ./gradlew :app:assembleDebug        # 需要 JDK 17
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-不在本地做发布构建：APK 一律由 GitHub Actions 产出（见下）。
+桌面端（Tauri v2 + Vite/React，行情直连 Gate 现货/永续）：
+
+```bash
+cd desktop
+npm install
+npm run dev                         # 浏览器预览：只有界面（无托盘/悬浮窗/更新，Tauri API 短路）
+npx tauri dev                       # 真实桌面窗口
+npx tauri build                     # 出 MSI + NSIS 安装包（见「桌面端发版流程」）
+```
+
+不在本地做发布构建：APK 一律由 GitHub Actions 产出（见下）；桌面端安装包由本地 `tauri build` 产出。
+
+### 桌面端交互约定（改之前先看这几条）
+
+- **主窗与悬浮窗是二选一，不是两个开关**：主窗顶栏的图标、悬浮窗遮罩里的图标都表示「换到另一个」，
+  两侧命令分别是 `switch_to_mini` / `switch_to_main`；悬浮窗点某一行走同一条路（主窗起来、悬浮窗收起）。
+- **悬浮窗没有常驻标题栏**：鼠标移上去才浮出遮罩层（市场标签 + 两个图标按钮）；
+  遮罩 `pointer-events: none`、只让按钮收事件，所以 hover 时行点选照旧。
+- **悬浮窗高度 = 自选条数**：`min(条数, 5) × 32px + 2px 边框`，超过 5 条封顶并在行区内滚动。
+  前端只把**条数**报给 Rust（`set_mini_rows`），几何在 Rust 侧算（`MINI_ROW_H` / `MINI_MAX_ROWS`，
+  与 theme.css 的 `--mini-row-h` / `--mini-max-rows` 一一对应）。别改成「前端量高度上报」：
+  悬浮窗出生即隐藏，隐藏窗口量不到排版、`getComputedStyle` 也读不到那两个字面量，
+  上报会静默退化成「没变化」。Rust 调窗口时**保持下边缘与 x 不动**（右下角是它的锚点）。
+- **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
+  就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
+  悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
+- **图表纵向手势 = 平移价格刻度**（`PriceView` 的 `zoom`/`pan` 两个意图量），缩放只留给 Shift+滚轮；
+  平移收口按**几何重叠**（可视区与数据区至少重叠 `min(可视跨度, 数据跨度) × 25%`），不按位移比例 ——
+  后者在放大 12 倍时几乎拖不动，缩小时又能把 K 线整屏拖出去。
 
 ## 当前版本
 
@@ -65,10 +103,10 @@ M3 的角色命名是给 Material 组件用的，表达不了「发丝线 / 弱�
 
 ## 发版流程
 
-版本号只在两处：`app/build.gradle.kts` 的 `versionCode` / `versionName`，以及本文件的「当前版本」表。
+版本号只在两处：`android/app/build.gradle.kts` 的 `versionCode` / `versionName`，以及本文件的「当前版本」表。
 
 1. 确认 `main` 的 CI（`CI` workflow）为绿：单测通过且能产出 debug APK。
-2. 改 `app/build.gradle.kts`：`versionCode` +1、`versionName` 按语义化递增，同步更新本文件的版本表。
+2. 改 `android/app/build.gradle.kts`：`versionCode` +1、`versionName` 按语义化递增，同步更新本文件的版本表。
 3. 提交并发版：
 
 ```bash
@@ -82,6 +120,42 @@ git push origin main 0.2.0
    所以优先打裸版本号 tag。
 5. 若推送 tag 后没看到 Release 运行，手动补一次：`gh workflow run release.yml --ref <tag>`。
 6. 发版前先确认 tag 不存在（`git tag -l`），并确认要发的改动**已经提交** —— 曾出现「线上 tag 已存在、而本地改动全未提交」的组合，那会误以为改动已发布。
+
+## 桌面端发版流程
+
+| 项 | 值 |
+| --- | --- |
+| version | `0.1.0`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| 最新 tag | `desktop-v0.1.0`（首个正式版） |
+| 安装包 | GitHub Release `<tag>` 的 `market-monitor_<version>_x64-setup.exe`，边车 `<exe>.sha256` |
+
+桌面端与 Android 共用同一个仓库的 Releases，因此用 **`desktop-v` 前缀的 tag** 与 Android 的裸版本号区分开：
+应用内更新只挑 `desktop-v*`，Android 的 `0.9.25` 不会被当成桌面端的新版本。
+反向也安全：`desktop-v0.1.0` 既不匹配 `v*` 也不匹配 `[0-9]*`，**不会误触发 Android 的 `release.yml`**。
+
+1. 改 `desktop/src-tauri/tauri.conf.json` 的 `version`（应用内比较的就是它，不是 Cargo.toml）。
+2. 构建 `cd desktop && npx tauri build`，NSIS 安装包在
+   `desktop/src-tauri/target/release/bundle/nsis/market-monitor_<version>_x64-setup.exe`。
+3. 算校验值 —— 必须是**纯十六进制一行**（`certutil` 会往文件里写表头，应用内读到的就不是哈希了）：
+
+```powershell
+(Get-FileHash .\market-monitor_0.1.0_x64-setup.exe -Algorithm SHA256).Hash |
+  Out-File .\market-monitor_0.1.0_x64-setup.exe.sha256
+```
+
+4. 新建 Release：tag 形如 `desktop-v0.1.0`，上传 **`*_x64-setup.exe`** 与 **`<exe>.sha256`** 两个文件。
+
+应用内更新挑产物的规则：只认 `-setup.exe` 结尾（MSI 留作手动安装），校验值优先取 Release 的 `digest`
+字段、缺失时读 `.sha256` 边车；**两个都拿不到就只给「打开 Release 页面」**，不做应用内下载。
+国内网络内置 5 个加速站（GitHub 原生 / gh-proxy.com / ghfast.top / ghproxy.net / gh-proxy.org），
+更新弹窗里可切换；检查更新与下载都会在所选站失败时回退到直连与其他站。
+
+⚠️ **桌面端 Release 会占掉仓库的 `/releases/latest`**：GitHub 的 latest 取「最新创建的非 draft、非预发布」的
+Release，桌面端发版后它就不再指向 Android 的包。Android 端靠 `/releases/latest` 发现更新，拿到
+`desktop-v0.1.0` 这类 tag 时，`VersionCompare.parse` 会因为 `desktop` 段不是纯数字而返回 null，
+再按「解析失败一律视为无更新」处理 —— 所以**不会误弹提示、也不会装错包，但那段窗口期 Android 收不到更新提示**，
+直到下一次 Android 发版把 latest 抢回来。要让两端彻底互不干扰，就把 Android 的发现方式也改成
+「拉 `releases?per_page=100` 再按**裸版本号**筛」，即桌面端 `resolve()` 的镜像做法（见 `desktop/src-tauri/src/update.rs`）。
 
 ## 签名：应用内更新的前提
 
@@ -101,7 +175,7 @@ git push origin main 0.2.0
 | `KEY_PASSWORD` | 密钥口令 |
 
 `release.yml` 解码到 runner 临时目录后注入 `KEYSTORE_FILE` 环境变量；
-`app/build.gradle.kts` 的 `android { signingConfigs }` 从该变量（CI）或仓库根的
+`android/app/build.gradle.kts` 的 `android { signingConfigs }` 从该变量（CI）或 Gradle 工程根 `android/` 下的
 `keystore.properties`（本地，已 gitignore）读取，挂在 `release` buildType 上。
 
 **发布密钥证书 SHA-256 指纹**（换密钥必须同步改 `release.yml` 里的断言）：

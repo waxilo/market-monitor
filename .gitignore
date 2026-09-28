@@ -18,3 +18,17 @@ keystore.properties
 # AI 工具产物：保留 memory 笔记（对后续会话有价值），但别把临时截图/中间产物提交进去
 .workbuddy/tmp/
 .trae/
+
+# IDE 本地配置（各人自己的编辑器偏好，不入库）
+.vscode/
+
+# Android 真机验证的中间截图与临时文件（每次验证都会重新生成）
+android/verify_*/
+
+# 桌面端（desktop/）：前端产物与依赖（Rust 的 target/ 见 desktop/src-tauri/.gitignore）
+# dist/ 带路径前缀：这个名字太通用，无前缀会误伤别处的同名目录
+node_modules/
+/desktop/dist/
+
+# Kotlin 编译会话目录（gradle 构建产物）
+.kotlin/

@@ -17,6 +17,9 @@ jobs:
     name: Build signed release APK and publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: android
 
     steps:
       - name: Checkout
