@@ -184,8 +184,12 @@ git push origin main desktop-v0.2.0
 | 根 CA（与 ai-assistant 共用） | `~/.traework-signing/`（本机已受信任） | —（CI 从 p12 里抽出来临时信任） |
 
 重新签发叶证书：`CA_DIR="${HOME}/.traework-signing" bash desktop/scripts/make-signing-cert.sh`。
-换机器：把 `~/.traework-signing` 与 `~/.market-monitor-signing` 整目录拷过去，重跑上面这条命令完成导入。
-⚠️ **不要用脚本的 A 模式重造 CA**：macOS 把信任记在代码身份（锚到根证书哈希）上，换 CA 等于换身份。
+⚠️ **重签 = 换身份**：macOS 的 designated requirement 钉的是**叶证书**哈希（本机实测，不是根证书），
+而脚本每执行一次就出一张新叶证书 —— 系统会把新包当新应用（权限重新授权），且必须把新的
+`ci-cert-p12.b64` 重配成 Secret，否则 CI 与本机出的包在系统眼里是两个应用。没有必要时不要重签。
+换机器：把 `~/.traework-signing` 与 `~/.market-monitor-signing` 整目录拷过去，重跑上面这条命令完成导入
+（用的是同一张叶证书，身份不变）。
+⚠️ **不要用脚本的 A 模式重造 CA** —— 同理，换 CA 也等于换身份。
 
 ### 两个一次性注意
 
