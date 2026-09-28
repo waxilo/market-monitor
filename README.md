@@ -108,9 +108,9 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.25` |
-| versionCode | `37` |
-| 最新 tag | `0.9.25` |
+| versionName | `0.9.26` |
+| versionCode | `38` |
+| 最新 tag | `0.9.26` |
 | 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
 产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
@@ -141,7 +141,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.0`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.1`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（标为 pre-release），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
