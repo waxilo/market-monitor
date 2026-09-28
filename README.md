@@ -25,11 +25,13 @@
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（窄侧栏导航 + 自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 
-应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
+Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
 仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
 应用内更新会整体失效（届时的出路：只读 token（会被打进 APK，有泄露风险）、或把产物同步到可匿名读的地址）。
 数据层按「tag 比较 + `<apk>.sha256` 边车 + 流式校验」实现，改动这条读取路径时保持这三段不变。
-桌面端同源，差别只在发现方式与产物类型（见「桌面端发版流程」）。
+
+桌面端**不复用**这条路径：它读固定更新通道 `desktop-latest` 的 `latest.json`（按平台给地址与 minisign 签名），
+因为桌面端产物是 dmg/exe 而 Android 是 APK、且 NSIS 安装与 Android 安装器的语义完全不同（见「桌面端发版流程」）。
 
 ## UI 设计系统
 
@@ -65,10 +67,13 @@ cd desktop
 npm install
 npm run dev                         # 浏览器预览：只有界面（无托盘/悬浮窗/更新，Tauri API 短路）
 npx tauri dev                       # 真实桌面窗口
-npx tauri build                     # 出 MSI + NSIS 安装包（见「桌面端发版流程」）
+npm run build                       # 前端类型检查 + 打包（CI 也会跑）
+RUSTUP_TOOLCHAIN=stable-aarch64-apple-darwin cargo test --manifest-path src-tauri/Cargo.toml --lib
+npx tauri build                     # 本机出安装包（macOS 需要签名身份，见「桌面端发版流程」）
 ```
 
-不在本地做发布构建：APK 一律由 GitHub Actions 产出（见下）；桌面端安装包由本地 `tauri build` 产出。
+不在本地做发布构建：APK 与桌面端安装包都由 GitHub Actions 产出（见下）。
+本地 `tauri build` 只用于自检与冒烟，产物留在 `src-tauri/target/`，不要拿它顶掉 `/Applications` 里正在用的那份。
 
 ### 桌面端交互约定（改之前先看这几条）
 
@@ -126,36 +131,75 @@ git push origin main 0.2.0
 | 项 | 值 |
 | --- | --- |
 | version | `0.1.0`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
-| 最新 tag | `desktop-v0.1.0`（首个正式版） |
-| 安装包 | GitHub Release `<tag>` 的 `market-monitor_<version>_x64-setup.exe`，边车 `<exe>.sha256` |
+| 更新通道 | 固定 tag `desktop-latest` 的 Release（标为 pre-release），应用只读它的 `latest.json` |
+| 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
+| 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
 
-桌面端与 Android 共用同一个仓库的 Releases，因此用 **`desktop-v` 前缀的 tag** 与 Android 的裸版本号区分开：
-应用内更新只挑 `desktop-v*`，Android 的 `0.9.25` 不会被当成桌面端的新版本。
-反向也安全：`desktop-v0.1.0` 既不匹配 `v*` 也不匹配 `[0-9]*`，**不会误触发 Android 的 `release.yml`**。
+桌面端与 Android 共用同一个仓库的 Releases，用 **`desktop-v` 前缀的 tag** 与 Android 的裸版本号区分开：
+`desktop-v*` 既不匹配 Android `release.yml` 的 `v*`/`[0-9]*`，桌面端自己也不走 `/releases/latest`。
 
-1. 改 `desktop/src-tauri/tauri.conf.json` 的 `version`（应用内比较的就是它，不是 Cargo.toml）。
-2. 构建 `cd desktop && npx tauri build`，NSIS 安装包在
-   `desktop/src-tauri/target/release/bundle/nsis/market-monitor_<version>_x64-setup.exe`。
-3. 算校验值 —— 必须是**纯十六进制一行**（`certutil` 会往文件里写表头，应用内读到的就不是哈希了）：
+### 发版三步
 
-```powershell
-(Get-FileHash .\market-monitor_0.1.0_x64-setup.exe -Algorithm SHA256).Hash |
-  Out-File .\market-monitor_0.1.0_x64-setup.exe.sha256
+1. 改 `desktop/src-tauri/tauri.conf.json` 的 `version`（应用内比较的就是它，不是 Cargo.toml），提交。
+2. 打 tag 推送（前缀不对工作流不触发）：
+
+```bash
+git tag desktop-v0.2.0
+git push origin main desktop-v0.2.0
 ```
 
-4. 新建 Release：tag 形如 `desktop-v0.1.0`，上传 **`*_x64-setup.exe`** 与 **`<exe>.sha256`** 两个文件。
+3. `Desktop Release` workflow 两端并行构建，再**重建** `desktop-latest`（tag 固定，里面的文件每次覆盖）：
 
-应用内更新挑产物的规则：只认 `-setup.exe` 结尾（MSI 留作手动安装），校验值优先取 Release 的 `digest`
-字段、缺失时读 `.sha256` 边车；**两个都拿不到就只给「打开 Release 页面」**，不做应用内下载。
-国内网络内置 5 个加速站（GitHub 原生 / gh-proxy.com / ghfast.top / ghproxy.net / gh-proxy.org），
-更新弹窗里可切换；检查更新与下载都会在所选站失败时回退到直连与其他站。
+| 平台 | 构建内容 | 发布产物 |
+| --- | --- | --- |
+| macOS arm64 | `app,dmg` | `market-monitor_<v>_macos.dmg` + `market-monitor_<v>_macos.app.tar.gz`(+`.sig`) |
+| Windows x64 | `nsis` | `market-monitor_<v>_windows.exe`(+`.sig`) |
 
-⚠️ **桌面端 Release 会占掉仓库的 `/releases/latest`**：GitHub 的 latest 取「最新创建的非 draft、非预发布」的
-Release，桌面端发版后它就不再指向 Android 的包。Android 端靠 `/releases/latest` 发现更新，拿到
-`desktop-v0.1.0` 这类 tag 时，`VersionCompare.parse` 会因为 `desktop` 段不是纯数字而返回 null，
-再按「解析失败一律视为无更新」处理 —— 所以**不会误弹提示、也不会装错包，但那段窗口期 Android 收不到更新提示**，
-直到下一次 Android 发版把 latest 抢回来。要让两端彻底互不干扰，就把 Android 的发现方式也改成
-「拉 `releases?per_page=100` 再按**裸版本号**筛」，即桌面端 `resolve()` 的镜像做法（见 `desktop/src-tauri/src/update.rs`）。
+产物一律改名为 `market-monitor_<版本>_<平台>.*`（`.sig` 跟着产物一起改名），另给安装包算 `.sha256` 边车
+供手动下载核对 —— 应用内不读它，读的是 minisign 签名。
+
+### 更新链路
+
+检查更新与下载都在 Rust 侧（`desktop/src-tauri/src/update.rs`）：候选链为 **所选加速站 → 直连 → 其他站**，
+两者都走这条链；下完先用内嵌公钥验 minisign 签名，验过才交给官方插件安装
+（Windows 拉起 NSIS 后应用自己退出，macOS 原地替换 `.app` 再重启）。
+内置 5 个加速站（GitHub 原生 / gh-proxy.com / ghfast.top / ghproxy.net / gh-proxy.org），更新弹窗里可切换；
+开 VPN 时 GitHub 会按出口 IP 拒绝，检查失败换个加速站即可。
+
+| 文件 | 用途 |
+| --- | --- |
+| `market-monitor_<v>_macos.dmg` | macOS 安装包（arm64，自签名：首次安装要在「系统设置 → 隐私与安全性」点『仍要打开』，或先 `xattr -dr com.apple.quarantine`） |
+| `market-monitor_<v>_macos.app.tar.gz` + `.sig` | macOS 应用内更新用 |
+| `market-monitor_<v>_windows.exe` | Windows 安装包（NSIS，x64） |
+| `market-monitor_<v>_windows.exe.sig` | Windows 应用内更新用 |
+| `latest.json` | 通道清单：版本 + 各平台的下载地址与 minisign 签名 |
+
+### 签名与凭据（都不入库）
+
+| 凭据 | 本机位置 | GitHub Secret |
+| --- | --- | --- |
+| updater minisign 私钥 | `~/.market-monitor-signing/updater.key`（公钥已内嵌 `plugins.updater.pubkey`） | `TAURI_SIGNING_PRIVATE_KEY` |
+| macOS 代码签名叶证书 | `~/.market-monitor-signing/leaf.p12`（含私钥与根 CA） | `MACOS_CERT_P12_MARKETMONITOR`（base64） |
+| 叶证书 p12 密码 | `~/.market-monitor-signing/ci-cert-password.txt` | `MACOS_CERT_PASSWORD_MARKETMONITOR` |
+| 根 CA（与 ai-assistant 共用） | `~/.traework-signing/`（本机已受信任） | —（CI 从 p12 里抽出来临时信任） |
+
+重新签发叶证书：`CA_DIR="${HOME}/.traework-signing" bash desktop/scripts/make-signing-cert.sh`。
+换机器：把 `~/.traework-signing` 与 `~/.market-monitor-signing` 整目录拷过去，重跑上面这条命令完成导入。
+⚠️ **不要用脚本的 A 模式重造 CA**：macOS 把信任记在代码身份（锚到根证书哈希）上，换 CA 等于换身份。
+
+### 两个一次性注意
+
+⚠️ **Windows 0.1.0（旧机制）要手动装一次下一版**：0.1.0 的更新是「扫 `desktop-v*` 找 `-setup.exe` + `.sha256` 边车」，
+而新链路只发固定通道 `desktop-latest`，所以那批用户不会再收到应用内提示；装一次 ≥0.1.1 之后就走新链路了。
+（想让旧版本自动迁移也可以：在 workflow 里额外发一个 `desktop-v<版本>` release，旧版本就会照旧发现它 ——
+代价是它会把仓库的 `/releases/latest` 抢走，Android 的更新发现会静默失效一轮，见下条。）
+
+⚠️ **`/releases/latest` 的抢占**：GitHub 的 latest 取「最新创建的非 draft、非预发布 Release」。
+新链路的通道 release 标了 **pre-release**，所以它不再占 latest；现存的一次性影响来自 `desktop-v0.1.0`
+（今天创建的正式 release），它会把 latest 从 Android 的包上抢走。Android 端拿到 `desktop-v0.1.0` 这类 tag 时，
+`VersionCompare.parse` 因 `desktop` 段不是纯数字而返回 null，按「解析失败一律视为无更新」处理 ——
+**不会误弹提示、也不会装错包，但那段窗口期 Android 收不到更新提示**，直到下一次 Android 发版把 latest 抢回来。
+要让两端彻底互不干扰，就把 Android 的发现方式也改成「拉 `releases?per_page=100` 再按**裸版本号**筛」。
 
 ## 签名：应用内更新的前提
 

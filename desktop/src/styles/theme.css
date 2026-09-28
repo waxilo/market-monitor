@@ -887,11 +887,6 @@ body {
   line-height: 1.6;
   color: var(--up);
 }
-.up-warn {
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--accent);
-}
 .up-progress {
   display: flex;
   align-items: center;
@@ -944,10 +939,6 @@ body {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--muted);
-}
-.up-release-name {
-  font-size: 13px;
-  font-weight: 600;
 }
 .up-notes {
   font-family: var(--mono);

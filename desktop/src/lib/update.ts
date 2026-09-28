@@ -37,22 +37,16 @@ export function markChecked() {
 export interface UpdateInfo {
   currentVersion: string;
   latestVersion: string;
-  releaseName: string;
   notes: string;
   publishedAt: string | null;
   pageUrl: string;
-  assetName: string;
-  assetSize: number;
-  /** false = 拿不到可信校验值，只能走浏览器打开 Release 页。 */
-  canInstall: boolean;
-  expectedSha256: string | null;
 }
 
 /** progress 为 0..1，-1 表示总量未知（服务端没给 Content-Length）。 */
 export type DownloadState =
   | { state: 'idle' }
   | { state: 'running'; progress: number; downloaded: number; total: number }
-  | { state: 'done'; path: string }
+  | { state: 'done' }
   | { state: 'failed'; message: string };
 
 export async function fetchAppVersion(): Promise<string> {
@@ -60,7 +54,7 @@ export async function fetchAppVersion(): Promise<string> {
   return await invoke<string>('app_version');
 }
 
-/** 检查更新；返回 null 表示已是最新（含仓库里还没有桌面端发布）。失败时抛出原因。 */
+/** 检查更新；返回 null 表示已是最新（含更新通道还没发布过比当前更新的版本）。失败时抛出原因。 */
 export async function checkUpdate(mirror: string): Promise<UpdateInfo | null> {
   if (!IS_TAURI) throw new Error('浏览器预览不检查更新');
   return await invoke<UpdateInfo | null>('check_update', { mirror });
@@ -75,8 +69,9 @@ export async function fetchDownloadState(): Promise<DownloadState> {
   return await invoke<DownloadState>('get_update_download_state');
 }
 
-export async function launchInstaller(): Promise<void> {
-  await invoke('launch_update_installer');
+/** 安装已下载并验签通过的安装包；Windows 交由安装器接管，macOS 原地替换后自动重启。 */
+export async function installUpdate(): Promise<void> {
+  await invoke('install_update');
 }
 
 export async function openUrl(url: string): Promise<void> {

@@ -6,7 +6,7 @@ import {
   checkUpdate,
   fetchAppVersion,
   fetchDownloadState,
-  launchInstaller,
+  installUpdate,
   markChecked,
   openUrl,
   readLastCheck,
@@ -93,7 +93,7 @@ export function useUpdate() {
   const install = useCallback(async () => {
     setError(null);
     try {
-      await launchInstaller();
+      await installUpdate();
     } catch (e) {
       setError(String(e));
     }

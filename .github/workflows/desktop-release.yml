@@ -1,0 +1,275 @@
+# 构建桌面端（macOS arm64 + Windows x64）并发布到「固定更新通道」tag `desktop-latest`，
+# 供应用内更新读取（tauri-plugin-updater 拉 latest.json，按平台给下载地址与 minisign 签名）。
+#
+# 触发方式：
+#   1. 打 tag `desktop-v<版本>` 并推送（版本号以 tag 为准，覆盖 tauri.conf.json）
+#   2. 手动 workflow_dispatch（用 tauri.conf.json 里的版本号）
+#
+# 需要的仓库 Secrets：
+#   TAURI_SIGNING_PRIVATE_KEY            —— updater 签名私钥（`npx tauri signer generate` 生成）
+#   MACOS_CERT_P12_MARKETMONITOR         —— macOS 代码签名证书（base64 的 p12，叶证书+私钥+根 CA）
+#   MACOS_CERT_PASSWORD_MARKETMONITOR    —— 该 p12 的密码
+#
+# ⚠️ macOS 证书是**必需项**，不是可选优化：`tauri.conf.json` 里写死了
+#    `bundle.macOS.signingIdentity`，缺证书时 `tauri build` 直接失败。
+#    为什么必须有固定身份（而不是 ad-hoc 签名），见 desktop/scripts/make-signing-cert.sh 头注。
+name: Desktop Release
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  APP_DIR: desktop
+  RELEASE_REPO: waxilo/market-monitor
+  CHANNEL_TAG: desktop-latest
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - platform: windows-latest
+            target: ''
+            bundles: nsis
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.APP_DIR }}/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 添加 macOS arm64 target
+        if: matrix.target != ''
+        shell: bash
+        run: rustup target add aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.APP_DIR }}/src-tauri
+
+      - name: 安装前端依赖
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        run: npm ci
+
+      - name: 确定版本号（tag 优先，否则读配置）
+        id: version
+        shell: bash
+        run: |
+          REF="$GITHUB_REF_NAME"
+          if [[ "$REF" == desktop-v* ]]; then
+            V="${REF#desktop-v}"
+          else
+            V=$(node -p "require('./${{ env.APP_DIR }}/src-tauri/tauri.conf.json').version")
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "本次版本号：$V"
+
+      - name: 检查签名私钥
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+            echo "::error::缺少 TAURI_SIGNING_PRIVATE_KEY secret。"
+            echo "请先在本地跑 npx tauri signer generate -w ~/.market-monitor-signing/updater.key，"
+            echo "并把私钥内容配到本仓库 Actions secrets。"
+            exit 1
+          fi
+
+      # ⚠️ 签名身份必须固定：桌面端要应用内自更新（.app 被原地替换），而 macOS 把授权/信任
+      # 记在代码身份上 —— ad-hoc 签名的身份每次构建都变，等于每轮更新都换一个新应用。
+      # 身份名由 tauri.conf.json 的 `bundle.MacOS.signingIdentity` 指定，两处必须一致。
+      - name: 导入 macOS 签名证书
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          CERT_P12_B64: ${{ secrets.MACOS_CERT_P12_MARKETMONITOR }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD_MARKETMONITOR }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CERT_P12_B64:-}" ]; then
+            echo "::error::缺少 secret MACOS_CERT_P12_MARKETMONITOR —— 未签名的构建会让每次应用内更新都换一次身份，拒绝继续。"
+            echo "生成方式：CA_DIR=\$HOME/.traework-signing bash desktop/scripts/make-signing-cert.sh"
+            exit 1
+          fi
+
+          P12="$RUNNER_TEMP/mm.p12"
+          CA="$RUNNER_TEMP/mm-ca.crt"
+          KEYCHAIN="$RUNNER_TEMP/mm-signing.keychain-db"
+
+          echo "$CERT_P12_B64" | openssl base64 -d -A > "$P12"
+
+          security create-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security -A
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$KEYCHAIN"
+
+          # 构建用的 codesign 要在这个钥匙串里找到身份（保留原有的搜索条目）
+          EXISTING=$(security list-keychains -d user | tr -d ' "' | tr '\n' ' ')
+          security list-keychains -d user -s "$KEYCHAIN" $EXISTING
+
+          # 自签根 CA 必须被信任，否则 codesign 看不到任何可用身份。
+          # 直接从 p12 里抽出 CA 证书，**不按 CN 查** —— 免得把「根证书叫什么名字」这种
+          # 细节写死在流程里（那份 CA 是与 ai-assistant 共用的，CN 不是本仓库的东西）。
+          #
+          # ⚠️ 两个 openssl 的坑（ai-assistant 首次跑 CI 时踩到）：
+          #   本机导出 p12 的 openssl 是 **LibreSSL**，证书袋用 `pbeWithSHA1And40BitRC2-CBC`；
+          #   而 runner 上的 openssl 是 **OpenSSL 3**，默认不加载 legacy provider ⇒ 直接报
+          #   `Error outputting keys and certificates … Algorithm (RC2-40-CBC : 0)`。
+          #   OpenSSL 3 要 `-legacy`，LibreSSL 又不认这个开关 —— 所以两种形态各试一次。
+          #   判据不能只看退出码：失败时也可能留下半截文件，必须校验真的抽到了证书。
+          extract_ca() {
+            openssl pkcs12 $1 -in "$P12" -cacerts -nokeys -passin "pass:$CERT_PASSWORD" \
+              -out "$CA" 2>/dev/null || true
+            grep -q 'BEGIN CERTIFICATE' "$CA" 2>/dev/null
+          }
+
+          # 兜底策略（与 CN、与 openssl 的 p12 实现都无关）：钥匙串里此刻已经有根证书
+          # （`security import` 那条 p12 时一并导入），把它倒成 PEM，挑出其中的**根**。
+          extract_ca_from_keychain() {
+            local all="$RUNNER_TEMP/all-certs.pem" f
+            security find-certificate -a -p "$KEYCHAIN" > "$all" 2>/dev/null || return 1
+            awk -v d="$RUNNER_TEMP" '/BEGIN CERTIFICATE/{n++} {if(n)print > (d "/cert" n ".pem")}' "$all"
+            for f in "$RUNNER_TEMP"/cert*.pem; do
+              [ -f "$f" ] || continue
+              # 认根用 `Basic Constraints: CA:TRUE`（叶证书是 CA:FALSE）。
+              # ⚠️ 别用「subject == issuer」：openssl 打印出来是 `subject= …` 与 `issuer= …`，
+              # **前缀就不同** ⇒ 这两个字符串永远不相等（ai-assistant 实测踩到，函数静默返回 1）。
+              if openssl x509 -in "$f" -noout -text 2>/dev/null | grep -q 'CA:TRUE'; then
+                cp "$f" "$CA"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          extract_ca "" || extract_ca "-legacy" || extract_ca_from_keychain || {
+            echo "::error::从 p12 / 钥匙串里都抽不出根 CA，无法建立可信签名身份"
+            exit 1
+          }
+          echo "根 CA：$(openssl x509 -in "$CA" -noout -subject 2>/dev/null)"
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign \
+            -k /Library/Keychains/System.keychain "$CA"
+
+          # 导入 ≠ 可用：根 CA 没被信任时这里会是「0 valid identities found」，
+          # 而真正的报错要等到 tauri build 签名那一步才出现（更晚、更难查）。就地拦下。
+          IDENTITIES="$(security find-identity -v -p codesigning "$KEYCHAIN")"
+          echo "$IDENTITIES"
+          if echo "$IDENTITIES" | grep -q '0 valid identities found'; then
+            echo "::error::证书导入了但签名身份不可用 —— 多半是根 CA 没被信任"
+            exit 1
+          fi
+          rm -f "$P12"
+
+      - name: Tauri build（带更新产物）
+        working-directory: ${{ env.APP_DIR }}
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          ARGS="--config {\"version\":\"${{ steps.version.outputs.version }}\"} --bundles ${{ matrix.bundles }}"
+          if [ -n "${{ matrix.target }}" ]; then
+            ARGS="$ARGS --target ${{ matrix.target }}"
+          fi
+          npx tauri build $ARGS
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            ${{ env.APP_DIR }}/src-tauri/target/**/release/bundle/**/*.exe
+            ${{ env.APP_DIR }}/src-tauri/target/**/release/bundle/**/*.app.tar.gz
+            ${{ env.APP_DIR }}/src-tauri/target/**/release/bundle/**/*.dmg
+            ${{ env.APP_DIR }}/src-tauri/target/**/release/bundle/**/*.sig
+
+  release:
+    name: 发布更新通道
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 确定版本号
+        id: version
+        shell: bash
+        run: |
+          REF="$GITHUB_REF_NAME"
+          if [[ "$REF" == desktop-v* ]]; then
+            V="${REF#desktop-v}"
+          else
+            V=$(node -p "require('./${{ env.APP_DIR }}/src-tauri/tauri.conf.json').version")
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: 收集安装包（统一改名成 名称_版本号_平台.ext，.sig 随产物同步改名）
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          V="${{ steps.version.outputs.version }}"
+          stage() {  # stage <源目录> <平台名>
+            local dir="$1" platform="$2" f base
+            for f in $(find "$dir" -type f); do
+              base=$(basename "$f")
+              case "$base" in
+                *.app.tar.gz.sig) cp "$f" "dist/market-monitor_${V}_${platform}.app.tar.gz.sig" ;;
+                *.app.tar.gz)     cp "$f" "dist/market-monitor_${V}_${platform}.app.tar.gz" ;;
+                *.dmg.sig)        cp "$f" "dist/market-monitor_${V}_${platform}.dmg.sig" ;;
+                *.dmg)            cp "$f" "dist/market-monitor_${V}_${platform}.dmg" ;;
+                *.exe.sig)        cp "$f" "dist/market-monitor_${V}_${platform}.exe.sig" ;;
+                *.exe)            cp "$f" "dist/market-monitor_${V}_${platform}.exe" ;;
+                *) echo "    跳过（不在发布清单里）：$base" ;;
+              esac
+            done
+          }
+          stage artifacts/bundle-macos-latest macos
+          stage artifacts/bundle-windows-latest windows
+          # 手动下载用的校验值：纯十六进制一行，`.sha256` 边车（App 端不读它，读的是签名）
+          for f in dist/*.dmg dist/*.exe; do
+            sha256sum "$f" | awk '{print $1}' > "$f.sha256"
+          done
+          ls -l dist
+
+      - name: 生成 latest.json（v2 CLI 只产 .sig，manifest 需自行拼装）
+        shell: bash
+        run: node ${{ env.APP_DIR }}/scripts/build-latest.mjs "${{ steps.version.outputs.version }}" "${{ env.CHANNEL_TAG }}" dist "${{ env.RELEASE_REPO }}"
+
+      # 通道 release 每次发版重建，tag 固定不变 —— 应用只认这一个地址（/releases/download/<tag>/latest.json）。
+      # 标 --prerelease 是有意的：GitHub 的 `/releases/latest` 只认「非 draft、非预发布」的最新一个，
+      # 标了预发布就不会把 Android 的更新发现路径抢走（见 README「桌面端发版流程」）。
+      - name: 重建更新通道 Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete "${{ env.CHANNEL_TAG }}" --repo "${{ env.RELEASE_REPO }}" --yes || true
+          gh release create "${{ env.CHANNEL_TAG }}" dist/* \
+            --repo "${{ env.RELEASE_REPO }}" \
+            --prerelease \
+            --title "桌面端更新通道" \
+            --notes "机器读取的更新通道（latest.json）：桌面端应用内更新从这里取版本、下载地址与签名。安装包见下方 Assets，版本 ${{ steps.version.outputs.version }}。"

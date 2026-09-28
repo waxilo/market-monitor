@@ -192,6 +192,9 @@ fn set_mini_rows(app: AppHandle, rows: u32) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 更新通道（endpoints/公钥）来自 tauri.conf.json 的 plugins.updater；
+        // 检查与安装细节在 update.rs 里包了一层（加速站 + 验签自验）
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(update::UpdateShared::default())
         .invoke_handler(tauri::generate_handler![
             show_main_window,
@@ -201,7 +204,7 @@ pub fn run() {
             update::check_update,
             update::start_update_download,
             update::get_update_download_state,
-            update::launch_update_installer,
+            update::install_update,
             update::open_url,
             update::update_mirrors,
             update::app_version

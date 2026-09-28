@@ -83,7 +83,7 @@ export function UpdatePanel({
 
           <p className="up-hint">
             加速站同时用于检查更新与下载；某一站不通时会自动回退到直连和其他站。
-            开 VPN 检查更新报 403，就是 GitHub 拒了你的出口 IP，选一个加速站即可。
+            开 VPN 时 GitHub 会按出口 IP 拒绝，检查失败就换一个加速站。
           </p>
 
           <div className="up-actions">
@@ -94,23 +94,18 @@ export function UpdatePanel({
             >
               {checking ? '检查中…' : '检查更新'}
             </button>
-            {info && info.canInstall && download.state !== 'done' && (
+            {info && download.state !== 'done' && (
               <button
                 className="up-btn primary"
                 onClick={() => void beginDownload()}
                 disabled={downloading}
               >
-                {download.state === 'failed' ? '重试下载' : '下载并安装'}
-              </button>
-            )}
-            {info && !info.canInstall && (
-              <button className="up-btn primary" onClick={() => void openPage()}>
-                打开 Release 页面
+                {download.state === 'failed' ? '重试下载' : '下载更新'}
               </button>
             )}
             {download.state === 'done' && (
               <button className="up-btn primary" onClick={() => void install()}>
-                安装并退出
+                安装并重启
               </button>
             )}
           </div>
@@ -137,26 +132,16 @@ export function UpdatePanel({
 
           {download.state === 'failed' && <p className="up-error">{download.message}</p>}
           {download.state === 'done' && (
-            <p className="up-ok">安装包已下载并校验通过，点「安装并退出」后按安装向导完成升级。</p>
+            <p className="up-ok">安装包已下载并通过签名校验，点「安装并重启」完成升级。</p>
           )}
 
           {info && (
             <div className="up-release">
               <div className="up-release-head">
                 <span className="up-version">v{info.latestVersion}</span>
-                <span className="up-release-meta">
-                  {[formatSize(info.assetSize), formatDate(info.publishedAt)]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </span>
+                <span className="up-release-meta">{formatDate(info.publishedAt)}</span>
               </div>
-              {info.releaseName && <div className="up-release-name">{info.releaseName}</div>}
               <pre className="up-notes">{info.notes || '（该版本没有填写更新说明）'}</pre>
-              {!info.canInstall && (
-                <p className="up-warn">
-                  这个发布没有可校验的安装包（缺 SHA-256），不做应用内下载，请从 Release 页面手动下载。
-                </p>
-              )}
               <button className="up-link" onClick={() => void openPage()}>
                 在浏览器中打开 Release 页面
               </button>
