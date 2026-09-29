@@ -283,8 +283,9 @@ node "C:/Users/sloan.wang/.workbuddy/skills/tauri-gh-release-verify/scripts/veri
 node "C:/Users/sloan.wang/.workbuddy/skills/tauri-gh-release-verify/scripts/verify-channel.mjs" 0.1.1 # 应判「有更新」
 ```
 
-28 条断言覆盖：发布列表恰好两个通道、manifest 可取且两平台齐全、版本判定、
-**通道里没有上一版残留产物**、安装包真下载比对 SHA-256 边车、`.sig` 解出的 keyid == 内嵌公钥 keyid、
+34 条断言覆盖：发布列表恰好两个通道、manifest 可取且两平台齐全、版本判定、
+**通道里没有上一版残留产物**、安装包真下载比对 SHA-256 边车、
+**两个平台**的 `.sig` 解出的 keyid == 内嵌公钥 keyid（且通道里的 `.sig` 文件与 manifest 内联签名一致）、
 Android 通道的 APK 版本能从文件名读出来。失败即非 0 退出码。
 （`.workbuddy/tmp/verify-desktop-update-chain.mjs` 是它的转发壳，在仓库根目录跑等价。）
 
