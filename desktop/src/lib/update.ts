@@ -12,9 +12,18 @@ export const MIRRORS = [
 
 const MIRROR_KEY = 'mm.updateMirror';
 const LAST_CHECK_KEY = 'mm.updateLastCheck';
+const READY_DISMISS_KEY = 'mm.updateReadyDismissed';
 
-/** 启动时的静默检查节流：一天一次，够用且不碰 GitHub 的 60 次/小时限额。 */
-export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * 启动时的静默检查节流。
+ *
+ * ⚠️ 这不是 GitHub API 调用：manifest 走的是
+ * `github.com/<o>/<r>/releases/download/<通道>/latest.json`，普通的文件下载，
+ * 「匿名 API 60 次/小时」那条限额管不着它。所以节流的目的是少发无谓请求而不是自保：
+ * 定成 1 小时 —— 新版本在一小时内就会被发现（发现即**自动下载**），
+ * 又不至于因为一天开关几十次应用而把请求打成一串。
+ */
+export const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 export function readMirror(): string {
   const saved = localStorage.getItem(MIRROR_KEY);
@@ -32,6 +41,20 @@ export function readLastCheck(): number {
 
 export function markChecked() {
   localStorage.setItem(LAST_CHECK_KEY, String(Date.now()));
+}
+
+/**
+ * 「安装包已就绪」提示条被「稍后」关掉的那个版本号。
+ *
+ * 记版本而不是记布尔：同一版关掉就不再烦他，但**下一版必须重新提示** ——
+ * 否则一次「稍后」等于把用户永久锁在旧版本上（安装包会一版一版地悄悄下、再也不出声）。
+ */
+export function readReadyDismissed(): string {
+  return localStorage.getItem(READY_DISMISS_KEY) ?? '';
+}
+
+export function writeReadyDismissed(version: string) {
+  localStorage.setItem(READY_DISMISS_KEY, version);
 }
 
 export interface UpdateInfo {

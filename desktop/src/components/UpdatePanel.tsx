@@ -29,6 +29,7 @@ export function UpdatePanel({
     checked,
     error,
     download,
+    auto,
     check,
     beginDownload,
     install,
@@ -100,7 +101,13 @@ export function UpdatePanel({
                 onClick={() => void beginDownload()}
                 disabled={downloading}
               >
-                {download.state === 'failed' ? '重试下载' : '下载更新'}
+                {download.state === 'failed'
+                  ? '重试下载'
+                  : downloading
+                    ? auto
+                      ? '自动下载中…'
+                      : '下载中…'
+                    : '下载更新'}
               </button>
             )}
             {download.state === 'done' && (
@@ -109,6 +116,10 @@ export function UpdatePanel({
               </button>
             )}
           </div>
+
+          {auto && downloading && (
+            <p className="up-hint">发现新版本后已自动开始下载，完成后会提示你安装。</p>
+          )}
 
           {error && <p className="up-error">{error}</p>}
           {checked && !info && !error && <p className="up-ok">已是最新版本</p>}

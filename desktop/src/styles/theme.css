@@ -879,6 +879,19 @@ body {
   border-radius: var(--r-full);
   background: var(--accent);
 }
+/* 圆点按状态区分，都不用动画（顶栏角落不值得一直动）：
+   下载中 = 空心环（还没好），下好了 = 实心且大一圈（可以装了）。
+   自动下载本身是无声的，这三态是它在顶栏唯一的存在感。 */
+.up-badge[data-state='running'] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.up-badge[data-state='ready'] {
+  top: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+}
 
 .up-backdrop {
   position: fixed;
@@ -1064,6 +1077,53 @@ body {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* ── 「安装包已就绪」提示条 ──────────────────────────────────
+   自动下载把「下载」这一步变成了无声的，这条提示就是它**唯一的出口** ——
+   下载完不提示，包等于白下（用户永远停在旧版本上）。
+   钉在主窗右下角：在图表区之外，不挡盘口也不打断操作。
+   z-index 取 40，与搜索下拉同级、低于更新弹窗(50)：弹窗开着时该被盖住，
+   那时候面板里本来就有同一个「安装并重启」。 */
+.up-ready {
+  position: fixed;
+  right: var(--sp-md);
+  bottom: var(--sp-md);
+  z-index: 40;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+  padding: var(--sp-sm);
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+}
+.up-ready-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.up-ready-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--accent);
+}
+.up-ready-title {
+  font-size: 12px;
+  color: var(--ink);
+}
+.up-ready-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.up-ready-actions {
+  display: flex;
+  gap: var(--sp-xs);
+  margin-top: 2px;
 }
 
 /* ── 数据源 ───────────────────────────────────────────────

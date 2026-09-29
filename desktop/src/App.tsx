@@ -16,6 +16,7 @@ import { WindowChrome } from './components/WindowChrome';
 import { MiniWindowIcon } from './components/icons';
 import { SourcePanel } from './components/SourcePanel';
 import { UpdatePanel } from './components/UpdatePanel';
+import { UpdateReady } from './components/UpdateReady';
 import { useUpdate } from './hooks/useUpdate';
 
 type Theme = 'dark' | 'light';
@@ -216,10 +217,19 @@ export default function App() {
         <button
           className="icon-btn up-entry"
           onClick={() => setUpdateOpen(true)}
-          title="应用更新：检查 GitHub 上的新版本"
+          title={
+            update.ready
+              ? `应用更新：v${update.readyVersion} 已下载好，点这里安装`
+              : '应用更新：发现新版本会自动下载，下好提示你安装'
+          }
         >
           更新
-          {update.info && <span className="up-badge" />}
+          {update.info && (
+            <span
+              className="up-badge"
+              data-state={update.download.state === 'running' ? 'running' : update.ready ? 'ready' : 'idle'}
+            />
+          )}
         </button>
         <span className="winops-divider" />
         <WindowChrome />
@@ -246,6 +256,8 @@ export default function App() {
 
       {sourceOpen && <SourcePanel onClose={() => setSourceOpen(false)} />}
       {updateOpen && <UpdatePanel controller={update} onClose={() => setUpdateOpen(false)} />}
+      {/* 自动下载把下载过程变成了无声的，这条提示就是它唯一的出口 —— 别删。 */}
+      {update.ready && <UpdateReady controller={update} />}
     </div>
   );
 }

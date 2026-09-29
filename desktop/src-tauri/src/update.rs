@@ -1,11 +1,12 @@
 //! 应用内更新：固定更新通道（desktop-latest）+ 加速站 + minisign 签名自验。
 //!
-//! 与 Android 侧的更新实现同源不同路：那边在 `/releases` 列表里筛最新的 `desktop-v*`，
-//! 这里只认一个固定 tag 的更新通道 —— CI 每次发版都覆盖 `desktop-latest` 里的
-//! `latest.json`（按平台给下载地址与签名）。发现与版本比较交给官方 tauri-plugin-updater，
-//! 本模块负责它不管的两件事：
+//! 发现与版本比较交给官方 tauri-plugin-updater（读固定通道里的 `latest.json`，
+//! 按平台给下载地址与签名），本模块负责它不管的三件事：
 //! 1. 加速站：manifest 与安装包都按「所选站 → 直连 → 其他站」的候选链依次尝试；
-//! 2. 签名自验：下完先用 minisign 公钥验一遍，验过才交给 `Update::install`。
+//! 2. 签名自验：下完先用 minisign 公钥验一遍，验过才交给 `Update::install`；
+//! 3. **自动下载**的状态机：前端一查到新版就自动发起下载（不用用户点），
+//!    所以重复检查不能把已下好的包或在途进度清掉（见 `check_effect`），
+//!    换包时还得靠代次把在途结果丢掉（见 `should_write_back`）。
 //!
 //! 安装语义由插件负责：Windows 拉起 NSIS 后自行退出进程；macOS 原地替换 .app、
 //! 需要调用方重启 —— 所以 `install_update` 里 install 之后必接一次 `app.restart()`。
@@ -181,6 +182,46 @@ struct Inner {
     downloading: bool,
     /// 下好且验签通过的安装包字节；重新检查后作废。
     bytes: Vec<u8>,
+    /// 下载代次：每换一次包（或清空状态）就 +1，在途下载带着自己那代跑，
+    /// 回来时代次对不上就丢弃结果 —— 否则换包后旧包的字节会盖掉新状态。
+    download_gen: u64,
+}
+
+/// 安装包身份：版本 + 下载地址 + 签名。三者全同才算「还是那个包」。
+/// 只比版本不够 —— 换了加速站或 CI 重发同名产物时，后两者会变。
+fn release_id(update: &Update) -> String {
+    format!(
+        "{}|{}|{}",
+        update.version, update.download_url, update.signature
+    )
+}
+
+/// 新一轮检查对「已下好的包 / 在途下载」的影响。
+#[derive(Debug, PartialEq, Eq)]
+enum CheckEffect {
+    /// 还是同一个包：保留字节与进度。
+    Keep,
+    /// 换包、首次、或已经查不到更新：清空；在途下载靠代次作废。
+    Reset,
+}
+
+/// ⚠️ 这条规则是「自动下载」能不能成立的前提。
+///
+/// 以前检查一次就无条件清空，是因为下载纯手动、重新检查必然意味着「重新决定要不要下」。
+/// 现在发现新版会**自动**开下，而检查会更频繁地发生（启动检查 + 用户手动点）——
+/// 若无条件清空，用户随手点一下「检查更新」就会把已经下好的包丢掉，
+/// 或者把正在下的进度清成 idle（在途任务回来又被 `downloading == false` 挡住），
+/// 表现是「进度条跑到一半自己没了」。
+fn check_effect(previous: Option<&str>, next: Option<&str>) -> CheckEffect {
+    match (previous, next) {
+        (Some(previous), Some(next)) if previous == next => CheckEffect::Keep,
+        _ => CheckEffect::Reset,
+    }
+}
+
+/// 在途下载的结果要不要写回：代次对不上说明期间已经换了包，结果必须丢。
+fn should_write_back(run_gen: u64, state_gen: u64) -> bool {
+    run_gen == state_gen
 }
 
 impl UpdateShared {
@@ -247,14 +288,20 @@ pub async fn check_update(app: AppHandle, mirror: String) -> Result<Option<Updat
         .map_err(|e| check_failed(&e, chain.len()))?;
 
     let dto = update.as_ref().map(to_dto);
+    let next_id = update.as_ref().map(release_id);
     {
         let shared = app.state::<UpdateShared>();
         shared.with(|inner| {
+            let previous_id = inner.update.as_ref().map(release_id);
+            if check_effect(previous_id.as_deref(), next_id.as_deref()) == CheckEffect::Reset {
+                inner.download = DlState::Idle;
+                inner.downloading = false;
+                inner.bytes.clear();
+                inner.download_gen = inner.download_gen.wrapping_add(1);
+            }
+            // 句柄总是换成最新的（更新说明、发布日期可能变了），
+            // 但上面判为 Keep 时已下好的字节与在途进度都留着。
             inner.update = update;
-            // 换了版本，上一轮下好的包就不能再拿来装
-            inner.download = DlState::Idle;
-            inner.downloading = false;
-            inner.bytes.clear();
         });
     }
     Ok(dto)
@@ -262,11 +309,13 @@ pub async fn check_update(app: AppHandle, mirror: String) -> Result<Option<Updat
 
 #[tauri::command]
 pub fn start_update_download(app: AppHandle, mirror: String) -> Result<(), String> {
-    let update = {
+    let started = {
         let shared = app.state::<UpdateShared>();
         shared.with(|inner| {
-            if inner.downloading {
-                return Ok(None); // 按钮可能被连点，第二次只会把进度写乱
+            // 已在下载 / 已经下好：不再重下一次。前者挡住按钮连点（第二次会把进度写乱），
+            // 后者挡住「自动下载 + 手动再点一次」把已经验过签的字节清掉。
+            if inner.downloading || matches!(inner.download, DlState::Done) {
+                return Ok(None);
             }
             let Some(update) = inner.update.clone() else {
                 return Err("请先检查更新".to_string());
@@ -278,10 +327,10 @@ pub fn start_update_download(app: AppHandle, mirror: String) -> Result<(), Strin
                 total: 0,
             };
             inner.bytes.clear();
-            Ok(Some(update))
+            Ok(Some((update, inner.download_gen)))
         })?
     };
-    let Some(update) = update else {
+    let Some((update, gen)) = started else {
         return Ok(());
     };
 
@@ -294,7 +343,7 @@ pub fn start_update_download(app: AppHandle, mirror: String) -> Result<(), Strin
 
     let mirror = Mirror::from_key(&mirror);
     let handle = app.clone();
-    tauri::async_runtime::spawn(async move { run_download(handle, update, mirror).await });
+    tauri::async_runtime::spawn(async move { run_download(handle, update, mirror, gen).await });
     Ok(())
 }
 
@@ -399,23 +448,35 @@ fn release_pubkey(app: &AppHandle) -> Result<String, String> {
     Ok(config.pubkey)
 }
 
-async fn run_download(app: AppHandle, update: Update, mirror: Mirror) {
-    let state = match download_and_verify(&app, &update, mirror).await {
+async fn run_download(app: AppHandle, update: Update, mirror: Mirror, gen: u64) {
+    let state = match download_and_verify(&app, &update, mirror, gen).await {
         Ok(bytes) => {
             let shared = app.state::<UpdateShared>();
-            shared.with(|inner| inner.bytes = bytes);
+            shared.with(|inner| {
+                if should_write_back(gen, inner.download_gen) {
+                    inner.bytes = bytes;
+                }
+            });
             DlState::Done
         }
         Err(message) => DlState::Failed { message },
     };
+    let mut publish = false;
     {
         let shared = app.state::<UpdateShared>();
         shared.with(|inner| {
+            // 期间换过包：这一轮结论整体作废，别把新包的状态盖成旧包的结果。
+            if !should_write_back(gen, inner.download_gen) {
+                return;
+            }
             inner.downloading = false;
             inner.download = state.clone();
+            publish = true;
         });
     }
-    let _ = app.emit_to(MAIN, EVENT, state);
+    if publish {
+        let _ = app.emit_to(MAIN, EVENT, state);
+    }
 }
 
 /// 依次尝试候选地址，返回第一个「下全且验签通过」的字节。
@@ -423,6 +484,7 @@ async fn download_and_verify(
     app: &AppHandle,
     update: &Update,
     mirror: Mirror,
+    gen: u64,
 ) -> Result<Vec<u8>, String> {
     let pubkey = release_pubkey(app)?;
     let client = reqwest::Client::builder()
@@ -435,7 +497,7 @@ async fn download_and_verify(
     let urls = mirror.chain(update.download_url.as_str());
     let mut last: Option<String> = None;
     for url in &urls {
-        let bytes = match download_once(&client, url, app).await {
+        let bytes = match download_once(&client, url, app, gen).await {
             Ok(bytes) => bytes,
             Err(e) => {
                 last = Some(e);
@@ -465,6 +527,7 @@ async fn download_once(
     client: &reqwest::Client,
     url: &str,
     app: &AppHandle,
+    gen: u64,
 ) -> Result<Vec<u8>, String> {
     let mut response = client
         .get(url)
@@ -481,7 +544,7 @@ async fn download_once(
     let mut bytes: Vec<u8> = Vec::new();
     let mut downloaded: u64 = 0;
     let mut last_emit = Instant::now();
-    publish_progress(app, 0, total);
+    publish_progress(app, 0, total, gen);
     while let Some(chunk) = response
         .chunk()
         .await
@@ -491,7 +554,7 @@ async fn download_once(
         downloaded += chunk.len() as u64;
         if last_emit.elapsed() >= PROGRESS_INTERVAL {
             last_emit = Instant::now();
-            publish_progress(app, downloaded, total);
+            publish_progress(app, downloaded, total, gen);
         }
     }
     if bytes.is_empty() {
@@ -519,7 +582,7 @@ fn verify_signature(data: &[u8], release_signature: &str, pub_key: &str) -> Resu
     })
 }
 
-fn publish_progress(app: &AppHandle, downloaded: u64, total: u64) {
+fn publish_progress(app: &AppHandle, downloaded: u64, total: u64, gen: u64) {
     let progress = if total > 0 {
         downloaded as f64 / total as f64
     } else {
@@ -530,15 +593,19 @@ fn publish_progress(app: &AppHandle, downloaded: u64, total: u64) {
         downloaded,
         total,
     };
+    let mut publish = false;
     {
         let shared = app.state::<UpdateShared>();
         shared.with(|inner| {
-            if inner.downloading {
+            if inner.downloading && should_write_back(gen, inner.download_gen) {
                 inner.download = state.clone();
+                publish = true;
             }
         });
     }
-    let _ = app.emit_to(MAIN, EVENT, state);
+    if publish {
+        let _ = app.emit_to(MAIN, EVENT, state);
+    }
 }
 
 #[cfg(test)]
@@ -580,5 +647,51 @@ mod tests {
     fn check_failure_mentions_source_count() {
         let message = check_failed(&tauri_plugin_updater::Error::ReleaseNotFound, 5);
         assert!(message.contains("5 个源"), "{message}");
+    }
+
+    /// 同一个包重复检查 ⇒ 已下好的字节留着。
+    /// 自动下载是常态，用户随手点一下「检查更新」不能把下好的包丢掉。
+    #[test]
+    fn same_release_keeps_downloaded_bytes() {
+        let id = "0.1.3|https://example.com/a.exe|sig";
+        assert_eq!(check_effect(Some(id), Some(id)), CheckEffect::Keep);
+    }
+
+    /// 换了包 / 首次查到 / 变成没有更新 ⇒ 一律清空。
+    #[test]
+    fn different_or_missing_release_resets_download() {
+        assert_eq!(
+            check_effect(Some("0.1.3|a|s"), Some("0.1.4|a|s")),
+            CheckEffect::Reset,
+            "换了版本"
+        );
+        assert_eq!(
+            check_effect(Some("0.1.3|a|s"), Some("0.1.3|b|s")),
+            CheckEffect::Reset,
+            "换了下载地址（换了加速站 / CI 重发同名产物）"
+        );
+        assert_eq!(
+            check_effect(Some("0.1.3|a|s"), Some("0.1.3|a|t")),
+            CheckEffect::Reset,
+            "换了签名"
+        );
+        assert_eq!(
+            check_effect(None, Some("0.1.3|a|s")),
+            CheckEffect::Reset,
+            "首次查到"
+        );
+        assert_eq!(
+            check_effect(Some("0.1.3|a|s"), None),
+            CheckEffect::Reset,
+            "已经查不到更新"
+        );
+    }
+
+    /// 在途下载带着自己那代跑，回来时代次对不上就丢结果 ——
+    /// 否则换包后旧包的字节会盖掉新包的状态。
+    #[test]
+    fn stale_download_run_is_dropped() {
+        assert!(should_write_back(3, 3));
+        assert!(!should_write_back(3, 4), "期间换过包 ⇒ 结果作废");
     }
 }
