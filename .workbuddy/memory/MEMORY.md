@@ -9,11 +9,12 @@
 - `gh` 要先 `export APPDATA="C:\Users\sloan.wang\AppData\Roaming"`；匿名 GitHub API 60 次/小时。
 
 ## Android（android/）
-- 本地构建：gradlew 跑不起来，起 GradleMain（见 skill `android-gh-release-verify`）。SDK `C:/Users/sloan.wang/android-sdk`。单测基线 180 全绿；设备 MuMu `emulator-5554`，坐标先 `uiautomator dump`（`screencap` 可能是上一帧）。
+- 单测：`JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" ANDROID_HOME="C:/Users/sloan.wang/android-sdk" ./gradlew --no-daemon testDebugUnitTest`（**默认 Java 8 会失败**，那才是「gradlew 跑不起来」的真因）。基线 **250 全绿**。设备 MuMu `emulator-5554`，坐标先 `uiautomator dump`（`screencap` 可能是上一帧）。
 - MuMu 的 WebView 会被反复 kill ⇒ 白屏，图表才改自研 Compose Canvas。
 - 设计系统：极简杂志风，Ink/Paper 灰阶 + 涨绿跌红，语义色走 `MarketTheme.colors`，尺寸全在 `Tokens.kt`。**改前先 grep 调用点**（踩过两次）。
 - 视窗：`ChartViewport` 只存 `visibleBars`+`rightOffset`，**`barCount` 为方法入参、不存字段**；复位 = 重挂 `remember(symbolKey, interval.storageKey)`，别用 `LaunchedEffect` 事后对齐。`window()` 管量程、`plotRange()` 管像素（含留白）；每帧位移不足一根要累积。
 - Sparkline 别硬要求周期：读不到按 `cachedIntervalCounts` 挑最粗回退（表 `kline`）。
+- ⚠️ **`LazyColumn` 给了 `key` 就会「按第一个可见项锚定」**：列表被重新排序时（行情接口测速弹窗按延迟逐条重排），被锚定的那条一旦被排到后面，**整个视口跟着它往下滚 ⇒ 排第一的反而跑到屏幕上方**，用户得往回滑（真实反馈「我明明在最上面，测速排序后还得往上滑」）。修法：`rememberLazyListState()` + 排序一变就 `scrollToItem(0)`；但**单行「重测」不要抢视口**（用户正盯着那一行看结果，key 锚定恰好是他要的），用一个 `pinToTop` 标志区分「批量检测」与「单行重测」。排序规则抽成纯函数 `ui/settings/ProbeOrdering.kt`（+7 条单测）。
 - 发版：改 `versionCode/versionName` → tag（裸版本号）→ workflow 出 APK + `.sha256`。**签名已固定**（`cf2e20c7…52f034`），别换。
 
 ## Desktop（desktop/）
@@ -24,7 +25,8 @@
 - ⚠️ **`readWatchlist()` 里 `[]` 不能当「没存过」**（`hooks/useWatchlist.ts`）：原逻辑 `raw == null || 空数组` 都落回 8 条默认值 ⇒ 用户删空自选后主窗又冒出默认 8 条，且两个窗口各自读 localStorage 时口径还不一致（`.mini-empty` 变成死代码）。现在只有 `getItem` 返回 `null` 才当首次启动，`[]` 就是空自选。
 - ⚠️ **悬浮窗行的高亮底色不能用 CSS `:hover`**（`hooks/usePointerInside.ts` 算出的 `.inside` 挂在面板根节点上）：窗口会自己移动（拖拽、改高度时下边缘不动 ⇒ 上边缘在跑）和隐藏，鼠标在那之后离开了窗口 Chromium 也收不到 `mouseleave`，`:hover` 就**永久卡亮**（表现为「某一行一直亮着」）。规则：只有 `pointermove` 能点亮，离开面板 / 失焦 / 页面不可见 / 被移动 / 被改尺寸一律熄灭，默认熄灭。（遮罩层本身已于 2026-09-29 撤掉、`--scrim` 一并删除；这个 hook 保留下来只管行高亮。）
 - ⚠️ **`.mini-x` 是跨面板共用的类**（`SourcePanel` / `UpdatePanel` 标题栏的关闭「×」），别当悬浮窗专属 —— 撤遮罩时差点连它一起删掉；已改名 `.panel-close` 并挪到 `.panel-head` 旁边。**删 CSS 前先 `git grep` 类名的全部调用点。**
-- **悬浮窗几何**：前端只报**条数**（`set_mini_rows`），高度在 Rust 算。几何常量（行高 26 / 封顶 6 / 宽 268）的**权威定义在 `src/lib/layout.ts`**，`MiniApp` 注入成内联 CSS 变量 `--mini-row-h`/`--mini-max-rows`（theme.css 里同名声明只是兜底）；Rust `MINI_ROW_H`/`MINI_MAX_ROWS`/`MINI_W` 跨 FFI 没法共享，**手工对齐**。❗别改成「前端量高度上报」：窗口出生即隐藏，量不到排版也读不到 CSS 变量 ⇒ 静默退化。调尺寸时**下边缘与 x 不动**。
+- **悬浮窗几何**：前端只报**条数**（`set_mini_rows`），高度在 Rust 算。几何常量（行高 26 / 封顶 6 / **宽 236**，2026-09-29 由 268 收窄）的**权威定义在 `src/lib/layout.ts`**，`MiniApp` 注入成内联 CSS 变量 `--mini-row-h`/`--mini-max-rows`（theme.css 里同名声明只是兜底）；Rust `MINI_ROW_H`/`MINI_MAX_ROWS`/`MINI_W` 跨 FFI 没法共享，**手工对齐**。❗别改成「前端量高度上报」：窗口出生即隐藏，量不到排版也读不到 CSS 变量 ⇒ 静默退化。调尺寸时**下边缘与 x 不动**。
+  - 宽度是**窗口**属性、CSS 里没有第二个旋钮（`.mini` 是块级 flex，被视口撑满）⇒ 改宽度要同时改 `layout.ts` 与 `lib.rs`，再用 `.workbuddy/tmp/verify-mini-width.mjs` 按真实视口（236×158）量。实测：行内容现实最坏（`1000PEPE` + `116,435.2` + `+12.34%`）只需 ~183px，236 时符号列还剩 31px 余量。⚠️ 量文本宽度**必须用 `Range`**，克隆 `getComputedStyle().font` 会偏大 20%（见 skill `web-ui-change-verify` 第 13 节）。三个老脚本（`verify-desktop-ui` / `verify-mini-interaction` / `verify-desktop-search-drop`）里的视口与半宽坐标（268→236、134→118）已同步。
 - **侧栏 = 自选列表（名称 + 现价），搜索结果走浮层**：现价直接取 `useTickers` 格子（零额外请求）；搜索结果不进侧栏（临时态塞进常驻容器会把自选冲掉）⇒ `components/SearchDropdown.tsx` 挂在 `.search-wrap` 下（**锚在 wrap 不是 input**：wrap 含「清空」按钮，量 input 会得出「错位 10px、窄 42px」的假问题）。排序口径抽成 `lib/search.ts` 的 `rankInstruments` 纯函数。
 - ⚠️ **下拉浮层的键盘事件必须挂 `document`**：焦点全程在顶部输入框里，事件不经过浮层 DOM，挂浮层根节点一条都收不到。点行 = 未自选则**先加入再选中**（否则主窗的「选中项必须在自选里」校验会把它打回）。
 - **窗口要出生即隐藏**：builder 里 `.position()` + `.visible(false)`；`build()` 返回时窗口已「可见 + 系统默认位置」，再补 `set_position`/`hide` 会留一段窗口期。
