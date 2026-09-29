@@ -1,4 +1,5 @@
 mod market;
+mod taskbar;
 mod update;
 
 use tauri::{
@@ -84,7 +85,7 @@ fn mini_anchor(app: &AppHandle) -> (f64, f64) {
 /// 必须在 setup 阶段（启动时）建，运行时再建 WebView2 控制器起不来（0x0 空窗）。
 fn create_mini(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     let (x, y) = mini_anchor(app);
-    WebviewWindowBuilder::new(app, MINI, WebviewUrl::App("index.html#/mini".into()))
+    let window = WebviewWindowBuilder::new(app, MINI, WebviewUrl::App("index.html#/mini".into()))
         .title("行情悬浮窗")
         .inner_size(MINI_W, MINI_H)
         .position(x, y)
@@ -96,7 +97,12 @@ fn create_mini(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .shadow(false)
         .transparent(true)
         .build()
-        .ok()
+        .ok()?;
+    // 把句柄登记给 z 序守护：它只跟这个 HWND 打交道，不回主线程（见 `taskbar` 模块）。
+    if let Ok(hwnd) = window.hwnd() {
+        taskbar::set_mini_hwnd(hwnd.0 as isize);
+    }
+    Some(window)
 }
 
 /// 悬浮窗开关：启动时已预建（隐藏），这里只做显隐切换。
@@ -212,140 +218,6 @@ fn set_mini_rows(app: AppHandle, rows: u32) {
     let _ = window.set_position(PhysicalPosition::new(pos.x, y));
 }
 
-/// 悬浮窗不被 Windows 任务栏压住。
-///
-/// 悬浮窗与任务栏**同为 topmost 窗口**。点击任务栏时系统会把任务栏提到 topmost 组的
-/// 最前，于是盖住悬浮窗；而这件事不会给我们发任何事件（用户点的是任务栏，我们的窗口
-/// 连激活都没参与），所以只能自己查 z 序、事后纠正。
-///
-/// 只在「确实被任务栏压住」时才动手：无条件重设 topmost 会周期性地把自己压到
-/// 开始菜单等其它 topmost 窗口前面，那比被压住更烦人。
-#[cfg(windows)]
-fn watch_mini_above_taskbar(app: AppHandle) {
-    use std::time::Duration;
-
-    /// 轮询间隔。够短 —— 点完任务栏几乎立刻看到悬浮窗回到最前。
-    const TICK: Duration = Duration::from_millis(500);
-
-    std::thread::spawn(move || loop {
-        std::thread::sleep(TICK);
-        let handle = app.clone();
-        // 窗口操作统一回主线程做（Tauri 的窗口线程约定）
-        let _ = app.run_on_main_thread(move || {
-            let Some(window) = handle.get_webview_window(MINI) else {
-                return;
-            };
-            if !window.is_visible().unwrap_or(false) {
-                return;
-            }
-            let Ok(hwnd) = window.hwnd() else {
-                return;
-            };
-            if taskbar::is_buried_by_taskbar(hwnd) {
-                taskbar::raise(hwnd);
-            }
-        });
-    });
-}
-
-/// macOS 的 Dock 与 NSWindow 是另一套 level 规则（floating level 本就压不过 Dock），
-/// 而本项目只发 Windows 安装包 —— 这里留空实现，不假装处理了。
-#[cfg(not(windows))]
-fn watch_mini_above_taskbar(_app: AppHandle) {}
-
-/// 任务栏遮挡相关的 Win32 调用（`windows` crate 只在 Windows 目标上依赖）。
-#[cfg(windows)]
-mod taskbar {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetClassNameW, GetWindow, GetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GW_HWNDPREV,
-        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_TOPMOST,
-    };
-
-    /// 任务栏的窗口类名：主屏一个，副屏一个（多显示器时每个屏各有一条任务栏）。
-    const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
-
-    fn class_name(hwnd: HWND) -> String {
-        let mut buf = [0u16; 64];
-        let len = unsafe { GetClassNameW(hwnd, &mut buf) };
-        if len <= 0 {
-            return String::new();
-        }
-        String::from_utf16_lossy(&buf[..len as usize])
-    }
-
-    /// 类名比对单独拎出来，好让它能被离线单测覆盖（`is_taskbar` 要真窗口，测不了）。
-    fn matches_taskbar_class(class: &str) -> bool {
-        TASKBAR_CLASSES
-            .iter()
-            .any(|known| class.eq_ignore_ascii_case(known))
-    }
-
-    fn is_taskbar(hwnd: HWND) -> bool {
-        matches_taskbar_class(&class_name(hwnd))
-    }
-
-    /// 悬浮窗当前是否被任务栏压着。
-    ///
-    /// 沿 z 序往上（`GW_HWNDPREV`）**只看同一个 topmost 组**：topmost 窗口永远排在所有
-    /// 非 topmost 之上，所以碰到第一个非 topmost 窗口就可以停 —— 它上面的都压不住我们。
-    /// （`GetWindow` 取不到上一个窗口就是已经到顶，同样结束。）
-    pub fn is_buried_by_taskbar(hwnd: HWND) -> bool {
-        let mut cursor = hwnd;
-        while let Ok(above) = unsafe { GetWindow(cursor, GW_HWNDPREV) } {
-            let ex_style = unsafe { GetWindowLongPtrW(above, GWL_EXSTYLE) } as u32;
-            if ex_style & WS_EX_TOPMOST.0 == 0 {
-                return false;
-            }
-            if is_taskbar(above) {
-                return true;
-            }
-            cursor = above;
-        }
-        false
-    }
-
-    /// 把窗口重新提到 topmost 组最前。
-    ///
-    /// **不能**用 `set_always_on_top(true)`：tao 对窗口 flags 做了去重
-    /// （`WindowState::set_window_flags` 里 `diff == empty` 就直接 return），
-    /// `ALWAYS_ON_TOP` 早已置位 ⇒ 重复调用根本走不到 `SetWindowPos`，什么都不会发生。
-    pub fn raise(hwnd: HWND) {
-        unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn taskbar_class_matches_both_forms() {
-            assert!(matches_taskbar_class("Shell_TrayWnd"));
-            assert!(matches_taskbar_class("Shell_SecondaryTrayWnd"));
-            // 类名大小写不敏感
-            assert!(matches_taskbar_class("shell_traywnd"));
-        }
-
-        #[test]
-        fn taskbar_class_rejects_lookalikes() {
-            assert!(!matches_taskbar_class(""));
-            assert!(!matches_taskbar_class("Shell_TrayWndX"));
-            assert!(!matches_taskbar_class("TrayWnd"));
-            assert!(!matches_taskbar_class("Progman"));
-        }
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -415,8 +287,8 @@ pub fn run() {
             // 悬浮窗启动即预建（隐藏），从托盘/主窗按钮唤起
             let _ = create_mini(app.handle());
 
-            // 后台看住悬浮窗的 z 序：被任务栏压住就重新置顶（见 watch_mini_above_taskbar）
-            watch_mini_above_taskbar(app.handle().clone());
+            // 看住悬浮窗的 z 序：被任务栏压住就重新置顶（事件驱动，见 `taskbar` 模块）
+            taskbar::start();
 
             Ok(())
         })
