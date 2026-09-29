@@ -219,7 +219,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.3`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.4`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
@@ -255,7 +255,7 @@ git push origin main desktop-v0.2.0
 内置 5 个加速站（GitHub 原生 / gh-proxy.com / ghfast.top / ghproxy.net / gh-proxy.org），更新弹窗里可切换；
 开 VPN 时 GitHub 会按出口 IP 拒绝，检查失败换个加速站即可。
 
-**自动下载**：应用启动时静默检查一次（节流 1 小时），**一发现新版本就立刻在后台下载并验签**，
+**自动下载**（`0.1.4` 起）：应用启动时静默检查一次（节流 1 小时），**一发现新版本就立刻在后台下载并验签**，
 不用点「下载更新」；下完在主窗右下角弹一条「新版本已就绪」，点「安装并重启」即可。
 「稍后」按**版本**记（`mm.updateReadyDismissed`）—— 同一版不再烦你，下一版必须重新提示
 （否则一次「稍后」等于把人永久锁在旧版本上）。
