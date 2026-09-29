@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -384,6 +385,14 @@ private fun FuturesSourcePickerDialog(
         // 弹窗内自己拉一轮检测，用户不必先点按钮才知道哪个能用。
         LaunchedEffect(Unit) { onDetectAll() }
 
+        // 排序会随探测结果**逐条**变化，而 LazyColumn 默认「按 key 锚定当前第一个可见项」：
+        // 被锚定的那条一旦被排到后面，整个列表就跟着它往下滚，于是**排第一的那条反而跑到
+        // 视口上方**——用户得往回滑才看得到（真实反馈：「我明明在最上面，测速排序后还得往上滑」）。
+        // 所以批量检测期间每次重排都把视口拉回顶部：这一档的用法就是看最上面几条。
+        // 单行「重测」不抢视口（用户正盯着那一行看结果，key 锚定会自然把那条留在原地）。
+        val listState = rememberLazyListState()
+        var pinToTop by remember { mutableStateOf(true) }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -399,7 +408,11 @@ private fun FuturesSourcePickerDialog(
                 actions = {
                     TextAction(
                         text = if (state.probing) "检测中…" else "全部重新检测",
-                        onClick = onDetectAll,
+                        // 又是一轮批量检测 → 重新接管视口（若上一轮点过单行「重测」）
+                        onClick = {
+                            pinToTop = true
+                            onDetectAll()
+                        },
                     )
                 },
             )
@@ -418,13 +431,17 @@ private fun FuturesSourcePickerDialog(
 
             // 整体按检测结论排序：能连的按延迟升序在最上面，连不上的沉底，未检测其次。
             // 探测结果逐条回填，快的域自然先浮上来，不被最慢的域拖住。
-            val ordered = FuturesEndpoints.ALL.sortedWith(
-                compareBy<FuturesEndpoint>(
-                    { state.probeResults[it.baseUrl].sortRank() },
-                    { state.probeResults[it.baseUrl].latencyOrMax() },
-                )
-            )
-            LazyColumn(modifier = Modifier.fillMaxSize()) {
+            // 规则本体在 ProbeOrdering（纯函数，有单测）。
+            val ordered = remember(state.probeResults) {
+                ProbeOrdering.of(FuturesEndpoints.ALL, state.probeResults)
+            }
+
+            // 排序一变就回顶（`pinToTop` 的来历见函数开头）。
+            LaunchedEffect(ordered) {
+                if (pinToTop) listState.scrollToItem(0)
+            }
+
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 items(ordered, key = { it.baseUrl }) { endpoint ->
                     FuturesSourceRow(
                         endpoint = endpoint,
@@ -436,7 +453,10 @@ private fun FuturesSourcePickerDialog(
                         onSelect = {
                             onSelect(endpoint.baseUrl)
                         },
-                        onProbeOne = { onProbeOne(endpoint.baseUrl) },
+                        onProbeOne = {
+                            pinToTop = false
+                            onProbeOne(endpoint.baseUrl)
+                        },
                     )
                 }
                 item { Spacer(Modifier.height(Spacing.Xl)) }
@@ -444,17 +464,6 @@ private fun FuturesSourcePickerDialog(
         }
     }
 }
-
-/** 排序名次：通的 0、连不上的 1、未检测的 2。 */
-private fun ProbeOutcome?.sortRank(): Int = when (this) {
-    is ProbeOutcome.Reachable -> 0
-    is ProbeOutcome.Failed -> 1
-    null -> 2
-}
-
-/** 同类排序键：只有通的有真实延迟，其余给最大值沉到本档末尾。 */
-private fun ProbeOutcome?.latencyOrMax(): Long =
-    (this as? ProbeOutcome.Reachable)?.latencyMs ?: Long.MAX_VALUE
 
 /**
  * 候选行：名称 + 域名在左，检测结论与选中态在右。整行可点即选定。

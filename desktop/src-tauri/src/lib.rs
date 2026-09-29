@@ -13,7 +13,9 @@ const MINI: &str = "mini";
 /// 悬浮窗右键菜单里「隐藏」那一条的 id（菜单在 `open_mini_menu` 里建，
 /// 语义统一在 `run()` 的全局 `on_menu_event` 里处理）。
 const MENU_MINI_HIDE: &str = "mini_hide";
-const MINI_W: f64 = 268.0;
+/// 面板宽度**必须与 `src/lib/layout.ts` 的 `MINI_WIDTH` 一致**（同上：跨 FFI 只能手工同步）。
+/// 这里还决定窗口的横向落点（右边缘贴屏，见本文件下方的定位逻辑）。
+const MINI_W: f64 = 236.0;
 /// 行高与封顶行数**必须与 `src/lib/layout.ts` 的 `MINI_ROW_HEIGHT` / `MINI_MAX_ROWS`
 /// 一致**：那边是权威定义（前端渲染行高也用它），这边管真实窗口高度，
 /// 跨 FFI 没法共享常量，只能手工同步。theme.css 里的同名声明只是兜底默认值。
