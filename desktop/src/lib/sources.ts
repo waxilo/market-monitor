@@ -4,6 +4,10 @@
  * 与 App 的 FuturesEndpoints / SettingsViewModel 同一套语义：候选固定打包，**在用户
  * 本机上**并行实测连通性与延迟，再由用户点选 —— 网络环境因地区/代理而异，开发机上的
  * 探测结果不作数。切换后上层会清掉合约缓存并重新同步交易对（见 api.ts 的注册）。
+ *
+ * 这一个模块同时管两半：**候选与探测**（弹窗用，见 `probeEndpoint`）与
+ * **当前选择**（取数用，见 `useFuturesSourceUrl` / `useSourceKey`）。选择存在 localStorage、
+ * 跨窗口同步、换源广播清缓存；写入口只有 [`setFuturesSource`]。
  */
 
 import { useSyncExternalStore } from 'react';
@@ -22,20 +26,25 @@ export interface FuturesEndpoint {
   dialect: DialectId;
 }
 
-/** 内置候选：与 App 的 FuturesEndpoints.ALL 同一份清单（名称与说明照抄）。 */
+/**
+ * 内置候选：与 App 的 FuturesEndpoints.ALL 同一份清单（名称与说明照抄）。
+ *
+ * **清单长度不等于容灾能力**：币安主域的镜像 1/2/3 与老镜像曾是 4 个独立席位，但它们
+ * 与主域是同一套后端、同一份可达性（实测：本机直连时 6 个币安域一起全红，而 Gate / Bitunix
+ * 照常）—— 一起有效一起失效的席位只是把探测弹窗填满，不提供额外逃生通道。所以这里**只留
+ * 主域与 Aster 两个**，腾出的位置给真正独立的盘口（HTX / Bitunix）。
+ */
 export const FUTURES_ENDPOINTS: FuturesEndpoint[] = [
   { label: 'Aster 官方', baseUrl: 'https://fapi.asterdex.com', note: 'Aster 盘口 · 大陆通常可直连', dialect: 'BINANCE' },
   { label: '币安合约 主域', baseUrl: 'https://fapi.binance.com', note: '币安盘口 · 大陆通常需代理', dialect: 'BINANCE' },
-  { label: '币安合约 镜像 1', baseUrl: 'https://fapi1.binance.com', note: '币安盘口 · 官方镜像', dialect: 'BINANCE' },
-  { label: '币安合约 镜像 2', baseUrl: 'https://fapi2.binance.com', note: '币安盘口 · 官方镜像', dialect: 'BINANCE' },
-  { label: '币安合约 镜像 3', baseUrl: 'https://fapi3.binance.com', note: '币安盘口 · 官方镜像', dialect: 'BINANCE' },
-  { label: '币安合约 老镜像', baseUrl: 'https://fapi.binancefuture.com', note: '币安盘口 · 早期官方镜像', dialect: 'BINANCE' },
   { label: 'OKX', baseUrl: 'https://www.okx.com', note: '独立盘口 · 大陆通常需代理', dialect: 'OKX' },
   { label: 'Bybit', baseUrl: 'https://api.bybit.com', note: '独立盘口 · 大陆通常需代理', dialect: 'BYBIT' },
   { label: 'Bitget', baseUrl: 'https://api.bitget.com', note: '独立盘口', dialect: 'BITGET' },
   { label: 'Gate', baseUrl: 'https://api.gateio.ws', note: '独立盘口 · 大陆通常可直连', dialect: 'GATE' },
   { label: 'MEXC', baseUrl: 'https://contract.mexc.com', note: '独立盘口', dialect: 'MEXC' },
   { label: 'Hyperliquid', baseUrl: 'https://api.hyperliquid.xyz', note: '独立盘口 · 链上永续', dialect: 'HYPERLIQUID' },
+  { label: 'HTX 火币', baseUrl: 'https://api.hbdm.com', note: '独立盘口 · 域名偶有污染', dialect: 'HTX' },
+  { label: 'Bitunix', baseUrl: 'https://fapi.bitunix.com', note: '独立盘口 · 大陆通常可直连', dialect: 'BITUNIX' },
 ];
 
 /**

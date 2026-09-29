@@ -258,14 +258,3 @@ export function formatCandleTime(epochMs: number, intervalMinutes: number): stri
   if (intervalMinutes >= 1440) return date;
   return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
-
-export const INTERVAL_MINUTES: Record<string, number> = {
-  '1m': 1,
-  '5m': 5,
-  '15m': 15,
-  '30m': 30,
-  '1h': 60,
-  '4h': 240,
-  '1d': 1440,
-  '1w': 10080,
-};

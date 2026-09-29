@@ -134,12 +134,24 @@ class MarketRepositoryImpl(
         interval: CandleInterval,
         beforeOpenTime: Long,
         limit: Int,
-    ): KlinePage = fetch(id, interval, limit, startTime = null, endTime = beforeOpenTime - 1)
-        ?: KlinePage(
-            klines = readCache(id, interval, limit, before = beforeOpenTime),
-            hasMore = true,
-            origin = DataOrigin.CACHE,
-        )
+    ): KlinePage {
+        // 不支持时间窗的来源（目前是 HTX）：请求里的时间参数会被服务端无视，每次都回「最新 N 根」，
+        // 去重后没有新增内容。这种来源直接以缓存收尾并置 hasMore=false，
+        // 否则 UI 拖到最左会无限触发翻页、反复拉同一批数据。
+        if (!api.supportsOlderKlines(id.market)) {
+            return KlinePage(
+                klines = readCache(id, interval, limit, before = beforeOpenTime),
+                hasMore = false,
+                origin = DataOrigin.CACHE,
+            )
+        }
+        return fetch(id, interval, limit, startTime = null, endTime = beforeOpenTime - 1)
+            ?: KlinePage(
+                klines = readCache(id, interval, limit, before = beforeOpenTime),
+                hasMore = true,
+                origin = DataOrigin.CACHE,
+            )
+    }
 
     /** 网络异常降级为读缓存（PRD 3.2「断网展示缓存」）；协程取消必须原样上抛。 */
     private suspend fun fetch(

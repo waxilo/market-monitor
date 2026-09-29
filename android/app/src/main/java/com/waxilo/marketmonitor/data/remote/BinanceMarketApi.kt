@@ -135,6 +135,19 @@ class BinanceMarketApi(
         }
 
     /**
+     * 当前合约接口是否支持按时间窗取数（即「往更早方向翻页」）。
+     *
+     * HTX 实测会无视 `from`/`to` 与 `start`/`end`，任何时间参数都返回「最新 N 根」；
+     * 这类来源不能继续翻页 —— 上层去重后没有新增，再请求只是反复拉同一批数据。
+     */
+    fun supportsOlderKlines(market: MarketType): Boolean =
+        if (market.isFutures) {
+            FuturesDialects.of(futuresEndpoint().dialect).supportsTimeWindow
+        } else {
+            true
+        }
+
+    /**
      * 对**指定候选接口**做一次性连通探测（弹窗「一键检测」并行调用），返回往返毫秒数。
      * 按该候选的方言构造其原生探测请求（GET 或 Hyperliquid 的 POST）。
      * 不经回退链、不计权重：探测的是「这个接口在这台设备上通不通」，

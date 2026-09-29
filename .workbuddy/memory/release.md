@@ -22,5 +22,12 @@
     `Compiling market-monitor v0.1.0` 是 **Cargo.toml 包版本**，与发布版本无关。
   - ⚠️ `.sig` 是 **base64(minisign 签名文件全文)**，不是裸签名 —— 验 keyid 要先 base64 解一层拿到文本，再解第二行
     （`Ed`/`ED` + keyid(8) + sig(64) = 74 字节）。
-- 已用掉的 tag：`0.9.27`、`desktop-v0.1.3`、`desktop-v0.1.4`。发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→
-  `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→ `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）。
+- ⚠️ **`github.com` 不通时官方 `verify-channel.mjs` 会在拉 `latest.json` 那步 `ConnectTimeoutError`**（走 api 的前 2 条
+  断言仍能过）；但 **`gh release download desktop-latest`（asset API + objects.githubusercontent.com）照样能下** ⇒
+  用 `.workbuddy/tmp/verify-channel-local.py` 做本地核对（31 条：体积 / sha256 边车 / **逐平台** keyid /
+  manifest 内联签名 == `.sig` 文件内容 / 版本比较 / 无旧版残留）。
+- **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
+  改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
+- 已用掉的 tag：`0.9.27`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`。发版记录：`0.9.26`/`desktop 0.1.2`
+  （通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→ `desktop 0.1.4`（发现新版自动下载 +
+  下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）。

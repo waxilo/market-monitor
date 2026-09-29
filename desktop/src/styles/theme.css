@@ -19,6 +19,8 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
+  /* 用户画的水平线：刻意避开涨跌色（红/绿）与指标线的八色位，以免被读成行情信号 */
+  --line-mark: #8b9bff;
 }
 
 [data-theme='light'] {
@@ -37,6 +39,7 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
+  --line-mark: #4b5bd6;
 }
 
 :root {
@@ -171,14 +174,31 @@ body {
   /* 侧边栏是窄导航栏（交易对名 + 现价），宽度按最长一行算：
      「BTC + USDT」≈ 96px + 现价列 66px + 移除按钮 20px + 左右 12px 内边距 ≈ 194，
      208 留一点余量，长币名（DOGE/DASH）也不会把价格挤到换行。
-     minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动 */
-  grid-template-columns: 208px minmax(0, 1fr);
+     minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动。
+     收起 = 这一列收到 0（`.list-collapsed`），侧栏内容靠 .panel-list 的 overflow 裁掉，
+     列表本身不卸载 —— 状态/行情格子留着，展开回来不用重拉。 */
+  --list-w: 208px;
+  grid-template-columns: var(--list-w) minmax(0, 1fr);
   min-height: 0;
+  transition: grid-template-columns var(--base) var(--ease-standard);
+}
+.main.list-collapsed {
+  --list-w: 0px;
+}
+/* 收到 0 之后侧栏那一列还剩一条 1px 的边框（border-box 的最小宽度是边框本身）
+   —— 它在窗口最左边画出一条没来由的发丝线，一起收掉。 */
+.main.list-collapsed .panel-list {
+  border-right: 0;
+  border-bottom: 0;
 }
 @media (max-width: 900px) {
   .main {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(160px, 38%) minmax(0, 1fr);
+  }
+  /* 横过来时侧栏是顶部条，收起就是这一行收到 0 */
+  .main.list-collapsed {
+    grid-template-rows: 0 minmax(0, 1fr);
   }
   .panel-list {
     border-right: 0;
@@ -204,6 +224,9 @@ body {
 .panel-list {
   border-right: 1px solid var(--hairline);
   background: var(--surface);
+  /* 收起时这一列的宽度是 0：内容（行/表头）靠这里裁掉，而不是靠条件渲染卸载
+     —— 卸载了 React 状态就没了，展开回来会重新拉一遍行情 */
+  overflow: hidden;
 }
 .panel-head {
   padding: var(--sp-xs) var(--sp-sm);
@@ -213,7 +236,7 @@ body {
   justify-content: space-between;
   gap: var(--sp-xs);
 }
-/* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、UpdatePanel 共用）。
+/* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、SettingsPanel 共用）。
    放在这里而不是某个具体面板的段落里 —— 它跨面板复用；改名前叫 `.mini-x`，
    悬浮窗遮罩撤掉之后就彻底名不副实了。 */
 .panel-close {
@@ -404,6 +427,18 @@ body {
   color: var(--ink);
   border-color: transparent;
 }
+/* 置灰的 chip = 当前数据源不支持这个周期（周期是用户自己配的，换源后可能就用不上了）。
+   压到 .35 并去掉 hover 的高亮，免得看着像能点。 */
+.chip:disabled,
+.chip:disabled:hover {
+  opacity: 0.35;
+  color: var(--muted);
+  border-color: var(--hairline);
+  cursor: default;
+}
+.chip.selected:disabled {
+  color: var(--muted);
+}
 
 .icon-btn {
   border: 1px solid var(--hairline);
@@ -458,10 +493,16 @@ body {
 
 /* 顶部工具条里的全市场搜索：桌面窗口够宽，让它吃掉中间的空档。
    `.search-wrap` 只负责定位（结果浮层贴它的下沿），宽度约束挂在这一层；
-   `.search-field` 自己撑满 wrap —— 搜索框与「清空」按钮仍是同一行的两个元素。 */
+   `.search-field` 自己撑满 wrap —— 搜索框与「清空」按钮仍是同一行的两个元素。
+   `min-width: 120px` 是为了「谁先扛收缩」：工具条是 nowrap，窗口窄下来总得有人让步。
+   不给下限的话让步的会是「现货/永续」那两个胶囊（CJK 随处可断，min-content 只有
+   一个字的宽），结果是两行文字把工具条顶高一倍；给搜索框一个下限、并让 input
+   可以缩到 min-width 以下（`min-width: 0`，默认值是 auto = 内容宽 ≈180px），
+   收缩就落在它身上 —— 1024 宽下实测工具条仍是单行。 */
 .search-wrap {
   position: relative;
   flex: 1;
+  min-width: 120px;
   max-width: 460px;
 }
 .search-field {
@@ -472,6 +513,7 @@ body {
 }
 .search-field input {
   flex: 1;
+  min-width: 0;
   background: var(--wash);
   border: 1px solid var(--hairline);
   border-radius: var(--r-xs);
@@ -642,6 +684,12 @@ body {
   font-size: 10px;
   padding: 3px 7px;
 }
+/* 「周期」按钮跟旁边的 chip 同号：它按 .icon-btn 的通用尺寸会高出 5px，
+   把整条周期条撑高（可视区就少 5px）。 */
+.interval-bar .icon-btn {
+  font-size: 10px;
+  padding: 3px 7px;
+}
 /* 自绘画布：主图 + 每块副图 110px 固定叠加（与 App 同）；超出容器就整块滚动，
    主图因此永不被副图压扁。pan-y 把纵向滑动留给页面，横向拖动归图表平移。 */
 .chart-scroll {
@@ -663,6 +711,8 @@ body {
   font-size: 11px;
   letter-spacing: 0.2px;
   color: var(--muted);
+  /* 「已连接」不许折行：窄窗口下它会断成「已连 / 接」，把工具条顶高一倍 */
+  white-space: nowrap;
 }
 .status .dot {
   display: inline-block;
@@ -1085,6 +1135,109 @@ body {
   text-underline-offset: 3px;
 }
 
+/* ── 合约数据源弹窗 ─────────────────────────────────────────
+   两列卡片网格。候选 12 条（币安一家 5 个镜像），纵向排下来 ≈685px，
+   而弹窗上限是 calc(100vh - 72px)（默认窗 748px / 最小窗 608px）——
+   一旦溢出，Windows 的经典滚动条会**占位常显**，非常碍眼。卡片把每张
+   压到 ~45px、六行放完，最小窗下仍留 ~150px 余量。
+
+   卡片两行：
+     上行  ✓ 名称 ·············· 结论胶囊
+     下行    域名 · 说明 ······· 重测
+   勾号位 12px **常驻**（未选中留白），选中只换配色与左侧竖条，
+   所以点选时卡片内文字不会横向跳动。 */
+.up-panel.up-wide {
+  width: min(720px, calc(100vw - 48px));
+}
+.src-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-xs);
+}
+.src-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'mark name pill'
+    'mark sub  retry';
+  align-items: center;
+  column-gap: 6px;
+  row-gap: 2px;
+  padding: 5px var(--sp-xs) 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard);
+}
+.src-row:hover {
+  background: var(--wash);
+}
+.src-row.on {
+  background: var(--wash-strong);
+  border-color: var(--hairline-strong);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.src-mark {
+  grid-area: mark;
+  align-self: start;
+  padding-top: 3px;
+  text-align: center;
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+}
+.src-label {
+  grid-area: name;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.src-row.on .src-label {
+  color: var(--accent);
+}
+.src-sub {
+  grid-area: sub;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 固定宽（不是 min-width）：卡在网格里，胶囊随文案长短伸缩会把名称挤歪。
+   100px / 11px 是按最长的一档定的 ——「最快 326ms」「域名解析失败」都放得下
+   （12px + 8px 内边距时「最快 326ms」正好卡在 82px 的临界点，会被截成「326….」）。 */
+.src-pill {
+  grid-area: pill;
+  width: 100px;
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.src-retry {
+  grid-area: retry;
+  /* 靠右；且**不许换行** —— 不给这两条，「重测」会被挤成竖排的两个字 */
+  justify-self: end;
+  white-space: nowrap;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 3px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.src-retry:hover {
+  color: var(--ink);
+  background: var(--wash-strong);
+}
+
 /* ── 「安装包已就绪」提示条 ──────────────────────────────────
    自动下载把「下载」这一步变成了无声的，这条提示就是它**唯一的出口** ——
    下载完不提示，包等于白下（用户永远停在旧版本上）。
@@ -1132,72 +1285,280 @@ body {
   margin-top: 2px;
 }
 
-/* ── 数据源 ───────────────────────────────────────────────
-   候选行：左边名称 + 「域名 · 说明」，右边检测结论与选中勾。
-   行序整体按延迟排（快的在上），结论胶囊给固定最小宽，四行字面
-   （检测中… / 最快 128ms / 连接超时 / 未检测）来回切时不抖。 */
-.src-row {
+/* ── 周期管理面板（IntervalPanel）：整行可拖 + 挤动动效、自定义「数值 + 单位」 ──────
+   弹窗上限是 calc(100vh - 72px)（最小窗 1024×680 下 608px），一旦溢出，右侧就会
+   常显一条 15px 的经典滚动条。所以「已选」排**两列**（8 个 → 4 行）；
+   2026-09-29 又去掉了「未选」清单（目录 15 个都能用数值造出来，那是同一件事的
+   第二个入口）⇒ 整块只剩「已选 + 添加 + 恢复默认」，最小窗下也留得住余量。 */
+.iv-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px var(--sp-xs);
+}
+/* 整行都能拖：`cursor: grab` 是唯一的「可拖」暗示（原来左侧还有点阵把手，
+   2026-09-29 去掉 —— 它只是个装饰，而「拖哪儿都行」这件事把手说不出）。
+   `user-select: none` + `touch-action: none` 不是装饰 —— 少了它们，拖动会变成选文字 / 滚面板。 */
+.iv-row {
   display: flex;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 6px var(--sp-xs);
-  border-bottom: 1px solid var(--hairline);
-  cursor: pointer;
-  transition: background var(--fast) var(--ease-standard);
+  padding: 5px var(--sp-xs);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  transition:
+    border-color var(--fast) var(--ease-standard),
+    background var(--fast) var(--ease-standard);
 }
-.src-row:hover {
+.iv-row:hover {
+  border-color: var(--hairline-strong);
   background: var(--wash);
 }
-.src-row.on {
+.iv-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+/* 被拖起来的那一行（幽灵）：描边 + 底色 + 阴影把它抬起来。
+   ⚠️ 刻意**不加 scale** —— 缩放会把 transform 的基准点也挪走，
+   而「把抓住的那一点钉在指针下」是按左上角算的，加了就会偏。 */
+.iv-row.dragging {
+  cursor: grabbing;
+  border-color: var(--accent);
+  background: var(--wash-strong);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 32%);
+}
+/* 幽灵本体：portal 到 body 的 fixed 元素 —— 只有脱离 .up-body 这个滚动容器，
+   才不会被它的 overflow 裁掉（行和格子一样宽，贴在指针下必然探出右边缘一大截，
+   留在容器里会被裁掉三分之一、还多出一条横向滚动条）。 */
+.iv-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60; /* 高于 .up-backdrop(50) */
+  pointer-events: none;
+  will-change: transform;
+}
+/* 原地留下的空位：虚线框标出「松手就落在这儿」。
+   内容只藏不删 —— 行宽高不变，落点判定与挤动动效都不用为「少了一行」特判。 */
+.iv-row.slot {
+  cursor: grabbing;
+  border-style: dashed;
+  border-color: var(--accent);
+  background: none;
+}
+.iv-row.slot > * {
+  visibility: hidden;
+}
+/* 行里不需要「抓取把手」：整行都能拖（cursor: grab + title 已经说清），
+   再画一个点阵反而让人以为只有那一小块能拖。 */
+.iv-row .iv-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  min-width: 34px;
+}
+.iv-row .iv-note {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}
+.iv-tag {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* 行内小动作（× / 添加）：无边框 —— 密度本来就高，再加 15 个方框会花掉版面 */
+.iv-act {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.iv-act:hover:not(:disabled) {
+  color: var(--ink);
   background: var(--wash-strong);
 }
-.src-main {
+.iv-act:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.iv-act.iv-add {
+  padding: 0 8px;
+}
+
+/* ── 设置面板（SettingsPanel）：外观 / 快捷键 / 更新 三段 ────────────────
+   2026-09-29 把顶栏的「浅色|深色」与「更新」两个按钮收进这里 —— 它们都是
+   「偶尔改一次」的东西，占着顶栏两个位置不值当；更新的进度与「下好了」
+   由设置按钮上的圆点 + 右下角提示条报信。
+   每段 = 一个小标题（.up-label）+ 若干行；行是**四列**（名称 / 组合键 / 修改 / 恢复默认），
+   所以名称列要给下限宽，长说明才不会被挤成好几行。 */
+.set-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xs);
+  padding-top: var(--sp-sm);
+  border-top: 1px solid var(--hairline);
+}
+/* 第一段顶着标题栏，再画一条线就重了 */
+.set-block:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.set-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+}
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+.set-name {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-}
-.src-label {
+  gap: 2px;
   font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--ink);
 }
-.src-row.on .src-label {
-  color: var(--accent);
-}
-.src-sub {
-  font-size: 10px;
+.set-sub {
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
-.src-pill {
-  min-width: 78px;
+/* 当前的组合键：做成一个键帽（等宽 + 描边 + 底色），一眼能看出「这是个键」 */
+.set-key {
+  flex: none;
+  min-width: 96px;
   text-align: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--wash);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-xs);
+  padding: 4px 10px;
 }
-.src-retry {
+/* 录制中：描边用主色，与「按下新的组合键」那句提示呼应 */
+.set-key.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+/* 主题分段选择器：与周期弹窗的「分/时/天」同一套（共享外框、内部只用分隔线） */
+.set-seg {
+  flex: none;
+  display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+.set-seg button {
+  min-width: 52px;
+  padding: 4px 10px;
   border: 0;
+  border-left: 1px solid var(--hairline);
   background: none;
   color: var(--muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 2px 4px;
-  border-radius: var(--r-xs);
+  font-family: var(--sans);
+  font-size: 12px;
   cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
 }
-.src-retry:hover {
+.set-seg button:first-child {
+  border-left: 0;
+}
+.set-seg button:hover:not(.on) {
   color: var(--ink);
-  background: var(--wash-strong);
+  background: var(--wash);
 }
-/* 常驻占位（选中打勾 / 未选中留白）：右侧三件套的宽度不随选中态变 */
-.src-check {
-  width: 14px;
-  flex: none;
-  text-align: center;
-  color: var(--accent);
-  font-size: 13px;
+.set-seg button.on {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+/* ── 自定义周期：数值 + 单位（分 / 时 / 天 / 月 / 年） ───────────────────── */
+.iv-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.iv-compose {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+}
+.iv-num {
+  width: 76px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--wash);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  padding: 4px 8px;
+  text-align: right;
+}
+.iv-num:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* 单位分段选择器：一个整体（共享外框 + 内部只用分隔线），比 5 个独立小方框更像一件事 */
+.iv-units {
+  display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+.iv-unit {
+  min-width: 34px;
+  padding: 4px 0;
+  border: 0;
+  border-left: 1px solid var(--hairline);
+  background: none;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.iv-unit:first-child {
+  border-left: 0;
+}
+.iv-unit:hover:not(.on) {
+  color: var(--ink);
+  background: var(--wash);
+}
+.iv-unit.on {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+/* 反馈行：不换行（换行会把弹窗顶高），超长就省略号，全文进 title */
+.iv-msg {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.iv-custom.ok .iv-msg {
+  color: var(--up);
+}
+.iv-custom.bad .iv-msg {
+  color: var(--down);
 }

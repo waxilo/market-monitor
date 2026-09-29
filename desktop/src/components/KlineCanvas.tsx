@@ -10,6 +10,7 @@ import {
   indexAt,
   initialPriceView,
   initialViewport,
+  overDataAt,
   panPriceView,
   panViewport,
   plotRange,
@@ -27,7 +28,6 @@ import {
 import {
   buildSeries,
   formatCandleTime,
-  INTERVAL_MINUTES,
   mainRange,
   overlayFamilies,
   subRange,
@@ -35,22 +35,28 @@ import {
   type ReadoutSegment,
   type SubPaneKind,
 } from '../lib/chartSeries';
+import {
+  AXIS_W,
+  chartHeights,
+  READOUT_LINE,
+  READOUT_PAD,
+  SUB_PANE_H,
+  SUB_READOUT_H,
+  TIME_AXIS_H,
+} from '../lib/chartLayout';
 import { decimalsFor, formatCompact } from '../lib/format';
+import { minutesOf } from '../lib/intervals';
+import { nearestLineWithin } from '../lib/priceLines';
 
 /**
- * 布局常量与 App ui/chart/KlineChart.kt 的 ChartGeo 对齐（dp → px）：
- * 价格刻度固定右侧、时间刻度固定底部；副图每块固定高、主图不被压缩，
- * 超出容器高度时整块图滚动（App 是靠页面滚动）。
+ * 纵向几何（各段高度分配、刻度带宽度）在 `lib/chartLayout.ts` —— 那里是唯一出处，
+ * `chartHeights()` 负责把可视区高度分给 读数带 / 主图 / 副图 / 时间轴。这里只留纯**绘制**用的。
+ *
+ * 与 App ui/chart/KlineChart.kt 的 ChartGeo 对齐（dp → px）：价格刻度固定右侧、时间刻度固定底部、
+ * 副图每块固定高。**唯一不同的是主图会把剩余空间吃满**（有副图则让位、没副图则自己占满）
+ * —— App 在手机上靠页面滚动，桌面端窗口高度固定、滚动条又被隐藏，见 chartLayout.ts 里 chartHeights 的注释。
  */
-const AXIS_W = 58;
-const TIME_AXIS_H = 18;
-const READOUT_LINE = 12;
-const READOUT_PAD = 6;
 const READOUT_X = 8;
-const SUB_PANE_H = 110;
-const SUB_READOUT_H = 16;
-const MAIN_MIN = 240;
-const MAIN_MAX = 420;
 const BODY_SHARE = 0.66;
 const MAX_TIME_LABELS = 6;
 const TIME_LABEL_GAP = 12;
@@ -86,6 +92,8 @@ interface Palette {
   edge: string;
   /** 主色：布林带的填充色（App 用 scheme.primary 8% 透明度）。 */
   accent: string;
+  /** 用户画的水平线：刻意不取涨跌色，免得被读成行情信号。 */
+  line: string;
 }
 
 /** 颜色从 CSS 变量读，主题切换只需重画。 */
@@ -102,6 +110,7 @@ function readPalette(): Palette {
     wash: v('--wash') || '#1b1e22',
     edge: v('--hairline-strong') || '#3a3f47',
     accent: v('--accent') || '#f0b90b',
+    line: v('--line-mark') || '#8b9bff',
   };
 }
 
@@ -225,6 +234,15 @@ interface Props {
   theme: string;
   /** 换标的或换周期时视窗复位（App 的 remember(symbolKey, interval) 同理）。 */
   resetKey: string;
+  /**
+   * 用户画的水平线（价格）与它们的锁。状态与落盘都在 ChartView 侧
+   * （`usePriceLines`），这里只负责画和手势 —— 画布不做持久化。
+   */
+  priceLines: number[];
+  linesLocked: boolean;
+  onAddLine: (price: number) => void;
+  onRemoveLine: (index: number) => void;
+  onMoveLine: (index: number, price: number) => void;
 }
 
 export function KlineCanvas({
@@ -236,6 +254,11 @@ export function KlineCanvas({
   tickSize,
   theme,
   resetKey,
+  priceLines,
+  linesLocked,
+  onAddLine,
+  onRemoveLine,
+  onMoveLine,
 }: Props) {
   const series = useMemo(
     () => buildSeries(candles, maPeriods, showBoll, subPanes),
@@ -249,28 +272,78 @@ export function KlineCanvas({
    * 与时间轴视窗同为「用户意图」，换标的/周期一律复位。
    */
   const priceRef = useRef<PriceView>(initialPriceView());
-  const crossRef = useRef<{ index: number; y: number } | null>(null);
+  /**
+   * 十字光标。`index` 是**夹回序列内**的下标（读数带、横线与价格标都按它走），
+   * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线只看这一个开关，
+   * 因为视窗右侧还有一段没有蜡烛的留白（默认 3 根）。
+   */
+  const crossRef = useRef<{ index: number; y: number; onBar: boolean } | null>(null);
   /** 复位小标上一帧的落点，供点击命中判定；不在图上时为 null。 */
   const badgeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
-  const [availH, setAvailH] = useState(0);
+  /**
+   * 画布容器（`.chart-scroll`）的**实测**尺寸。
+   *
+   * 高度决定纵向分配；宽度只用于「宽度变了也要重画」—— 收起/展开侧栏只改宽度、
+   * 高度不变，只存高度的话 setState 会因新旧值相同而 bail out，画布不会重画，
+   * 于是 canvas 的位图被 CSS 拉伸（糊）。
+   */
+  const [box, setBox] = useState({ w: 0, h: 0 });
 
   // 读数带：K 线一条 + 每个叠加线族（MA / BOLL）各一行
   const readoutRows = 1 + overlayFamilies(series).length;
-  const readoutH = READOUT_PAD + READOUT_LINE * readoutRows;
-  const mainH = availH > 0 ? clampNum(availH - readoutH - TIME_AXIS_H, MAIN_MIN, MAIN_MAX) : MAIN_MIN;
-  const totalH = readoutH + mainH + series.subPanes.length * SUB_PANE_H + TIME_AXIS_H;
+  /**
+   * 纵向几何一律由 chartLayout 分配 —— 副图占的高度在那里被一起减掉了。
+   * 之前这里手写 `clamp(avail - readout - TIME_AXIS_H)` 漏掉副图，导致第三块副图
+   * 被挤出可视区（见 chartLayout.ts 的 chartHeights 注释）。
+   */
+  const heights = chartHeights(box.h, readoutRows, series.subPanes.length);
+  const { totalH } = heights;
 
-  const modelRef = useRef({ series, mainH, interval, tickSize });
+  /**
+   * 绘制与手势共用的一份「最新值」。
+   *
+   * 事件监听只在挂载时绑一次（见下面手势 effect 的依赖），闭包里拿不到新 props，
+   * 所以一律从这里读；同步 effect **不写依赖数组**，保证每轮渲染后都是最新的，
+   * 且声明在绘制 effect 之前（effect 按声明顺序跑，先同步再画）。
+   */
+  const modelRef = useRef({
+    series,
+    heights,
+    interval,
+    tickSize,
+    priceLines,
+    linesLocked,
+    onAddLine,
+    onRemoveLine,
+    onMoveLine,
+  });
   useEffect(() => {
-    modelRef.current = { series, mainH, interval, tickSize };
-  }, [series, mainH, interval, tickSize]);
+    modelRef.current = {
+      series,
+      heights,
+      interval,
+      tickSize,
+      priceLines,
+      linesLocked,
+      onAddLine,
+      onRemoveLine,
+      onMoveLine,
+    };
+  });
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const { series: s, mainH: mh, interval: iv, tickSize: ts } = modelRef.current;
+    const {
+      series: s,
+      heights: gh,
+      interval: iv,
+      tickSize: ts,
+      priceLines: pl,
+    } = modelRef.current;
+    const mh = gh.mainH;
     const list = s.candles;
     const n = list.length;
     const cssW = canvas.clientWidth;
@@ -290,10 +363,10 @@ export function KlineCanvas({
 
     const plotW = Math.max(1, cssW - AXIS_W);
     const families = overlayFamilies(s);
-    const rows = 1 + families.length;
-    const mainTop = READOUT_PAD + READOUT_LINE * rows;
-    const mainBottom = mainTop + mh;
-    const plotBottom = mainBottom + s.subPanes.length * SUB_PANE_H;
+    // 各段的纵向落点统一取自 heights：主图与副图的边界只有一处定义
+    const mainTop = gh.mainTop;
+    const mainBottom = gh.mainBottom;
+    const plotBottom = mainBottom + gh.subPanesH;
     const rowY = (row: number) => READOUT_PAD / 2 + READOUT_LINE * row + READOUT_LINE / 2;
 
     const vp = clampViewport(vpRef.current, n);
@@ -389,6 +462,20 @@ export function KlineCanvas({
       );
     }
 
+    // 用户画的水平线：虚线横贯主图，压在 K 线/均线之上、最新价虚线之下
+    // （最新价是行情本身，任何时候都不该被遮）。价格标在下面与最新价标一起画。
+    if (pl.length > 0) {
+      ctx.strokeStyle = p.line;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 3]);
+      for (const price of pl) {
+        const y = yOf(toFraction(mainR, price), mainTop, mh);
+        if (y < mainTop || y > mainBottom) continue;
+        hline(ctx, 0, plotW, y);
+      }
+      ctx.setLineDash([]);
+    }
+
     const last = list[n - 1];
     const lastY = yOf(toFraction(mainR, last.close), mainTop, mh);
     const lastUp = last.close >= last.open;
@@ -447,7 +534,10 @@ export function KlineCanvas({
       ctx.restore();
     });
 
-    // ── 十字光标（长按/悬停）：竖线贯穿全部窗格，横线只在主图 ──
+    // ── 十字光标（悬停）：竖线贯穿全部窗格、横线只在主图 ──
+    // 竖线**只画在真蜡烛上**：视窗右侧的留白里没有蜡烛，而 `indexAt` 会把那里
+    // 夹回最后一根 ⇒ 不判 `onBar` 的话，鼠标停在最新 K 线右边也会冒出一条竖线，
+    // 看着像选中了最新那根（横线与价格标照旧 —— 那段留白里读价是合理的需求）。
     const cross = crossRef.current;
     if (cross && cross.index >= rs && cross.index <= re) {
       const x = xOf(cross.index);
@@ -455,7 +545,7 @@ export function KlineCanvas({
       ctx.strokeStyle = p.ink;
       ctx.lineWidth = 1.5;
       ctx.setLineDash([6, 6]);
-      vline(ctx, x, mainTop, plotBottom);
+      if (cross.onBar) vline(ctx, x, mainTop, plotBottom);
       if (cross.y <= mainBottom) {
         const y = clampNum(cross.y, mainTop, mainBottom);
         hline(ctx, 0, plotW, y);
@@ -509,6 +599,14 @@ export function KlineCanvas({
     };
     const priceText = (price: number) =>
       price.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    // 水平线的价格标先画：最新价标后画，同高时由它盖住（行情比画线重要）。
+    // **不在可视区里的线不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
+    // 看着像就在那个价上。
+    for (const price of pl) {
+      const y = yOf(toFraction(mainR, price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) continue;
+      drawBadge(priceText(price), y, p.line, p.paper);
+    }
     if (lastY >= mainTop && lastY <= mainBottom) {
       drawBadge(priceText(last.close), lastY, lastUp ? p.up : p.down, p.paper);
     }
@@ -520,7 +618,7 @@ export function KlineCanvas({
     }
 
     // ── 时间轴 ──
-    const minutes = INTERVAL_MINUTES[iv] ?? 15;
+    const minutes = minutesOf(iv) ?? 15;
     const labelW = ctx.measureText(formatCandleTime(0, minutes)).width;
     const minGap = labelW + TIME_LABEL_GAP;
     const count = re - rs + 1;
@@ -606,21 +704,36 @@ export function KlineCanvas({
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
-    const observer = new ResizeObserver(() => setAvailH(el.clientHeight));
+    const measure = () => {
+      const next = { w: el.clientWidth, h: el.clientHeight };
+      // 没变就返回同一个对象：否则每轮观察都触发一次重渲染（取消侧栏的列宽动画时尤其频繁）
+      setBox((prev) => (prev.w === next.w && prev.h === next.h ? prev : next));
+    };
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    setAvailH(el.clientHeight);
+    measure();
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    let dragging = false;
+    /**
+     * 本场手势的种类。`line` = 正拖着某条水平线（只有它跟着鼠标走）。
+     * 种类在**按下那一刻**由落点决定：副图（以及它下面的时间轴）不参与任何手势。
+     */
+    type Mode = 'none' | 'pan' | 'line';
+    let mode: Mode = 'none';
     /**
      * 本场拖拽锁定的轴；`null` = 还没定性。
      * 定性后整场只动这一个轴 —— 上下（平移价格刻度）与左右（平移时间轴）不允许叠加。
      */
     let axis: DragAxis | null = null;
+    /**
+     * 正在拖的水平线下标。拖拽期间下标不变（`movePriceLine` 按下标改、不排序，
+     * 见 priceLines.ts 的文件头），松手后下一次命中判定重新算。
+     */
+    let lineIndex = -1;
     let accumX = 0;
     let accumY = 0;
     let lastX = 0;
@@ -632,11 +745,10 @@ export function KlineCanvas({
       return { rect, plotW: Math.max(1, rect.width - AXIS_W) };
     };
 
-    /** 主图上下边界（读数带占几行由叠加线族数决定，与 draw 里同一套算法）。 */
+    /** 主图上下边界 —— 直接取 heights，别再手写一遍（手写过就会跟 draw 分叉）。 */
     const mainBounds = () => {
-      const s = modelRef.current.series;
-      const top = READOUT_PAD + READOUT_LINE * (1 + overlayFamilies(s).length);
-      return { top, bottom: top + modelRef.current.mainH };
+      const gh = modelRef.current.heights;
+      return { top: gh.mainTop, bottom: gh.mainBottom };
     };
 
     /**
@@ -651,17 +763,42 @@ export function KlineCanvas({
       return mainRange(s, ws, we);
     };
 
+    /** 当帧**真正画出来**的价格量程：自动量程 + 用户的缩放/平移意图（与 draw 同源）。 */
+    const currentMainRange = () => priceRange(currentBase(), priceRef.current);
+
+    /** 价格 → 主图内的 y（与 draw 里 `yOf(toFraction(mainR, price), mainTop, mh)` 同式）。 */
+    const yOfPrice = (price: number) => {
+      const { top, bottom } = mainBounds();
+      return top + toFraction(currentMainRange(), price) * (bottom - top);
+    };
+
+    /** 主图内的 y → 价格（右键落点的反算）。 */
+    const priceOfY = (y: number) => {
+      const { top, bottom } = mainBounds();
+      const height = bottom - top;
+      return fromFraction(currentMainRange(), height > 0 ? (y - top) / height : 0);
+    };
+
+    /** 离落点最近的那条水平线的下标（4px 容差），没有则 -1。 */
+    const hitLine = (y: number) =>
+      nearestLineWithin(modelRef.current.priceLines.map(yOfPrice), y);
+
+    /** 落点在主图**下方**（副图与时间轴）—— 只读区，手势与缩放都不响应。 */
+    const belowMain = (y: number) => y > mainBounds().bottom;
+
     /**
      * 滚轮缩放：默认横轴（时间窗），Shift 改成纵轴（价格量程）。
      * 纵轴这一支与纵向拖拽共用同一套意图量与钳制，方向对齐「向上滚 = 放大」。
+     *
+     * 落点在副图上一概不响应（`preventDefault` 仍要做：否则浏览器会去滚
+     * `.chart-scroll`，整块画布连着主图一起挪走，那就还是「主图变动了」）。
      */
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const { rect, plotW } = geom();
+      if (belowMain(e.clientY - rect.top)) return;
       crossRef.current = null;
       if (e.shiftKey) {
-        // 副图区的纵向缩放与主图价格无关：落笔在主图以下就不响应
-        if (e.clientY - rect.top >= mainBounds().bottom) return;
         // Blink 在把 Shift+滚轮交给页面之前已经把两个轴换过（垂直滚变成了横向 delta），
         // 所以哪个轴有值用哪个，符号不变；Firefox 不换轴，走 deltaY 那一支。
         const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
@@ -695,12 +832,36 @@ export function KlineCanvas({
     };
 
     const onPointerDown = (e: PointerEvent) => {
+      // 只认左键：右键走 contextmenu（画线/删线），按下时不吞掉它
+      if (e.button !== 0) return;
+      const { rect, plotW } = geom();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
       if (hitBadge(e)) {
         priceRef.current = initialPriceView();
         draw();
         return;
       }
-      dragging = true;
+      const { top, bottom } = mainBounds();
+      // ① 抓线优先：未锁住、落在主图内、离某条线 4px 以内 —— 整场只拖这一条线
+      if (!modelRef.current.linesLocked && x <= plotW && y >= top && y <= bottom) {
+        const hit = hitLine(y);
+        if (hit >= 0) {
+          mode = 'line';
+          lineIndex = hit;
+          lastY = e.clientY;
+          crossRef.current = null;
+          pointerId = e.pointerId;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'ns-resize';
+          draw();
+          return;
+        }
+      }
+      // ② 副图与时间轴：只读区，不参与拖拽
+      if (belowMain(y)) return;
+      // ③ 其余 = 拖画布
+      mode = 'pan';
       axis = null;
       accumX = 0;
       accumY = 0;
@@ -713,8 +874,14 @@ export function KlineCanvas({
 
     const onPointerMove = (e: PointerEvent) => {
       const { rect, plotW } = geom();
+      const y = e.clientY - rect.top;
       const n = modelRef.current.series.candles.length;
-      if (dragging) {
+      if (mode === 'line') {
+        // 价格跟着鼠标走；落盘与重画都由上层（ChartView 的 usePriceLines）带回来
+        modelRef.current.onMoveLine(lineIndex, priceOfY(y));
+        return;
+      }
+      if (mode === 'pan') {
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
         lastX = e.clientX;
@@ -733,27 +900,39 @@ export function KlineCanvas({
           vpRef.current = panViewport(vpRef.current, dx / slot, n);
         } else {
           // 上下拖 = 拖拽画布：把价格刻度整体搬走，K 线跟着鼠标（缩放只留给 Shift+滚轮）。
-          // 起笔在副图区也一样：整块画布是一个整体，拖着没反应比拖错更难理解。
           priceRef.current = panPriceView(
             priceRef.current,
             dy,
-            modelRef.current.mainH,
+            modelRef.current.heights.mainH,
             currentBase(),
           );
         }
         draw();
         return;
       }
-      canvas.style.cursor = hitBadge(e) ? 'pointer' : '';
-      const index = indexAt(vpRef.current, (e.clientX - rect.left) / plotW, n);
-      crossRef.current = index >= 0 ? { index, y: e.clientY - rect.top } : null;
+      // 空闲：悬停在可拖的线上时给「能抓」的指针形状，其余交给十字光标
+      const grabbable =
+        !modelRef.current.linesLocked &&
+        y <= mainBounds().bottom &&
+        (e.clientX - rect.left) <= plotW &&
+        hitLine(y) >= 0;
+      canvas.style.cursor = hitBadge(e) ? 'pointer' : grabbable ? 'ns-resize' : '';
+      // 十字光标照常贯穿副图：竖线跨窗格、副图读数带要能读值，那不属于「拖拽/缩放」
+      // `onBar` 只关竖线（右侧留白里没有蜡烛），横线与读数带照旧。
+      const px = e.clientX - rect.left;
+      const fraction = px / plotW;
+      const index = indexAt(vpRef.current, fraction, n);
+      crossRef.current = index >= 0
+        ? { index, y, onBar: px <= plotW && overDataAt(vpRef.current, fraction, n) }
+        : null;
       draw();
     };
 
     const endDrag = () => {
-      if (!dragging) return;
-      dragging = false;
+      if (mode === 'none') return;
+      mode = 'none';
       axis = null;
+      lineIndex = -1;
       if (pointerId !== null && canvas.hasPointerCapture(pointerId)) {
         canvas.releasePointerCapture(pointerId);
       }
@@ -762,17 +941,44 @@ export function KlineCanvas({
     };
 
     const onLeave = () => {
-      if (dragging) return;
+      if (mode !== 'none') return;
       crossRef.current = null;
       draw();
     };
 
-    /** 双击复位：视窗与价格刻度一起回自动（App 的「双击复位」同理）。 */
-    const onDblClick = () => {
+    /** 双击复位：视窗与价格刻度一起回自动（App 的「双击复位」同理）。副图不参与。 */
+    const onDblClick = (e: MouseEvent) => {
+      const { rect } = geom();
+      if (belowMain(e.clientY - rect.top)) return;
       vpRef.current = initialViewport();
       priceRef.current = initialPriceView();
       crossRef.current = null;
       draw();
+    };
+
+    /**
+     * 右键 = 画线 / 删线，这是水平线**唯一**的入口。
+     *
+     * 不弹自建菜单：一条线的全部操作就这两个，菜单反而多一次点击；而且自绘菜单会被
+     * 窗口边界裁掉（悬浮窗那边就吃过这个亏，最后走了原生 popup）。
+     * 落点先命中判定：落在已有线上（4px 内）就是删它，否则在落点价格上新增一条 ——
+     * 于是「同一处右键两次」= 加了又删，不会叠出两根重合的线。
+     *
+     * 锁住时**什么都不做**（连 preventDefault 之外的副作用都没有）：这就是「锁」的意义。
+     */
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault(); // 挡住 Chromium 自带的「另存为图片」
+      const model = modelRef.current;
+      if (model.linesLocked) return;
+      const { rect, plotW } = geom();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const { top, bottom } = mainBounds();
+      // 只有主图里能画：副图、时间轴、右侧价格刻度列一律不管
+      if (x > plotW || y < top || y > bottom) return;
+      const hit = hitLine(y);
+      if (hit >= 0) model.onRemoveLine(hit);
+      else model.onAddLine(priceOfY(y));
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
@@ -782,6 +988,7 @@ export function KlineCanvas({
     canvas.addEventListener('pointercancel', endDrag);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('dblclick', onDblClick);
+    canvas.addEventListener('contextmenu', onContextMenu);
     return () => {
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('pointerdown', onPointerDown);
@@ -790,6 +997,7 @@ export function KlineCanvas({
       canvas.removeEventListener('pointercancel', endDrag);
       canvas.removeEventListener('pointerleave', onLeave);
       canvas.removeEventListener('dblclick', onDblClick);
+      canvas.removeEventListener('contextmenu', onContextMenu);
     };
   }, [draw]);
 

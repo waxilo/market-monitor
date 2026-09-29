@@ -20,7 +20,9 @@ export type DialectId =
   | 'BITGET'
   | 'GATE'
   | 'MEXC'
-  | 'HYPERLIQUID';
+  | 'HYPERLIQUID'
+  | 'HTX'
+  | 'BITUNIX';
 
 /** 对外请求规格：带 body 则以 application/json POST 发出（Hyperliquid 的 /info 是唯一 POST 方言）。 */
 export interface HttpCall {
@@ -56,18 +58,6 @@ export interface FuturesDialect {
   parseAllTickers(text: string): [string, TickerSnapshot][];
   parseExchangeInfo(text: string): Instrument[];
 }
-
-/** 界面上的周期 → 分钟数（适配器按它查各家原生周期码）。 */
-export const INTERVAL_MINUTES: Record<string, number> = {
-  '1m': 1,
-  '5m': 5,
-  '15m': 15,
-  '30m': 30,
-  '1h': 60,
-  '4h': 240,
-  '1d': 1_440,
-  '1w': 10_080,
-};
 
 // —————————————————————————— 小工具（对齐 App 的 Kotlin 扩展） ——————————————————————————
 
@@ -210,6 +200,26 @@ function checkMexc(root: unknown): void {
   }
 }
 
+/**
+ * HTX 的业务码在 `status` 里、**不在 HTTP 状态里**：非法周期实测回的是
+ * `HTTP 200 + {"status":"error","err-code":"invalid-parameter"}`（详见 htx 方言注释）。
+ */
+function checkHtx(root: unknown): void {
+  const o = obj(root);
+  const status = str(o.status);
+  if (status != null && status !== 'ok') {
+    const code = str(o['err-code']);
+    throw new Error(`HTX ${code ?? ''}：${str(o['err-msg']) ?? status}`);
+  }
+}
+
+/** Bitunix 的业务码在 `code`（0 为成功）；缺字段时不误判成 0，故用 numOrNull。 */
+function checkBitunix(root: unknown): void {
+  const o = obj(root);
+  const code = numOrNull(o.code);
+  if (code != null && code !== 0) throw new Error(`Bitunix ${code}：${str(o.msg) ?? ''}`);
+}
+
 const get = (url: string): HttpCall => ({ method: 'GET', url });
 const post = (url: string, body: unknown): HttpCall => ({
   method: 'POST',
@@ -221,6 +231,12 @@ const post = (url: string, body: unknown): HttpCall => ({
 
 /** 与 fapi.binance.com `/fapi/v1` 完全同构（Aster 即此列）：路径、参数、K 线行序都照币安。 */
 const binance: FuturesDialect = (() => {
+  /**
+   * 实测白名单（用 Aster 同构端点打的，`.workbuddy/tmp/probe-intervals.log`）：
+   * 表里这 15 个全 200 且时间戳落在各周期边界上；`2m` / `7m` / `10m` / `45m` / `3h` / `2d` /
+   * `5d` / `2w` / `2M` 一律 `400 {"code":-1120,"msg":"Invalid interval."}`。
+   * ⚠️ `1M` 是**按日历月**走的（相邻间隔实测 28/31/30 天），不是固定 43200 分钟。
+   */
   const ladder: Record<number, string> = {
     1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
     60: '1h', 120: '2h', 240: '4h', 360: '6h', 480: '8h', 720: '12h',
@@ -302,10 +318,17 @@ const binance: FuturesDialect = (() => {
  * limit 上限 300，比币安小。
  */
 const okx: FuturesDialect = (() => {
+  /**
+   * 实测白名单（`.workbuddy/tmp/probe-intervals*.log`）。⚠️ **OKX 的错法是 HTTP 200 +
+   * 业务码 `51000 Parameter bar error` + `data: []`** —— 只看 HTTP 状态会把「不支持」读成「支持」。
+   *
+   * 支持：`1m 3m 5m 15m 30m 1H 2H 4H 6H 12H 1D 2D 3D 1W 1M`（`2D` 是这次实测补的）；
+   * 被拒：`45m` / `3H` / `7H` / `2W` / `2M` / `bogus` —— 都是 51000。
+   */
   const ladder: Record<number, string> = {
     1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
     60: '1H', 120: '2H', 240: '4H', 360: '6H', 720: '12H',
-    1_440: '1D', 4_320: '3D', 10_080: '1W', 43_200: '1M',
+    1_440: '1D', 2_880: '2D', 4_320: '3D', 10_080: '1W', 43_200: '1M',
   };
   const max = 300;
   const native = (symbol: string) => `${coinOf(symbol)}-USDT-SWAP`;
@@ -393,6 +416,11 @@ const okx: FuturesDialect = (() => {
 
 /** Bybit（api.bybit.com）。linear 即 USDT 永续，volume=基础币、turnover=USDT。 */
 const bybit: FuturesDialect = (() => {
+  /**
+   * ⚠️ **这张表本轮没能联网复测**（`api.bybit.com` 从本机 `fetch failed`，与
+   * Bitget / MEXC 一样需要代理）—— 沿用之前对过的值，条目数少于其余几家。
+   * 复测方法见 `.workbuddy/tmp/probe-intervals.mjs`。
+   */
   const ladder: Record<number, string> = {
     1: '1', 3: '3', 5: '5', 15: '15', 30: '30',
     60: '60', 120: '120', 240: '240', 360: '360', 720: '720',
@@ -472,6 +500,7 @@ const bybit: FuturesDialect = (() => {
 
 /** Bitget（api.bitget.com）USDT-FUTURES。K 线行内第 6/7 列即基础/计价币量，升序返回。 */
 const bitget: FuturesDialect = (() => {
+  /** ⚠️ **本轮没能联网复测**（`api.bitget.com` 从本机 `fetch failed`，需代理）—— 沿用之前对过的值。 */
   const ladder: Record<number, string> = {
     1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
     60: '1h', 120: '2h', 240: '4h', 360: '6h', 720: '12h',
@@ -561,10 +590,21 @@ const bitget: FuturesDialect = (() => {
  * 用 `last - change_price` 还原。
  */
 const gate: FuturesDialect = (() => {
+  /**
+   * 逐周期实测过的白名单（两份日志：`.workbuddy/tmp/probe-intervals.log` /
+   * `probe-intervals-2.log`）。
+   *
+   * 支持：`1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 2d 3d 5d 7d 30d`
+   * （`1w` 也认，与 `7d` 同一段时间）；被拒：`2m` / `45m` / `7h` / `2w` / `1M` / `bogus`
+   * —— 一律 `400 INVALID_PARAM_VALUE`，所以 200 是「真的支持」而不是「宽容地向下取整」。
+   *
+   * ⚠️ `30d` 是**按日历月**走的（相邻间隔实测 28/31/30 天），不是固定 30 天；
+   * 界面 id `1M` 映射到它属于既有的近似。
+   */
   const ladder: Record<number, string> = {
-    1: '1m', 5: '5m', 15: '15m', 30: '30m',
-    60: '1h', 120: '2h', 240: '4h', 360: '6h', 480: '8h',
-    1_440: '1d', 10_080: '7d',
+    1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
+    60: '1h', 120: '2h', 240: '4h', 360: '6h', 480: '8h', 720: '12h',
+    1_440: '1d', 2_880: '2d', 4_320: '3d', 7_200: '5d', 10_080: '7d', 43_200: '30d',
   };
   const max = 2000;
   const native = (symbol: string) => `${coinOf(symbol)}_USDT`;
@@ -658,6 +698,7 @@ const gate: FuturesDialect = (() => {
  * 基础币量按 `amount / close` 折算。24h 开盘用 `lastPrice - riseFallValue` 还原。
  */
 const mexc: FuturesDialect = (() => {
+  /** ⚠️ **本轮没能联网复测**（`contract.mexc.com` 从本机 `fetch failed`，需代理）—— 沿用之前对过的值。 */
   const ladder: Record<number, string> = {
     1: 'Min1', 5: 'Min5', 15: 'Min15', 30: 'Min30', 60: 'Min60',
     240: 'Hour4', 480: 'Hour8', 1_440: 'Day1', 10_080: 'Week1', 43_200: 'Month1',
@@ -772,9 +813,16 @@ const mexc: FuturesDialect = (() => {
  * 与「每标的一次请求」的轮询节奏一致；蜡烛只有基础币量，计价币量按收盘价折算。
  */
 const hyperliquid: FuturesDialect = (() => {
+  /**
+   * 实测白名单（`.workbuddy/tmp/probe-intervals*.log`）：`1m 3m 5m 15m 30m 1h 2h 4h 8h 12h 1d 3d 1w 1M`。
+   * ❗**`6h` 曾经在这张表里，但实测返回 `422`（拒绝反序列化该 interval）** ⇒ 删掉。
+   * 删掉不会让「6h」这个周期用不了 —— `fetchKlines` 会用 2h 聚合成它（`480 % 120 === 0`），
+   * 但留着它就会**以原生身份去请求并必然失败**（图空白），所以必须删。
+   * 被拒：`45m` / `3h` / `6h` / `7h` / `2d` / `2w` / `2M` / `bogus`。
+   */
   const ladder: Record<number, string> = {
     1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
-    60: '1h', 120: '2h', 240: '4h', 360: '6h', 480: '8h', 720: '12h',
+    60: '1h', 120: '2h', 240: '4h', 480: '8h', 720: '12h',
     1_440: '1d', 4_320: '3d', 10_080: '1w', 43_200: '1M',
   };
   const max = 500;
@@ -875,6 +923,229 @@ const hyperliquid: FuturesDialect = (() => {
   };
 })();
 
+// —————————————————————————— HTX（火币）USDT 本位永续 ——————————————————————————
+
+/**
+ * HTX / 火币（api.hbdm.com）。两套路径混用，别搞混：
+ * - `linear-swap-ex/market/*` 是**行情**（K 线、detail/merged、batch_merged），裸 JSON 带 `status`；
+ * - `linear-swap-api/v1/*` 是**合约元数据**（swap_contract_info）与 ping。
+ *
+ * ⚠️ **可达性不如其他家**：本次实测期间 `api.hbdm.com` / `api.htx.com` 的域名解析会落到
+ * Meta 的 IP 段（`157.240.10.32` / `108.160.170.52` = 典型 DNS 污染），表现为间歇性连不上；
+ * 同在一条网络下的 Gate / Bitunix / Hyperliquid 解析正常。所以它进清单是因为「接口最完整、
+ * 通的时候最好用」，而不是「稳定」——探测弹窗里它时通时不通是真实情况，不是 bug。
+ *
+ * K 线行 = `{id(秒), open, close, high, low, amount, vol, trade_turnover, count}`，**升序**；
+ * `amount` 是基础币数量、`vol` 是张数（`contract_size`）、`trade_turnover` 是计价币金额，
+ * 三者的关系实测自洽（`amount × close ≈ trade_turnover`）。24h 快照自带 `open` 字段，
+ * 无需像 Gate / Bybit / MEXC 那样还原。
+ */
+const htx: FuturesDialect = (() => {
+  /**
+   * 逐周期实测白名单：支持 `1min 3 5 15 30 60min 2 4 6 12hour 1day 3day 1week 1mon`；
+   * 被拒的是 `1year`。对照（明显非法值 `bogus`）同样被拒，所以「200」是真支持而不是宽容回落。
+   */
+  const ladder: Record<number, string> = {
+    1: '1min', 3: '3min', 5: '5min', 15: '15min', 30: '30min',
+    60: '60min', 120: '2hour', 240: '4hour', 360: '6hour', 720: '12hour',
+    1_440: '1day', 4_320: '3day', 10_080: '1week', 43_200: '1mon',
+  };
+  /** 官方文档给的上限是 2000（本次网络下未能复测到上限，取保守值）。 */
+  const max = 2000;
+  const native = (symbol: string) => `${coinOf(symbol)}-USDT`;
+  const ex = (base: string, path: string) => `${trimBase(base)}/linear-swap-ex${path}`;
+  const api = (base: string, path: string) => `${trimBase(base)}/linear-swap-api/v1${path}`;
+
+  /** 先查业务码再取 data（K 线）或 ticks（全量快照）。 */
+  const rows = (text: string, key: 'data' | 'ticks'): unknown[] => {
+    const root = parse(text);
+    checkHtx(root);
+    return arr(obj(root)[key]);
+  };
+
+  const rowTicker = (row: Record<string, unknown>): TickerSnapshot | null =>
+    snapshotOf(
+      numOrNull(row.close),
+      numOrNull(row.open),
+      numOrNull(row.high),
+      numOrNull(row.low),
+      numOrNull(row.trade_turnover),
+    );
+
+  /** 合约名即规范符号：`BTC-USDT` → `BTC_USDT`。 */
+  const rowSymbol = (contractCode: string | undefined): string | null =>
+    contractCode != null && contractCode.endsWith('-USDT')
+      ? canonical(contractCode.slice(0, -'-USDT'.length))
+      : null;
+
+  return {
+    intervalLadder: ladder,
+    maxKlineLimit: max,
+    probe: (base) => get(api(base, `/swap_contract_info?contract_code=${native('BTC_USDT')}`)),
+    klines: (base, symbol, minutes, limit) =>
+      get(
+        ex(
+          base,
+          `/market/history/kline?contract_code=${native(symbol)}&period=${ladderCode(ladder, minutes, 'HTX')}&size=${cap(limit, max)}`,
+        ),
+      ),
+    ticker: (base, symbol) => get(ex(base, `/market/detail/merged?contract_code=${native(symbol)}`)),
+    allTickers: (base) => get(ex(base, '/market/detail/batch_merged')),
+    exchangeInfo: (base) => get(api(base, '/swap_contract_info')),
+
+    parseKlines: (text) =>
+      compact(
+        rows(text, 'data').map((row) => {
+          const o = obj(row);
+          const seconds = numOrNull(o.id);
+          if (seconds == null) return null;
+          return candle(
+            seconds * 1000,
+            numOrNull(o.open),
+            numOrNull(o.high),
+            numOrNull(o.low),
+            numOrNull(o.close),
+            numOrNull(o.amount),
+          );
+        }),
+      ).sort(byTime),
+
+    // detail/merged 的规格与 batch_merged 同构；`open` 万一缺失由 snapshotOf 以最新价代位
+    parseTicker: (text) => {
+      const root = parse(text);
+      checkHtx(root);
+      return rowTicker(obj(obj(root).tick));
+    },
+
+    parseAllTickers: (text) =>
+      compact(
+        rows(text, 'ticks').map((row) => {
+          const o = obj(row);
+          const symbol = rowSymbol(str(o.contract_code));
+          const snapshot = rowTicker(o);
+          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
+        }),
+      ),
+
+    /** 元数据行的合约名在 `contract_code`，币名另有 `symbol`（如 `BTC`）。 */
+    parseExchangeInfo: (text) =>
+      compact(
+        rows(text, 'data').map((row) => {
+          const o = obj(row);
+          const code = str(o.contract_code);
+          const symbol = rowSymbol(code);
+          const tick = tickString(numOrNull(o.price_tick));
+          const base = str(o.symbol) ?? (code != null ? code.slice(0, -'-USDT'.length) : undefined);
+          if (symbol == null || base == null || tick == null) return null;
+          return { symbol, baseAsset: base, quoteAsset: 'USDT', tickSize: tick };
+        }),
+      ),
+  };
+})();
+
+// —————————————————————————— Bitunix ——————————————————————————
+
+/**
+ * Bitunix（fapi.bitunix.com）。全部走 `/api/v1/futures/market/*`，裸 JSON 带 `code`。
+ *
+ * 本次实测里最「干净」的一家：直连稳定（走 Cloudflare）、四件套齐全、响应体积小。
+ *
+ * 两处必须留意：
+ * - **K 线是降序返回**（newest-first），要倒过来；时间是毫秒。
+ * - **单标的快照的路径是 `tickers?symbols=`（复数）**：`ticker?symbol=` 返回 `code:404`，
+ *   `/tickers` 不带参数则是全量。
+ * - ❗**非法 interval 返 `code:0` + `data:[]`**——不报错、也不回落，只是空数组。
+ *   所以「请求没报错」在这里不等于「周期被支持」，判定必须看 `data` 是否非空；
+ *   本适配器靠 `intervalLadder` 白名单把非法周期挡在请求之前。
+ * - 价格精度取 `quotePrecision`（价格小数位）：B=10^-quotePrecision，实测 BTCUSDT(1)→0.1、
+ *   DOGEUSDT(5)→0.00001、1000PEPEUSDT(7)→0.0000001 对得上。
+ */
+const bitunix: FuturesDialect = (() => {
+  /** 实测 15 个周期全支持（`1m 3 5 15 30m 1 2 4 6 8 12h 1d 3d 1w 1M`）。`1M` 走**日历月**（实测 28~31 天）。 */
+  const ladder: Record<number, string> = {
+    1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
+    60: '1h', 120: '2h', 240: '4h', 360: '6h', 480: '8h', 720: '12h',
+    1_440: '1d', 4_320: '3d', 10_080: '1w', 43_200: '1M',
+  };
+  /** 实测上限：请求 500 / 1000 / 1500 一律只回 200 根（服务端截断）。 */
+  const max = 200;
+  const native = (symbol: string) => `${coinOf(symbol)}USDT`;
+  const url = (base: string, path: string) => `${trimBase(base)}/api/v1/futures/market${path}`;
+  const data = (text: string): unknown => {
+    const root = parse(text);
+    checkBitunix(root);
+    return obj(root).data;
+  };
+  const rows = (text: string): unknown[] => arr(data(text));
+
+  const rowTicker = (row: Record<string, unknown>): TickerSnapshot | null =>
+    snapshotOf(
+      numOrNull(row.lastPrice),
+      numOrNull(row.open),
+      numOrNull(row.high),
+      numOrNull(row.low),
+      numOrNull(row.quoteVol),
+    );
+
+  return {
+    intervalLadder: ladder,
+    maxKlineLimit: max,
+    probe: (base) => get(url(base, '/time')),
+    klines: (base, symbol, minutes, limit) =>
+      get(
+        url(
+          base,
+          `/kline?symbol=${native(symbol)}&interval=${ladderCode(ladder, minutes, 'Bitunix')}&limit=${cap(limit, max)}`,
+        ),
+      ),
+    ticker: (base, symbol) => get(url(base, `/tickers?symbols=${native(symbol)}`)),
+    allTickers: (base) => get(url(base, '/tickers')),
+    exchangeInfo: (base) => get(url(base, '/trading_pairs')),
+
+    parseKlines: (text) =>
+      compact(
+        rows(text).map((row) => {
+          const o = obj(row);
+          const ms = numOrNull(o.time);
+          if (ms == null) return null;
+          return candle(
+            ms,
+            numOrNull(o.open),
+            numOrNull(o.high),
+            numOrNull(o.low),
+            numOrNull(o.close),
+            numOrNull(o.baseVol),
+          );
+        }),
+      ).sort(byTime),
+
+    parseTicker: (text) => rowTicker(obj(rows(text)[0])),
+
+    parseAllTickers: (text) =>
+      compact(
+        rows(text).map((row) => {
+          const o = obj(row);
+          const symbol = usdtSymbol(str(o.symbol));
+          const snapshot = rowTicker(o);
+          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
+        }),
+      ),
+
+    parseExchangeInfo: (text) =>
+      compact(
+        rows(text).map((row) => {
+          const o = obj(row);
+          if (str(o.quote) !== 'USDT' || str(o.symbolStatus) !== 'OPEN') return null;
+          const base = str(o.base);
+          const decimals = numOrNull(o.quotePrecision);
+          const tick = decimals != null && decimals >= 0 && decimals <= 12 ? 10 ** -decimals : null;
+          if (base == null || tick == null) return null;
+          return { symbol: canonical(base), baseAsset: base, quoteAsset: 'USDT', tickSize: tickString(tick) };
+        }),
+      ),
+  };
+})();
+
 export const DIALECTS: Record<DialectId, FuturesDialect> = {
   BINANCE: binance,
   OKX: okx,
@@ -883,4 +1154,6 @@ export const DIALECTS: Record<DialectId, FuturesDialect> = {
   GATE: gate,
   MEXC: mexc,
   HYPERLIQUID: hyperliquid,
+  HTX: htx,
+  BITUNIX: bitunix,
 };

@@ -288,6 +288,24 @@ export function indexAt(v: Viewport, fraction: number, barCount: number): number
   return clampNum(Math.round(raw), 0, barCount - 1);
 }
 
+/**
+ * 归一化横坐标（0..1）是否真的压在**某根蜡烛的格子里**。
+ *
+ * 为什么需要它：视窗右侧有一段留白（`Viewport.rightOffset`，默认 3 根），那段位置上
+ * 没有蜡烛，但 `indexAt` 会把结果**夹回最后一根** —— 于是「鼠标停在最新 K 线右边」
+ * 时，十字光标的竖线会画在最新那根上，看上去像选中了它（或者像一根莫名其妙的竖线）。
+ *
+ * 判据与画法同源：一根蜡烛占 `[中心 - 半格, 中心 + 半格]`，折算成浮点下标就是
+ * `[i - 0.5, i + 0.5]`，所以「压在蜡烛上」⇔ 浮点下标落在 `[-0.5, barCount - 1 + 0.5]` 内。
+ * 夹 `fraction` 到 [0,1] 与 `indexAt` 一致 ⇒ 落到右侧价格刻度列上时同样判 false。
+ */
+export function overDataAt(v: Viewport, fraction: number, barCount: number): boolean {
+  if (barCount <= 0) return false;
+  const span = Math.max(0, clampViewport(v, barCount).visibleBars - 1);
+  const raw = plotStart(v, barCount) + clampNum(fraction, 0, 1) * span;
+  return raw >= -0.5 && raw <= barCount - 1 + 0.5;
+}
+
 /* ── 时间轴标签落点 ───────────────────────────────────── */
 
 export interface TimeLabelPlacement {

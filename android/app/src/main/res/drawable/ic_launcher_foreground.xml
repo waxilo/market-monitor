@@ -1,26 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标的**前景层**：金色圆币 + 币内上扬的行情折线。
+     几何与桌面端母版 desktop/app-icon.svg 同源（把 1024 空间按比例搬过来）：
+     group 把 1024 空间缩到 108dp 画布上，且让圆币直径正好 60dp ——
+     自适应图标的安全区是中间 66dp 的圆，缩到 60dp 才不会在任何厂商的遮罩下被切边
+     （圆形 / 方形 / 水滴形遮罩都有余量）。
+     币内折线与箭头取暗色，是为在金色上留足对比；底色由背景层给
+     （见 ic_launcher_background）。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 三根蜡烛：中间高、左右低，象征 K 线 -->
-    <path
-        android:fillColor="#8B93A7"
-        android:pathData="M33,42h2v28h-2z" />
-    <path
-        android:fillColor="#16C784"
-        android:pathData="M28,50h12v16h-12z" />
-    <path
-        android:fillColor="#8B93A7"
-        android:pathData="M53,34h2v34h-2z" />
-    <path
-        android:fillColor="#16C784"
-        android:pathData="M48,40h12v22h-12z" />
-    <path
-        android:fillColor="#8B93A7"
-        android:pathData="M73,46h2v26h-2z" />
-    <path
-        android:fillColor="#EA3949"
-        android:pathData="M68,52h12v14h-12z" />
+
+    <group
+        android:scaleX="0.093168"
+        android:scaleY="0.093168"
+        android:translateX="6.298"
+        android:translateY="6.298">
+
+        <!-- 圆币：r=322 @ (512,512) -->
+        <path android:pathData="M190,512 a322,322 0 1,0 644,0 a322,322 0 1,0 -644,0 z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="267" android:startY="190"
+                    android:endX="757" android:endY="834">
+                    <item android:offset="0" android:color="#FFEAA8" />
+                    <item android:offset="0.46" android:color="#F0B90B" />
+                    <item android:offset="1" android:color="#B87F02" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- 币面内圈 -->
+        <path
+            android:pathData="M240,512 a272,272 0 1,0 544,0 a272,272 0 1,0 -544,0 z"
+            android:fillColor="#00000000"
+            android:strokeColor="#8A5E00"
+            android:strokeAlpha="0.28"
+            android:strokeWidth="12" />
+
+        <!-- 上扬折线 -->
+        <path
+            android:pathData="M368,636 L478,524 L566,612 L676,436"
+            android:fillColor="#00000000"
+            android:strokeColor="#12151C"
+            android:strokeWidth="70"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+
+        <!-- 箭头 -->
+        <path
+            android:pathData="M756,309 L754,485 L598,387 Z"
+            android:fillColor="#12151C" />
+    </group>
 </vector>

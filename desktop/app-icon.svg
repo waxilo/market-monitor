@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Market Monitor 应用图标母版（1024×1024，四周透明）。
+       币圈元素：金色圆币 + 币内一条上扬的行情折线。
+       `npm run tauri:icon` 由这一个文件生成 ico / icns / 各尺寸 png / Windows Store 方块图；
+       Android 侧是同一套几何的矢量重绘（见 android/app/src/main/res/drawable/ic_launcher_foreground.xml）。
+       只用线性/径向渐变，不用滤镜 —— tauri icon 走 resvg，滤镜支持不全。 -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0.32" y2="1">
+      <stop offset="0" stop-color="#262b3a"/>
+      <stop offset="1" stop-color="#090b10"/>
+    </linearGradient>
+    <linearGradient id="coin" x1="0.12" y1="0" x2="0.88" y2="1">
+      <stop offset="0" stop-color="#ffeaa8"/>
+      <stop offset="0.46" stop-color="#f0b90b"/>
+      <stop offset="1" stop-color="#b87f02"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角方底 -->
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#tile)"/>
+  <!-- 内描边：没有它，深色任务栏上图标边缘会糊掉 -->
+  <rect x="36" y="36" width="952" height="952" rx="220" fill="none" stroke="#f0b90b" stroke-opacity="0.18" stroke-width="8"/>
+
+  <!-- 金币 -->
+  <circle cx="512" cy="512" r="322" fill="url(#coin)"/>
+  <circle cx="512" cy="512" r="272" fill="none" stroke="#8a5e00" stroke-opacity="0.28" stroke-width="12"/>
+
+  <!-- 币内：上扬折线 + 箭头（颜色取暗色，是为在金色上留足对比） -->
+  <polyline points="368,636 478,524 566,612 676,436" fill="none" stroke="#12151c"
+            stroke-width="70" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 756 309 L 754 485 L 598 387 Z" fill="#12151c"/>
+</svg>

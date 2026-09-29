@@ -1,13 +1,30 @@
-import { useEffect, useState } from 'react';
-import { fetchKlines, type Bar, type Instrument, type Ticker24h } from '../lib/api';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  fetchKlines,
+  nativeMinutes,
+  type Bar,
+  type Instrument,
+  type Ticker24h,
+} from '../lib/api';
 import { SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
-import { useSourceKey } from '../lib/sources';
+import {
+  DEFAULT_INTERVALS,
+  FALLBACK_INTERVAL,
+  firstSupported,
+  INTERVALS_KEY,
+  isKnownInterval,
+  parseIntervals,
+  serializeIntervals,
+  synthesisOf,
+} from '../lib/intervals';
+import { useSourceKey, endpointOf } from '../lib/sources';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
-import type { WatchItem } from '../hooks/useWatchlist';
+import { usePriceLines } from '../hooks/usePriceLines';
+import { watchKey, type WatchItem } from '../hooks/useWatchlist';
+import { IntervalPanel } from './IntervalPanel';
 import { KlineCanvas } from './KlineCanvas';
 
-const INTERVALS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'];
 const MA_CHOICES = [5, 10, 20, 30, 60];
 /**
  * 第一次进来是**裸 K 线**：均线 / 布林带 / 副图全关。
@@ -28,7 +45,16 @@ interface Props {
 }
 
 export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
-  const [interval, setInterval_] = useState('15m');
+  /** 周期条上放哪些周期、按什么顺序 —— 用户在「周期」弹窗里改，存 localStorage。 */
+  const [intervals, setIntervals] = useState<string[]>(() =>
+    parseIntervals(localStorage.getItem(INTERVALS_KEY)),
+  );
+  /**
+   * 当前周期仍从 15m 起（一直以来的默认视图；1m 太吵、不适合当首屏）。
+   * 它不一定在用户的列表里 —— 那种情况交给下面的回落规则处理。
+   */
+  const [interval, setInterval_] = useState(FALLBACK_INTERVAL);
+  const [intervalPanelOpen, setIntervalPanelOpen] = useState(false);
   const [maPeriods, setMaPeriods] = useState<number[]>(DEFAULT_MA);
   /** 布林带默认关，与 AppSettings 的 bollEnabled 默认值一致。 */
   const [showBoll, setShowBoll] = useState(false);
@@ -36,8 +62,29 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   const [candles, setCandles] = useState<Bar[]>([]);
   const market = item?.market;
   const symbol = item?.symbol;
+  /**
+   * 水平线（画线）+ 它的锁。按标的存（与自选同键）—— 线画在「这个价」上，
+   * 换周期不该丢，换标的必须分开。
+   */
+  const priceLines = usePriceLines(item ? watchKey(item) : null);
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
   const source = useSourceKey(market);
+  /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
+  const natives = useMemo(() => nativeMinutes(market ?? 'FUTURES'), [market, source]);
+  const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : 'Gate 现货';
+
+  useEffect(() => {
+    localStorage.setItem(INTERVALS_KEY, serializeIntervals(intervals));
+  }, [intervals]);
+
+  // 当前周期必须在列表里，否则回落到列表里第一个。
+  // 现在不存在「当前源不支持」这回事了 —— 表外周期由更细的原生周期聚合出来，
+  // 所以回落只剩一个真实触发点：用户在弹窗里把当前周期移出了周期条
+  // （不回落的后果是没有任何 chip 高亮，看不出图在看哪个周期）。
+  useEffect(() => {
+    if (intervals.includes(interval) && isKnownInterval(interval)) return;
+    setInterval_(firstSupported(intervals));
+  }, [interval, intervals]);
 
   // 切换标的/周期：全量拉 300 根
   useEffect(() => {
@@ -146,15 +193,28 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       </div>
 
       <div className="interval-bar">
-        {INTERVALS.map((iv) => (
-          <button
-            key={iv}
-            className={`chip${iv === interval ? ' selected' : ''}`}
-            onClick={() => setInterval_(iv)}
-          >
-            {iv}
-          </button>
-        ))}
+        {intervals.map((iv) => {
+          // 表外周期由更细的原生周期**聚合**出来，所以不再有「点了会得到空白图」的周期 ——
+          // 一律可点；只在 title 里说明它是原生直取还是拼出来的。
+          const synth = synthesisOf(iv, natives);
+          return (
+            <button
+              key={iv}
+              className={`chip${iv === interval ? ' selected' : ''}`}
+              title={synth ? synth.title : undefined}
+              onClick={() => setInterval_(iv)}
+            >
+              {iv}
+            </button>
+          );
+        })}
+        <button
+          className="icon-btn"
+          title="添加 / 移除 / 排序 K 线周期"
+          onClick={() => setIntervalPanelOpen(true)}
+        >
+          周期
+        </button>
         <div className="sep" />
         <span className="bar-label">叠加</span>
         {MA_CHOICES.map((p) => (
@@ -180,6 +240,36 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             {SUB_PANE_LABEL[kind]}
           </button>
         ))}
+        <div className="sep" />
+        {/* 画线：操作全在画布上（右键加减、拖动改价），这里只给锁与清理。
+            标签刻意短 —— 指标条是靠 .interval-bar 的 wrap 兜底的，
+            多写几个字就会在 1280 宽的窗口下折成两行、白吃掉 20 多 px 图高；
+            手势提示放进 title。 */}
+        <span
+          className="bar-label"
+          title="右键主图添加水平线；右键已有的线删掉；拖动线能改价（锁住后三个都不生效）"
+        >
+          画线
+        </span>
+        <button
+          className={`chip${priceLines.locked ? ' on' : ''}`}
+          onClick={priceLines.toggleLock}
+          title={
+            priceLines.locked
+              ? '已锁住：水平线不能再增删、也不能拖动。点一下解锁'
+              : '锁住水平线：右键与拖动一概不生效（防手滑改图）'
+          }
+        >
+          {priceLines.locked ? '已锁' : '锁住'}
+        </button>
+        <button
+          className="chip"
+          disabled={priceLines.locked || priceLines.lines.length === 0}
+          onClick={priceLines.clear}
+          title={priceLines.locked ? '先解锁才能清空' : '删掉当前标的的全部水平线'}
+        >
+          清空 {priceLines.lines.length}
+        </button>
       </div>
 
       <KlineCanvas
@@ -191,7 +281,23 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         tickSize={instrument?.tickSize}
         theme={theme}
         resetKey={`${item.market}|${item.symbol}|${interval}`}
+        priceLines={priceLines.lines}
+        linesLocked={priceLines.locked}
+        onAddLine={priceLines.add}
+        onRemoveLine={priceLines.removeAt}
+        onMoveLine={priceLines.moveAt}
       />
+
+      {intervalPanelOpen && (
+        <IntervalPanel
+          list={intervals}
+          nativeMinutes={natives}
+          sourceLabel={sourceLabel}
+          onChange={setIntervals}
+          onReset={() => setIntervals([...DEFAULT_INTERVALS])}
+          onClose={() => setIntervalPanelOpen(false)}
+        />
+      )}
     </section>
   );
 }

@@ -16,6 +16,7 @@ import { openMiniMenu, resizeMiniRows, showMainWindow, switchToMainWindow } from
 import { syncFuturesSource } from './lib/sources';
 import { MINI_MAX_ROWS, MINI_ROW_HEIGHT } from './lib/layout';
 import { usePointerInside } from './hooks/usePointerInside';
+import { useShortcut } from './hooks/useShortcut';
 import { useWindowDrag } from './lib/windowDrag';
 
 const MARKET_KEY = 'mm.market';
@@ -29,8 +30,6 @@ const MARKET_KEY = 'mm.market';
 const SYNC_MS = 4000;
 /** 悬浮窗轮询比主窗慢一档，避免两个窗口叠加把 Gate 的限频顶穿。 */
 const POLL_MS = 3000;
-/** 按住这么久才算「要搬窗口」，之前抬手一律当点击 —— 行本身是按钮，点选必须保留。 */
-const HOLD_DRAG_MS = 200;
 
 function readMarket(): MarketType {
   return localStorage.getItem(MARKET_KEY) === 'SPOT' ? 'SPOT' : 'FUTURES';
@@ -52,10 +51,21 @@ export function MiniApp() {
   const [market, setMarket] = useState<MarketType>(readMarket);
   const [items, setItems] = useState<WatchItem[]>(readWatchlist);
   const rows = useMemo(() => items.filter((i) => i.market === market), [items, market]);
-  const drag = useWindowDrag({ holdMs: HOLD_DRAG_MS, blankOnly: false });
+  /**
+   * 整块面板都能拖（`blankOnly: false`）—— 行本身也是入口，别让「点在行上」就搬不动窗口。
+   * 「点行选中」与「搬窗口」的分界**不是时长而是位移**（超过 4px 才算搬）：
+   * 早先用「按住 200ms」手感和行为都不对，判据与踩坑见 `lib/dragThreshold.ts`。
+   */
+  const drag = useWindowDrag({ blankOnly: false });
   /** 面板上有没有指针：行的高亮底色挂在它上面（不能直接用 `:hover`，原因见 usePointerInside）。 */
   const miniRef = useRef<HTMLDivElement>(null);
   const inside = usePointerInside(miniRef);
+  /**
+   * 快捷键（默认 Alt+M，可在主窗的设置里改）在悬浮窗里同样有效：按一下就换回主窗。
+   * 和弦在**按下时**才从 localStorage 现读（见 hooks/useShortcut），
+   * 所以主窗刚改完，这边下一次按键就是新键 —— 不需要等 4s 的自选同步轮询。
+   */
+  useShortcut('toggleWindow', switchToMainWindow);
 
   /** 点面板任意处 = 换到主窗（行按钮自己会先接手，事件不会冒泡到这儿）。 */
   const onPanelClick = (e: ReactMouseEvent<HTMLDivElement>) => {

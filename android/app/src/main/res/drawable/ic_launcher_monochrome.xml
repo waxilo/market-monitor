@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ 主题图标（单色层）：系统只取**形状**再自己上色，所以这里不能靠
+     金色圆币与暗色折线的对比来区分，得换成「币圈 + 箭头」的纯轮廓 ——
+     一圈币缘 + 一支上扬箭头，两者同色也能各看各的。
+     环比前景层里的币面内圈粗一些：单色下细线会糊没。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:scaleX="0.093168"
+        android:scaleY="0.093168"
+        android:translateX="6.298"
+        android:translateY="6.298">
+
+        <path
+            android:pathData="M212,512 a300,300 0 1,0 600,0 a300,300 0 1,0 -600,0 z"
+            android:fillColor="#00000000"
+            android:strokeColor="#000000"
+            android:strokeWidth="30" />
+
+        <path
+            android:pathData="M368,636 L478,524 L566,612 L676,436"
+            android:fillColor="#00000000"
+            android:strokeColor="#000000"
+            android:strokeWidth="70"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+
+        <path
+            android:pathData="M756,309 L754,485 L598,387 Z"
+            android:fillColor="#000000" />
+    </group>
+</vector>

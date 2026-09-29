@@ -9,8 +9,10 @@
  * 搜索、图表这些下游不感知数据源。
  */
 
-import { DIALECTS, INTERVAL_MINUTES, type FuturesDialect, type HttpCall, type TickerSnapshot } from './dialects';
+import { aggregateCandles } from './aggregate';
+import { DIALECTS, type FuturesDialect, type HttpCall, type TickerSnapshot } from './dialects';
 import { httpRequest } from './http';
+import { coarsestBaseFor, minutesOf } from './intervals';
 import { currentFuturesUrl, endpointOf, onFuturesSourceChange } from './sources';
 
 export type MarketType = 'SPOT' | 'FUTURES';
@@ -107,8 +109,28 @@ export async function fetchAllTickers(market: MarketType): Promise<Ticker24h[]> 
 // —————————————————————————— K 线 ——————————————————————————
 
 /**
+ * 当前数据源的**原生周期表**（分钟 → 原生码）。
+ *
+ * 现货固定 Gate（唯一盘口）；永续看当前方言的 `intervalLadder` —— 它本来就是各家的原生码表，
+ * 所以不另立一份支持清单（两处清单必然会分叉）。**这是唯一的「原生」真出处。**
+ */
+export function nativeLadder(market: MarketType): Record<number, string> {
+  return market === 'FUTURES' ? currentFutures().dialect.intervalLadder : SPOT_LADDER;
+}
+
+/** 原生支持的周期分钟数（表外的周期不是不能用，而是要**聚合**出来 —— 见 `fetchKlines`）。 */
+export function nativeMinutes(market: MarketType): Set<number> {
+  return new Set(Object.keys(nativeLadder(market)).map(Number));
+}
+
+/**
  * K 线，旧→新。limit 与 App 仓库层一致默认 300；
  * MEXC / Hyperliquid 没有 limit 参数，按根数与周期倒推时间窗（见 dialects.ts）。
+ *
+ * **表外周期靠聚合**：各家的周期是一张固定白名单（实测：`45m`/`2m`/`7h`/`2M` 一律被拒，
+ * 见 `.workbuddy/tmp/probe-intervals*.log`），所以「自定义周期」只能由能整除它的原生周期拼出来。
+ * 基底挑**能整除的最粗**那个（因子最小 ⇒ 要请求的细粒度根数最少），
+ * 证据与算法见 `lib/aggregate.ts`。
  */
 export async function fetchKlines(
   market: MarketType,
@@ -116,17 +138,37 @@ export async function fetchKlines(
   interval: string,
   limit = 300,
 ): Promise<Bar[]> {
+  const minutes = minutesOf(interval);
+  if (minutes == null) throw new Error(`未知周期 ${interval}`);
+  const ladder = nativeLadder(market);
+  const base = coarsestBaseFor(Object.keys(ladder).map(Number), minutes);
+  if (base == null) throw new Error(`${sourceLabelOf(market)} 找不到能拼出 ${interval} 的原生周期`);
+  if (base === minutes) return fetchNativeKlines(market, symbol, ladder, minutes, limit);
+
+  const factor = minutes / base;
+  // 多要一桶：请求窗口只保证「最新 N 根根」，起点多半不落在桶边界上 ⇒ 第一桶是残的会被丢掉
+  const raw = await fetchNativeKlines(market, symbol, ladder, base, (limit + 1) * factor);
+  const merged = aggregateCandles(raw, base, minutes);
+  return merged.length > limit ? merged.slice(merged.length - limit) : merged;
+}
+
+/** 单一原生周期的取数（`minutes` 必须真的在该源的表里）。 */
+async function fetchNativeKlines(
+  market: MarketType,
+  symbol: string,
+  ladder: Record<number, string>,
+  minutes: number,
+  limit: number,
+): Promise<Bar[]> {
+  const code = ladder[minutes];
+  if (code == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
   if (market === 'FUTURES') {
-    const { baseUrl, dialect, label } = currentFutures();
-    const minutes = INTERVAL_MINUTES[interval];
-    if (minutes == null || dialect.intervalLadder[minutes] == null) {
-      throw new Error(`${label} 不支持 ${interval} 周期`);
-    }
+    const { baseUrl, dialect } = currentFutures();
     return dialect.parseKlines(await fetchText(dialect.klines(baseUrl, symbol, minutes, limit)), minutes);
   }
   const limitClamped = Math.max(1, Math.min(limit, 1000));
   const rows = await spotJson<string[][]>(
-    `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${gateInterval(interval)}&limit=${limitClamped}`,
+    `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${code}&limit=${limitClamped}`,
   );
   // 现货蜡烛是**数组**且字段顺序与币安不同：[秒级时间, 成交额, 收, 高, 低, 开, 成交量, 是否收线]
   return rows.map((r) => ({
@@ -137,6 +179,11 @@ export async function fetchKlines(
     close: num(r[2]),
     volume: num(r[6]),
   }));
+}
+
+/** 报错文案里点名的数据源。 */
+function sourceLabelOf(market: MarketType): string {
+  return market === 'FUTURES' ? currentFutures().label : 'Gate 现货';
 }
 
 // —————————————————————————— 标的清单（搜索的数据源） ——————————————————————————
@@ -179,10 +226,33 @@ async function spotJson<T>(path: string): Promise<T> {
   return JSON.parse(await fetchText({ url: `${SPOT}${path}`, method: 'GET' })) as T;
 }
 
-/** Gate 周期名与币安不同：周线是 7d（界面 chip 仍显示 1w）。 */
-function gateInterval(interval: string): string {
-  return interval === '1w' ? '7d' : interval;
-}
+/**
+ * Gate **现货**的原生周期表（分钟 → 原生码）。
+ *
+ * 现货与永续是两张不同的白名单，所以必须分开列：粗周期上现货只有 `7d`/`30d` 这两个名字，
+ * 而**没有** `2d`/`5d`。逐周期实测（`.workbuddy/tmp/probe-intervals-2.log`）：
+ *   ✓ `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 7d 30d`（`1w` 也认，与 `7d` 同）
+ *   ✗ `2m` `45m` `7h` `2d` `5d` `1M` `bogus` —— 一律报错
+ * ⚠️ `30d` 是**按日历月**走的（相邻间隔实测 28/31/30 天），不是固定 30 天；
+ * 界面 id `1M` 映射到它就是既有的近似，别拿它当聚合基底去拼更粗的周期。
+ */
+const SPOT_LADDER: Record<number, string> = {
+  1: '1m',
+  3: '3m',
+  5: '5m',
+  15: '15m',
+  30: '30m',
+  60: '1h',
+  120: '2h',
+  240: '4h',
+  360: '6h',
+  480: '8h',
+  720: '12h',
+  1_440: '1d',
+  4_320: '3d',
+  10_080: '7d',
+  43_200: '30d',
+};
 
 interface GateSpotTicker {
   currency_pair: string;

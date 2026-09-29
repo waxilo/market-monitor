@@ -13,9 +13,17 @@ interface RowState {
   outcome: ProbeOutcome | null;
 }
 
+const domainOf = (baseUrl: string) => baseUrl.replace('https://', '');
+
 /**
  * 合约数据源弹窗：打开即**并行**检测全部候选（结果只对本机当前网络有效），点一行即选定。
  * 交互与文案照 App 的 FuturesSourcePickerDialog：每行独立回填，哪个先回来哪个先亮。
+ *
+ * ⚠️ 布局刻意做成**两列卡片网格**，而不是原来的纵向长列表。候选有 12 条（币安一家就
+ * 占了 5 个镜像），两行式行高 × 12 + 两段说明 ≈ 685px，而弹窗上限是 `100vh - 72px`
+ * （默认 1280×820 下 748px、最小窗 1024×680 下 608px）—— 在 125%/150% 缩放的笔记本上
+ * 必然溢出，右侧就冒出一条谁都不想要的滚动条。卡片把高度压到 ~45px/张、六行放完
+ * （见 theme.css 的 `.src-row`）。
  */
 export function SourcePanel({ onClose }: { onClose: () => void }) {
   const selectedUrl = useFuturesSourceUrl();
@@ -76,33 +84,41 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
     const outcome = state?.outcome ?? null;
     const isSelected = endpoint.baseUrl === selectedUrl;
     const pill = state?.probing
-      ? { cls: 'flat', text: '检测中…' }
+      ? { cls: 'flat', text: '检测中…', title: '正在探测该地址' }
       : outcome?.ok
-        ? { cls: 'up', text: `${outcome.latencyMs === fastest ? '最快 ' : ''}${outcome.latencyMs}ms` }
+        ? {
+            cls: 'up',
+            text: `${outcome.latencyMs === fastest ? '最快 ' : ''}${outcome.latencyMs}ms`,
+            title: `${outcome.latencyMs}ms 往返`,
+          }
         : outcome
-          ? { cls: 'down', text: outcome.reason ?? '失败' }
-          : { cls: 'flat', text: '未检测' };
+          ? { cls: 'down', text: outcome.reason ?? '失败', title: outcome.reason ?? '探测失败' }
+          : { cls: 'flat', text: '未检测', title: '本次还没探测到结果' };
+    const sub = `${domainOf(endpoint.baseUrl)} · ${endpoint.note}`;
 
     return (
       <div
         key={endpoint.baseUrl}
         className={`src-row${isSelected ? ' on' : ''}`}
-        title={isSelected ? '使用中' : `切换到 ${endpoint.label}`}
+        title={isSelected ? `使用中 · ${endpoint.label}` : `切换到 ${endpoint.label}`}
         onClick={() => {
           setFuturesSource(endpoint.baseUrl);
           onClose();
         }}
       >
-        <span className="src-main">
-          <span className="src-label">{endpoint.label}</span>
-          <span className="src-sub num">
-            {endpoint.baseUrl.replace('https://', '')} · {endpoint.note}
-          </span>
+        {/* 常驻占位：勾号位宽固定，点选时卡片里的文字不会横向跳 */}
+        <span className="src-mark">{isSelected ? '✓' : ''}</span>
+        <span className="src-label">{endpoint.label}</span>
+        <span className={`pill ${pill.cls} src-pill`} title={pill.title}>
+          {pill.text}
         </span>
-        <span className={`pill ${pill.cls} src-pill`}>{pill.text}</span>
+        <span className="src-sub num" title={sub}>
+          {sub}
+        </span>
         {!state?.probing && (
           <button
             className="src-retry"
+            title={`重新探测 ${endpoint.label}`}
             onClick={(e) => {
               e.stopPropagation();
               void probeOne(endpoint);
@@ -111,20 +127,23 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
             重测
           </button>
         )}
-        <span className="src-check">{isSelected ? '✓' : ''}</span>
       </div>
     );
   };
 
   return (
     <div className="up-backdrop" onMouseDown={onClose}>
-      <section className="up-panel" onMouseDown={(e) => e.stopPropagation()}>
+      <section className="up-panel up-wide" onMouseDown={(e) => e.stopPropagation()}>
         <header className="up-head">
           <span className="overline">合约数据源</span>
           <span className="grow" />
-          <button className="icon-btn source-retry-all" disabled={probing} onClick={() => {
-            for (const endpoint of FUTURES_ENDPOINTS) void probeOne(endpoint);
-          }}>
+          <button
+            className="icon-btn"
+            disabled={probing}
+            onClick={() => {
+              for (const endpoint of FUTURES_ENDPOINTS) void probeOne(endpoint);
+            }}
+          >
             {probing ? '检测中…' : '全部重新检测'}
           </button>
           <button className="panel-close" title="关闭" onClick={onClose}>
@@ -141,7 +160,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
             切换后清空合约缓存并重新同步交易对。
           </p>
 
-          {ordered.map(renderRow)}
+          <div className="src-grid">{ordered.map(renderRow)}</div>
         </div>
       </section>
     </div>

@@ -45,6 +45,15 @@ sealed interface FuturesDialectAdapter {
     /** 单次 K 线请求的根数上限（超出会被接口截断，聚合倍率计算要按它封顶）。 */
     val maxKlineLimit: Int
 
+    /**
+     * 是否支持按时间窗取数（即「往更早方向翻页」）。
+     *
+     * 默认 true；只有实测确认接口会**无视**时间参数的家才覆盖成 false（目前是 HTX）。
+     * 不支持时必须让上层停掉翻页：这类接口对任何时间窗都返回「最新 N 根」，
+     * 上层按 openTime 去重后没有新增，继续翻只是无限重复请求同一批数据。
+     */
+    val supportsTimeWindow: Boolean get() = true
+
     fun probe(base: String): Request
     fun klines(
         base: String,
@@ -72,6 +81,8 @@ object FuturesDialects {
         FuturesDialect.GATE -> GateDialect
         FuturesDialect.MEXC -> MexcDialect
         FuturesDialect.HYPERLIQUID -> HyperliquidDialect
+        FuturesDialect.HTX -> HtxDialect
+        FuturesDialect.BITUNIX -> BitunixDialect
     }
 }
 
@@ -109,6 +120,25 @@ private fun JsonElement.checkMexc() {
     val ok = obj.str("success")?.toBooleanStrictOrNull()
     val code = obj.str("code")?.toIntOrNull() ?: 0
     if (ok == false || code != 0) throw IOException("MEXC ${code}: ${obj.str("message")}")
+}
+
+/**
+ * HTX 的业务码在 `status` 里、**不在 HTTP 状态里**：非法 size 实测回的是
+ * `HTTP 200 + {"status":"error","err-code":"invalid-parameter","err-msg":"invalid size"}`。
+ */
+private fun JsonElement.checkHtx() {
+    val obj = asObject()
+    val status = obj.str("status") ?: return
+    if (status != "ok") {
+        throw IOException("HTX ${obj.str("err-code").orEmpty()}: ${obj.str("err-msg") ?: status}")
+    }
+}
+
+/** Bitunix 的业务码在 `code`（0 为成功）。 */
+private fun JsonElement.checkBitunix() {
+    val obj = asObject()
+    val code = obj.str("code")?.toIntOrNull() ?: return
+    if (code != 0) throw IOException("Bitunix $code: ${obj.str("msg")}")
 }
 
 /** 由开盘时间 + 周期推算收盘时间（没有原生收盘字段的都用它）。 */
@@ -193,9 +223,14 @@ private fun meta(
 private fun stripUsdt(symbol: String): String =
     if (symbol.endsWith("USDT")) symbol.removeSuffix("USDT") else symbol
 
-// —————————————————————————— 币安同构（Aster / 币安主域与镜像）——————————————————————————————————————
+// —————————————————————————— 币安同构（Aster / 币安主域）——————————————————————————————————————
 
-/** 与 fapi.binance.com /fapi/v1 完全同构的接口（Aster 即此列），复用现成的 DTO 解析。 */
+/**
+ * 与 fapi.binance.com `/fapi/v1` 完全同构的接口（Aster 即此行），复用现成的 DTO 解析。
+ *
+ * 候选清单里只留了**币安主域 + Aster** 两家：币安主域和它那几个镜像域名在后端其实是同一批
+ * 机器，一起通、一起挂，多列只会让弹窗里一片红，所以镜像已从清单移除（方言本身仍通用）。
+ */
 internal object BinanceCompatibleDialect : FuturesDialectAdapter {
 
     override val intervalLadder: Map<Long, String> =
@@ -865,6 +900,247 @@ internal object HyperliquidDialect : FuturesDialectAdapter {
                 priceTick = BigDecimal.ONE.movePointLeft(decimals),
                 qtyStep = row.str("szDecimals")?.toIntOrNull()?.let { BigDecimal.ONE.movePointLeft(it) },
                 trading = row.str("isDelisted") != "true",
+            )
+        }
+}
+
+// —————————————————————————— HTX（火币）USDT 本位永续 ——————————————————————————
+
+/**
+ * HTX / 火币（api.hbdm.com）。两套路径混用，别搞混：
+ * - `linear-swap-ex` 下的 `market` 一脉是**行情**（K 线、detail/merged、batch_merged），裸 JSON 带 `status`；
+ * - `linear-swap-api/v1` 一脉是**合约元数据**（swap_contract_info）与探测。
+ *
+ * ⚠️ **可达性弱于其他家**：实测期间 `api.hbdm.com` / `api.htx.com` 的解析会落到 Meta 的 IP 段
+ * （`157.240.10.32` / `108.160.170.52`，典型 DNS 污染），表现为间歇性连不上，而同网络下
+ * Gate / Bitunix / Hyperliquid 解析正常。它进候选是因为「接口最完整、通的时候最好用」，
+ * 不是因为它稳 —— 探测弹窗里时通时不通属于真实情况。
+ *
+ * K 线行 = `{id(秒), open, close, high, low, amount, vol, trade_turnover, count}`，原生**升序**；
+ * `amount` 是基础币数量、`vol` 是张数、`trade_turnover` 是计价币金额（三者实测自洽：
+ * `amount × close ≈ trade_turnover`）。24h 快照自带 `open`，无需像 Gate / Bybit / MEXC 那样还原。
+ */
+internal object HtxDialect : FuturesDialectAdapter {
+
+    /**
+     * 逐周期实测白名单：`1min 3 5 15 30 60min 2 4 6 12hour 1day 3day 1week 1mon`；
+     * `1year` 被拒，对照用的 `bogus` 同样被拒（所以 200 是真支持，不是宽容回落）。
+     */
+    override val intervalLadder = mapOf(
+        1L to "1min", 3L to "3min", 5L to "5min", 15L to "15min", 30L to "30min",
+        60L to "60min", 120L to "2hour", 240L to "4hour", 360L to "6hour", 720L to "12hour",
+        1_440L to "1day", 4_320L to "3day", 10_080L to "1week", 43_200L to "1mon",
+    )
+
+    /** 实测：size=2000 通过、size=5000 被拒（`invalid size`），故上限为 2000。 */
+    override val maxKlineLimit = 2000
+
+    /** 实测 `from`/`to` 与 `start`/`end` 四种写法全被忽略，永远返回最新 size 根 ⇒ 不能翻页。 */
+    override val supportsTimeWindow = false
+
+    private fun contract(symbol: String) = stripUsdt(symbol) + "-USDT"
+
+    private fun market(base: String, path: String) = base.trimEnd('/') + "/linear-swap-ex" + path
+
+    private fun api(base: String, path: String) = base.trimEnd('/') + "/linear-swap-api/v1" + path
+
+    /** 先查业务码，再取指定键的数组（K 线在 `data`、全量快照在 `ticks`）。 */
+    private fun rows(text: String, key: String): List<JsonElement> =
+        parse(text).also { it.checkHtx() }.asObject()[key].asArray()
+
+    override fun probe(base: String) =
+        FuturesDialectAdapter.Request(api(base, "/swap_contract_info?contract_code=BTC-USDT"))
+
+    override fun klines(
+        base: String,
+        symbol: String,
+        minutes: Long,
+        limit: Int,
+        startMs: Long?,
+        endMs: Long?,
+    ): FuturesDialectAdapter.Request {
+        // ❗**时间窗参数实测无效**：`from`/`to` 与 `start`/`end` 四种写法都试过，
+        // 传与不传返回的都是「最近 size 根」（用一个明显过期的窗口请求，回来的仍是当下最新的
+        // 那几根）。所以这里不传 —— 传了会让人以为支持翻页，实际拿到的是重复数据。
+        // 代价是往更早方向翻页会退化成重复取最新 N 根（上层按 openTime 去重后无新增）。
+        val query = listOf(
+            "contract_code=${contract(symbol)}",
+            "period=${requireNotNull(intervalLadder[minutes])}",
+            "size=${limit.coerceIn(1, maxKlineLimit)}",
+        )
+        return FuturesDialectAdapter.Request(
+            market(base, "/market/history/kline?" + query.joinToString("&")),
+        )
+    }
+
+    override fun ticker(base: String, symbol: String) = FuturesDialectAdapter.Request(
+        market(base, "/market/detail/merged?contract_code=${contract(symbol)}"),
+    )
+
+    override fun exchangeInfo(base: String) =
+        FuturesDialectAdapter.Request(api(base, "/swap_contract_info"))
+
+    override fun parseKlines(text: String, minutes: Long): List<Kline> =
+        rows(text, "data").mapNotNull { el ->
+            val row = el.asObject()
+            val seconds = row.str("id")?.toLongOrNull() ?: return@mapNotNull null
+            candle(
+                openTime = seconds * 1000,
+                minutes = minutes,
+                o = row.str("open").bd(),
+                h = row.str("high").bd(),
+                l = row.str("low").bd(),
+                c = row.str("close").bd(),
+                base = row.str("amount").bd(),
+                quote = row.str("trade_turnover").bd(),
+                trades = row.str("count")?.toLongOrNull() ?: 0,
+            )
+        }.sortedBy { it.openTime }
+
+    override fun parseTicker(text: String, symbol: String, now: Long): MarketTicker? {
+        val row = parse(text).also { it.checkHtx() }.asObject()["tick"].asObject()
+        val last = row.str("close").bd() ?: return null
+        return tickerOf(
+            symbol = symbol,
+            last = last,
+            open = row.str("open").bd(),
+            high = row.str("high").bd(),
+            low = row.str("low").bd(),
+            base = row.str("amount").bd(),
+            quote = row.str("trade_turnover").bd(),
+            now = now,
+        )
+    }
+
+    override fun parseExchangeInfo(text: String): List<InstrumentMeta> =
+        rows(text, "data").mapNotNull { el ->
+            val row = el.asObject()
+            val code = row.str("contract_code").orEmpty()
+            if (!code.endsWith("-USDT")) return@mapNotNull null
+            // 元数据行的币名在 `symbol`（如 BTC），合约名在 `contract_code`（如 BTC-USDT）
+            val base = row.str("symbol")?.takeIf { it.isNotBlank() }
+                ?: code.substringBefore('-').takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            meta(
+                symbol = base + "USDT",
+                base = base,
+                quote = "USDT",
+                priceTick = row.str("price_tick").bd(),
+                qtyStep = row.str("contract_size").bd(),
+                trading = row.str("contract_status") == "1",
+            )
+        }
+}
+
+// —————————————————————————— Bitunix ——————————————————————————
+
+/**
+ * Bitunix（fapi.bitunix.com）。全部走 `api/v1/futures/market` 这一脉，裸 JSON 带 `code`。
+ *
+ * 本次实测里最「干净」的一家：直连稳定（Cloudflare）、四件套齐全、响应体积小。
+ *
+ * 三处必须留意：
+ * - **K 线是降序返回**（newest-first），时间是毫秒 —— 统一排序后再交给上层；
+ * - **单标的快照走 `tickers?symbols=`（复数）**：`ticker?symbol=` 返回 `code:404`，
+ *   不带参数的 `/tickers` 则是全量；
+ * - ❗**非法 interval 返 `code:0` + `data:[]`** —— 不报错、也不回落，只是给个空数组。
+ *   所以「请求没报错」在这里不等于「周期被支持」；适配器靠 [intervalLadder] 白名单
+ *   把非法周期挡在请求之前，不能依赖接口报错。
+ *
+ * 价格精度取 `quotePrecision`（价格小数位）：实测 BTCUSDT(1)→0.1、DOGEUSDT(5)→0.00001、
+ * 1000PEPEUSDT(7)→0.0000001 均对得上。
+ */
+internal object BitunixDialect : FuturesDialectAdapter {
+
+    /** 实测 15 个周期全支持；`1M` 走**日历月**（相邻间隔实测 28~31 天）。 */
+    override val intervalLadder = mapOf(
+        1L to "1m", 3L to "3m", 5L to "5m", 15L to "15m", 30L to "30m",
+        60L to "1h", 120L to "2h", 240L to "4h", 360L to "6h", 480L to "8h", 720L to "12h",
+        1_440L to "1d", 4_320L to "3d", 10_080L to "1w", 43_200L to "1M",
+    )
+
+    /** 实测上限：请求 500 / 1000 / 1500 一律只回 200 根（服务端截断）。 */
+    override val maxKlineLimit = 200
+
+    private fun native(symbol: String) = stripUsdt(symbol) + "USDT"
+
+    private fun url(base: String, path: String) = base.trimEnd('/') + "/api/v1/futures/market" + path
+
+    private fun rows(text: String): List<JsonElement> =
+        parse(text).also { it.checkBitunix() }.asObject()["data"].asArray()
+
+    override fun probe(base: String) = FuturesDialectAdapter.Request(url(base, "/time"))
+
+    override fun klines(
+        base: String,
+        symbol: String,
+        minutes: Long,
+        limit: Int,
+        startMs: Long?,
+        endMs: Long?,
+    ): FuturesDialectAdapter.Request {
+        val query = buildList {
+            add("symbol=${native(symbol)}")
+            add("interval=${requireNotNull(intervalLadder[minutes])}")
+            add("limit=${limit.coerceIn(1, maxKlineLimit)}")
+            startMs?.let { add("startTime=$it") }
+            endMs?.let { add("endTime=$it") }
+        }
+        return FuturesDialectAdapter.Request(url(base, "/kline?" + query.joinToString("&")))
+    }
+
+    override fun ticker(base: String, symbol: String) = FuturesDialectAdapter.Request(
+        url(base, "/tickers?symbols=${native(symbol)}"),
+    )
+
+    override fun exchangeInfo(base: String) =
+        FuturesDialectAdapter.Request(url(base, "/trading_pairs"))
+
+    override fun parseKlines(text: String, minutes: Long): List<Kline> =
+        rows(text).mapNotNull { el ->
+            val row = el.asObject()
+            val ms = row.str("time")?.toLongOrNull() ?: return@mapNotNull null
+            candle(
+                openTime = ms,
+                minutes = minutes,
+                o = row.str("open").bd(),
+                h = row.str("high").bd(),
+                l = row.str("low").bd(),
+                c = row.str("close").bd(),
+                base = row.str("baseVol").bd(),
+                quote = row.str("quoteVol").bd(),
+            )
+        }.sortedBy { it.openTime }
+
+    override fun parseTicker(text: String, symbol: String, now: Long): MarketTicker? {
+        val row = rows(text).firstOrNull()?.asObject() ?: return null
+        val last = row.str("lastPrice").bd() ?: return null
+        return tickerOf(
+            symbol = symbol,
+            last = last,
+            open = row.str("open").bd(),
+            high = row.str("high").bd(),
+            low = row.str("low").bd(),
+            base = row.str("baseVol").bd(),
+            quote = row.str("quoteVol").bd(),
+            now = now,
+        )
+    }
+
+    override fun parseExchangeInfo(text: String): List<InstrumentMeta> =
+        rows(text).mapNotNull { el ->
+            val row = el.asObject()
+            if (row.str("quote") != "USDT" || row.str("symbolStatus") != "OPEN") return@mapNotNull null
+            val base = row.str("base")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val decimals = row.str("quotePrecision")?.toIntOrNull()
+            val tick = decimals?.takeIf { it in 0..12 }?.let { BigDecimal.ONE.movePointLeft(it) }
+            meta(
+                symbol = base + "USDT",
+                base = base,
+                quote = "USDT",
+                priceTick = tick,
+                qtyStep = row.str("basePrecision")?.toIntOrNull()?.let { BigDecimal.ONE.movePointLeft(it) },
+                trading = true,
             )
         }
 }

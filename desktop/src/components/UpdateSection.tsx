@@ -1,0 +1,145 @@
+import { MIRRORS } from '../lib/update';
+import type { UpdateController } from '../hooks/useUpdate';
+
+function formatSize(bytes: number): string {
+  if (!bytes) return '大小未知';
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatDate(iso: string | null): string {
+  return iso ? iso.slice(0, 10) : '';
+}
+
+/**
+ * 「更新」这一整段：当前版本、加速站、检查/下载/安装、Release 说明。
+ *
+ * 原来是独立的弹窗（`UpdatePanel`），2026-09-29 收进设置面板 ——
+ * 顶栏上它和主题一样是「偶尔改一次的东西」，占着顶栏一个按钮不值当
+ * （进度与「下好了」由设置按钮上的圆点 + 右下角提示条负责报信）。
+ * 所以这里只渲染**内容**，弹窗壳（遮罩、标题栏、关闭、Esc）由设置面板提供。
+ */
+export function UpdateSection({ controller }: { controller: UpdateController }) {
+  const {
+    version,
+    mirror,
+    changeMirror,
+    info,
+    checking,
+    checked,
+    error,
+    download,
+    auto,
+    check,
+    beginDownload,
+    install,
+    openPage,
+  } = controller;
+
+  const downloading = download.state === 'running';
+  const percent = download.state === 'running' && download.progress >= 0
+    ? Math.round(download.progress * 100)
+    : null;
+
+  return (
+    <div className="set-block-body">
+      <div className="up-meta-row">
+        <span className="up-label">当前版本</span>
+        <span className="num">v{version || '—'}</span>
+      </div>
+
+      <div className="up-meta-row">
+        <span className="up-label">加速站</span>
+        <select
+          className="up-select"
+          value={mirror}
+          disabled={downloading}
+          onChange={(e) => changeMirror(e.target.value)}
+        >
+          {MIRRORS.map((item) => (
+            <option key={item.key} value={item.key}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <p className="up-hint">
+        加速站同时用于检查更新与下载；某一站不通时会自动回退到直连和其他站。
+        开 VPN 时 GitHub 会按出口 IP 拒绝，检查失败就换一个加速站。
+      </p>
+
+      <div className="up-actions">
+        <button
+          className="up-btn"
+          onClick={() => void check(false)}
+          disabled={checking || downloading}
+        >
+          {checking ? '检查中…' : '检查更新'}
+        </button>
+        {info && download.state !== 'done' && (
+          <button
+            className="up-btn primary"
+            onClick={() => void beginDownload()}
+            disabled={downloading}
+          >
+            {download.state === 'failed'
+              ? '重试下载'
+              : downloading
+                ? auto
+                  ? '自动下载中…'
+                  : '下载中…'
+                : '下载更新'}
+          </button>
+        )}
+        {download.state === 'done' && (
+          <button className="up-btn primary" onClick={() => void install()}>
+            安装并重启
+          </button>
+        )}
+      </div>
+
+      {auto && downloading && (
+        <p className="up-hint">发现新版本后已自动开始下载，完成后会提示你安装。</p>
+      )}
+
+      {error && <p className="up-error">{error}</p>}
+      {checked && !info && !error && <p className="up-ok">已是最新版本</p>}
+
+      {download.state === 'running' && (
+        <div className="up-progress">
+          <div className="up-bar">
+            <div
+              className="up-bar-fill"
+              style={{ width: percent == null ? '100%' : `${percent}%` }}
+              data-indeterminate={percent == null ? 'true' : 'false'}
+            />
+          </div>
+          <span className="num up-progress-text">
+            {percent == null
+              ? `下载中 ${formatSize(download.downloaded)}`
+              : `${percent}% · ${formatSize(download.downloaded)} / ${formatSize(download.total)}`}
+          </span>
+        </div>
+      )}
+
+      {download.state === 'failed' && <p className="up-error">{download.message}</p>}
+      {download.state === 'done' && (
+        <p className="up-ok">安装包已下载并通过签名校验，点「安装并重启」完成升级。</p>
+      )}
+
+      {info && (
+        <div className="up-release">
+          <div className="up-release-head">
+            <span className="up-version">v{info.latestVersion}</span>
+            <span className="up-release-meta">{formatDate(info.publishedAt)}</span>
+          </div>
+          <pre className="up-notes">{info.notes || '（该版本没有填写更新说明）'}</pre>
+          <button className="up-link" onClick={() => void openPage()}>
+            在浏览器中打开 Release 页面
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
