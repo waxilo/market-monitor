@@ -24,14 +24,21 @@
     （`Ed`/`ED` + keyid(8) + sig(64) = 74 字节）。
 - ⚠️ **`github.com` 不通时官方 `verify-channel.mjs` 会在拉 `latest.json` 那步 `ConnectTimeoutError`**（走 api 的前 2 条
   断言仍能过）；但 **`gh release download desktop-latest`（asset API + objects.githubusercontent.com）照样能下** ⇒
-  用 `.workbuddy/tmp/verify-channel-local.py` 做本地核对（31 条：体积 / sha256 边车 / **逐平台** keyid /
-  manifest 内联签名 == `.sig` 文件内容 / 版本比较 / 无旧版残留）。
+  用 `.workbuddy/tmp/verify-channel-local.py` 做**本机核对**（2026-09-29 发 0.1.7 起是 **38 条**，PASS 38/38：体积 /
+  sha256 边车 / **逐平台** keyid 与上一版逐字节比 / manifest 内联签名 == `.sig` 文件内容 / URL 版本号 / 无旧版残留）。
+  ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
+  别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
+  - 脚本自带「直连失败改走本机代理 `127.0.0.1:7897`」的兜底（发 0.1.7 时 TLS handshake timeout 反复出现，直连与代理谁通就用谁）；
+    **发版前先抓上一版基线**（`created_at` + 两个 `.sig` + 体积清单）到 `/tmp/mm-before/`，覆盖后就再也拿不到了。
+- ⚠️ **SSH 推送会「假死」**：连接看起来建立、进程 3 分钟 0.01s CPU（死连接）⇒ `kill` 后**单次**重推即成功（2.8s）。
+  判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
-  `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）。
+  `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
+  `desktop 0.1.7`（两点画直线/趋势线 + 指标条 1280 折行修复；只发桌面端）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
