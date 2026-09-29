@@ -37,11 +37,11 @@ class VersionCompareTest {
     }
 
     @Test
-    fun `tag 与当前 versionName 的更新判定`() {
+    fun `最新版本与当前 versionName 的更新判定`() {
         assertTrue(VersionCompare.hasUpdate("v0.2.0", "0.1.0"))
         assertFalse(VersionCompare.hasUpdate("v0.1.0", "0.1.0"))
         assertFalse(VersionCompare.hasUpdate("v0.0.9", "0.1.0"))
-        // 解析失败一律视为无更新：宁可不提醒，也不因为 tag 格式变化弹假更新
+        // 解析失败一律视为无更新：宁可不提醒，也不因为产物名格式变化弹假更新
         assertFalse(VersionCompare.hasUpdate("nightly-2026", "0.1.0"))
         assertFalse(VersionCompare.hasUpdate(null, "0.1.0"))
         assertFalse(VersionCompare.hasUpdate("v0.2.0", null))
@@ -52,6 +52,24 @@ class VersionCompareTest {
         assertTrue(VersionCompare.hasUpdate("v1.0.0", "1.0.0-beta.1"))
         assertTrue(VersionCompare.hasUpdate("v1.0.0-beta.2", "1.0.0-beta.1"))
         assertFalse(VersionCompare.hasUpdate("v1.0.0-beta.1", "1.0.0"))
+    }
+
+    @Test
+    fun `从产物名里取版本`() {
+        assertEquals("0.9.26", VersionCompare.versionFromAssetName("market-monitor-0.9.26.apk"))
+        // ABI 后缀在版本号后面，且 ABI 名不含点 —— 不会被误当成版本
+        assertEquals("0.9.26", VersionCompare.versionFromAssetName("market-monitor-0.9.26-arm64-v8a.apk"))
+        assertEquals("0.9.26", VersionCompare.versionFromAssetName("market-monitor-v0.9.26.apk"))
+        // 边车与应用内下载都靠这个后缀配对，名字里照样带版本
+        assertEquals("0.9.26", VersionCompare.versionFromAssetName("market-monitor-0.9.26.apk.sha256"))
+    }
+
+    @Test
+    fun `产物名里没有版本时返回 null 而不是瞎猜`() {
+        assertNull(VersionCompare.versionFromAssetName("market-monitor.apk"))
+        assertNull(VersionCompare.versionFromAssetName("notes.txt"))
+        // `2026-09-29` 这种日期没有点，不构成版本
+        assertNull(VersionCompare.versionFromAssetName("2026-09-29-report.txt"))
     }
 }
 
@@ -65,17 +83,25 @@ class ReleaseInfoTest {
     )
 
     private fun release(vararg assets: ReleaseAsset) = ReleaseInfo(
-        tagName = "v0.2.0",
-        name = "0.2.0",
+        // 固定通道：tag 恒为 android-latest、不带版本，版本在产物名里
+        tagName = "android-latest",
+        name = "Android 更新通道",
         body = "## 更新内容\n- 新增自定义周期",
         publishedAt = "2026-09-19T08:00:00Z",
         assets = assets.toList(),
     )
 
     @Test
-    fun `版本号来自 tag`() {
-        assertEquals(SemVer(0, 2, 0), release().version)
-        assertNull(release().copy(tagName = "latest").version)
+    fun `版本号来自产物名 —— 固定通道的 tag 不带版本`() {
+        assertEquals("0.2.0", release(asset("market-monitor-0.2.0.apk")).apkVersion())
+        // 通道里没有可识别的 APK → 读不到版本，上层据此判「无更新」而不是瞎猜
+        assertNull(release(asset("notes.txt")).apkVersion())
+    }
+
+    @Test
+    fun `产物名带 ABI 后缀也能取到版本`() {
+        val info = release(asset("market-monitor-0.2.0-arm64-v8a.apk"))
+        assertEquals("0.2.0", info.apkVersion(listOf("arm64-v8a")))
     }
 
     @Test

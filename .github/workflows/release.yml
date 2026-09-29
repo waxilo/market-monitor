@@ -3,14 +3,21 @@ name: Release
 on:
   push:
     tags:
-      # 应用内更新用「去掉 v 前缀的 tag」与 versionName 比较，所以裸版本号 tag 是本项目的主约定；
-      # 两种写法都放行，否则发版时这个工作流压根不会被触发。
+      # tag 现在**只是触发器**：发布目标永远是固定通道 `android-latest`，
+      # 版本号由产物名承载（App 从 `market-monitor-<版本>.apk` 里读，不再看 tag）。
+      # 裸版本号是本项目的主约定，`v` 前缀也放行，否则发版时这个工作流压根不会被触发。
       - 'v*'
       - '[0-9]*'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# 两端各自只有一个**固定 tag 的通道 Release**：发新版只替换里面的产物，不新建 Release。
+# 共用脚本 .github/scripts/publish-channel.sh（存在就换产物、不存在才建）。
+env:
+  RELEASE_REPO: waxilo/market-monitor
+  CHANNEL_TAG: android-latest
 
 jobs:
   release:
@@ -84,23 +91,51 @@ jobs:
             exit 1
           fi
 
+      - name: 确定版本号（tag 去掉 v 前缀；手动触发时读 build.gradle.kts）
+        id: version
+        run: |
+          set -euo pipefail
+          # 版本号必须与 build.gradle.kts 一致：不一致就是忘了改 versionName，
+          # 装出来的包 versionCode/Name 还是旧的，应用内更新会反复提示同一个版本。
+          DECLARED=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          else
+            V="$DECLARED"
+          fi
+          if [ "$V" != "$DECLARED" ]; then
+            echo "::error::tag 版本（$V）与 build.gradle.kts 的 versionName（$DECLARED）不一致"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "本次版本号：$V"
+
       - name: Stage artifacts
         run: |
           set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
           mkdir -p dist
-          # 直接产出带版本号的包名，边车文件必须叫 `<apk>.sha256`，App 端按后缀配对。
-          APK="dist/market-monitor-$GITHUB_REF_NAME.apk"
+          # ⚠️ 产物名是**版本号的唯一载体**（通道 tag 固定，App 从文件名里读版本）——
+          # 约定 `market-monitor-<版本>[-<abi>].apk`，改名前先看
+          # VersionCompare.versionFromAssetName 与 README「发版流程」。
+          # 边车必须叫 `<apk>.sha256`，App 端按后缀配对。
+          APK="dist/market-monitor-$V.apk"
           cp app/build/outputs/apk/release/app-release.apk "$APK"
           sha256sum "$APK" | awk '{print $1}' > "$APK.sha256"
           ls -l dist
 
-      - name: Publish GitHub Release
+      - name: 发布到更新通道（固定 tag，原地换产物）
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/market-monitor-$GITHUB_REF_NAME.apk" \
-            "dist/market-monitor-$GITHUB_REF_NAME.apk.sha256" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
-            --verify-tag || gh release view "$GITHUB_REF_NAME"
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          NOTES="$RUNNER_TEMP/mm-android-notes.md"
+          {
+            echo "Android 应用内更新的固定通道：tag $CHANNEL_TAG 永远不变，每次发版只替换里面的产物、不新建 Release。"
+            echo
+            echo "最新版本：$V"
+          } > "$NOTES"
+          bash "$GITHUB_WORKSPACE/.github/scripts/publish-channel.sh" \
+            "$CHANNEL_TAG" "Android 更新通道" "$NOTES" \
+            "$GITHUB_WORKSPACE/android/dist" "$RELEASE_REPO"

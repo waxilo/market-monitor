@@ -34,9 +34,16 @@ class GithubReleaseApi(
     private val mirror: () -> UpdateMirror = { UpdateMirror.NATIVE },
 ) {
 
-    /** 最新正式版发布；GitHub 的 `latest` 已排除 draft 与 prerelease。 */
-    suspend fun latestRelease(): ReleaseInfo {
-        val path = "/repos/$owner/$repo/releases/latest"
+    /**
+     * 更新通道 Release（固定 tag [CHANNEL_TAG]）。
+     *
+     * 不用 `/releases/latest`：那个「最新」是按**创建时间**算的，跟 tag 语义无关 ——
+     * 桌面端一发版就会把它从 Android 的包上抢走，Android 于是静默判「无更新」。
+     * 按固定 tag 直取没有这个问题；而且发新版只替换通道里的产物、不新建 Release，
+     * 版本号改由产物名承载（见 [ReleaseInfo.apkVersion]）。
+     */
+    suspend fun channelRelease(): ReleaseInfo {
+        val path = "/repos/$owner/$repo/releases/tags/$CHANNEL_TAG"
         val element = getJson(mirror().apiChain(path, apiBase), "检查更新")
         return MarketJson.DEFAULT.decodeFromJsonElement(GithubReleaseDto.serializer(), element).toDomain()
     }
@@ -172,5 +179,11 @@ class GithubReleaseApi(
     companion object {
         /** GitHub API 强制要求 User-Agent，缺失返回 403。 */
         const val USER_AGENT = "market-monitor-android"
+
+        /**
+         * 更新通道 tag：**永远不变**，每次发版只替换 Release 里的产物、不新建 Release。
+         * 与 `.github/workflows/release.yml` 的 `env.CHANNEL_TAG` 必须一致。
+         */
+        const val CHANNEL_TAG = "android-latest"
     }
 }

@@ -258,18 +258,25 @@ jobs:
         shell: bash
         run: node ${{ env.APP_DIR }}/scripts/build-latest.mjs "${{ steps.version.outputs.version }}" "${{ env.CHANNEL_TAG }}" dist "${{ env.RELEASE_REPO }}"
 
-      # 通道 release 每次发版重建，tag 固定不变 —— 应用只认这一个地址（/releases/download/<tag>/latest.json）。
-      # 标 --prerelease 是有意的：GitHub 的 `/releases/latest` 只认「非 draft、非预发布」的最新一个，
-      # 标了预发布就不会把 Android 的更新发现路径抢走（见 README「桌面端发版流程」）。
-      - name: 重建更新通道 Release
+      # 通道的 tag 固定不变，应用只认这一个地址（/releases/download/<tag>/latest.json）。
+      # 发新版**原地换产物**，不删了重建 —— 删了重建每次都会产生一个新的 Release（id 与创建时间都变）。
+      # 也不再标 --prerelease：两端现在都读各自的通道 tag，没有任何一端还在用 `/releases/latest`，
+      # 「标预发布以免抢走 Android 的 latest」这个理由已经不存在了。
+      - name: 发布到更新通道（固定 tag，原地换产物）
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release delete "${{ env.CHANNEL_TAG }}" --repo "${{ env.RELEASE_REPO }}" --yes || true
-          gh release create "${{ env.CHANNEL_TAG }}" dist/* \
-            --repo "${{ env.RELEASE_REPO }}" \
-            --prerelease \
-            --title "桌面端更新通道" \
-            --notes "机器读取的更新通道（latest.json）：桌面端应用内更新从这里取版本、下载地址与签名。安装包见下方 Assets，版本 ${{ steps.version.outputs.version }}。"
+          V="${{ steps.version.outputs.version }}"
+          NOTES="$RUNNER_TEMP/mm-desktop-notes.md"
+          {
+            echo "桌面端应用内更新的固定通道：tag ${{ env.CHANNEL_TAG }} 永远不变，每次发版只替换里面的产物、不新建 Release。"
+            echo
+            echo "最新版本：$V（对应 tag desktop-v$V）"
+            echo
+            echo "应用内更新读这个 Release 里的 latest.json（版本 + 各平台下载地址 + minisign 签名）；安装包见下方 Assets。"
+          } > "$NOTES"
+          bash "$GITHUB_WORKSPACE/.github/scripts/publish-channel.sh" \
+            "${{ env.CHANNEL_TAG }}" "桌面端更新通道" "$NOTES" \
+            "$GITHUB_WORKSPACE/dist" "${{ env.RELEASE_REPO }}"

@@ -16,6 +16,19 @@ data class SemVer(
 
 object VersionCompare {
 
+    /**
+     * 产物文件名里取版本，返回形如 `0.9.26` 的原始串；取不到返回 null。
+     *
+     * 每个端只有一个**固定 tag 的通道 Release**（Android `android-latest`、桌面端 `desktop-latest`），
+     * 发新版只替换里面的产物 —— tag 于是不再承载版本，版本改由**产物名**承载。
+     * 约定：`market-monitor-<版本>[-<abi>].apk`，例 `market-monitor-0.9.26.apk`、
+     * `market-monitor-0.9.26-arm64-v8a.apk`（发布 workflow 里生成的，见 README「发版流程」）。
+     *
+     * 取**第一个** `数字.数字[.数字]`：ABI 名（`arm64-v8a`、`armeabi-v7a`）不含点，不会被误取，
+     * 所以 ABI 后缀加在版本号后面是安全的。取不到就当作「无更新」，宁可不提示也不误弹。
+     */
+    fun versionFromAssetName(name: String): String? = VERSION_IN_ASSET.find(name)?.value
+
     /** 兼容 `v1.2.3` / `1.2` / `1.2.3-beta.1+build5`。解析失败返回 null。 */
     fun parse(raw: String): SemVer? {
         var text = raw.trim().removePrefix("v").removePrefix("V")
@@ -80,6 +93,9 @@ object VersionCompare {
     private fun compareInts(a: Int, b: Int): Int = a.compareTo(b)
 
     private inline fun Int.orElse(block: () -> Int): Int = if (this != 0) this else block()
+
+    /** 产物名里的版本：主体三段（`0.9.26`）或两段（`0.9`）都认。 */
+    private val VERSION_IN_ASSET = Regex("""\d+\.\d+(?:\.\d+)?""")
 }
 
 /** GitHub Release 资产。`digest` 为 GitHub 侧的 `sha256:<hex>`，可能为空。 */
@@ -106,7 +122,14 @@ data class ReleaseInfo(
     /** Release 页面地址，无法应用内安装时用它走浏览器。 */
     val pageUrl: String = "",
 ) {
-    val version: SemVer? get() = VersionCompare.parse(tagName)
+    /**
+     * 通道产物里的版本（形如 `0.9.26`）。
+     *
+     * 固定通道的 tag 恒为 `android-latest`、不带版本，所以版本只能从产物名里读
+     * —— 见 [VersionCompare.versionFromAssetName]。没有可识别的 APK 产物时返回 null。
+     */
+    fun apkVersion(abiPreferences: List<String> = emptyList()): String? =
+        apkAsset(abiPreferences)?.name?.let(VersionCompare::versionFromAssetName)
 
     /** 优先匹配设备 ABI 的 APK，其次通用包，最后任意 APK。 */
     fun apkAsset(abiPreferences: List<String> = emptyList()): ReleaseAsset? {

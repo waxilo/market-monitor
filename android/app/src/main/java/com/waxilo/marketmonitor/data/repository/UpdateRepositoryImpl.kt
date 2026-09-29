@@ -12,7 +12,8 @@ import java.io.File
 import java.io.IOException
 
 /**
- * 应用内更新（PRD 4.6）：GitHub Releases 取产物 → 校验 SHA-256 → 拉起系统安装器。
+ * 应用内更新（PRD 4.6）：从**固定通道 Release**（tag `android-latest`）取产物 →
+ * 校验 SHA-256 → 拉起系统安装器。
  * 只做「有没有新版本」的判定，不缓存 Release 数据，避免展示过期的大小与说明。
  */
 class UpdateRepositoryImpl(
@@ -27,15 +28,17 @@ class UpdateRepositoryImpl(
         resolve(currentVersionName)
 
     private suspend fun resolve(currentVersionName: String): UpdateInfo? {
-        val release = api.latestRelease()
-        if (!VersionCompare.hasUpdate(release.tagName, currentVersionName)) return null
-        val apk = release.apkAsset(abiPreferences)
-        val expected = apk?.let { asset ->
-            asset.sha256Hex ?: release.checksumAsset(asset)?.let { runCatching { api.sidecarChecksum(it) }.getOrNull() }
-        }
+        val release = api.channelRelease()
+        // 更新通道 tag 恒为 android-latest、不带版本，版本在产物名里（market-monitor-<版本>.apk）；
+        // 没有可识别的 APK 产物就当「无更新」，别拿个装不上的东西提示用户。
+        val apk = release.apkAsset(abiPreferences) ?: return null
+        val latest = release.apkVersion(abiPreferences) ?: return null
+        if (!VersionCompare.hasUpdate(latest, currentVersionName)) return null
+        val expected = apk.sha256Hex
+            ?: release.checksumAsset(apk)?.let { runCatching { api.sidecarChecksum(it) }.getOrNull() }
         return UpdateInfo(
             currentVersion = currentVersionName,
-            latestVersion = release.tagName.removePrefix("v"),
+            latestVersion = latest,
             releaseName = release.name,
             notes = release.body,
             publishedAt = release.publishedAt,

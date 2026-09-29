@@ -7,8 +7,10 @@ import org.junit.Test
 
 class UpdateMirrorTest {
 
-    private val githubUrl = "https://github.com/waxilo/market-monitor/releases/download/0.9.8/app.apk"
-    private val apiPath = "/repos/waxilo/market-monitor/releases/latest"
+    // 产物与 API 都指向**固定通道**：tag 恒为 android-latest，版本在产物名里
+    private val githubUrl =
+        "https://github.com/waxilo/market-monitor/releases/download/android-latest/market-monitor-0.9.26.apk"
+    private val apiPath = "/repos/waxilo/market-monitor/releases/tags/android-latest"
     private val apiBase = "https://api.github.com"
 
     @Test

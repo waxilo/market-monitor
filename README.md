@@ -23,7 +23,7 @@
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
-| 桌面端（窄侧栏导航 + 自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
+| 桌面端（窄侧栏导航 + 现价、搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 | 桌面端合约多数据源（与 App 同一份 12 候选清单，顶栏「数据源」弹窗并行测速后点选，结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
 
 Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
@@ -67,7 +67,7 @@ cd android
 cd desktop
 npm install
 npm run dev                         # 浏览器预览：只有界面（无托盘/悬浮窗/更新，Tauri API 短路）
-npx tauri dev                       # 真实桌面窗口
+npm run tauri:dev                   # 真实桌面窗口，dev 身份 —— 日常调试用这个（见下）
 npm run build                       # 前端类型检查 + 打包（CI 也会跑）
 RUSTUP_TOOLCHAIN=stable-aarch64-apple-darwin cargo test --manifest-path src-tauri/Cargo.toml --lib
 npx tauri build                     # 本机出安装包（macOS 需要签名身份，见「桌面端发版流程」）
@@ -76,6 +76,28 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 不在本地做发布构建：APK 与桌面端安装包都由 GitHub Actions 产出（见下）。
 本地 `tauri build` 只用于自检与冒烟，产物留在 `src-tauri/target/`，不要拿它顶掉 `/Applications` 里正在用的那份。
 
+**验证界面改动一律走 `npm run tauri:dev`，不要去关掉/覆盖本机正在跑的那份应用。**
+
+它是 `tauri dev` 加一层 dev 身份覆盖（`src-tauri/tauri.dev.conf.json`），与安装版从**名字到身份**都分开：
+
+| | 二进制 | 身份 `identifier` | 应用数据 / WebView2 目录 |
+|---|---|---|---|
+| dev（`tauri dev`） | `target/debug/market-monitor.exe` | `com.waxilo.marketmonitor.dev` | `%APPDATA%`/`%LOCALAPPDATA%\com.waxilo.marketmonitor.dev` |
+| 安装版（`tauri build`） | `MarketMonitor.exe` | `com.waxilo.marketmonitor` | `%APPDATA%`/`%LOCALAPPDATA%\com.waxilo.marketmonitor` |
+
+（Rust 包名是 `market-monitor`，所以 dev 二进制永远是 `market-monitor.exe`；安装版的名字来自
+`tauri.conf.json` 的 `productName: MarketMonitor`。）
+
+两条线互不干扰：数据目录不同（自选列表因此**不是**同一份），**dev 构建也不参与更新通道**
+（`update.rs` 的 `check_update` 在 debug 下直接返回「开发版不检查更新」）——否则装上一次更新，
+调试实例就被换成正式安装版了。`npm run tauri dev` 仍然可用，但它走生产身份，日常别用。
+
+dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`），改前端有 HMR、不用重编译。
+反过来，**用 `cargo build` 出的 release 二进制不会因为 `dist/` 变了而重新链接**
+—— cargo 的指纹里没有前端产物，`tauri-build` 只在 CLI codegen 路径上写 `rerun-if-changed`；
+只改了前端却 `cargo build` 会打印 `Finished` 但 exe 还是旧的（表现为「改动没生效」）。
+要么直接 `tauri dev` / `tauri build`，要么先 `touch src-tauri/src/lib.rs` 再 build。
+
 桌面端的行情请求**全走宿主侧** `market_request`（`src-tauri/src/market.rs`），不用 webview 的 `fetch`：
 除 Gate、Hyperliquid 与币安现货镜像外，其余接口都不回 `Access-Control-Allow-Origin`，webview 里读到的
 一定是 CORS 报错（宿主侧 reqwest 跟随系统代理，路由与浏览器一致）。Rust 只做搬运，周期映射、
@@ -83,15 +105,46 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 
 ### 桌面端交互约定（改之前先看这几条）
 
-- **主窗与悬浮窗是二选一，不是两个开关**：主窗顶栏的图标、悬浮窗遮罩里的图标都表示「换到另一个」，
-  两侧命令分别是 `switch_to_mini` / `switch_to_main`；悬浮窗点某一行走同一条路（主窗起来、悬浮窗收起）。
-- **悬浮窗没有常驻标题栏**：鼠标移上去才浮出遮罩层（市场标签 + 两个图标按钮）；
-  遮罩 `pointer-events: none`、只让按钮收事件，所以 hover 时行点选照旧。
-- **悬浮窗高度 = 自选条数**：`min(条数, 5) × 32px + 2px 边框`，超过 5 条封顶并在行区内滚动。
-  前端只把**条数**报给 Rust（`set_mini_rows`），几何在 Rust 侧算（`MINI_ROW_H` / `MINI_MAX_ROWS`，
-  与 theme.css 的 `--mini-row-h` / `--mini-max-rows` 一一对应）。别改成「前端量高度上报」：
+- **主窗与悬浮窗是二选一，不是两个开关**：主窗顶栏的图标表示「收成悬浮窗」（`switch_to_mini`）。
+  反方向没有图标：**悬浮窗整块面板就是入口**（左键）—— 点行 = `show_main_window`（主窗起来并选中该
+  标的），点空白/空状态 = `switch_to_main`（只切过去）。所以 `MiniApp` 在面板根节点上有 `onClick`，
+  且必须用 `closest('button')` 给行让位：行自带更具体的语义。
+- **悬浮窗没有常驻标题栏，也没有遮罩层**：整块面板都是价格。**隐藏走右键的原生菜单**
+  （`lib.rs` 的 `open_mini_menu` → `hide_mini`），菜单条目 id 交回 `run()` 里的全局
+  `on_menu_event` 处理。菜单只能由宿主弹：窗口就面板那么大，在 webview 里画 HTML 菜单
+  会被窗口自己的边界裁掉，原生 popup 是独立窗口才能溢出到面板外面。右键**不改变左键语义**
+  （`click` 不响应右键；`useWindowDrag` 在 `button !== 0` 就返回，也不会开始拖拽）。
+- **行的高亮底色不用 CSS `:hover`**（`hooks/usePointerInside.ts`）：这个窗口会自己移动
+  （拖拽、按条数改高度时下边缘不动 ⇒ 上边缘在跑）和隐藏，鼠标位置在那之后离开窗口时
+  Chromium 收不到 `mouseleave`，`:hover` 就永久卡在亮着 —— 表现为「某一行一直亮着」。
+  规则只有一条：**只有指针自己的事件能点亮，任何能证明「指针位置已失效」的信号
+  （离开面板 / 窗口失焦 / 页面不可见 / 被移动 / 被改尺寸）一律熄灭**，默认熄灭。
+  hook 算出的 `.inside` 挂在面板根节点上，`theme.css` 里写的是 `.mini.inside .mini-row:hover`。
+- **悬浮窗高度 = 自选条数**：`min(条数, 6) × 26px + 2px 边框`，超过 6 条封顶并在行区内滚动。
+  前端只把**条数**报给 Rust（`set_mini_rows`），几何在 Rust 侧算（`MINI_ROW_H` / `MINI_MAX_ROWS`）。
+  这两个值的**权威定义在 `desktop/src/lib/layout.ts`**（`MINI_ROW_HEIGHT` / `MINI_MAX_ROWS`），
+  由 `MiniApp` 注入成内联 CSS 变量 `--mini-row-h` / `--mini-max-rows`（theme.css 里同名声明只是兜底默认值）；
+  Rust 侧跨 FFI 没法共享常量，只能与 layout.ts 手工对齐。别改成「前端量高度上报」：
   悬浮窗出生即隐藏，隐藏窗口量不到排版、`getComputedStyle` 也读不到那两个字面量，
   上报会静默退化成「没变化」。Rust 调窗口时**保持下边缘与 x 不动**（右下角是它的锚点）。
+- **悬浮窗要压在任务栏之上**（`lib.rs` 的 `watch_mini_above_taskbar` + `taskbar` 模块）：
+  任务栏与悬浮窗同为 topmost 窗口，任务栏被点击/激活时会被 shell 提到 topmost 组最前、盖住悬浮窗；
+  而这件事**不会给应用发任何事件**（用户点的是任务栏，我们连 `Focused(false)` 都收不到），
+  所以只能 500ms 轮询 z 序、**真被任务栏压住时**才用 `SetWindowPos(HWND_TOPMOST)` 提回去
+  （无条件重设会周期性压住开始菜单等其它 topmost 窗口）。两个别踩的坑：
+  ① `set_always_on_top(true)` **重复调用无效** —— tao 对窗口 flags 做了去重
+  （`set_window_flags` 里 `diff == empty` 直接 return），`ALWAYS_ON_TOP` 早已置位，根本走不到
+  `SetWindowPos`，所以这里直接调 Win32；② 对已经是 topmost 的窗口直接提 `HWND_TOPMOST`
+  也可能是 no-op，**验证脚本复现现象时要先降级再升级**（`.workbuddy/tmp/verify-mini-taskbar.py`），
+  不然时灵时不灵，验证就成了掷骰子。
+- **搜索结果是浮层，不进侧栏**（`components/SearchDropdown.tsx`）：侧栏只管自选（它是常驻的，
+  内容要稳定），搜索结果是**临时态**、由输入驱动 —— 塞进侧栏会在输入时把自选冲掉，清空才恢复。
+  浮层锚在 `.search-wrap`（输入框 +「清空」按钮那一整块），不是锚在 input 上。
+  键盘 ↑↓/Enter/Esc 挂在 **document** 上而不是浮层根节点：焦点一直在顶部输入框里，
+  事件不经过浮层的 DOM，挂根节点一条都收不到。排序口径在 `lib/search.ts` 的 `rankInstruments`（纯函数）。
+- **侧栏行 = 名称 + 现价**（`MarketList.tsx`）：现价直接取 `useTickers` 的格子 —— 那份轮询本来
+  就在为图表跑，显示它是零额外代价。搜索结果那档**不给价格**：它没有现成的逐标的轮询源，
+  硬要显示就得把主窗的全量快照扩成常开，得不偿失。
 - **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
   就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
@@ -110,12 +163,14 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 | --- | --- |
 | versionName | `0.9.26` |
 | versionCode | `38` |
-| 最新 tag | `0.9.26` |
-| 安装包 | GitHub Release `<tag>` 的 `market-monitor-<tag>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
+| 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
+| 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
-产物的文件名从 `0.2.2` 起定为 `market-monitor-<tag>.apk`（`release.yml` 里先 `cp` 再上传；`gh` 的
-`本地文件#远端名` 写法不生效，用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
-应用内更新按 `releases/latest` 的 tag 与 `versionName` 比较，因此**发版前务必确认 versionName 严格大于线上最新 tag**。
+产物名 `market-monitor-<version>[-<abi>].apk` 是**版本号的唯一载体**：通道 tag 恒定不变、不带版本，
+App 用 `VersionCompare.versionFromAssetName` 从文件名里读版本（`release.yml` 里先 `cp` 再上传；
+`gh` 的 `本地文件#远端名` 写法不生效，用 API 给产物改名又会留下旧的下载路径，所以只能从上传时就定名）。
+因此**发版前务必确认 `versionName` 严格大于通道里现存的版本**；workflow 里还有一条断言：
+tag 版本必须与 `build.gradle.kts` 的 `versionName` 一致，不一致直接红。
 
 ## 发版流程
 
@@ -132,17 +187,39 @@ git push origin main 0.2.0
 ```
 
 4. `Release` workflow 由 tag 触发（`v*` 与裸版本号都能触发），解码签名密钥后构建 **release APK**、算 SHA-256，
-   创建同名 GitHub Release。应用内更新读取 `releases/latest` 的 tag（**不带 `v` 前缀**）与 `versionName` 比较，
-   所以优先打裸版本号 tag。
-5. 若推送 tag 后没看到 Release 运行，手动补一次：`gh workflow run release.yml --ref <tag>`。
-6. 发版前先确认 tag 不存在（`git tag -l`），并确认要发的改动**已经提交** —— 曾出现「线上 tag 已存在、而本地改动全未提交」的组合，那会误以为改动已发布。
+   再把产物**原地换进固定通道** `android-latest`。tag 只是**触发器**，不再充当发布名，也**不会新建 Release**（见下节）。
+5. 若推送 tag 后没看到 workflow 运行，手动补一次：`gh workflow run release.yml --ref main`。
+6. 发版前确认要发的改动**已经提交** —— 曾出现「tag 已推、而本地改动全未提交」的组合，那会误以为改动已发布。
+
+## Release 只有一个（两个端各一个）
+
+每个端**只有一个 Release**，tag 固定不变；发新版只替换里面的产物，不新建 Release：
+
+| 端 | 通道 tag | 里面有什么 | 应用怎么读 |
+| --- | --- | --- | --- |
+| Android | `android-latest` | `market-monitor-<version>.apk` + `.sha256` | `GET /repos/<o>/<r>/releases/tags/android-latest`，版本从产物名里取 |
+| 桌面端 | `desktop-latest` | `latest.json` + 各平台 dmg/exe 及其 `.sig` / `.sha256` | 直接下 `/releases/download/desktop-latest/latest.json` |
+
+两端共用 `.github/scripts/publish-channel.sh`：**通道不存在才创建**，存在就先清掉上一次的全部产物再传新的
+—— 产物名带版本号（`market-monitor_0.1.1_windows.exe` → 下一版名字就变了），`gh release upload --clobber`
+只覆盖同名文件，不清就会新旧并存、用户可能下到过期包。
+
+⚠️ **两端都不再用 `/releases/latest`**：GitHub 的 latest 是「最新**创建**的非 draft、非预发布 Release」，
+与 tag 语义无关 —— 以前 Android 靠它找包，桌面端一发版就会把它抢走（Android 于是静默判「无更新」）。
+各自读固定通道 tag 之后，这个互相抢占从根上没有了。
+
+⚠️ **历史 tag 仍在**：`0.9.x` / `desktop-v0.1.x` 这些 tag 只是没有对应的 Release 了。
+`desktop-v*` 推上去照样触发 `Desktop Release`，裸版本号照样触发 `Release`，两边都只是**触发器**。
+
+⚠️ **Android 要在下一个版本手动装一次**：现存版本（≤0.9.26）读的是 `/releases/latest`，而 Release 列表里
+已经没有带版本号的正式 Release —— 它们不会再收到应用内提示。手动装一次带新发现机制的包之后就走新链路了。
 
 ## 桌面端发版流程
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.1`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
-| 更新通道 | 固定 tag `desktop-latest` 的 Release（标为 pre-release），应用只读它的 `latest.json` |
+| version | `0.1.2`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
 
@@ -159,7 +236,7 @@ git tag desktop-v0.2.0
 git push origin main desktop-v0.2.0
 ```
 
-3. `Desktop Release` workflow 两端并行构建，再**重建** `desktop-latest`（tag 固定，里面的文件每次覆盖）：
+3. `Desktop Release` workflow 两端并行构建，再**原地换进** `desktop-latest`（tag 固定：先清掉上一次的产物再传新的，**不新建 Release**）：
 
 | 平台 | 构建内容 | 发布产物 |
 | --- | --- | --- |
@@ -202,19 +279,11 @@ git push origin main desktop-v0.2.0
 （用的是同一张叶证书，身份不变）。
 ⚠️ **不要用脚本的 A 模式重造 CA** —— 同理，换 CA 也等于换身份。
 
-### 两个一次性注意
+### 一次性注意
 
 ⚠️ **Windows 0.1.0（旧机制）要手动装一次下一版**：0.1.0 的更新是「扫 `desktop-v*` 找 `-setup.exe` + `.sha256` 边车」，
-而新链路只发固定通道 `desktop-latest`，所以那批用户不会再收到应用内提示；装一次 ≥0.1.1 之后就走新链路了。
-（想让旧版本自动迁移也可以：在 workflow 里额外发一个 `desktop-v<版本>` release，旧版本就会照旧发现它 ——
-代价是它会把仓库的 `/releases/latest` 抢走，Android 的更新发现会静默失效一轮，见下条。）
-
-⚠️ **`/releases/latest` 的抢占**：GitHub 的 latest 取「最新创建的非 draft、非预发布 Release」。
-新链路的通道 release 标了 **pre-release**，所以它不再占 latest；现存的一次性影响来自 `desktop-v0.1.0`
-（今天创建的正式 release），它会把 latest 从 Android 的包上抢走。Android 端拿到 `desktop-v0.1.0` 这类 tag 时，
-`VersionCompare.parse` 因 `desktop` 段不是纯数字而返回 null，按「解析失败一律视为无更新」处理 ——
-**不会误弹提示、也不会装错包，但那段窗口期 Android 收不到更新提示**，直到下一次 Android 发版把 latest 抢回来。
-要让两端彻底互不干扰，就把 Android 的发现方式也改成「拉 `releases?per_page=100` 再按**裸版本号**筛」。
+而 0.1.1 起只认固定通道 `desktop-latest` 的 `latest.json`，所以那批用户不会再收到应用内提示；
+装一次 ≥0.1.1 之后就走新链路了。
 
 ## 签名：应用内更新的前提
 
