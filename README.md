@@ -161,8 +161,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.26` |
-| versionCode | `38` |
+| versionName | `0.9.27` |
+| versionCode | `39` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
@@ -211,14 +211,15 @@ git push origin main 0.2.0
 ⚠️ **历史 tag 仍在**：`0.9.x` / `desktop-v0.1.x` 这些 tag 只是没有对应的 Release 了。
 `desktop-v*` 推上去照样触发 `Desktop Release`，裸版本号照样触发 `Release`，两边都只是**触发器**。
 
-⚠️ **Android 要在下一个版本手动装一次**：现存版本（≤0.9.26）读的是 `/releases/latest`，而 Release 列表里
-已经没有带版本号的正式 Release —— 它们不会再收到应用内提示。手动装一次带新发现机制的包之后就走新链路了。
+⚠️ **Android 0.9.27 要手动装一次**：现存版本（≤0.9.26）读的是 `/releases/latest`，而它现在返回的是固定通道
+`android-latest`（tag 不带版本号）⇒ 老代码解析不出版本，判「无更新」（不误弹、也不装错包，只是收不到提示）。
+手动装一次 0.9.27（第一个带新发现机制的版本）之后就回到新链路了。
 
 ## 桌面端发版流程
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.2`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.3`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
