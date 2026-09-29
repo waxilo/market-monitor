@@ -4,6 +4,7 @@
  * 上面——用户翻半天找不到比特币。所以先按**匹配位置**分层，再按计价币、成交额。
  */
 
+import type { Instrument, MarketType, Ticker24h } from './api';
 import { displaySymbol } from './format';
 
 /** 空关键词（刚进搜索）时所有标的同分：不过滤，排序交给自选置顶/计价币/成交额。 */
@@ -61,4 +62,63 @@ export function quotePriority(quoteAsset: string): number {
     default:
       return 9;
   }
+}
+
+/** 搜索结果上限，与 App SearchViewModel.MAX_RESULTS 一致。 */
+export const MAX_RESULTS = 80;
+
+/**
+ * 排序权重（越小越靠前），**自选恒在最前**：`0` 已自选 / `1` 未自选。
+ *
+ * 自选置顶与「匹配质量」是两把尺子，分开算再比 —— 否则搜 `btc` 时
+ * 一个恰好叫 BTC 的未自选标的（rank 0）会压住用户自己加的 BTCUSDT（rank 2）。
+ */
+const WATCHED_WEIGHT = 0;
+const UNWATCHED_WEIGHT = 1;
+
+export interface RankContext {
+  market: MarketType;
+  /** 当前市场的自选条目键（`market:symbol`）。 */
+  watched: ReadonlySet<string>;
+  /** 全量行情快照：只有成交额这一档排序用它，缺了按 0 处理。 */
+  snapshot: Readonly<Record<string, Ticker24h>>;
+}
+
+/**
+ * 搜索一个关键词命中的标的，按 App 的排序口径排好序返回。
+ *
+ * 排序链（逐级兜底，前一级相同才看后一级）：
+ * 自选置顶 → 匹配分层（见 `rankSymbol`）→ 计价币主流度 → 成交额降序 → 交易对名字母序。
+ *
+ * 最后那两级的顺序不能反：成交额是给「同一匹配档、同一计价币」内部排的，
+ * 冷启动时快照还没到、全是 0，此时字母序是唯一的确定性来源 —— 反过来写会让
+ * 冷启动的结果顺序随机（依赖 `Array.prototype.sort` 对等值元素的处理）。
+ *
+ * **纯函数**：不请求、不读 storage，只把「命中哪些、怎么排」这条策略收在一处，
+ * 供搜索下拉框调用，也便于用核对脚本直接断言。
+ */
+export function rankInstruments(
+  instruments: readonly Instrument[],
+  keyword: string,
+  ctx: RankContext,
+  limit: number = MAX_RESULTS,
+): Instrument[] {
+  if (!keyword) return [];
+  return instruments
+    .map((inst) => ({ inst, rank: rankSymbol(inst.symbol, inst.baseAsset, keyword) }))
+    .filter((r): r is { inst: Instrument; rank: number } => r.rank != null)
+    .sort((a, b) => {
+      const aw = ctx.watched.has(`${ctx.market}:${a.inst.symbol}`) ? WATCHED_WEIGHT : UNWATCHED_WEIGHT;
+      const bw = ctx.watched.has(`${ctx.market}:${b.inst.symbol}`) ? WATCHED_WEIGHT : UNWATCHED_WEIGHT;
+      return (
+        aw - bw ||
+        a.rank - b.rank ||
+        quotePriority(a.inst.quoteAsset) - quotePriority(b.inst.quoteAsset) ||
+        (ctx.snapshot[b.inst.symbol]?.quoteVolume ?? 0) -
+          (ctx.snapshot[a.inst.symbol]?.quoteVolume ?? 0) ||
+        a.inst.symbol.localeCompare(b.inst.symbol)
+      );
+    })
+    .slice(0, limit)
+    .map((r) => r.inst);
 }

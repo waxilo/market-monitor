@@ -19,10 +19,6 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
-  /* 悬浮窗 hover 遮罩：必须压得住底下的行文字。0.62 / 0.88 都试过，行里的涨跌红
-     （#e5384b）会从标签缝里透出来，凑成「自选 · 永续合约 83082.78」这种读不通的一行，
-     所以直接取接近实底 */
-  --scrim: rgba(9, 10, 12, 0.97);
 }
 
 [data-theme='light'] {
@@ -41,7 +37,6 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
-  --scrim: rgba(250, 250, 248, 0.9);
 }
 
 :root {
@@ -173,10 +168,11 @@ body {
 }
 .main {
   display: grid;
-  /* 侧边栏是窄导航栏（只列交易对名），宽度按最长的「币名 + 计价币」定：
-     BTC + USDT ≈ 96px，加上左右 12px 内边距与行尾按钮，176 够用。
+  /* 侧边栏是窄导航栏（交易对名 + 现价），宽度按最长一行算：
+     「BTC + USDT」≈ 96px + 现价列 66px + 移除按钮 20px + 左右 12px 内边距 ≈ 194，
+     208 留一点余量，长币名（DOGE/DASH）也不会把价格挤到换行。
      minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动 */
-  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-columns: 208px minmax(0, 1fr);
   min-height: 0;
 }
 @media (max-width: 900px) {
@@ -216,6 +212,23 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-xs);
+}
+/* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、UpdatePanel 共用）。
+   放在这里而不是某个具体面板的段落里 —— 它跨面板复用；改名前叫 `.mini-x`，
+   悬浮窗遮罩撤掉之后就彻底名不副实了。 */
+.panel-close {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.panel-close:hover {
+  background: var(--wash-strong);
 }
 
 /* ── 自选列表行（窄导航栏：一行只放交易对名） ─────────────── */
@@ -274,6 +287,15 @@ body {
   margin-left: auto;
   display: flex;
   align-items: center;
+  gap: 2px;
+}
+/* 现价列：定宽 + 右对齐 + tabular-nums（`.num` 已带），三样合起来数字才竖着对齐。
+   定宽同时兜住「拿不到行情」时那个 `--` 占位，行不会因为价格出现/消失而抖动。 */
+.row-price {
+  min-width: 66px;
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: -0.2px;
 }
 .row-remove,
 .row-add {
@@ -434,13 +456,19 @@ body {
   color: var(--paper);
 }
 
-/* 顶部工具条里的全市场搜索：桌面窗口够宽，让它吃掉中间的空档 */
+/* 顶部工具条里的全市场搜索：桌面窗口够宽，让它吃掉中间的空档。
+   `.search-wrap` 只负责定位（结果浮层贴它的下沿），宽度约束挂在这一层；
+   `.search-field` 自己撑满 wrap —— 搜索框与「清空」按钮仍是同一行的两个元素。 */
+.search-wrap {
+  position: relative;
+  flex: 1;
+  max-width: 460px;
+}
 .search-field {
   display: flex;
   align-items: center;
   gap: var(--sp-xs);
-  flex: 1;
-  max-width: 460px;
+  width: 100%;
 }
 .search-field input {
   flex: 1;
@@ -455,6 +483,94 @@ body {
 }
 .search-field input:focus {
   border-color: var(--hairline-strong);
+}
+
+/* ── 搜索结果下拉框 ──────────────────────────────────────
+   浮在内容之上，所以层级要压过图表；沿设计系统的做法用发丝线而非阴影
+   （`--surface` 实底 + `--hairline-strong` 一圈，与更新弹窗同一个观感），
+   z-index 取 40 —— 低于弹窗(50)与拉伸把手(55)：弹窗开着时它就该被盖住。 */
+.search-drop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.sr-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-xs);
+  padding: var(--sp-xs) var(--sp-sm);
+  border-bottom: 1px solid var(--hairline);
+}
+.sr-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+/* 结果区封顶后内部滚动：拉到全市场 80 条也不会把浮层撑到屏幕外 */
+.sr-scroll {
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.sr-scroll::-webkit-scrollbar {
+  display: none;
+}
+.sr-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xxs);
+  min-height: 30px;
+  padding: 3px var(--sp-sm);
+  border-bottom: 1px solid var(--hairline);
+  cursor: pointer;
+}
+.sr-row:last-child {
+  border-bottom: 0;
+}
+/* 高亮：键盘 ↑↓ 与鼠标悬停走同一个下标，所以两种操作的观感一致 */
+.sr-row.active {
+  background: var(--wash-strong);
+}
+.sr-row.active .sr-name {
+  color: var(--accent);
+}
+.sr-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sr-quote {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+.sr-tail {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+}
+.sr-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  padding: 4px var(--sp-sm);
+  border-top: 1px solid var(--hairline);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
 }
 
 /* ── 图表面板 ─────────────────────────────────────────── */
@@ -563,17 +679,19 @@ body {
 /* ── 迷你悬浮窗 ──────────────────────────────────────────
    无边框透明窗口：圆角与发丝线全靠 CSS 画，所以 body 必须透明。
    面板高度只由自选条数决定：`min(条数, --mini-max-rows) × --mini-row-h + 2px 边框`，
-   >5 条时行区封顶滚动。窗口高度侧由 Rust 按同一条式子算（lib.rs 的
-   `MINI_ROW_H` / `MINI_MAX_ROWS`，**改这两个变量就得同步改那边**）；
+   >6 条时行区封顶滚动。下面两个变量只是**兜底默认值** —— 真正的来源是
+   `src/lib/layout.ts` 的 `MINI_ROW_HEIGHT` / `MINI_MAX_ROWS`，由 MiniApp 注入成
+   内联 CSS 变量；Rust 侧 lib.rs 的 `MINI_ROW_H` / `MINI_MAX_ROWS` 必须跟 layout.ts 对齐
+   （跨 FFI 没法共享常量，只能靠这条注释互指 —— **改 layout.ts 时记得一起改**）。
    前端只报条数、不报高度 —— 悬浮窗预建时是隐藏窗口，量不到排版。
    Rust 调窗口时保持下边缘不动（见 lib.rs set_mini_rows）。 */
 [data-window='mini'] body {
   background: transparent;
 }
 .mini {
-  --mini-row-h: 32px;
-  --mini-max-rows: 5;
-  position: relative;
+  /* 兜底默认值，实际值由 MiniApp 从 lib/layout.ts 注入 */
+  --mini-row-h: 26px;
+  --mini-max-rows: 6;
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -583,45 +701,9 @@ body {
   cursor: default;
   user-select: none;
 }
-/* 没有常驻标题栏：鼠标移上来才浮出遮罩层（左边市场、右边两个操作按钮）。
-   操作按钮贴顶排（就是原来顶栏那一条的位置），底下的行不再露字；
-   `pointer-events: none` 让遮罩不挡行点选 —— 只有按钮自己收事件。 */
-.mini-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-xxs);
-  padding: 5px 6px 0 12px;
-  background: var(--scrim);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--fast) var(--ease-standard);
-}
-.mini:hover .mini-overlay {
-  opacity: 1;
-}
-.mini-overlay .grow {
-  flex: 1;
-}
-.mini-overlay .mini-x {
-  pointer-events: auto;
-}
-.mini-x {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  background: none;
-  color: var(--ink);
-  border-radius: var(--r-xs);
-  cursor: pointer;
-}
-.mini-x:hover {
-  background: var(--wash-strong);
-}
+/* 没有常驻标题栏、也没有遮罩层：整块面板都是价格。隐藏走**右键的原生菜单**
+   （`lib.rs` 的 `open_mini_menu`，原生 popup 才能画到面板外面）。
+   左键保持原样：点行 = 主窗并选中该标的，点空白 = 只切到主窗。 */
 .mini-rows {
   max-height: calc(var(--mini-row-h) * var(--mini-max-rows));
   overflow-y: auto;
@@ -634,10 +716,10 @@ body {
   width: 100%;
   height: var(--mini-row-h);
   display: grid;
-  grid-template-columns: 1fr auto 58px;
+  grid-template-columns: 1fr auto 52px;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 0 12px;
+  padding: 0 10px;
   background: none;
   border: 0;
   border-bottom: 1px solid var(--hairline);
@@ -651,12 +733,18 @@ body {
 .mini-row:last-child {
   border-bottom: 0;
 }
-.mini-row:hover {
+/* 行的 hover 底色以 `.inside` 为前提：`:hover` 一旦卡住，残留的是「某一行一直亮着」
+   这种静态痕迹（悬浮窗会被拖走、会被改高度、会被收起，这几条路径上鼠标都没能正常离开）。
+   判定见 hooks/usePointerInside.ts。 */
+.mini.inside .mini-row:hover {
   background: var(--wash);
 }
 .mini-sym {
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .mini-price {
   font-size: 12px;
@@ -665,11 +753,18 @@ body {
   font-size: 11px;
   text-align: right;
 }
+/* 自选为空时的占位行：它也是「点面板换到主窗」的落点之一 ——
+   行有涨跌色和边框、一眼看得出是行，这条纯文字必须靠指针形状提示可点。
+   **高度钉成正好一行**：Rust 的高度算法 `rows.clamp(1, …)` 也给空自选留了一行（26+2=28），
+   这里要是按 padding 自然撑高（曾实测 43px），内容就比窗口高出一截，靠溢出被裁掉。 */
 .mini-empty {
-  padding: var(--sp-sm) var(--sp-md);
+  height: var(--mini-row-h);
+  display: grid;
+  place-items: center;
   font-size: 12px;
   color: var(--muted);
   text-align: center;
+  cursor: pointer;
 }
 
 /* ── 自绘窗口控件 ────────────────────────────────────────

@@ -54,7 +54,7 @@ export function UpdatePanel({
         <header className="up-head">
           <span className="overline">应用更新</span>
           <span className="grow" />
-          <button className="mini-x" title="关闭" onClick={onClose}>
+          <button className="panel-close" title="关闭" onClick={onClose}>
             ×
           </button>
         </header>

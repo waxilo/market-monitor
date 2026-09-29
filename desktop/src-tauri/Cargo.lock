@@ -1914,6 +1914,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-updater",
  "url",
+ "windows",
 ]
 
 [[package]]

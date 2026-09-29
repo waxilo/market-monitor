@@ -220,6 +220,13 @@ pub fn app_version(app: AppHandle) -> String {
 /// 返回 null 表示已是最新（含通道里还没有比当前更新的版本）。
 #[tauri::command]
 pub async fn check_update(app: AppHandle, mirror: String) -> Result<Option<UpdateInfoDto>, String> {
+    // dev 构建不参与更新通道。它跑的是 `target/debug/market-monitor.exe`（身份
+    // `com.waxilo.marketmonitor.dev`），而通道里发的是正式包 —— 允许它就等于
+    // 让「调试实例」原地变成「正式安装版」，两条线从此串在一起。
+    if cfg!(debug_assertions) {
+        return Err("开发版不检查更新".to_string());
+    }
+
     let mirror = Mirror::from_key(&mirror);
     let chain = mirror.chain(MANIFEST_URL);
     let endpoints: Vec<Url> = chain

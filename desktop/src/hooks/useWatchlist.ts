@@ -44,19 +44,28 @@ function migrate(value: unknown): WatchItem | null {
   return null;
 }
 
-/** 从 localStorage 读一份当前自选（悬浮窗与主窗是两套 React 实例，各自读同一份数据）。 */
+/**
+ * 从 localStorage 读一份当前自选（悬浮窗与主窗是两套 React 实例，各自读同一份数据）。
+ *
+ * **只有「没存过」才给默认自选；存过就是真相，空列表也算**。早先是 `list.length > 0`
+ * 才认，结果「把自选删空」被当成了「首次启动」：主窗删空后悬浮窗每 4s 读一次又拿回
+ * 默认 8 条，两窗显示不一致，悬浮窗的「自选为空」提示也就永远到不了。
+ */
 export function readWatchlist(): WatchItem[] {
+  let raw: string | null;
   try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) {
-        const list = parsed.map(migrate).filter((x): x is WatchItem => x != null);
-        if (list.length > 0) return list;
-      }
+    raw = localStorage.getItem(KEY);
+  } catch {
+    return DEFAULT_WATCHLIST; // 隐私模式等拿不到 storage：当成首次启动
+  }
+  if (raw == null) return DEFAULT_WATCHLIST;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.map(migrate).filter((x): x is WatchItem => x != null);
     }
   } catch {
-    /* 落回默认 */
+    /* 坏数据 → 落回默认 */
   }
   return DEFAULT_WATCHLIST;
 }

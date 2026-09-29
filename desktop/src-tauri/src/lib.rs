@@ -2,26 +2,31 @@ mod market;
 mod update;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{ContextMenu, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
-    WindowEvent,
+    Window, WindowEvent,
 };
 
 const MAIN: &str = "main";
 const MINI: &str = "mini";
+/// 悬浮窗右键菜单里「隐藏」那一条的 id（菜单在 `open_mini_menu` 里建，
+/// 语义统一在 `run()` 的全局 `on_menu_event` 里处理）。
+const MENU_MINI_HIDE: &str = "mini_hide";
 const MINI_W: f64 = 268.0;
-/// 行高与封顶行数**必须与 theme.css 的 `--mini-row-h` / `--mini-max-rows` 一致**
-/// （那边管视觉，这边管窗口高度，改一个就得改另一个）。封顶之外的行靠行区内部滚动看。
-const MINI_ROW_H: f64 = 32.0;
-const MINI_MAX_ROWS: u32 = 5;
+/// 行高与封顶行数**必须与 `src/lib/layout.ts` 的 `MINI_ROW_HEIGHT` / `MINI_MAX_ROWS`
+/// 一致**：那边是权威定义（前端渲染行高也用它），这边管真实窗口高度，
+/// 跨 FFI 没法共享常量，只能手工同步。theme.css 里的同名声明只是兜底默认值。
+/// 封顶之外的行靠行区内部滚动看。
+const MINI_ROW_H: f64 = 26.0;
+const MINI_MAX_ROWS: u32 = 6;
 /// 面板上下各 1px 边框。
 const MINI_CHROME_H: f64 = 2.0;
-/// 预建时的高度 = 封顶条数的高度，所以「自选 ≥ 5 条」的用户一上来就是对的尺寸。
+/// 预建时的高度 = 封顶条数的高度，所以「自选 ≥ 6 条」的用户一上来就是对的尺寸。
 const MINI_H: f64 = MINI_MAX_ROWS as f64 * MINI_ROW_H + MINI_CHROME_H;
 /// 窗口高度的下界/上界（逻辑像素），兜住前端传来的离谱条数。
 const MINI_MIN_H: f64 = MINI_ROW_H + MINI_CHROME_H;
-const MINI_MAX_H: f64 = 170.0;
+const MINI_MAX_H: f64 = 166.0;
 /// 距屏幕右侧 / 下侧的边距（逻辑像素）。
 const MINI_MARGIN_X: f64 = 24.0;
 const MINI_MARGIN_Y: f64 = 96.0;
@@ -141,6 +146,21 @@ fn switch_to_main(app: AppHandle) {
     show_main(&app);
 }
 
+/// 悬浮窗右键菜单。
+///
+/// **菜单必须由宿主弹**（原生 popup）：悬浮窗就面板那么大，在 webview 里画一层
+/// HTML 菜单立刻会被窗口边界裁掉 —— 原生菜单是独立窗口，能正常溢出到面板外面。
+///
+/// 条目的语义不写在这儿：id 交回 `run()` 里那个全局 `on_menu_event`，
+/// 免得「隐藏悬浮窗」在两处各实现一遍。
+#[tauri::command]
+fn open_mini_menu(window: Window, app: AppHandle) -> Result<(), String> {
+    let hide = MenuItem::with_id(&app, MENU_MINI_HIDE, "隐藏悬浮窗", true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(&app, &[&hide]).map_err(|e| e.to_string())?;
+    menu.popup(window).map_err(|e| e.to_string())
+}
+
 /// 悬浮窗的目标高度（逻辑像素）：`min(条数, 封顶行数) × 行高 + 边框`。
 ///
 /// 空自选也留一行 —— 那一行就是 `.mini-empty` 的「自选为空」提示。
@@ -190,6 +210,140 @@ fn set_mini_rows(app: AppHandle, rows: u32) {
     let _ = window.set_position(PhysicalPosition::new(pos.x, y));
 }
 
+/// 悬浮窗不被 Windows 任务栏压住。
+///
+/// 悬浮窗与任务栏**同为 topmost 窗口**。点击任务栏时系统会把任务栏提到 topmost 组的
+/// 最前，于是盖住悬浮窗；而这件事不会给我们发任何事件（用户点的是任务栏，我们的窗口
+/// 连激活都没参与），所以只能自己查 z 序、事后纠正。
+///
+/// 只在「确实被任务栏压住」时才动手：无条件重设 topmost 会周期性地把自己压到
+/// 开始菜单等其它 topmost 窗口前面，那比被压住更烦人。
+#[cfg(windows)]
+fn watch_mini_above_taskbar(app: AppHandle) {
+    use std::time::Duration;
+
+    /// 轮询间隔。够短 —— 点完任务栏几乎立刻看到悬浮窗回到最前。
+    const TICK: Duration = Duration::from_millis(500);
+
+    std::thread::spawn(move || loop {
+        std::thread::sleep(TICK);
+        let handle = app.clone();
+        // 窗口操作统一回主线程做（Tauri 的窗口线程约定）
+        let _ = app.run_on_main_thread(move || {
+            let Some(window) = handle.get_webview_window(MINI) else {
+                return;
+            };
+            if !window.is_visible().unwrap_or(false) {
+                return;
+            }
+            let Ok(hwnd) = window.hwnd() else {
+                return;
+            };
+            if taskbar::is_buried_by_taskbar(hwnd) {
+                taskbar::raise(hwnd);
+            }
+        });
+    });
+}
+
+/// macOS 的 Dock 与 NSWindow 是另一套 level 规则（floating level 本就压不过 Dock），
+/// 而本项目只发 Windows 安装包 —— 这里留空实现，不假装处理了。
+#[cfg(not(windows))]
+fn watch_mini_above_taskbar(_app: AppHandle) {}
+
+/// 任务栏遮挡相关的 Win32 调用（`windows` crate 只在 Windows 目标上依赖）。
+#[cfg(windows)]
+mod taskbar {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetClassNameW, GetWindow, GetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GW_HWNDPREV,
+        HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WS_EX_TOPMOST,
+    };
+
+    /// 任务栏的窗口类名：主屏一个，副屏一个（多显示器时每个屏各有一条任务栏）。
+    const TASKBAR_CLASSES: [&str; 2] = ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"];
+
+    fn class_name(hwnd: HWND) -> String {
+        let mut buf = [0u16; 64];
+        let len = unsafe { GetClassNameW(hwnd, &mut buf) };
+        if len <= 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buf[..len as usize])
+    }
+
+    /// 类名比对单独拎出来，好让它能被离线单测覆盖（`is_taskbar` 要真窗口，测不了）。
+    fn matches_taskbar_class(class: &str) -> bool {
+        TASKBAR_CLASSES
+            .iter()
+            .any(|known| class.eq_ignore_ascii_case(known))
+    }
+
+    fn is_taskbar(hwnd: HWND) -> bool {
+        matches_taskbar_class(&class_name(hwnd))
+    }
+
+    /// 悬浮窗当前是否被任务栏压着。
+    ///
+    /// 沿 z 序往上（`GW_HWNDPREV`）**只看同一个 topmost 组**：topmost 窗口永远排在所有
+    /// 非 topmost 之上，所以碰到第一个非 topmost 窗口就可以停 —— 它上面的都压不住我们。
+    /// （`GetWindow` 取不到上一个窗口就是已经到顶，同样结束。）
+    pub fn is_buried_by_taskbar(hwnd: HWND) -> bool {
+        let mut cursor = hwnd;
+        while let Ok(above) = unsafe { GetWindow(cursor, GW_HWNDPREV) } {
+            let ex_style = unsafe { GetWindowLongPtrW(above, GWL_EXSTYLE) } as u32;
+            if ex_style & WS_EX_TOPMOST.0 == 0 {
+                return false;
+            }
+            if is_taskbar(above) {
+                return true;
+            }
+            cursor = above;
+        }
+        false
+    }
+
+    /// 把窗口重新提到 topmost 组最前。
+    ///
+    /// **不能**用 `set_always_on_top(true)`：tao 对窗口 flags 做了去重
+    /// （`WindowState::set_window_flags` 里 `diff == empty` 就直接 return），
+    /// `ALWAYS_ON_TOP` 早已置位 ⇒ 重复调用根本走不到 `SetWindowPos`，什么都不会发生。
+    pub fn raise(hwnd: HWND) {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn taskbar_class_matches_both_forms() {
+            assert!(matches_taskbar_class("Shell_TrayWnd"));
+            assert!(matches_taskbar_class("Shell_SecondaryTrayWnd"));
+            // 类名大小写不敏感
+            assert!(matches_taskbar_class("shell_traywnd"));
+        }
+
+        #[test]
+        fn taskbar_class_rejects_lookalikes() {
+            assert!(!matches_taskbar_class(""));
+            assert!(!matches_taskbar_class("Shell_TrayWndX"));
+            assert!(!matches_taskbar_class("TrayWnd"));
+            assert!(!matches_taskbar_class("Progman"));
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -201,6 +355,7 @@ pub fn run() {
             show_main_window,
             switch_to_mini,
             switch_to_main,
+            open_mini_menu,
             set_mini_rows,
             market::market_request,
             update::check_update,
@@ -258,7 +413,17 @@ pub fn run() {
             // 悬浮窗启动即预建（隐藏），从托盘/主窗按钮唤起
             let _ = create_mini(app.handle());
 
+            // 后台看住悬浮窗的 z 序：被任务栏压住就重新置顶（见 watch_mini_above_taskbar）
+            watch_mini_above_taskbar(app.handle().clone());
+
             Ok(())
+        })
+        // 全局菜单事件：托盘菜单有自己的 `on_menu_event`，这里只接「没有自己的处理者」
+        // 的那些菜单 —— 目前就是悬浮窗右键菜单。
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == MENU_MINI_HIDE {
+                hide_mini(app);
+            }
         })
         .on_window_event(|window, event| {
             // 主窗点关闭 = 收进托盘，进程继续跑，悬浮窗照常刷新
@@ -277,19 +442,20 @@ pub fn run() {
 mod tests {
     use super::*;
 
-    /// 钉住产品约定：`min(条数, 5) × 32 + 2`。字面量是照着 theme.css 的
-    /// `--mini-row-h` / `--mini-max-rows` 写的 —— 那边改了，这里必须一起改。
+    /// 钉住产品约定：`min(条数, 6) × 26 + 2`。字面量是照着 theme.css 的
+    /// `--mini-row-h` / `--mini-max-rows` 与 src/lib/layout.ts 写的
+    /// —— 那两处改了，这里必须一起改。
     #[test]
     fn mini_height_follows_row_count() {
-        assert_eq!(mini_height_for_rows(0), 34.0, "空自选也要留一行提示");
-        assert_eq!(mini_height_for_rows(1), 34.0);
-        assert_eq!(mini_height_for_rows(3), 98.0);
-        assert_eq!(mini_height_for_rows(5), 162.0);
-        assert_eq!(mini_height_for_rows(8), 162.0, "超过 5 条封顶，靠行区内部滚动");
-        assert_eq!(mini_height_for_rows(u32::MAX), 162.0, "离谱条数不能撑爆窗口");
+        assert_eq!(mini_height_for_rows(0), 28.0, "空自选也要留一行提示");
+        assert_eq!(mini_height_for_rows(1), 28.0);
+        assert_eq!(mini_height_for_rows(3), 80.0);
+        assert_eq!(mini_height_for_rows(6), 158.0);
+        assert_eq!(mini_height_for_rows(8), 158.0, "超过 6 条封顶，靠行区内部滚动");
+        assert_eq!(mini_height_for_rows(u32::MAX), 158.0, "离谱条数不能撑爆窗口");
     }
 
-    /// 预建高度必须正好是「封顶条数」的高度：自选 ≥5 条的用户一上来就该是最终尺寸，
+    /// 预建高度必须正好是「封顶条数」的高度：自选 ≥6 条的用户一上来就该是最终尺寸，
     /// 否则首次显示会看到一次跳变；同时它得落在钳位区间内，否则首次 resize 会被削掉。
     #[test]
     fn prebuild_height_is_the_capped_height() {

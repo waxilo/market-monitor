@@ -10,6 +10,7 @@ import { useTickers } from './hooks/useTickers';
 import { useSparks } from './hooks/useSparks';
 import { useInstruments, useMarketTickers } from './hooks/useMarketData';
 import { MarketList } from './components/MarketList';
+import { SearchDropdown } from './components/SearchDropdown';
 import { ChartView } from './components/ChartView';
 import { WindowChrome } from './components/WindowChrome';
 import { MiniWindowIcon } from './components/icons';
@@ -31,10 +32,13 @@ export default function App() {
     localStorage.getItem(MARKET_KEY) === 'SPOT' ? 'SPOT' : 'FUTURES',
   );
   const [query, setQuery] = useState('');
+  /** 搜索下拉框的显隐。与 `query` 分开：点击外部只收起浮层、保留已输入的关键词。 */
+  const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const { items, add, remove } = useWatchlist();
   const instruments = useInstruments(market);
   const searchActive = query.trim().length > 0;
+  // 全量快照只为搜索结果的成交额排序服务：不进搜索就不拉
   const snapshot = useMarketTickers(market, searchActive);
   /** 顶栏空白处按住就能搬窗口（按钮/输入框上不生效，双击最大化）。 */
   const windowDrag = useWindowDrag({ dblClickMaximize: true });
@@ -126,21 +130,57 @@ export default function App() {
           ))}
         </div>
 
-        <div className="search-field">
-          <input
-            ref={searchRef}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setQuery('');
-            }}
-            placeholder={`搜索${MARKET_LABEL[market]}全市场，如 BTC（Ctrl+K）`}
-            spellCheck={false}
-          />
-          {searchActive && (
-            <button className="icon-btn" onClick={() => setQuery('')} title="清空搜索（Esc）">
-              清空
-            </button>
+        {/* 搜索框 + 结果浮层是一组：浮层贴着输入框下沿定位，所以外面要有个定位容器。
+            输入即开、点外部/Esc 收起，关键词保留在框里。 */}
+        <div className="search-wrap">
+          <div className="search-field">
+            <input
+              ref={searchRef}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setQuery('');
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder={`搜索${MARKET_LABEL[market]}全市场，如 BTC（Ctrl+K）`}
+              spellCheck={false}
+            />
+            {searchActive && (
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  setQuery('');
+                  setSearchOpen(false);
+                  searchRef.current?.focus();
+                }}
+                title="清空搜索（Esc）"
+              >
+                清空
+              </button>
+            )}
+          </div>
+
+          {searchOpen && searchActive && (
+            <SearchDropdown
+              market={market}
+              keyword={query.trim()}
+              instruments={instruments}
+              snapshot={snapshot}
+              items={marketItems}
+              onPick={(item) => {
+                setSelected(item);
+                setSearchOpen(false);
+              }}
+              onAdd={add}
+              onRemove={remove}
+              onClose={() => setSearchOpen(false)}
+            />
           )}
         </div>
 
@@ -166,7 +206,7 @@ export default function App() {
         <button
           className="icon-btn icon-only"
           onClick={switchToMiniWindow}
-          title="切到悬浮窗：只看自选价格（悬浮窗上的图标切回这里）"
+          title="切到悬浮窗：只看自选价格（在悬浮窗上点一下切回这里）"
         >
           <MiniWindowIcon />
         </button>
@@ -190,14 +230,9 @@ export default function App() {
           market={market}
           items={marketItems}
           instruments={instruments}
-          snapshot={snapshot}
+          cells={cells}
           selected={selected}
-          query={query}
           onSelect={setSelected}
-          onAdd={(item) => {
-            add(item);
-            setSelected(item);
-          }}
           onRemove={remove}
         />
         <ChartView

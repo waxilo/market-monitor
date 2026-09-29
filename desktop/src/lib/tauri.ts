@@ -28,9 +28,24 @@ export function showMainWindow(item: { market: string; symbol: string }) {
  *
  * 只报条数、不报高度：悬浮窗是启动时预建的**隐藏**窗口，隐藏状态下 WebView2 不给它排版，
  * 量不到 `getBoundingClientRect()`、读 CSS 变量也不可靠，只有「条数」是一定算得出来的。
- * 行高 / 封顶行数因此收在 Rust 侧（`MINI_ROW_H` / `MINI_MAX_ROWS`，注释里标了与 theme.css 的对应关系）。
+ * 行高 / 封顶行数因此收在 Rust 侧（`MINI_ROW_H` / `MINI_MAX_ROWS`），前端那两份
+ * 定义在 `lib/layout.ts`（TS 侧的权威）与 `styles/theme.css`（视觉投影）。
  */
 export function resizeMiniRows(rows: number) {
   if (!IS_TAURI) return;
   void invoke('set_mini_rows', { rows });
+}
+
+/**
+ * 悬浮窗右键菜单。
+ *
+ * 菜单在 Rust 侧用原生 popup 弹（`open_mini_menu`），不在这里画 HTML ——
+ * 悬浮窗就面板那么大，webview 里画的菜单会被窗口自己的边界裁掉。
+ * 失败不往上报：菜单没弹出来不值得打断用户，托盘菜单里有同一个开关。
+ */
+export function openMiniMenu() {
+  if (!IS_TAURI) return;
+  void invoke('open_mini_menu').catch(() => {
+    /* 见上：静默 */
+  });
 }

@@ -127,7 +127,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
           }}>
             {probing ? '检测中…' : '全部重新检测'}
           </button>
-          <button className="mini-x" title="关闭" onClick={onClose}>
+          <button className="panel-close" title="关闭" onClick={onClose}>
             ×
           </button>
         </header>
