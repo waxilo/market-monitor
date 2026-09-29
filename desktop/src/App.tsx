@@ -204,13 +204,6 @@ export default function App() {
         >
           数据源
         </button>
-        <button
-          className="icon-btn icon-only"
-          onClick={switchToMiniWindow}
-          title="切到悬浮窗：只看自选价格（在悬浮窗上点一下切回这里）"
-        >
-          <MiniWindowIcon />
-        </button>
         <button className="icon-btn" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
           {theme === 'dark' ? '浅色' : '深色'}
         </button>
@@ -232,6 +225,16 @@ export default function App() {
           )}
         </button>
         <span className="winops-divider" />
+        {/* 悬浮窗开关放在窗口控件组的最左（紧邻最小化）：它和「最小化」是同一类操作
+            —— 都是把窗口收起来，跟左边的数据源/主题/更新（改的是应用内容）不同组。
+            不能塞进 WindowChrome，那个组件只管窗口控件与拉伸热区。 */}
+        <button
+          className="icon-btn icon-only mini-entry"
+          onClick={switchToMiniWindow}
+          title="切到悬浮窗：只看自选价格（在悬浮窗上点一下切回这里）"
+        >
+          <MiniWindowIcon />
+        </button>
         <WindowChrome />
       </header>
 

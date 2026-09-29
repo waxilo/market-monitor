@@ -782,6 +782,12 @@ body {
   margin: 3px 2px;
   background: var(--hairline);
 }
+/* 悬浮窗开关（顶栏最右、窗口控件组左边）：顶栏的 flex gap 是 --sp-md，
+   这里抵掉它，让 ◫ 与「最小化」的间距跟组内按钮一致（见 .winops 的 2px），
+   视觉上读作同一组「把窗口收起来」的操作。 */
+.toolbar .mini-entry {
+  margin-right: calc(2px - var(--sp-md));
+}
 .winbtn {
   width: 30px;
   height: 22px;
