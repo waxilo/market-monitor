@@ -167,32 +167,60 @@
   `verify-intervals-ui.mjs`（36 条真实渲染：默认 8 个 → 添加 2h → 上移 → 关弹窗周期条跟着变 → 刷新仍在 →
   点了 2h 后**拦 fetch 断言真的请求了 `interval=2h`** → 预置 MEXC 源断言 12h 置灰 + 当前周期回落 → 恢复默认）。
 
-## 画线（`src/lib/priceLines.ts` + `hooks/usePriceLines.ts`）
-右键主图 = 加/删水平线（**不弹自绘菜单**：只有两个操作，菜单多一次点击，且会被窗口边界裁掉）。
+## 画线（`src/lib/priceLines.ts` + `src/lib/trendLines.ts` + `hooks/useDrawings.ts`）
+右键主图 = 加/删水平线（**不弹自绘菜单**：只有两个操作，菜单多一次点击，且会被窗口边界裁掉）；
+两点直线 = 「直线」chip 进画线模式，图上点两下、或按住直接拖出来（**贯穿全图的直线**，同花顺「直线」工具的口径）。
 - `lib/priceLines.ts`（零依赖纯函数）：`parseLineStore` / `addPriceLine`（同价不重复）/ `removePriceLine` /
   `movePriceLine` / `nearestLineWithin(ys, y, tolerance = 4px)`。
   ❗**数组顺序 = 添加顺序，绝不许排序** —— 拖拽期间下标必须稳定。
-- `hooks/usePriceLines.ts`：`mm.priceLines`（`{ [symbolKey]: number[] }`）+ `mm.priceLineLock`（**全局锁**）。
-  所有写操作走**函数式 setState**（调用方是每 `pointermove` 一次的手势，不能用过期闭包里的值）。
-- `KlineCanvas.tsx` 手势机：`dragging: boolean` → `type Mode = 'none' | 'pan' | 'line'`。
-  - `onContextMenu`：`preventDefault()`（挡 Chromium 自带菜单）→ 锁定则 return → 仅主图内有效
-    （`x > plotW || y < top || y > bottom` 直接 return）→ 命中已线 `onRemoveLine`，否则 `onAddLine(priceOfY(y))`。
-  - 抓线条件（全部满足）：未锁 && `x ≤ plotW` && `y ∈ [top, bottom]` && `hitLine(y) ≥ 0`。
-    move 时**只调** `onMoveLine(index, priceOfY(y))`、**不自己重画** —— 靠上层 state 回流，保证单一数据源。
+- `lib/trendLines.ts`（零依赖纯函数，2026-09-29 新增）：`parseTrendStore` / `addTrendLine`（两点完全重合不画）/
+  `removeTrendLine` / `moveTrendLineBy`（整体平移）/ `moveTrendAnchor`（拖一端，另一端当支点）/
+  `clipLineToRect`（Liang–Barsky，无限直线裁到主图）/ `distanceToLinePx` / `nearestTrendHandle`（6px）/
+  `nearestTrendBody`（4px）。**把手容差必须大于线身**：把手是「改角度」的唯一入口，难点中就等于没法编辑。
+- ❗直线的锚点是**数据空间**（时间戳 ms + 价格），不是蜡烛下标：序列是滚动的 300 根窗口，下标会漂，
+  时间戳不会 —— 刷新/换周期后线还落在同一段行情上。屏幕坐标由 `KlineCanvas.anchorPx` 实时换算，
+  **绘制与命中判定共用这一处**（两处各写一份必分叉，`xOf` 就吃过这个亏）。
+  配套 `chartMath.ts` 的 `timeIndexOf`/`timeAtIndex`（严格互逆：数据内按相邻两根真实间隔插值 —— 1M 是
+  28~31 天、缺根的洞同理；首尾之外按 `intervalMs` 外推 —— 线画到未来/过去都合法）。
+- `hooks/useDrawings.ts`（`usePriceLines` 扩成）：`mm.priceLines` + `mm.trendLines`（同一套 `市场:标的` 键）+
+  `mm.priceLineLock`（**一把锁管两种线**）。所有写操作走**函数式 setState**（调用方是每 `pointermove` 一次的手势）。
+- `KlineCanvas.tsx` 手势机：`type Mode = 'none' | 'pan' | 'line' | 'trend-body' | 'trend-anchor' | 'draw'`。
+  - 「直线」chip 点亮（`trendArmed`）时**左键整体让给画线**：平移与抓取都让路。点两下成线（第二点 <8px
+    当作空点、保持待定），按住拖 ≥8px 也成线 —— 两种手势同一条收口。Esc / 右键 / 锁住 / 换标的的复位都退模式。
+    读数带与时间轴里的点击不算锚点（与「只有主图里能画水平线」同规）；拖动预览甩出主图不受限（取到更远的
+    时间/价格，锚点仍良定义）。
+  - 未锁时的抓取优先序：端点把手 → 直线线身 → 水平线（= 绘制顺序的逆序）；画线模式的判断在这三者**之前**。
+  - 线身平移的位移按**当前映射**换算成数据空间增量（`timeAtIndex(indexOfX(x))` 之差 + `priceOfY` 之差），
+    **别自己推「像素 / 格宽 × 周期」**—— 视窗被夹住时那个公式不成立。
+  - `onContextMenu` 顺序：锁住 ⇒ 什么都不做；画线模式 ⇒ 退出（模式内右键不删除：左键画/右键删会让同一张
+    画布手感分叉）；否则把手 → 直线 → 水平线，都不中才在落点价格新增水平线。`Esc` 挂 document（canvas 不可聚焦）。
+  - `onPointerDown` 先 `if (e.button !== 0) return`；副图区 `belowMain(y)` 直接 return（副图全只读，含 `onDblClick`）。
   - `onWheel`：`belowMain(y)` 时 **return 但仍 `preventDefault()`**（不挡的话浏览器去滚 `.chart-scroll`，
     等于「副图滑轮动了主图」）。
-  - `onPointerDown` 先 `if (e.button !== 0) return`；副图区 `belowMain(y)` 直接 return（副图全只读，含 `onDblClick`）。
-  - 空闲光标：命中线 `ns-resize`；十字光标**照旧贯穿副图**（只读但可照价）。
-- 绘制：`--line-mark`（dark `#8b9bff` / light `#4b5bd6`）`[5,3]` 虚线，画在**最新价虚线之前**；
+  - 空闲光标：命中把手 `grab`、线身 `move`、水平线 `ns-resize`、画线模式 `crosshair`；十字光标**照旧贯穿副图**
+    （只读但可照价）。
+- 绘制：水平线 `--line-mark`（dark `#8b9bff` / light `#4b5bd6`）`[5,3]` 虚线，画在**最新价虚线之前**；
   其价格标也画在最新价标**之前**，同高时被最新价盖住。
-- UI（指标条末尾）：`画线` 标签（说明进 `title`，标签长了会把条挤成两行）+ `锁定/已锁` chip + `清空 N` chip。
+  直线**实线**（同色系不同线型：虚线读作「一个价位」、实线读作「一条斜率」），两锚点决定方向、向两端延伸到
+  主图边界裁掉；端点小圆点只在未锁时画（锁就是「别再动它」，不给能抓的错觉）。
+- UI（指标条末尾）：`画线` 标签（说明进 `title`）+ `直线` chip（锁住时禁用）+ `锁定/已锁` chip +
+  `清空 N` chip（**两种线合起来计数**）。
   ❗这两个控件是必要的：锁持久化在 `mm.priceLineLock`，没有可点入口用户找不到怎么解锁 / 怎么清理。
-- `modelRef` 本轮扩到 `{ series, heights, interval, tickSize, priceLines, linesLocked, onAddLine, onRemoveLine,
-  onMoveLine }`，同步 effect **不写依赖数组**且声明在绘制 effect **之前**（事件监听只在挂载时绑定，不能拖拽中途解绑）。
+  ❗**1280 宽下指标条只剩 ~30px 富余**（内容 ~1015 / 可用 ~1046，侧栏展开时）：标签一律要短、说明进 `title`。
+  本轮加「直线」chip 时就是差这 40px 折成了两行（画布 600 → 628 高），最后把「副图 · 可多选」压成「副图」才收住。
+- `modelRef` 扩到 `{ series, heights, interval, tickSize, priceLines, trendLines, linesLocked, trendArmed,
+  onAddLine, onRemoveLine, onMoveLine, onAddTrend, onRemoveTrend, onMoveTrendBy, onMoveTrendAnchor, onDisarmTrend }`，
+  同步 effect **不写依赖数组**且声明在绘制 effect **之前**（事件监听只在挂载时绑定，不能拖拽中途解绑）。
 - ❗`ResizeObserver` 必须同时存**宽和高**：`const [box, setBox] = useState({ w: 0, h: 0 })`。只存高时「只改宽度」
   会让 `setState` bail out ⇒ canvas 位图不重排、被 CSS 拉糊（侧栏收起正是这种「只改宽度」）。
 - 验收：`verify-price-lines.mts`（16 条纯函数）、`verify-chart-interaction.mjs`（43 条真实渲染，
-  含副图只读配主图对照、`attrW === clientW × dpr` 锁位图同步、刷新后线还在）。
+  含副图只读配主图对照、`attrW === clientW × dpr` 锁位图同步、刷新后线还在）；
+  **两点直线**：`verify-trend-lines.mts`（**140 条纯函数**：坏存储值、增删、平移/绕端点转、裁剪含水平/垂直/陡线/
+  擦角点/整线在外、命中容差边界、时间换算往返含缺口与单根、100 点单调性扫描）+
+  `verify-trend-lines-ui.mjs`（**68 条真实渲染**：点两下成线、按住拖成线、拖线身（像素位移 = 拖拽距离）、
+  拖端点（线仍穿过另一端）、右键删、锁住后右键/拖拽全不生效、清空两种线、刷新后锚点逐字节相同、
+  平移/缩放后锚点不变、待定 + Esc 取消、画线模式内右键只退出不删；像素判据 = 线色像素数 + 列增量 +
+  **左右边缘条带都有差异**（贯穿全图，不是 A-B 线段））。两个脚本都靠预注入 fetch 桩喂确定性 K 线，不碰网络。
 
 ## 十字光标（`lib/chartMath.ts::overDataAt`，2026-09-29 新增）
 ❗**竖线只在「真压在某根蜡烛上」时才画；视窗右侧的留白里不画竖线**（横线与右上角价格标**照旧**画，

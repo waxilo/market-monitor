@@ -306,6 +306,58 @@ export function overDataAt(v: Viewport, fraction: number, barCount: number): boo
   return raw >= -0.5 && raw <= barCount - 1 + 0.5;
 }
 
+/* ── 时间锚点（两点直线用）：时间戳 ⇄ 浮点下标 ────────────── */
+
+/**
+ * 时间戳 → **浮点下标**。
+ *
+ * 与它严格互逆的是 `timeAtIndex`，而画布里的 `xOf(i) = (i - start + 0.5) * slot`
+ * 用同一套下标 ⇒「点击落点 → 锚点 → 回放位置」是封闭的，线不会因来回换算漂移。
+ * 不用 `indexAt`：那个带末端的半格取整（给读数与命中用），拿它反换算会漂。
+ *
+ * 数据内按相邻两根插值（1M 的相邻间隔是 28~31 天，不是固定 30 天；缺根的洞同理）；
+ * 首尾之外按 `intervalMs` 外推 —— 线画到未来/过去都是合法的。
+ */
+export function timeIndexOf(
+  candles: readonly { timestamp: number }[],
+  t: number,
+  intervalMs: number,
+): number {
+  const n = candles.length;
+  if (n === 0 || !Number.isFinite(t) || !(intervalMs > 0)) return NaN;
+  const first = candles[0].timestamp;
+  if (n === 1) return (t - first) / intervalMs;
+  const last = candles[n - 1].timestamp;
+  if (t <= first) return (t - first) / intervalMs;
+  if (t >= last) return n - 1 + (t - last) / intervalMs;
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (candles[mid].timestamp <= t) lo = mid;
+    else hi = mid;
+  }
+  const span = candles[hi].timestamp - candles[lo].timestamp;
+  return span > 0 ? lo + (t - candles[lo].timestamp) / span : lo;
+}
+
+/** 浮点下标 → 时间戳（`timeIndexOf` 的反函数；数据窗口外同样按 `intervalMs` 外推）。 */
+export function timeAtIndex(
+  candles: readonly { timestamp: number }[],
+  index: number,
+  intervalMs: number,
+): number {
+  const n = candles.length;
+  if (n === 0 || !Number.isFinite(index)) return NaN;
+  const first = candles[0].timestamp;
+  if (n === 1) return first + index * intervalMs;
+  const last = candles[n - 1].timestamp;
+  if (index <= 0) return first + index * intervalMs;
+  if (index >= n - 1) return last + (index - (n - 1)) * intervalMs;
+  const i = Math.floor(index);
+  return candles[i].timestamp + (index - i) * (candles[i + 1].timestamp - candles[i].timestamp);
+}
+
 /* ── 时间轴标签落点 ───────────────────────────────────── */
 
 export interface TimeLabelPlacement {

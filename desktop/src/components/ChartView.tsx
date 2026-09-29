@@ -20,7 +20,7 @@ import {
 import { useSourceKey, endpointOf } from '../lib/sources';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
-import { usePriceLines } from '../hooks/usePriceLines';
+import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
 import { KlineCanvas } from './KlineCanvas';
@@ -63,10 +63,17 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   const market = item?.market;
   const symbol = item?.symbol;
   /**
-   * 水平线（画线）+ 它的锁。按标的存（与自选同键）—— 线画在「这个价」上，
+   * 画线（水平线 + 两点直线）+ 一把锁。按标的存（与自选同键）—— 线画在「这段行情」上，
    * 换周期不该丢，换标的必须分开。
    */
-  const priceLines = usePriceLines(item ? watchKey(item) : null);
+  const drawings = useDrawings(item ? watchKey(item) : null);
+  /** 画直线模式（「直线」chip 点亮）。落盘不必要：它是一次会话内的一次操作意图。 */
+  const [trendArmed, setTrendArmed] = useState(false);
+  // 锁住时模式必须退掉：否则 chip 亮着、图上一片死寂，看着像画不上（实际是被锁挡的）
+  useEffect(() => {
+    if (drawings.locked) setTrendArmed(false);
+  }, [drawings.locked]);
+  const drawingCount = drawings.priceLines.length + drawings.trendLines.length;
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
   const source = useSourceKey(market);
   /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
@@ -230,7 +237,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           BOLL
         </button>
         <div className="sep" />
-        <span className="bar-label">副图 · 可多选</span>
+        {/* 指标条在 1280 宽下只剩几十 px 富余（内容 ~1015 / 可用 ~1046），标签必须短：
+            「副图 · 可多选」比「副图」多 33px，加上「直线」chip 那 42px 就折成两行、
+            白吃掉 20 多 px 图高。多选说明进 title。 */}
+        <span className="bar-label" title="副图指标可多选：点亮的都会显示（一个不点亮 = 不显示副图）">
+          副图
+        </span>
         {SUB_PANE_KINDS.map((kind) => (
           <button
             key={kind}
@@ -241,34 +253,47 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           </button>
         ))}
         <div className="sep" />
-        {/* 画线：操作全在画布上（右键加减、拖动改价），这里只给锁与清理。
-            标签刻意短 —— 指标条是靠 .interval-bar 的 wrap 兜底的，
-            多写几个字就会在 1280 宽的窗口下折成两行、白吃掉 20 多 px 图高；
-            手势提示放进 title。 */}
+        {/* 画线：操作全在画布上（右键加/删水平线、拖动改线、「直线」chip 进画线模式），
+            这里只给入口、锁与清理。标签刻意短 —— 指标条是靠 .interval-bar 的 wrap 兜底的，
+            多写几个字就会在 1280 宽的窗口下折成两行、白吃掉 20 多 px 图高；手势提示放进 title。 */}
         <span
           className="bar-label"
-          title="右键主图添加水平线；右键已有的线删掉；拖动线能改价（锁住后三个都不生效）"
+          title="水平线：右键主图空白处添加、右键线上删除；直线：点「直线」后在图上点两下（或按住拖出来）。两种线都能拖动调整，锁住后一概不可动"
         >
           画线
         </span>
         <button
-          className={`chip${priceLines.locked ? ' on' : ''}`}
-          onClick={priceLines.toggleLock}
+          className={`chip${trendArmed ? ' on' : ''}`}
+          disabled={drawings.locked}
+          onClick={() => setTrendArmed((v) => !v)}
           title={
-            priceLines.locked
-              ? '已锁住：水平线不能再增删、也不能拖动。点一下解锁'
-              : '锁住水平线：右键与拖动一概不生效（防手滑改图）'
+            drawings.locked
+              ? '先解锁才能画直线'
+              : trendArmed
+                ? '正在画直线：在图上点第二下成线（Esc 或右键取消）'
+                : '画直线：两点定一条贯穿全图的直线 —— 图上点两下，或按住从起点直接拖出来'
           }
         >
-          {priceLines.locked ? '已锁' : '锁住'}
+          直线
+        </button>
+        <button
+          className={`chip${drawings.locked ? ' on' : ''}`}
+          onClick={drawings.toggleLock}
+          title={
+            drawings.locked
+              ? '已锁住：水平线与直线都不能增删、不能拖动、也不能画。点一下解锁'
+              : '锁住画线（水平线与直线）：右键、拖动、画直线一概不生效（防手滑改图）'
+          }
+        >
+          {drawings.locked ? '已锁' : '锁住'}
         </button>
         <button
           className="chip"
-          disabled={priceLines.locked || priceLines.lines.length === 0}
-          onClick={priceLines.clear}
-          title={priceLines.locked ? '先解锁才能清空' : '删掉当前标的的全部水平线'}
+          disabled={drawings.locked || drawingCount === 0}
+          onClick={drawings.clear}
+          title={drawings.locked ? '先解锁才能清空' : '删掉当前标的的全部画线（水平线 + 直线）'}
         >
-          清空 {priceLines.lines.length}
+          清空 {drawingCount}
         </button>
       </div>
 
@@ -281,11 +306,18 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         tickSize={instrument?.tickSize}
         theme={theme}
         resetKey={`${item.market}|${item.symbol}|${interval}`}
-        priceLines={priceLines.lines}
-        linesLocked={priceLines.locked}
-        onAddLine={priceLines.add}
-        onRemoveLine={priceLines.removeAt}
-        onMoveLine={priceLines.moveAt}
+        priceLines={drawings.priceLines}
+        trendLines={drawings.trendLines}
+        linesLocked={drawings.locked}
+        trendArmed={trendArmed}
+        onAddLine={drawings.addPriceLine}
+        onRemoveLine={drawings.removePriceLine}
+        onMoveLine={drawings.movePriceLine}
+        onAddTrend={drawings.addTrendLine}
+        onRemoveTrend={drawings.removeTrendLine}
+        onMoveTrendBy={drawings.moveTrendLineBy}
+        onMoveTrendAnchor={drawings.moveTrendAnchor}
+        onDisarmTrend={() => setTrendArmed(false)}
       />
 
       {intervalPanelOpen && (
