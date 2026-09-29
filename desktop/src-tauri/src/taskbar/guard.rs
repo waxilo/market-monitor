@@ -42,7 +42,7 @@ const FALLBACK: Duration = Duration::from_millis(2000);
 /// 有了它，最坏情况也只是每 100ms 收敛一轮。
 const MIN_RAISE_GAP: Duration = Duration::from_millis(100);
 
-/// 窗口句柄在窗口创建/重建时登记进来（见 [`set_mini_hwnd`]）。
+/// 窗口句柄在窗口创建/重建时登记进来（见 [`super::claim`]）。
 static MINI_HWND: AtomicIsize = AtomicIsize::new(0);
 
 static STARTED: Once = Once::new();

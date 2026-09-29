@@ -98,10 +98,10 @@ fn create_mini(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .transparent(true)
         .build()
         .ok()?;
-    // 把句柄登记给 z 序守护：它只跟这个 HWND 打交道，不回主线程（见 `taskbar` 模块）。
-    if let Ok(hwnd) = window.hwnd() {
-        taskbar::set_mini_hwnd(hwnd.0 as isize);
-    }
+    // 认领给 z 序守护：它只跟这个窗口的 HWND 打交道，不回主线程（见 `taskbar` 模块）。
+    // 取句柄的写法本身是平台相关的（`WebviewWindow::hwnd()` 只有 Windows 目标有），
+    // 所以那件事封装在模块里，这里不出现 `cfg`。
+    taskbar::claim(&window);
     Some(window)
 }
 
