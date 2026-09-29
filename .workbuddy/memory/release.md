@@ -28,6 +28,23 @@
   manifest 内联签名 == `.sig` 文件内容 / 版本比较 / 无旧版残留）。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`。发版记录：`0.9.26`/`desktop 0.1.2`
-  （通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→ `desktop 0.1.4`（发现新版自动下载 +
-  下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`。
+  发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
+  `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
+  `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）。
+  ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
+
+- ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
+  `market-monitor-0.9.28.apk` 的签名证书
+  **SHA-256 = `cf2e20c74d1edd4d1fb290afee3b68ed1a18e20ac70a89e4ab5c43ec2d52f034`**
+  （DN `CN=Waxilo, OU=Market Monitor, O=Waxilo, L=Beijing, ST=Beijing, C=CN`，SHA-1 `b539f267…`）
+  ⇒ 走的是**正式 release keystore**，不是 CI 自生成的 debug keystore（那种每次发版都换密钥）。
+  核法：下载新 APK 后跑
+  `JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" "C:/Users/sloan.wang/android-sdk/build-tools/36.0.0/apksigner.bat" verify --print-certs <apk>`，
+  指纹**必须与上面逐字一致** —— 不一致 = 覆盖安装必报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，那批用户只能卸载重装。
+
+- ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**：上次发版若走过 Git Data API 重建，
+  远端那个提交与本地是**同内容、不同 SHA**（时间戳被规范成 UTC）。先
+  `rev-parse <a>^{tree} <b>^{tree}` 比 tree + `git diff --stat` 确认等价，再
+  `git rebase --onto origin/main <本地那个等价提交>` 换基。（2026-09-29 发 0.1.6 实测：本地 `8f69de2` ↔ 远端
+  `ff4a0dd`，tree 同为 `665ae30…`。副作用：本地 `desktop-v0.1.5` tag 因此游离 ⇒ **推 tag 只写要发的名字，别用 `--tags`**。）
