@@ -262,6 +262,18 @@ git push origin main desktop-v0.2.0
 | `market-monitor_<v>_windows.exe.sig` | Windows 应用内更新用 |
 | `latest.json` | 通道清单：版本 + 各平台的下载地址与 minisign 签名 |
 
+发完版怎么验（不是「看一眼 Release 在不在」，而是把应用侧判定重跑一遍并**真的下载**）：
+
+```bash
+node "C:/Users/sloan.wang/.workbuddy/skills/tauri-gh-release-verify/scripts/verify-channel.mjs"       # 应判「已是最新」
+node "C:/Users/sloan.wang/.workbuddy/skills/tauri-gh-release-verify/scripts/verify-channel.mjs" 0.1.1 # 应判「有更新」
+```
+
+28 条断言覆盖：发布列表恰好两个通道、manifest 可取且两平台齐全、版本判定、
+**通道里没有上一版残留产物**、安装包真下载比对 SHA-256 边车、`.sig` 解出的 keyid == 内嵌公钥 keyid、
+Android 通道的 APK 版本能从文件名读出来。失败即非 0 退出码。
+（`.workbuddy/tmp/verify-desktop-update-chain.mjs` 是它的转发壳，在仓库根目录跑等价。）
+
 ### 签名与凭据（都不入库）
 
 | 凭据 | 本机位置 | GitHub Secret |

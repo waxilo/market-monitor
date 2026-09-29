@@ -35,16 +35,25 @@
 - ❗**不要开关/覆盖用户本机正在跑的那份应用**（用户为此明确抗议过一次）。dev 与安装版数据目录不同（自选列表**不是**同一份），并且 **dev 构建不进更新通道**：`update.rs::check_update` 在 `cfg!(debug_assertions)` 下直接返回「开发版不检查更新」—— 前端 `useUpdate` 启动时会静默检查，不放行就等于「装一次更新把调试实例换成正式安装版」。
 - 构建：`npx.cmd --yes @tauri-apps/cli@^2 build`（裸 `npx tauri` 失败）；改 Rust 用 `cargo build` —— **改了前端也要 cargo build**（debug 内嵌 `../dist`）。反过来说：**`cargo build --release` 不会因为 `dist/` 变了就重新链接** —— cargo 指纹里没有前端产物，`tauri-build` 只在 CLI codegen 路径写 `rerun-if-changed`；只改前端却直接 build 会打 `Finished` 但 exe 还是旧的（曾据此得出「改动没生效」的错误结论）。要么 `tauri dev/build`，要么 `touch src-tauri/src/lib.rs` 再 build。
   - ⚠️ 沙箱里 `npm run tauri dev` 会死在 `failed to run command 'npm run dev' with 'cmd /S /C': 所有的管道范例都在使用中。(os error 231)` —— tauri CLI 用 `cmd /S /C` 起 `beforeDevCommand`，沙箱的 stdout 管道撑不住（重定向到文件也没用）。绕法：**自己先起 Vite（`npm run dev -- --port 5173 --strictPort`），再用 `tauri dev --no-watch -c <覆盖配置>`** —— 覆盖配置里把 `build.beforeDevCommand` 置空即可（`-c` 指向 `.workbuddy/tmp/` 下的 json，别写进仓库正式配置；`--config` 内联 JSON 在 cmd 下引号会被吃）。顺带：tauri 配置是严格 schema，自定义键一律当作 `Additional properties are not allowed`，别想加 `_comment`。
-- **发版与验收见 skill `tauri-gh-release-verify`**（首发 `desktop-v0.1.0`：改 `tauri.conf.json` 的 `version` → 构建 → 纯 hex `.sha256` 边车 → `gh release create` 只传 `-setup.exe`+边车）。
-  - ⚠️ **0.1.1 起应用侧机制已换**：只认固定通道 `desktop-latest` 的 `latest.json`（官方 `tauri-plugin-updater` 发现+比较，`update.rs` 只管加速站与 minisign 自验），`update.rs` 里**没有 `pick_asset`/`-setup.exe` 列表筛选**了；skill 里那套「拉 `releases?per_page=100` 筛 `desktop-v*`」是 **0.1.0 的旧机制**（已在 skill 里标注，但那份 skill 整体仍待重写）。
-  - `productName` = `MarketMonitor` 后本地产物名是 `MarketMonitor_<v>_x64-setup.exe`（CI 上传时会改名成 `market-monitor_<v>_<platform>.exe`；应用端按 latest.json 的固定 URL 取包，不靠文件名筛）。
-- 无前端测试框架：`npm run build` = `tsc --noEmit && vite build`；Rust 单测 `cargo test --offline`。核对脚本在 `.workbuddy/tmp/`（`verify-desktop-math.mts` 纯函数 / `verify-desktop-ui.mjs` 版式+遮罩 / `verify-desktop-search-drop.mjs` 搜索下拉交互 / `verify-desktop-update-chain.mjs` / `smoke-desktop.py` 几何，**必须 DPI 感知**；`verify-mini-taskbar.py` 任务栏遮挡，真机 z 序判定）。
+- **发版 = 推 tag，CI 出包**（不在本地构建）：改 `desktop/src-tauri/tauri.conf.json` 的 `version` → commit → 推 main → 打 `desktop-v<版本>` 推 → `Desktop Release` 两端并行构建（macOS arm64 `app,dmg` + Windows `nsis`）→ `.github/scripts/publish-channel.sh` 原地换进 `desktop-latest`。
+  - `productName` = `MarketMonitor` 后本地产物名是 `MarketMonitor_<v>_x64-setup.exe`；CI 收集时改名为 `market-monitor_<v>_<platform>.exe`（应用端按 `latest.json` 的固定 URL 取包，不靠文件名）。
+  - ⚠️ `.sig` 是 **base64(minisign 签名文件全文)**，不是裸签名 —— 想验 keyid 得先 base64 解一层拿到文本，再解第二行（`Ed`/`ED` + keyid(8) + sig(64) = 74 字节）。
+  - 发版与验收步骤见 skill `tauri-gh-release-verify`（**2026-09-29 已按通道模型重写，v2.0.0**）：配套脚本 `scripts/verify-channel.mjs` 复刻整条链路（28 条断言：两通道唯一 / manifest / 版本判定 / **通道无上一版残留** / 真下载比 SHA-256 / `.sig` keyid == 内嵌公钥 / Android APK 版本取自文件名）。
+- 无前端测试框架：`npm run build` = `tsc --noEmit && vite build`；Rust 单测 `cargo test --offline`。核对脚本在 `.workbuddy/tmp/`（`verify-desktop-math.mts` 纯函数 / `verify-desktop-ui.mjs` 版式 / `verify-desktop-search-drop.mjs` 搜索下拉交互 / `verify-desktop-update-chain.mjs` **已是转发壳**，真实现在 skill 的 `scripts/verify-channel.mjs` / `smoke-desktop.py` 几何，**必须 DPI 感知**；`verify-mini-taskbar.py` 任务栏遮挡，真机 z 序判定）。
   - 真机脚本注意：**Bash 工具调用结束时会把子进程树一起收掉**，所以「启动应用 → 操作 → 断言」必须在同一次调用里做完；打包的 python 3.13 **没有 tkinter**（要造测试窗口直接用 ctypes `RegisterClassExW`+`CreateWindowExW`，还能自定义类名伪装成任务栏）；`taskkill` 输出是 GBK，`subprocess.run(..., text=True)` 会 UnicodeDecodeError，加 `errors="ignore"`。
   - ⚠️ CDP 脚本的两个坑（都踩过）：① **只改 fragment 的跳转（`/#/mini` ⇄ `/`）是同文档导航，`loadEventFired` 不发** ⇒ 纯等事件挂死（曾零输出 5 分钟），必须配兜底超时 + 每次导航带不同 `?v=`；再加全局看门狗。② 量浮层位置/宽度要挑对**锚点元素**，量错元素会得出假问题。
   - ⚠️ 断言依赖外部数据的（如 Gate 1.3MB 全量合约表）**必须轮询等它真就位**再断言，并把页面里的提示文案一起打出来 —— 否则「清单还没到」会被误判成「功能坏了」。用 CDP 派发鼠标/键盘真事件（`Input.insertText` / `dispatchKeyEvent`）比原生 setter 造假事件更可信。
 - ❗WebView2 远程调试口走不通（Tauri 自己设了 additional_browser_args，环境变量被忽略）。
 
-## 跨端速查
-- Android 用 `/releases/latest` 比 `versionName`；桌面端拉列表只挑 `desktop-v*`。
-- ⚠️ `/releases/latest` 取「**最新创建**的非 draft/非预发布」⇒ 发完桌面端就不再指向 Android 包（Android 静默判「无更新」，不误弹但收不到提示）。彻底解耦 = 两端都「拉列表筛 tag 前缀」。
-- 发版前确认改动真的 commit 了、目标 tag 不存在。
+## 跨端速查（2026-09-29 起：**每端一个固定通道 Release**）
+
+- **两端各只有一个 Release**，tag 固定、永不新增；发新版只换里面的产物。共用 `.github/scripts/publish-channel.sh`：通道不存在才创建，存在就**先清空上一次的全部产物**再传新的（不清会新旧并存，用户可能下到过期包）。
+
+  | 端 | 通道 tag | 产物 | 应用怎么读 |
+  | --- | --- | --- | --- |
+  | Android | `android-latest` | `market-monitor-<version>.apk` + `.sha256` | `/repos/<o>/<r>/releases/tags/android-latest`，版本从**产物名**读 |
+  | 桌面端 | `desktop-latest` | `latest.json` + dmg/exe + `.sig` / `.sha256` | `/releases/download/desktop-latest/latest.json` |
+
+- ⚠️ **两端都不再用 `/releases/latest`**（它按「最新**创建**」算、与 tag 语义无关；以前桌面端一发版就把 Android 的包抢走）。**版本号的唯一载体是产物名**，不是 tag —— tag 现在纯粹是**触发器**（`desktop-v*` → Desktop Release，裸版本号 → Android Release）。
+- ⚠️ **现存 Android（≤0.9.26）收不到应用内更新了**：老代码读 latest，拿到的 `android-latest` 解析不出版本 ⇒ 判「无更新」（不误弹、也不装错包）。要在下一个 Android 版本手动装一次。
+- 发版前确认改动真的 commit 了；目标 tag 不存在（`desktop-v0.1.2` 已存在）。
