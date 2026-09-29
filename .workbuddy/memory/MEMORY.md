@@ -57,5 +57,7 @@
   | 桌面端 | `desktop-latest` | `latest.json` + dmg/exe + `.sig` / `.sha256` | `/releases/download/desktop-latest/latest.json` |
 
 - ⚠️ **两端都不再用 `/releases/latest`**（它按「最新**创建**」算、与 tag 语义无关；以前桌面端一发版就把 Android 的包抢走）。**版本号的唯一载体是产物名**，不是 tag —— tag 现在纯粹是**触发器**（`desktop-v*` → Desktop Release，裸版本号 → Android Release）。
-- ⚠️ **现存 Android（≤0.9.26）收不到应用内更新了**：老代码读 latest，拿到的 `android-latest` 解析不出版本 ⇒ 判「无更新」（不误弹、也不装错包）。要在下一个 Android 版本手动装一次。
-- 发版前确认改动真的 commit 了；目标 tag 不存在（`desktop-v0.1.2` 已存在）。
+- ⚠️ **存量 Android（≤0.9.26）收不到应用内更新**：老代码读 latest，拿到的 `android-latest` 解析不出版本 ⇒ 判「无更新」（不误弹、也不装错包，只是收不到提示）。**0.9.27 是第一个走新链路的版本**，那批用户得手动装一次才回到链路上（已写进 README）。
+- **验收一条命令**：`node ~/.workbuddy/skills/tauri-gh-release-verify/scripts/verify-channel.mjs [当前版本]` —— 28 条断言覆盖两个通道（发布列表恰好 2 条、manifest、真下载 + sha256、`.sig` keyid、无残留）。**证明「原地换、没新建」看 `createdAt`**：`gh api repos/<o>/<r>/releases/tags/<通道> --jq .created_at`，发版前后不变就是原地换（`desktop-latest` 一直是 `2026-09-28T12:55:50Z`）。
+- 发版前确认改动真的 commit 了；目标 tag 不存在（已用掉：`0.9.27`、`desktop-v0.1.3`）。
+- 发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序滚动修复）。
