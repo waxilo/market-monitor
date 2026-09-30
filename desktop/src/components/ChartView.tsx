@@ -23,9 +23,34 @@ import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
-import { KlineCanvas } from './KlineCanvas';
+import { KlineCanvas, type DrawTool } from './KlineCanvas';
 
 const MA_CHOICES = [5, 10, 20, 30, 60];
+
+/** 工具条那四格（**单选**）：选中哪一格，右边就只展开哪一组的选项。 */
+type BarTab = 'interval' | 'indicator' | 'subpane' | 'draw';
+
+/**
+ * 一格只管一件事，标签都得短（指标条是靠 `.interval-bar` 的 wrap 兜底的，
+ * 多写几个字就在 1280 宽下折成两行、白吃掉 20 多 px 图高）。
+ * 说明文字进 `hint`（title）：选中那一格之后要干什么，鼠标停上去就能看到。
+ */
+const BAR_TABS: readonly { id: BarTab; label: string; hint: string }[] = [
+  { id: 'interval', label: '周期', hint: '点一个换一张图；末尾的「＋」是增删与排序' },
+  { id: 'indicator', label: '指标', hint: '主图叠加：均线可多选，布林带单独开关' },
+  { id: 'subpane', label: '副图', hint: '副图可多选，一个都不点亮 = 不显示副图' },
+  {
+    id: 'draw',
+    label: '画图',
+    hint: '只有选中这一格才能在图上动线：左键画、拖动移、右键删',
+  },
+];
+
+/** 画线工具（单选）：水平线 = 单击落线；直线 = 拖出来或点两下。 */
+const DRAW_TOOLS: readonly { id: DrawTool; label: string; hint: string }[] = [
+  { id: 'hline', label: '水平线', hint: '在图上点一下就在那个价上落一条水平线；按住拖仍是平移' },
+  { id: 'trend', label: '直线', hint: '两点定一条贯穿全图的直线 —— 按住从起点拖出来，或点两下' },
+];
 /**
  * 第一次进来是**裸 K 线**：均线 / 布林带 / 副图全关。
  * （App 端默认开 5/10/30 + VOL，桌面端按需求改成从零开始 —— 指标是用户自己叠上去的，
@@ -54,6 +79,11 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    * 它不一定在用户的列表里 —— 那种情况交给下面的回落规则处理。
    */
   const [interval, setInterval_] = useState(FALLBACK_INTERVAL);
+  /**
+   * 工具条当前选中哪一格。**不落盘**：它只是「现在要看/要改哪一组」的临时焦点，
+   * 重启后回到周期最直白（尤其是「画图」—— 谁都不希望一开机右键就在改图）。
+   */
+  const [tab, setTab] = useState<BarTab>('interval');
   const [intervalPanelOpen, setIntervalPanelOpen] = useState(false);
   const [maPeriods, setMaPeriods] = useState<number[]>(DEFAULT_MA);
   /** 布林带默认关，与 AppSettings 的 bollEnabled 默认值一致。 */
@@ -63,17 +93,27 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   const market = item?.market;
   const symbol = item?.symbol;
   /**
-   * 画线（水平线 + 两点直线）+ 一把锁。按标的存（与自选同键）—— 线画在「这段行情」上，
+   * 画线（水平线 + 两点直线）。按标的存（与自选同键）—— 线画在「这段行情」上，
    * 换周期不该丢，换标的必须分开。
    */
   const drawings = useDrawings(item ? watchKey(item) : null);
-  /** 画直线模式（「直线」chip 点亮）。落盘不必要：它是一次会话内的一次操作意图。 */
-  const [trendArmed, setTrendArmed] = useState(false);
-  // 锁住时模式必须退掉：否则 chip 亮着、图上一片死寂，看着像画不上（实际是被锁挡的）
-  useEffect(() => {
-    if (drawings.locked) setTrendArmed(false);
-  }, [drawings.locked]);
+  /**
+   * 「画图」格里选中的工具。落盘不必要：它是一次会话内的操作意图；默认水平线（点一下就完事，
+   * 是最常画的那一种）。
+   */
+  const [drawTool, setDrawTool] = useState<DrawTool>('hline');
   const drawingCount = drawings.priceLines.length + drawings.trendLines.length;
+  /** 选中「画图」那格 = 画布现在可以动线；另外三格都只是看图，手滑改不了图。 */
+  const canDraw = tab === 'draw';
+
+  /**
+   * 换格子。离开「画图」时把工具退回水平线 —— 下次进来先给最不容易误操作的那一种，
+   * 而不是停在「直线」上让人对着空白一顿拖。
+   */
+  function pickTab(next: BarTab) {
+    setTab(next);
+    if (next !== 'draw') setDrawTool('hline');
+  }
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
   const source = useSourceKey(market);
   /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
@@ -199,102 +239,127 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         </div>
       </div>
 
+      {/* 工具条：四格**单选**（周期 / 指标 / 副图 / 画图），选中哪一格右边就只展开哪一组。
+          平铺那版在 1280 宽下只剩几十 px 富余（内容 ~1015 / 可用 ~1046），再加一组就得折行、
+          白吃掉 20 多 px 图高；收成单选之后每行只出现当前那一组，行宽基本恒定。 */}
       <div className="interval-bar">
-        {intervals.map((iv) => {
-          // 表外周期由更细的原生周期**聚合**出来，所以不再有「点了会得到空白图」的周期 ——
-          // 一律可点；只在 title 里说明它是原生直取还是拼出来的。
-          const synth = synthesisOf(iv, natives);
-          return (
+        <div className="bar-tabs" role="radiogroup" aria-label="图表工具条">
+          {BAR_TABS.map((t) => (
             <button
-              key={iv}
-              className={`chip${iv === interval ? ' selected' : ''}`}
-              title={synth ? synth.title : undefined}
-              onClick={() => setInterval_(iv)}
+              key={t.id}
+              type="button"
+              role="radio"
+              aria-checked={tab === t.id}
+              className={`chip${tab === t.id ? ' selected' : ''}`}
+              title={t.hint}
+              onClick={() => pickTab(t.id)}
             >
-              {iv}
+              {t.label}
             </button>
-          );
-        })}
-        <button
-          className="icon-btn"
-          title="添加 / 移除 / 排序 K 线周期"
-          onClick={() => setIntervalPanelOpen(true)}
-        >
-          周期
-        </button>
+          ))}
+        </div>
         <div className="sep" />
-        <span className="bar-label">叠加</span>
-        {MA_CHOICES.map((p) => (
-          <button
-            key={p}
-            className={`chip${maPeriods.includes(p) ? ' on' : ''}`}
-            onClick={() => toggleMa(p)}
-          >
-            MA{p}
-          </button>
-        ))}
-        <button className={`chip${showBoll ? ' on' : ''}`} onClick={() => setShowBoll((v) => !v)}>
-          BOLL
-        </button>
-        <div className="sep" />
-        {/* 指标条在 1280 宽下只剩几十 px 富余（内容 ~1015 / 可用 ~1046），标签必须短：
-            「副图 · 可多选」比「副图」多 33px，加上「直线」chip 那 42px 就折成两行、
-            白吃掉 20 多 px 图高。多选说明进 title。 */}
-        <span className="bar-label" title="副图指标可多选：点亮的都会显示（一个不点亮 = 不显示副图）">
-          副图
-        </span>
-        {SUB_PANE_KINDS.map((kind) => (
-          <button
-            key={kind}
-            className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
-            onClick={() => toggleSubPane(kind)}
-          >
-            {SUB_PANE_LABEL[kind]}
-          </button>
-        ))}
-        <div className="sep" />
-        {/* 画线：操作全在画布上（右键加/删水平线、拖动改线、「直线」chip 进画线模式），
-            这里只给入口、锁与清理。标签刻意短 —— 指标条是靠 .interval-bar 的 wrap 兜底的，
-            多写几个字就会在 1280 宽的窗口下折成两行、白吃掉 20 多 px 图高；手势提示放进 title。 */}
-        <span
-          className="bar-label"
-          title="水平线：右键主图空白处添加、右键线上删除；直线：点「直线」后在图上点两下（或按住拖出来）。两种线都能拖动调整，锁住后一概不可动"
-        >
-          画线
-        </span>
-        <button
-          className={`chip${trendArmed ? ' on' : ''}`}
-          disabled={drawings.locked}
-          onClick={() => setTrendArmed((v) => !v)}
-          title={
-            drawings.locked
-              ? '先解锁才能画直线'
-              : trendArmed
-                ? '正在画直线：在图上点第二下成线（Esc 或右键取消）'
-                : '画直线：两点定一条贯穿全图的直线 —— 图上点两下，或按住从起点直接拖出来'
-          }
-        >
-          直线
-        </button>
-        <button
-          className={`chip${drawings.locked ? ' on' : ''}`}
-          onClick={drawings.toggleLock}
-          title={
-            drawings.locked
-              ? '已锁住：水平线与直线都不能增删、不能拖动、也不能画。点一下解锁'
-              : '锁住画线（水平线与直线）：右键、拖动、画直线一概不生效（防手滑改图）'
-          }
-        >
-          {drawings.locked ? '已锁' : '锁住'}
-        </button>
-        <button
-          className="chip"
-          disabled={drawings.locked || drawingCount === 0}
-          onClick={drawings.clear}
-          title={drawings.locked ? '先解锁才能清空' : '删掉当前标的的全部画线（水平线 + 直线）'}
-        >
-          清空 {drawingCount}
-        </button>
+
+        {tab === 'interval' && (
+          <>
+            {intervals.map((iv) => {
+              // 表外周期由更细的原生周期**聚合**出来，所以不再有「点了会得到空白图」的周期 ——
+              // 一律可点；只在 title 里说明它是原生直取还是拼出来的。
+              const synth = synthesisOf(iv, natives);
+              return (
+                <button
+                  key={iv}
+                  className={`chip${iv === interval ? ' selected' : ''}`}
+                  title={synth ? synth.title : undefined}
+                  onClick={() => setInterval_(iv)}
+                >
+                  {iv}
+                </button>
+              );
+            })}
+            {/* 末尾这一枚「＋」就是原来的「周期」按钮：增删与排序都在弹窗里（IntervalPanel） */}
+            <button
+              className="chip"
+              title="添加 / 移除 / 排序 K 线周期"
+              onClick={() => setIntervalPanelOpen(true)}
+            >
+              ＋
+            </button>
+          </>
+        )}
+
+        {tab === 'indicator' && (
+          <>
+            {MA_CHOICES.map((p) => (
+              <button
+                key={p}
+                className={`chip${maPeriods.includes(p) ? ' on' : ''}`}
+                title={`叠加 MA${p}（可多选）`}
+                onClick={() => toggleMa(p)}
+              >
+                MA{p}
+              </button>
+            ))}
+            <button
+              className={`chip${showBoll ? ' on' : ''}`}
+              title="布林带：主图叠加开关（周期 20、倍数 2）"
+              onClick={() => setShowBoll((v) => !v)}
+            >
+              BOLL
+            </button>
+          </>
+        )}
+
+        {tab === 'subpane' && (
+          <>
+            {SUB_PANE_KINDS.map((kind) => (
+              <button
+                key={kind}
+                className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
+                title={`${SUB_PANE_LABEL[kind]} 副图（可多选，一个都不点亮 = 不显示副图）`}
+                onClick={() => toggleSubPane(kind)}
+              >
+                {SUB_PANE_LABEL[kind]}
+              </button>
+            ))}
+          </>
+        )}
+
+        {tab === 'draw' && (
+          <>
+            {/* 这一格是整个画线功能的总开关：选中才动得了线。里面再**单选**一个工具
+                （水平线 / 直线），造型沿用左边那四格的分段选择器；手势说明直接写在条上，
+                不用逐个 chip 去摸。 */}
+            <div className="bar-tabs" role="radiogroup" aria-label="画线工具">
+              {DRAW_TOOLS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={drawTool === t.id}
+                  className={`chip${drawTool === t.id ? ' selected' : ''}`}
+                  title={t.hint}
+                  onClick={() => setDrawTool(t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <span className="bar-label">
+              {drawTool === 'hline'
+                ? '左键单击落线 · 拖动移线 · 右键删线'
+                : '按住拖出直线 · 或点两下 · 拖动移线 · 右键删线'}
+            </span>
+            <button
+              className="chip"
+              disabled={drawingCount === 0}
+              onClick={drawings.clear}
+              title="删掉当前标的的全部画线（水平线 + 直线）"
+            >
+              清空 {drawingCount}
+            </button>
+          </>
+        )}
       </div>
 
       <KlineCanvas
@@ -308,8 +373,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         resetKey={`${item.market}|${item.symbol}|${interval}`}
         priceLines={drawings.priceLines}
         trendLines={drawings.trendLines}
-        linesLocked={drawings.locked}
-        trendArmed={trendArmed}
+        drawTool={canDraw ? drawTool : null}
         onAddLine={drawings.addPriceLine}
         onRemoveLine={drawings.removePriceLine}
         onMoveLine={drawings.movePriceLine}
@@ -317,7 +381,6 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         onRemoveTrend={drawings.removeTrendLine}
         onMoveTrendBy={drawings.moveTrendLineBy}
         onMoveTrendAnchor={drawings.moveTrendAnchor}
-        onDisarmTrend={() => setTrendArmed(false)}
       />
 
       {intervalPanelOpen && (

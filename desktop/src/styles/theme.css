@@ -153,6 +153,12 @@ body {
   padding: var(--sp-xs) var(--sp-md);
   border-bottom: 1px solid var(--hairline);
   background: var(--surface);
+  /* 双击顶栏是为了最大化，不是为了选字：不关掉选择，那两下会划出一段蓝条。
+     搜索框要能选词，单独开回来。 */
+  user-select: none;
+}
+.toolbar input {
+  user-select: text;
 }
 .toolbar .grow {
   flex: 1;
@@ -678,15 +684,39 @@ body {
   color: var(--muted);
   align-self: center;
 }
+/* 左四格（周期/指标/副图/画图）是一个**单选**组：它们不许被压窄，
+   宁可让右边的选项组按 wrap 换行。flex-wrap 之外再禁掉 shrink，
+   中文标签（2 字 ≈ 20px + padding 14px）才不会被挤成竖排。
+   造型走分段选择器：共享一根外框、内部只留分隔线（与主题选择器 `.set-seg`、
+   周期弹窗的「分/时/天」同一套），选中那格填 accent —— 一眼看出它和右边
+   那些独立 chip（可多选）不是一类控件。 */
+.interval-bar .bar-tabs {
+  display: flex;
+  flex-shrink: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  overflow: hidden;
+}
+.interval-bar .bar-tabs .chip {
+  border: 0;
+  border-left: 1px solid var(--hairline);
+  border-radius: 0;
+  padding: 3px 9px;
+}
+.interval-bar .bar-tabs .chip:first-child {
+  border-left: 0;
+}
+.interval-bar .bar-tabs .chip:hover:not(.selected) {
+  background: var(--wash);
+  color: var(--ink);
+}
+.interval-bar .bar-tabs .chip.selected {
+  background: var(--accent);
+  color: var(--on-accent);
+}
 /* 指标条里的控件比通用 .chip 收一档（10px 与 App IndicatorBar 的 compact FilterChip 同号）：
    加了 BOLL 后整行需要 871px，收档前是 1103px —— 1280 宽的桌面（面板 940）也能单行放下。 */
 .interval-bar .chip {
-  font-size: 10px;
-  padding: 3px 7px;
-}
-/* 「周期」按钮跟旁边的 chip 同号：它按 .icon-btn 的通用尺寸会高出 5px，
-   把整条周期条撑高（可视区就少 5px）。 */
-.interval-bar .icon-btn {
   font-size: 10px;
   padding: 3px 7px;
 }
@@ -1436,6 +1466,10 @@ body {
   font-size: 11px;
   line-height: 1.5;
   color: var(--muted);
+}
+/* 系统级快捷键没接管时的说明：底色一样，只是标红，别做成「报错弹窗」那种声势 */
+.set-sub.bad {
+  color: var(--down);
 }
 /* 当前的组合键：做成一个键帽（等宽 + 描边 + 底色），一眼能看出「这是个键」 */
 .set-key {
