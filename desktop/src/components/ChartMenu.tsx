@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { TrendAnchor } from '../lib/trendLines';
 import type { ChartMenuHit } from './KlineCanvas';
 
 interface Props {
@@ -9,12 +10,17 @@ interface Props {
   hit: ChartMenuHit;
   /** 命中价格时用来显示的那串字（精度跟着标的的 tickSize，别在菜单里另算一套）。 */
   priceText: string;
+  /** 当前标的的画线总数：清空那条要显示条数，一条都没有时整条不出现。 */
+  drawingCount: number;
   /** 纵向刻度已被拖离自动量程 —— 多给一条「复位」。 */
   adjusted: boolean;
   onAddLine: (price: number, alert: boolean) => void;
   onRemoveLine: (index: number) => void;
   onSetAlert: (index: number, alert: boolean) => void;
   onRemoveTrend: (index: number) => void;
+  /** 「从这里画直线」：第一点就用右键落点，第二下左键成线（画布接着预览）。 */
+  onStartTrend: (anchor: TrendAnchor) => void;
+  onClear: () => void;
   onResetPrice: () => void;
   onClose: () => void;
 }
@@ -22,35 +28,38 @@ interface Props {
 interface Item {
   key: string;
   label: string;
-  /** 右侧那列小字（价位 / 提示），可有可无。 */
+  /** 右侧那列小字（价位 / 手势提示 / 条数），可有可无。 */
   aside?: string;
   danger?: boolean;
   run: () => void;
 }
 
-/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可）。 */
+/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可：最多 5 条）。 */
 const MENU_W = 208;
-const MENU_H = 132;
+const MENU_H = 168;
 
 /**
- * 图表区的右键菜单。
+ * 图表区的右键菜单 —— **画线上唯一的入口**（0.1.11 起工具条上没有「画图」这组了）。
  *
  * 为什么这里可以自绘 HTML（悬浮窗那边非得走原生 popup）：主窗有 1024×680 的底，
  * 画布不是整个窗口，菜单再怎么贴边也翻得回来；悬浮窗就一块面板，浮层一定被窗口边界裁掉。
  *
  * 每条动作做完立刻收起（`run` 之后父层就 `onClose`）：菜单是一次性的定点操作，
- * 不是常驻工具条。
+ * 不是常驻工具条。「清空全部画线」是唯一的破坏性条目，排在最后并走 danger 色。
  */
 export function ChartMenu({
   x,
   y,
   hit,
   priceText,
+  drawingCount,
   adjusted,
   onAddLine,
   onRemoveLine,
   onSetAlert,
   onRemoveTrend,
+  onStartTrend,
+  onClear,
   onResetPrice,
   onClose,
 }: Props) {
@@ -99,6 +108,15 @@ export function ChartMenu({
       aside: priceText,
       run: () => onAddLine(hit.price, false),
     });
+    // 第一点直接取右键落点（anchor 为空 = 图上还没有数据，画出来的线没有时间锚点）
+    if (hit.anchor) {
+      items.push({
+        key: 'trend',
+        label: '从这里画直线',
+        aside: '再点一下成线',
+        run: () => onStartTrend(hit.anchor!),
+      });
+    }
   }
   if (hit.kind === 'hline') {
     items.push({
@@ -111,6 +129,15 @@ export function ChartMenu({
   }
   if (hit.kind === 'trend') {
     items.push({ key: 'remove', label: '删掉这条直线', danger: true, run: () => onRemoveTrend(hit.index) });
+  }
+  if (drawingCount > 0) {
+    items.push({
+      key: 'clear',
+      label: '清空全部画线',
+      aside: `${drawingCount}`,
+      danger: true,
+      run: onClear,
+    });
   }
   if (adjusted) {
     items.push({ key: 'reset', label: '复位纵向刻度', run: onResetPrice });

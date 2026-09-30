@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { MARKETS, MARKET_LABEL, type MarketType } from './lib/api';
+import { MARKET_LABEL, type MarketType } from './lib/api';
 import { endpointOf, useFuturesSourceUrl } from './lib/sources';
 import { IS_TAURI, switchToMiniWindow } from './lib/tauri';
 import { useWindowDrag } from './lib/windowDrag';
 import { useShortcut } from './hooks/useShortcut';
 import { useGlobalKey } from './hooks/useGlobalKey';
-import { useWatchlist, type WatchItem } from './hooks/useWatchlist';
+import { useWatchlist, watchKey, type WatchItem } from './hooks/useWatchlist';
 import { useTickers } from './hooks/useTickers';
 import { usePriceAlerts } from './hooks/usePriceAlerts';
 import { useSparks } from './hooks/useSparks';
@@ -28,13 +28,15 @@ type Theme = 'dark' | 'light';
 const MARKET_KEY = 'mm.market';
 /** 侧栏展开/收起（`0` = 收起）。收起时图表吃掉整行宽度。 */
 const LIST_OPEN_KEY = 'mm.listOpen';
-/** 主题：深色是原生底色（`:root`），浅色靠 `[data-theme='light']` 覆盖一套变量。 */
+/** 主题：出厂浅色（`[data-theme='light']` 那套变量）；`:root` 仍是深色底 —— 标签页没带
+ * `data-theme` 时（首帧脚本执行前）先按深色画，脚本一跑就定成存储里的值。 */
 const THEME_KEY = 'mm.theme';
 
 export default function App() {
+  // 出厂浅色（`index.html` 里有一段同样判据的首帧脚本 —— 两处必须一致）
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem(THEME_KEY);
-    return saved === 'light' ? 'light' : 'dark';
+    return saved === 'dark' ? 'dark' : 'light';
   });
   /** 当前市场（App 的 defaultMarket 同样「记住上次选择」）。 */
   const [market, setMarket] = useState<MarketType>(() =>
@@ -140,12 +142,13 @@ export default function App() {
     };
   }, []);
 
-  // 选中项必须落在当前市场里：换市场、移除被选中的标的都会走到这里
+  // 选中项只要求「属于当前市场」：搜索里点一条不入自选也能直接看（搜索行只查看，加自选走行内 ＋），
+  // 正在看的那条被删掉（行内 × / 详情页 ☆）图也不动 —— 所以不再检查它在不在自选里。
+  // 真正需要回落的只剩换市场（自选清空 ⇒ marketItems[0] 为 undefined ⇒ 回到空图）。
   useEffect(() => {
-    if (selected && selected.market === market && marketItems.some((i) => i.symbol === selected.symbol)) {
-      return;
+    if (selected == null || selected.market !== market) {
+      setSelected(marketItems[0] ?? null);
     }
-    setSelected(marketItems[0] ?? null);
   }, [market, marketItems, selected]);
 
   const current = useMemo(() => {
@@ -156,36 +159,38 @@ export default function App() {
   }, [cells, selected, snapshot]);
 
   const instrument = selected ? instrumentMap.get(selected.symbol) : undefined;
+  /** 详情页那枚 ☆/★ 的状态：当前标的在不在自选里。 */
+  const watched = selected != null && items.some((i) => watchKey(i) === watchKey(selected));
+  /** 详情页星标：★ → ☆ 从自选删掉（左侧列表里那条也消失），☆ → ★ 加回来。 */
+  const toggleWatch = (it: WatchItem) => {
+    if (items.some((i) => watchKey(i) === watchKey(it))) remove(it);
+    else add(it);
+  };
 
   return (
     <div className="app">
       <header className="toolbar" {...windowDrag}>
-        <div className="brand">
-          <span className="brand-name">Market Monitor</span>
-          <span className="overline">行情总览</span>
+        {/* 顶栏 = 左右两组等宽（`.tb-side`，basis 0 / 等分余量）+ 正中一个搜索框 ——
+            两组各占一半余量，搜索框自然落在整条顶栏的正中（见 theme.css 的 .toolbar）。 */}
+        <div className="tb-side">
+          <div className="brand">
+            <span className="brand-name">Market Monitor</span>
+            <span className="overline">行情总览</span>
+          </div>
+
+          {/* 侧栏开关：收起后图表整行铺开（列宽动画见 theme.css 的 .main）。
+              放在顶栏而不是侧栏里 —— 收起之后侧栏整个不在了，开关必须留在外面。 */}
+          <button
+            className="icon-btn icon-only list-toggle"
+            onClick={() => setListOpen((v) => !v)}
+            title={listOpen ? '收起自选侧栏（图表占满宽度）' : '展开自选侧栏'}
+          >
+            <SidebarIcon open={listOpen} />
+          </button>
         </div>
 
-        {/* 侧栏开关：收起后图表整行铺开（列宽动画见 theme.css 的 .main）。
-            放在顶栏而不是侧栏里 —— 收起之后侧栏整个不在了，开关必须留在外面。 */}
-        <button
-          className="icon-btn icon-only list-toggle"
-          onClick={() => setListOpen((v) => !v)}
-          title={listOpen ? '收起自选侧栏（图表占满宽度）' : '展开自选侧栏'}
-        >
-          <SidebarIcon open={listOpen} />
-        </button>
-
-        <div className="market-switch">
-          {MARKETS.map((m) => (
-            <button
-              key={m}
-              className={`market-pill${m === market ? ' on' : ''}`}
-              onClick={() => setMarket(m)}
-            >
-              {MARKET_LABEL[m]}
-            </button>
-          ))}
-        </div>
+        {/* 市场切换（现货/永续）挪到侧栏顶部了 —— 它换的是「左边这一列显示哪个市场」，
+            放在它管着的那列上面比搁顶栏贴切（见 MarketList 的 panel-head）。 */}
 
         {/* 搜索框 + 结果浮层是一组：浮层贴着输入框下沿定位，所以外面要有个定位容器。
             输入即开、点外部/Esc 收起，关键词保留在框里。 */}
@@ -241,65 +246,65 @@ export default function App() {
           )}
         </div>
 
-        <span className="grow" />
-
-        <span className="status" title={`数据源 ${sourceLabel} ${MARKET_LABEL[market]} · 只读`}>
-          <span className={`dot${online === false ? ' bad' : ''}`} />
-          {marketItems.length === 0
-            ? '无自选'
-            : online == null
-              ? '连接中'
-              : online
-                ? '已连接'
-                : '断线'}
-        </span>
-        <button
-          className="icon-btn"
-          onClick={() => setSourceOpen(true)}
-          title={`合约数据源：检测各接口延迟并切换 · 当前 ${sourceLabel}`}
-        >
-          数据源
-        </button>
-        {/* 悬浮窗列表的入口直接在顶栏：它改的是「这会儿盯着看哪几条」，
-            和主题/快捷键不是一类东西，藏在设置里每次要多点两层。 */}
-        <button
-          className="icon-btn"
-          onClick={() => setMiniOpen(true)}
-          title="悬浮窗列表：勾选显示哪几条、拖动排序（不动自选）"
-        >
-          悬浮窗
-        </button>
-        {/* 主题、快捷键、更新都在这一个入口里（`title` 会跟着更新状态变），
-            圆点 = 更新的存在感：自动下载本身没有声音，这里必须看得见（见 .up-badge）。 */}
-        <button
-          className="icon-btn up-entry"
-          onClick={() => setSettingsOpen(true)}
-          title={
-            update.ready
-              ? `设置：v${update.readyVersion} 已下载好，点这里进去安装`
-              : '设置：主题 / 快捷键 / 更新'
-          }
-        >
-          设置
-          {update.info && (
-            <span
-              className="up-badge"
-              data-state={update.download.state === 'running' ? 'running' : update.ready ? 'ready' : 'idle'}
-            />
-          )}
-        </button>
-        <span className="winops-divider" />
-        {/* 悬浮窗开关放在窗口控件组的最左（紧邻最小化）：它和「最小化」是同一类操作
-            —— 都是把窗口收起来，跟左边的设置（改的是应用内容）不同组。
-            不能塞进 WindowChrome，那个组件只管窗口控件与拉伸热区。 */}
-        <button
-          className="icon-btn icon-only mini-entry"
-          onClick={switchToMiniWindow}
-          title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+M 也行）"
-        >
-          <MiniWindowIcon />
-        </button>
-        <WindowChrome />
+        <div className="tb-side right">
+          <span className="status" title={`数据源 ${sourceLabel} ${MARKET_LABEL[market]} · 只读`}>
+            <span className={`dot${online === false ? ' bad' : ''}`} />
+            {marketItems.length === 0
+              ? '无自选'
+              : online == null
+                ? '连接中'
+                : online
+                  ? '已连接'
+                  : '断线'}
+          </span>
+          <button
+            className="icon-btn"
+            onClick={() => setSourceOpen(true)}
+            title={`合约数据源：检测各接口延迟并切换 · 当前 ${sourceLabel}`}
+          >
+            数据源
+          </button>
+          {/* 悬浮窗列表的入口直接在顶栏：它改的是「这会儿盯着看哪几条」，
+              和主题/快捷键不是一类东西，藏在设置里每次要多点两层。 */}
+          <button
+            className="icon-btn"
+            onClick={() => setMiniOpen(true)}
+            title="悬浮窗列表：勾选显示哪几条、拖动排序（不动自选）"
+          >
+            悬浮窗
+          </button>
+          {/* 主题、快捷键、更新都在这一个入口里（`title` 会跟着更新状态变），
+              圆点 = 更新的存在感：自动下载本身没有声音，这里必须看得见（见 .up-badge）。 */}
+          <button
+            className="icon-btn up-entry"
+            onClick={() => setSettingsOpen(true)}
+            title={
+              update.ready
+                ? `设置：v${update.readyVersion} 已下载好，点这里进去安装`
+                : '设置：主题 / 快捷键 / 更新'
+            }
+          >
+            设置
+            {update.info && (
+              <span
+                className="up-badge"
+                data-state={update.download.state === 'running' ? 'running' : update.ready ? 'ready' : 'idle'}
+              />
+            )}
+          </button>
+          <span className="winops-divider" />
+          {/* 悬浮窗开关放在窗口控件组的最左（紧邻最小化）：它和「最小化」是同一类操作
+              —— 都是把窗口收起来，跟左边的设置（改的是应用内容）不同组。
+              不能塞进 WindowChrome，那个组件只管窗口控件与拉伸热区。 */}
+          <button
+            className="icon-btn icon-only mini-entry"
+            onClick={switchToMiniWindow}
+            title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+M 也行）"
+          >
+            <MiniWindowIcon />
+          </button>
+          <WindowChrome />
+        </div>
       </header>
 
       <main className={`main${listOpen ? '' : ' list-collapsed'}`}>
@@ -312,6 +317,7 @@ export default function App() {
           onSelect={setSelected}
           onRemove={remove}
           onReorder={reorderWithinMarket}
+          onMarket={setMarket}
         />
         <ChartView
           item={selected}
@@ -319,6 +325,8 @@ export default function App() {
           instrument={instrument}
           spark={selected ? sparks[`${selected.market}:${selected.symbol}`] : undefined}
           theme={theme}
+          watched={watched}
+          onToggleWatch={toggleWatch}
         />
       </main>
 

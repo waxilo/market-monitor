@@ -127,8 +127,8 @@ export function intervalIdFromMinutes(minutes: number): string | null {
   return `${minutes}m`;
 }
 
-/** 分钟数的人类读数（与 id 的换算档同源）：`90 → 1 小时 30 分钟`。 */
-export function minutesLabel(minutes: number): string {
+/** 从粗到细拆开一段分钟数：`90 → ['1 小时', '30 分钟']`。 */
+function labelParts(minutes: number): string[] {
   const parts: string[] = [];
   let rest = minutes;
   for (const unit of LADDER_UNITS) {
@@ -138,7 +138,44 @@ export function minutesLabel(minutes: number): string {
       rest -= n * unit.minutes;
     }
   }
-  return parts.join(' ') || '0 分钟';
+  return parts;
+}
+
+/** 分钟数的人类读数（与 id 的换算档同源）：`90 → 1 小时 30 分钟`。 */
+export function minutesLabel(minutes: number): string {
+  return labelParts(minutes).join(' ') || '0 分钟';
+}
+
+/** 界面短名的单位后缀：只换单位，数字原样。 */
+const SHORT_UNIT: Record<string, string> = {
+  m: '分',
+  h: '时',
+  d: '天',
+  w: '周',
+  M: '月',
+  y: '年',
+};
+
+/**
+ * 周期 id → 界面上的**短名**：`15m → 15分`、`1h → 1时`、`1w → 1周`、`1M → 1月`。
+ *
+ * 给周期条 chip、面板行这些窄地方用；要完整读数（`90 → 1 小时 30 分钟`）走 `minutesLabel`。
+ * 认不出的形状原样返回，且**不许做大小写归一化**（`1m` 是分、`1M` 是月，只差一个字母）。
+ */
+export function intervalLabel(id: string): string {
+  const m = /^(\d+)(y|M|w|d|h|m)$/.exec(id);
+  return m ? `${m[1]}${SHORT_UNIT[m[2] as string]}` : id;
+}
+
+/**
+ * 行尾/提示里的**完整读数**；短名已经说清同一件事时返回空串
+ * （`15分` 旁边再写「15 分钟」是纯占地方，`90分` 才值得写「1 小时 30 分钟」）。
+ */
+export function intervalNote(id: string): string {
+  const minutes = minutesOf(id);
+  if (minutes == null) return '';
+  const parts = labelParts(minutes);
+  return parts.length > 1 ? parts.join(' ') : '';
 }
 
 /** id → 分钟数。内置与自定义同一条路；认不出返回 null。 */
@@ -337,14 +374,19 @@ export function synthesisOf(id: string, natives: ReadonlySet<number>): IntervalS
   if (!info || natives.has(info.minutes)) return null;
   const base = coarsestBaseFor(natives, info.minutes);
   if (base == null) {
-    return { baseId: null, factor: 0, tag: '不可用', title: `${id} 在当前数据源上既没有原生周期，也拼不出来` };
+    return {
+      baseId: null,
+      factor: 0,
+      tag: '不可用',
+      title: `${intervalLabel(id)} 在当前数据源上既没有原生周期，也拼不出来`,
+    };
   }
   const factor = info.minutes / base;
   const baseId = intervalIdFromMinutes(base) ?? `${base}m`;
   return {
     baseId,
     factor,
-    tag: `聚合 ${baseId}×${factor}`,
-    title: `当前数据源没有 ${id}，用 ${baseId} 每 ${factor} 根合成 1 根`,
+    tag: `聚合 ${intervalLabel(baseId)} × ${factor}`,
+    title: `当前数据源没有 ${intervalLabel(id)}，用 ${intervalLabel(baseId)} 每 ${factor} 根合成 1 根`,
   };
 }

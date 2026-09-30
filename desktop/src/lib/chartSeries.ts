@@ -36,11 +36,14 @@ export const SUB_PANE_KINDS = ['VOLUME', 'MACD', 'RSI', 'KDJ'] as const;
 export type SubPaneKind = (typeof SUB_PANE_KINDS)[number];
 
 export const SUB_PANE_LABEL: Record<SubPaneKind, string> = {
-  VOLUME: 'VOL',
+  VOLUME: '成交量',
   MACD: 'MACD',
   RSI: 'RSI',
   KDJ: 'KDJ',
 };
+
+/** 主图可叠的均线期数（指标行那五枚 chip；选择持久化见 `lib/indicatorPrefs.ts`）。 */
+export const MA_CHOICES: number[] = [5, 10, 20, 30, 60];
 
 export interface SubPaneData {
   kind: SubPaneKind;
@@ -97,12 +100,12 @@ function buildSubPane(candles: Bar[], closes: number[], kind: SubPaneKind): SubP
       const volumes = candles.map((c) => c.volume);
       return {
         kind,
-        title: 'VOL',
+        title: '成交量',
         lines: [],
         bars: volumes,
         fromZero: true,
         readoutAt: (i) => [
-          { text: `VOL: ${formatCompact(candles[i]?.volume)}`, role: 'LABEL' },
+          { text: `成交量: ${formatCompact(candles[i]?.volume)}`, role: 'LABEL' },
         ],
       };
     }

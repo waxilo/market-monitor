@@ -23,10 +23,19 @@
   `calc(100vh - 72px)`（默认窗 748px、**最小窗 1024×680 下只有 608px**）⇒ 125%/150% 缩放的笔记本上必然溢出，
   右侧挂一条常显的经典滚动条（占 15px 布局宽）。现在 `.src-grid` 是**两列卡片**、单卡 ~49px ⇒ 整个弹窗 **472px**，
   最小窗余量 136px。**同一条规则也适用于 `IntervalPanel`**（15 行曾顶到 608 上限、同样 15px 滚动条 ⇒ 现已两列、525px）。
-- ⚠️ **顶栏是 `nowrap`，窗口窄下来总得有人让步**：默认会轮到 `.market-pill`（CJK 随处可断、min-content 只有一个字宽）
-  ⇒ 折成两行把顶栏从 43px 顶到 55px。让让步落在搜索框身上：`.search-wrap { min-width: 120px }` +
+- ⚠️ **顶栏是 `nowrap`，窗口窄下来总得有人让步**：让步落在搜索框身上：`.search-wrap { min-width: 120px }` +
   `.search-field input { min-width: 0 }`（input 默认 `min-width: auto` = 内容宽 ≈180px，是它挡住了收缩）。
   `.status` 也要 `white-space: nowrap`，否则「已连接」会断成两行。
+  （原先的退让候选 `.market-pill` 0.1.11 起已不在顶栏，见「侧栏与搜索」。）
+- **0.1.11：搜索框落在整条顶栏的正中**（用户点名）。机制 = 顶栏分三块：`.tb-side`（brand + 侧栏开关）+
+  `.search-wrap` + `.tb-side.right`（状态/数据源/悬浮窗/设置/窗口组），两组侧翼 `flex: 1 1 0` **等分余量**
+  ⇒ 搜索框自然落在整条顶栏的中点（不是「剩下的空档里居中」）。搜索框 `flex: 0 1 380px` —— 380 是
+  「1280 下右组（自然宽 ≈415）不被压 + 两侧仍严格等宽」的最大值（400 时右组差 8px ⇒ 偏 6px，实测过）。
+  ⚠️ **`.icon-btn` 必须 `white-space: nowrap`**：分组后按钮被 flex 压到自然宽以下时，中文标签
+  （「数据源/悬浮窗/设置」）会**折成两行**把顶栏撑到 61px（1024 下 78px）—— 第一版就踩了。
+  同理 `.winops-divider` 要 `flex: none`（否则被压到 0 宽）。
+  实测：1280 中心 = 640、1600 中心 = 800（**精确相等**）；1024（最小窗）右组顶到自己的 min-content（≈415）
+  ⇒ 搜索框左移 ~100px（中心 412），但不重叠、不折行、单行 44px 高 —— 接受。
 - 拖拽用 `lib/windowDrag.ts`，**别用 `data-tauri-drag-region`**（会把子元素按钮一起变热区）。双窗**二选一**互切。
   ❗**「搬窗口」的判据是位移不是时长**（`lib/dragThreshold.ts`，死区 `DRAG_THRESHOLD_PX = 4`，取 4 是为了与
   Windows 的 `SM_CXDRAG` 同值）：按下只记起点，指针走出死区才 `startDragging()`；**按住再久、原地不动都不搬**，
@@ -56,6 +65,10 @@
   `on_menu_event`）—— 菜单只能宿主弹，webview 里画的会被窗口边界裁掉。
 - ⚠️ **`readWatchlist()` 里 `[]` 不能当「没存过」**（`hooks/useWatchlist.ts`）：只有 `getItem` 返回 `null` 才算首次启动，
   否则删空自选后主窗又冒出默认 8 条，且两个窗口口径不一致。
+- **0.1.11：出厂自选收成「现货 / 永续 各 BTC、ETH」四条**（`DEFAULT_WATCHLIST`）。光改默认值对老装机没用
+  （「存过就是真相」，旧列表原样留着）⇒ `seedOnce()` 用新 key `mm.watchlistSeeded` 做**一次性替换**：没有记号
+  就无条件把 `mm.watchlist` 覆写成出厂名单、再落上记号，之后永不再动 ⇒ 用户自己加回来的标的不会被二次清掉。
+  `readWatchlist` 入口调用（两窗同口径）；storage 拿不到时什么都不写、读的那头走默认值。
 - ⚠️ **悬浮窗行高亮不能用 `:hover`**（`hooks/usePointerInside.ts` 的 `.inside`）：窗口会自己移动/隐藏，鼠标离开后
   Chromium 收不到 `mouseleave` ⇒ **永久卡亮**。只有 `pointermove` 能点亮，离开/失焦/页面不可见/被移动/被改尺寸一律熄灭。
 - **删 CSS 前先 `git grep` 类名的全部调用点**（`.mini-x` 曾是跨面板共用的关闭「×」，已改名 `.panel-close`）。
@@ -68,6 +81,11 @@
 - 三段：**外观**（主题 segmented，`theme.css` 的 `.set-seg` 与 `.iv-units` 同款）/ **快捷键** /
   **更新**（`<UpdateSection/>`）。主题落盘仍是 `mm.theme`（`App.tsx`），`setTheme` 同时调
   `getCurrentWindow().setTheme(theme)` 把原生窗口主题对齐。
+- **0.1.11 出厂浅色**：`mm.theme` 的解析口径 = 「只有存过 `'dark'` 才是深色，其余（没存过 / 坏值）一律浅色」。
+  ❗**首帧主题必须由 `desktop/index.html` 里的一段内联脚本在样式生效前定 `data-theme`** —— `:root` 的深色底
+  是默认值，等 React 的 effect 才翻会先闪一帧深色（出厂浅色后这一闪看得见）。两处判据必须一致
+  （都是 `=== 'dark' ? 'dark' : 'light'`），`vite build` 会原样保留这段内联脚本（dist 里已核过）。
+  `tauri.conf.json` 的 `"theme": "Dark"` 不动也行：主窗 `decorations:false` 看不到原生外框，JS 挂载后 `setTheme` 会纠。
 - **快捷键模块是零依赖纯函数 + 一个 hook**，改快捷键时只动这两处：
   - `lib/shortcuts.ts`：`Chord {ctrl,alt,shift,meta,key}`；注册表 `SHORTCUTS`（目前只有
     `toggleWindow` = 「主窗 ⇄ 悬浮窗」，默认 `alt+m`）；`serializeChord`/`parseChord`（认不出的返回 null）/
@@ -110,10 +128,22 @@
 `var(--mini-row-h)`（padding 撑是 43px ≠ Rust 算的 28px）。
 
 ## 侧栏与搜索
+- **0.1.11：市场切换（现货 / 永续合约）从顶栏挪到侧栏顶部** —— `MarketList` 的 `.panel-head.list-head`
+  竖排两行：`.market-switch`（两个 `.market-pill`、`flex:1` 等分、选中 `.on`）+ `自选 · N`。
+  ❗用户点名「放到左侧菜单栏上面」；副作用是**侧栏收起（`.list-collapsed`）时胶囊跟着宽度归零一起消失**，
+  想切市场得先展开侧栏（开合开关就在顶栏左端）。
 侧栏 = 自选（名称 + 现价，取 `useTickers` 格子，零额外请求）；搜索结果走浮层（临时态塞进常驻容器会把自选冲掉）⇒
 `components/SearchDropdown.tsx` 锚在 `.search-wrap`（**不是 input**：wrap 含「清空」按钮，量 input 会得出「错位 10px、
 窄 42px」的假问题）。排序口径 = `lib/search.ts::rankInstruments` 纯函数。⚠️ 浮层键盘事件必须挂 `document`（焦点全程在
-顶部输入框，事件不经过浮层 DOM）；点行 = 未自选则**先加入再选中**（否则主窗「选中项必须在自选里」的校验会打回）。
+顶部输入框，事件不经过浮层 DOM）。
+- **0.1.11：自选三个入口的分工**（用户点名；口径改过一次：先要「行内常显 ×」，随即又要求撤掉 ×、
+  改「右键移除自选」）：① **行右键菜单**「从自选移除」（`MarketList` 里的 `RowMenu`，复用 `.chart-menu`
+  壳与行为 —— 贴边翻转、点外面/Esc/滚轮收起、做完即收；单条 danger、aside 显示标的）——
+  行上**不再挂任何按钮**；② 详情页标题旁的 ☆/★（`.star-btn`，`watched` = 当前标的是否在自选里，
+  `App::toggleWatch` 复用 add/remove）；③ 搜索结果行内的 ＋/✓（`.row-add`，判重按 symbol）。
+  ❗**整行点击 = 只查看，不进自选**（0.1.11 起）：`SearchDropdown::pick` 不再调 `onAdd`。为此 `App` 的选中校验
+  从「必须在自选里」放宽成**只要求 `selected.market === market`** ⇒ 「搜到直接看图、不入列表」成立，且正在看的
+  条目被行内 × / ☆ 删掉时**图不动**（真正需要回落的只剩换市场：`marketItems[0]` 或 null）。
 **窗口出生即隐藏**：builder 里 `.position()` + `.visible(false)`（`build()` 返回时窗口已可见且在系统默认位置）。
 
 ## 图表纵向几何（`src/lib/chartLayout.ts`）
@@ -149,6 +179,22 @@
   canvas 的 style.height 与 `.chart-scroll` 的 clientHeight，逐块算可见比例 + 截图）。
   ⚠️ 周期条里加控件会改这条链上的可视高（新按钮按通用 `.icon-btn` 尺寸比 chip 高 5px ⇒ 可视区少 5px），
   所以 `.interval-bar .icon-btn` 单独收了字号与内边距。
+
+## 指标与副图的选择（0.1.11 起持久化）
+- `lib/indicatorPrefs.ts`：`mm.indicators` = `{ ma: number[]; boll: boolean; panes: SubPaneKind[] }`。
+  `parseIndicatorPrefs` 按支持集过滤（`MA_CHOICES` / `SUB_PANE_KINDS`，去重排序）、认不出的静默丢 ——
+  与 `lib/intervals.ts` 同一套「解析即过滤」。`ChartView` 里**一个** `prefs` state 管三样（挂载读一次 +
+  effect 落盘），别再拆回三个 useState。
+- 语义没变：MA chip 切 `prefs.ma`、BOLL 切 `prefs.boll`、副图组切 `prefs.panes`；panes 按 `SUB_PANE_KINDS`
+  目录顺序存，不按点击顺序。出厂 = **裸 K 线**（一个都不叠）；这是「怎么看图」与标的无关 ⇒ 全局一份。
+
+## 界面文案（0.1.11 起全中文）
+- 用户要求「页面上所有参数用中文」，但**通用技术指标名保留英文**（MA5/MA10/…、BOLL、MACD、RSI、KDJ、
+  DIF/DEA —— 用户在示例文案里自己拍的「基本全中文」）。已改：K 线明细带 `开 / 高 / 低 / 收`
+  （`KlineCanvas.tsx::drawCandleRow`，`较上根 ±x%` 不变）；概览四块 `24小时最高 / 24小时最低 /
+  24小时成交额 / 24小时走势`；标的后缀 `永续 / 现货`；副图 `成交量`（`SUB_PANE_LABEL.VOLUME`，读数
+  `成交量: …`）；周期用短单位（见「K 线周期」）。
+- ⚠️ 改这些文案会牵动验收脚本的**文本断言**（画布上的字要靠 `fillText` 探针收，见「本地校验」）。
 
 ## K 线周期（`src/lib/intervals.ts` = 目录唯一出处）
 
@@ -187,6 +233,12 @@
 目录 = **各数据源能力的并集** 15 个（1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 1w 1M），
 由用户在「周期」弹窗里挑、排（`components/IntervalPanel.tsx`：已选整行拖排序/`×` 删、下方「添加周期」用数值+单位造、恢复默认），
 存 `localStorage mm.intervals`（**有序数组**，`parseIntervals` 过滤认不出的 id ⇒ 老值不会弄崩界面）。
+
+- **0.1.11 周期文案改短单位**：`intervalLabel`（`15m→15分`、`1h→1时`、`1w→1周`、`1M→1月`，`y→年`；认不出的
+  原样返回，**不做大小写归一**），周期条 chip / `IntervalPanel` 行 / 聚合 tag（`聚合 15分 × 3`）全走它。
+  `intervalNote` = 「短名没说清同一件事才给第二行」：`90分 → 1 小时 30 分钟`，单成分周期返回 `''`
+  （`15分` 旁再写「15 分钟」= 说两遍，用户要求砍重复）。`minutesLabel` 保留（完整读数；`intervalNote` 与
+  `composeInterval` 的报错文案在用）。
 
 - 用户改的是**列表与顺序**，不是能力：`supportedIntervals(market)` 才是「这家能不能用」——
   永续看当前方言的 `intervalLadder`（不另立一份支持清单，两份必然分叉），现货（Gate）全支持。
@@ -231,6 +283,23 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
 > ❗**0.1.10 更新**：指标/副图/画图**另起一行**挪到周期行**下面**（`ChartView` 里第二个 `.interval-bar`，
 > 两行都在 `.bar-stack` 内），仍然每行只展开当前一组；挪行是为了让「选周期」和「选指标」在视觉上分开。
 > 图表纵向几何（上文的 `chartHeights`）因此多了一条工具条的高度 —— 改工具条高度等于改可视高。
+
+> ❗**0.1.11 更新**（未发版，2026-09-30 用户拍板「移除画图和后面的选择，直接在右键菜单里做，右键菜单也添加清空」）：
+> **工具条上的「画图」整组拿掉**（`直线` / `锁定` / `清空 N` 三个 chip + 手势提示全删），第二行只剩
+> 指标 / 副图 / 条件性的 `告警 N` 读数（`.bar-label.alert`，只说「有几条告警线在盯着」）。
+> 所有增删改一律走**右键菜单**（`ChartMenu.tsx` 是画线上唯一入口）：空白 = 设成告警线 / 画一条水平线 /
+> **从这里画直线**；线身 = 设(取消)告警 / 删掉这条线；直线线身 = 删掉这条直线；一律附一条
+> `清空全部画线`（右侧报总数，一条都没时不出现）。⇒ **画布对已有的线是只读的**：没有抓取、没有拖动，
+> 光标不再有 grab/move/ns-resize（只剩「复位小标」给 pointer），`mode` 只剩 `'none' | 'pan'`。
+> 起笔 = 菜单里「从这里画直线」把键点落成 `TrendSeed{anchor,seq}`（**seq 递增**才好重复触发同一点），
+> 之后鼠标动 = 预览虚线、左键落第二点成线、Esc / 右键撤销这一笔（右键撤销排在「线身命中」之后 ——
+> 落在线上时右键仍是操作那条线）。「从这里画直线」不再需要「画线开关」这个状态，`drawTool` / `trendArmed` 全删。
+> 验收 `.workbuddy/tmp/verify-draw-menu.mjs`（**无头 Chrome，PASS 71/71**：工具条无「画图」字样、
+> 空白菜单三条、单击/拖拽画布不落线、预览/Esc/两点成线、**按在线上拖 = 平移画布且落盘逐字节不变**、
+> 刷新落盘、清空两种线一起清）。`movePriceLine` / `moveTrendLineBy` / `moveTrendAnchor` 三个写操作
+> 从 `useDrawings` 摘掉（库里的纯函数留着，`.mts` 验收还在用）。
+> ⚠️ 右键菜单是**自绘 HTML**（`createPortal` 到 body、`position: fixed`、z 62）：主窗有 1024×680 的底，
+> 贴边能翻回来；悬浮窗那边才非得走原生 popup（那块面板一整块就是窗口）。
 > ❗**0.1.8 更新**（`desktop-v0.1.8`）：指标条改**四格单选**（周期/指标/副图/画图，`ChartView` 的 `BAR_TABS`），
 > 每行只展开当前一组，1280 宽不再折行吃图高。画线工具（水平线/直线）收进「画图」格，进那一格才能动线、
 > 离开即退回水平线；**那把全局锁 `mm.priceLineLock` 整个删了** —— 「能不能改线」和「选在哪一格」是同一个开关，
@@ -308,6 +377,24 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
   `verify-chart-interaction.mjs` ⑪ 用**像素列增量**验真实渲染（压在蜡烛上时该列增量 ≥ 200px、
   挪回留白后增量归 0）——**「挪回去又消失」这条必须有**，否则只是「画上去没擦」。
 
+## 前台不息屏（`src-tauri/src/awake.rs`，2026-09-30 新增）
+
+- 口径（用户拍板）：**任一窗口有焦点才算前台** —— 主窗/悬浮窗谁在前台都压住息屏；全丢焦点（切去别的应用）
+  就松开，按系统原本的时间息屏。「窗口只摊着但没焦点」不算。
+- 调用点只有一个：`run()` 里 `on_window_event` 的 `WindowEvent::Focused(_)` → `awake::refresh(app)`（幂等）。
+  它必须在事件循环线程上跑：macOS 那支要读 `NSWindow.isKeyWindow()`（AppKit 只许主线程碰）。
+- macOS：IOKit 断言 `IOPMAssertionCreateWithName(PreventUserIdleDisplaySleep)`。语义（本机 SDK `IOPMLib.h`）：
+  屏幕不因空闲关闭，且**屏幕压着时系统也不会 idle sleep**。`IOPMAssertionRelease` 松开；断言归属进程、
+  任何线程都能建/销（`static HELD: Mutex<Option<AssertionId>>` 防重复建）。失败只 `log::warn`，退化成照常息屏。
+  验收 = `awake::imp::tests::display_sleep_assertion_round_trip`（建 → `/usr/bin/pmset -g assertions` 里按**自己 pid**
+  查到这条 → 松开 → 查不到）。⚠️ 直接链 IOKit：没有官方 Tauri 插件干这件事；`core-foundation = "0.10"`
+  复用已锁版本（0.10.1，不拉新树）。单测与实现同进程 ⇒ pmset 查自己 pid 就是真凭据。
+- Windows：`SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)` 压住、
+  只留 `ES_CONTINUOUS` 松开。❗这个状态是**线程态**的：压住与松开必须同一条线程，所以养一条常驻线程靠
+  `mpsc` 收请求（`static TX: OnceLock<Sender<bool>>`），谁调 `set` 都只是发消息。少写 `ES_SYSTEM_REQUIRED`
+  机器照样能睡（屏幕一样会黑）。新依赖 feature = `Win32_System_Power`。
+- 其它平台空实现（本项目只发 Windows 安装包；macOS 是 dev 机上的顺手实现）。
+
 ## 悬浮窗压在任务栏之上（`src-tauri/src/taskbar/`）
 `mod.rs` + `zorder.rs`（纯 Win32）+ `guard.rs`（事件源）。任务栏与悬浮窗同为 topmost，任务栏被激活时会被 shell 提到
 topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到**（连 `Focused(false)` 都没有）。
@@ -379,6 +466,19 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
 `verify-desktop-search-drop.mjs` **38** / `verify-desktop-auto-update.mjs` **20** /
 `verify-mini-interaction.mjs` **22** / `verify-mini-drag.mjs` **42**（真手势位移判据）/
 `verify-mini-width.mjs` **12** / `verify-sub-panes.mjs` **28**（纵向空间分配，五场景）。
+**2026-09-30 新增**：`verify-draw-menu.mjs` **71**（右键菜单画线 + 画布只读）/
+`verify-zh-prefs.mjs` **95**（0.1.11 第一批：出厂浅色 + 自选迁移 + 侧栏市场胶囊 + 中文文案 + 周期面板 +
+指标持久化 + 坏值容错 + 老机器迁移「自己加回的不会被二次清」；第二批：**顶栏几何**（1280/1600 搜索中心 =
+顶栏中点 ±1、左右两组等宽、1024 不重叠不折行、`.grow` 与顶栏胶囊计数为 0）+ **行上无按钮 + 行右键菜单**
+（菜单内容/Esc 收起不动数据/点条目真的移除）+ **搜索行只查看不进自选**（点行后 `mm.watchlist` 逐字节不变、
+星标 ☆、侧栏无选中行）→ **☆/★ 往返**（加入/移除、侧栏跟着多/少一行、正在看的图不动）→ 行内 ＋ 仍能加
+→ 右键移除正在看的条目、图仍不动）。
+- ❗**画布上的文字没有 DOM**：断 K 线明细（`开/高/低/收`）、读数带（`MA5: …`）这类文案要打
+  `CanvasRenderingContext2D.prototype.fillText` 把文本收进 `window.__texts`（配 `__textsClear()` 分阶段读），
+  在 init 脚本里注入。
+- ⚠️ **脚本之间会互相踩出厂默认**：0.1.11 起 `mm.theme` 缺省是浅色（颜色断言写死深色的脚本要显式预置
+  `'dark'`），`mm.watchlist` 缺 `mm.watchlistSeeded` 时会被一次性迁移覆写（自己预置自选的脚本要补 `'1'`）。
+  `verify-draw-menu.mjs` 两处都已补。
 `verify-source-panel.mjs` 的反面控制：不加 `--hide-scrollbars` + 注入 2000px 内容验证探针能测出 15px。
 其它工具：`check-exe-icon.py`（**exe 内嵌图标 vs ico 逐图 sha256 对账**，`--locate` 看字节落在哪个段）/
 `icon-lab.html`·`icon-preview.html`（图标候选对比 / 真实产物预览）/

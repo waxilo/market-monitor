@@ -160,8 +160,18 @@ body {
 .toolbar input {
   user-select: text;
 }
-.toolbar .grow {
-  flex: 1;
+/* 顶栏的左右两组（brand+侧栏开关 / 状态+按钮组）：basis 0 + 等分余量 ⇒ 两组同宽，
+   中间的搜索框就落在**整条顶栏的正中**（不是「剩下的空档里居中」）。
+   右侧组内容比左侧宽，1280 下恰好吃得下；窗口再窄它先顶到自己的 min-content，
+   搜索框跟着左移一点 —— 但两组都在文档流里，绝不重叠、也不折行。 */
+.tb-side {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-md);
+  flex: 1 1 0;
+}
+.tb-side.right {
+  justify-content: flex-end;
 }
 .brand {
   display: flex;
@@ -241,6 +251,17 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-xs);
+}
+/* 侧栏顶部（市场切换 + 自选计数）：竖着两行 —— 胶囊平摊整行宽，像个分段控件。
+   208px 的侧栏放不下「胶囊 + 计数」并排（永续合约那枚就 76px），所以不给它并排的机会。 */
+.panel-head.list-head {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-xxs);
+}
+.list-head .market-pill {
+  flex: 1;
+  padding: 4px 0;
 }
 /* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、SettingsPanel 共用）。
    放在这里而不是某个具体面板的段落里 —— 它跨面板复用；改名前叫 `.mini-x`，
@@ -326,7 +347,8 @@ body {
   font-size: 11px;
   letter-spacing: -0.2px;
 }
-.row-remove,
+/* 搜索结果里的「加入自选」常驻可见：未加入才用强调色。
+   （侧栏行上原来有个常显的 ×，0.1.11 用户要求撤掉、改右键菜单「从自选移除」—— 行不再是按钮的落点。） */
 .row-add {
   width: 20px;
   height: 20px;
@@ -339,20 +361,6 @@ body {
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
-}
-.row-remove {
-  color: var(--muted);
-  visibility: hidden;
-}
-.row:hover .row-remove {
-  visibility: visible;
-}
-.row-remove:hover {
-  background: var(--wash-strong);
-  color: var(--down);
-}
-/* 搜索结果里的「加入自选」常驻可见：未加入才用强调色 */
-.row-add {
   color: var(--accent);
 }
 .row-add:hover {
@@ -455,6 +463,9 @@ body {
   font-size: 12px;
   padding: 4px 10px;
   cursor: pointer;
+  /* 文字按钮不许折行：CJK 随处可断，空间一紧「数据源」会先折成两行把顶栏顶高一倍
+     （0.1.11 顶栏改成左右等宽的组之后实测到过 43px → 61px）。 */
+  white-space: nowrap;
 }
 .icon-btn:hover:not(:disabled) {
   color: var(--ink);
@@ -497,19 +508,16 @@ body {
   color: var(--paper);
 }
 
-/* 顶部工具条里的全市场搜索：桌面窗口够宽，让它吃掉中间的空档。
+/* 顶部工具条里的全市场搜索：**定宽居中**（左右两组 `.tb-side` 等分余量把它顶到正中）。
    `.search-wrap` 只负责定位（结果浮层贴它的下沿），宽度约束挂在这一层；
    `.search-field` 自己撑满 wrap —— 搜索框与「清空」按钮仍是同一行的两个元素。
-   `min-width: 120px` 是为了「谁先扛收缩」：工具条是 nowrap，窗口窄下来总得有人让步。
-   不给下限的话让步的会是「现货/永续」那两个胶囊（CJK 随处可断，min-content 只有
-   一个字的宽），结果是两行文字把工具条顶高一倍；给搜索框一个下限、并让 input
-   可以缩到 min-width 以下（`min-width: 0`，默认值是 auto = 内容宽 ≈180px），
-   收缩就落在它身上 —— 1024 宽下实测工具条仍是单行。 */
+   380 是「右侧那组（状态 + 三个按钮 + 窗口控件 ≈ 415）仍然摊得开、两组还等宽」的上限：
+   实测 1280/1440/1600 下搜索框都落在正中（组内项 valign 都是 nowrap，不会挤到折行）。
+   工具条是 nowrap，窄窗口（1024）先收缩搜索框自己（`min-width: 120px` 兜底，绝不重叠）。 */
 .search-wrap {
   position: relative;
-  flex: 1;
+  flex: 0 1 380px;
   min-width: 120px;
-  max-width: 460px;
 }
 .search-field {
   display: flex;
@@ -642,6 +650,30 @@ body {
   letter-spacing: 0.2px;
   margin-left: var(--sp-xs);
 }
+/* 详情页的「自选」标记（★ 实心 = 在左侧列表里 / ☆ 空心 = 只是搜来看看）。
+   小一号、贴着 20px 的币名基线 —— 它是标题的附注，不是主按钮。 */
+.star-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+  width: 22px;
+  height: 22px;
+  margin-left: var(--sp-xs);
+  border: 0;
+  background: none;
+  border-radius: var(--r-xs);
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+.star-btn:hover {
+  background: var(--wash-strong);
+}
+.star-btn.on {
+  color: var(--accent);
+}
 /* 未选中标的时的占位（App 的 HintRow 语义） */
 .chart-empty {
   flex: 1;
@@ -664,7 +696,7 @@ body {
 .metric-block .overline {
   margin-bottom: 2px;
 }
-/* 工具条两行：第一行周期，第二行指标 / 副图 / 画图 三组常驻铺开（不再单选切格）。
+/* 工具条两行：第一行周期，第二行指标 / 副图 两组常驻铺开（不再单选切格）。
    外框只管一根下边框，行内上下内边距收小一档 —— 两行合计比原来单行高约 28px，
    换来的是改个 MA、开块副图都不用先点格子。 */
 .bar-stack {
@@ -698,7 +730,7 @@ body {
   color: var(--muted);
   align-self: center;
 }
-/* 组名（周期 / 指标 / 副图 / 画图）压一手实色，和同排那些手势提示小字分得开 */
+/* 组名（周期 / 指标 / 副图）压一手实色，和同排那些手势提示小字分得开 */
 .interval-bar .bar-label.grp {
   color: var(--ink);
   flex-shrink: 0;
@@ -708,7 +740,7 @@ body {
   color: var(--accent);
   flex-shrink: 0;
 }
-/* 分段选择器（周期条 / 画线工具）：它们不许被压窄，
+/* 分段选择器（周期条）：它不许被压窄，
    宁可让右边的选项组按 wrap 换行。flex-wrap 之外再禁掉 shrink，
    中文标签（2 字 ≈ 20px + padding 14px）才不会被挤成竖排。
    造型走分段选择器：共享一根外框、内部只留分隔线（与主题选择器 `.set-seg`、
@@ -928,6 +960,8 @@ body {
   align-self: stretch;
   margin: 3px 2px;
   background: var(--hairline);
+  /* 一根发丝线不许被 flex 挤没（0.1.11 顶栏分组后窄窗口实测被压到 0 宽） */
+  flex: none;
 }
 /* 悬浮窗开关（顶栏最右、窗口控件组左边）：顶栏的 flex gap 是 --sp-md，
    这里抵掉它，让 ◫ 与「最小化」的间距跟组内按钮一致（见 .winops 的 2px），

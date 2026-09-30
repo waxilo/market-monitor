@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   addPriceLine,
-  movePriceLine,
   parseLineStore,
   removePriceLine,
   setLineAlert,
@@ -10,12 +9,9 @@ import {
 } from '../lib/priceLines';
 import {
   addTrendLine,
-  moveTrendAnchor,
-  moveTrendLineBy,
   parseTrendStore,
   removeTrendLine,
   type TrendAnchor,
-  type TrendEnd,
   type TrendLine,
   type TrendStore,
 } from '../lib/trendLines';
@@ -25,8 +21,8 @@ import {
  * 两种线都按「市场:标的」存（与自选同一个键，见 `watchKey`）—— 线画在这段行情上，
  * 换周期不该丢，换标的必须分开。
  *
- * 这里**没有锁**：能不能动线由工具条上选没选中画线工具决定（不选就动不了，
- * 见 ChartView 的 `drawTool`），所以那把独立的全局锁是多余的第二层开关。
+ * 这里**没有锁**：画布对已有的线是只读的（没有抓取、没有拖动），所有增删都由右键菜单
+ * 那条路进来，一次点击一次改动 —— 不再需要工具开关那类「现在能不能动线」的状态。
  */
 const LINES_KEY = 'mm.priceLines';
 const TRENDS_KEY = 'mm.trendLines';
@@ -48,15 +44,10 @@ export interface DrawingsApi {
   trendLines: TrendLine[];
   addPriceLine: (price: number, alert?: boolean) => void;
   removePriceLine: (index: number) => void;
-  movePriceLine: (index: number, price: number) => void;
   /** 开关某条水平线的价格告警（穿越时弹系统通知）。 */
   setPriceLineAlert: (index: number, alert: boolean) => void;
   addTrendLine: (a: TrendAnchor, b: TrendAnchor) => void;
   removeTrendLine: (index: number) => void;
-  /** 线身整体平移（拖拽；两个锚点同加一个数据空间位移）。 */
-  moveTrendLineBy: (index: number, deltaTime: number, deltaPrice: number) => void;
-  /** 拖某一端改角度。 */
-  moveTrendAnchor: (index: number, end: TrendEnd, anchor: TrendAnchor) => void;
   /** 清空当前标的的**全部**画线（两种一起）。 */
   clear: () => void;
 }
@@ -64,8 +55,8 @@ export interface DrawingsApi {
 /**
  * 画线的状态与落盘（localStorage）。
  *
- * 改动一律走**函数式 setState**：调用方是画布的手势回调（拖拽时每个 pointermove
- * 都改一笔），它们拿不到最新的 store，读闭包里的旧值会把一次拖拽里的改动丢掉。
+ * 改动一律走**函数式 setState**：调用方是画布的回调，它们拿不到最新的 store，
+ * 读闭包里的旧值会把连续两次改动里的第一次丢掉。
  *
  * `key` 为空（没选中标的）时一切写操作都是空转，读出来是空列表。
  */
@@ -105,10 +96,6 @@ export function useDrawings(key: string | null): DrawingsApi {
     (index: number) => editLines((cur) => removePriceLine(cur, index)),
     [editLines],
   );
-  const moveLine = useCallback(
-    (index: number, price: number) => editLines((cur) => movePriceLine(cur, index, price)),
-    [editLines],
-  );
   const alertLine = useCallback(
     (index: number, alert: boolean) => editLines((cur) => setLineAlert(cur, index, alert)),
     [editLines],
@@ -122,16 +109,6 @@ export function useDrawings(key: string | null): DrawingsApi {
     (index: number) => editTrends((cur) => removeTrendLine(cur, index)),
     [editTrends],
   );
-  const moveTrendBy = useCallback(
-    (index: number, deltaTime: number, deltaPrice: number) =>
-      editTrends((cur) => moveTrendLineBy(cur, index, deltaTime, deltaPrice)),
-    [editTrends],
-  );
-  const moveTrendEnd = useCallback(
-    (index: number, end: TrendEnd, anchor: TrendAnchor) =>
-      editTrends((cur) => moveTrendAnchor(cur, index, end, anchor)),
-    [editTrends],
-  );
 
   const clear = useCallback(() => {
     editLines(() => []);
@@ -143,12 +120,9 @@ export function useDrawings(key: string | null): DrawingsApi {
     trendLines: (key ? trendStore[key] : undefined) ?? NO_TRENDS,
     addPriceLine: addLine,
     removePriceLine: removeLine,
-    movePriceLine: moveLine,
     setPriceLineAlert: alertLine,
     addTrendLine: addTrend,
     removeTrendLine: removeTrend,
-    moveTrendLineBy: moveTrendBy,
-    moveTrendAnchor: moveTrendEnd,
     clear,
   };
 }

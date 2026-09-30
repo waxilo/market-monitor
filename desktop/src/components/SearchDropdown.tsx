@@ -14,7 +14,7 @@ interface Props {
   snapshot: Record<string, Ticker24h>;
   /** 当前市场的自选条目（既判重也决定置顶）。 */
   items: WatchItem[];
-  /** 选中一个标的（未自选的由调用方先补进自选，否则选中会被主窗的校验打回）。 */
+  /** 选中一个标的（**只查看，不自动入自选** —— 加自选走行内那枚 ＋/✓ 按钮）。 */
   onPick: (item: WatchItem) => void;
   onAdd: (item: WatchItem) => void;
   onRemove: (item: WatchItem) => void;
@@ -62,11 +62,12 @@ export function SearchDropdown({
     setActive(-1);
   }, [keyword]);
 
-  /** 整行点击：已自选 → 切过去；未自选 → 补进自选再切过去。 */
+  /**
+   * 整行点击 = **只看这一条**，不碰自选（0.1.11 起）：加自选是行内那枚 ＋ 的专职，
+   * 顺手把「搜一下」变成「往列表里塞一条」会让人没法只看看。图表面板里也有 ☆/★ 可切换。
+   */
   const pick = (inst: Instrument) => {
-    const item: WatchItem = { market, symbol: inst.symbol };
-    if (!watchedSymbols.has(inst.symbol)) onAdd(item);
-    onPick(item);
+    onPick({ market, symbol: inst.symbol });
   };
 
   useEffect(() => {

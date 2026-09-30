@@ -4,6 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Market Monitor</title>
+    <script>
+      // 首帧主题：必须在样式生效前就把 data-theme 定下来。等 React 的 effect 才设的话，
+      // 会先按 :root 的深色底画一帧再翻成浅色 —— 出厂浅色之后这一下就看得见了。
+      // 判据与 App.tsx 里的 THEME_KEY 解析必须一致（没存过 = 浅色）。
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem('mm.theme') === 'dark' ? 'dark' : 'light';
+      } catch (_) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

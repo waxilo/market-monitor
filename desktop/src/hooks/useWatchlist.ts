@@ -19,16 +19,11 @@ export function sameWatch(a: WatchItem | null, b: WatchItem | null): boolean {
   return a != null && b != null && a.market === b.market && a.symbol === b.symbol;
 }
 
-export const DEFAULT_WATCHLIST: WatchItem[] = [
-  'BTC',
-  'ETH',
-  'SOL',
-  'BNB',
-  'XRP',
-  'DOGE',
-  'ADA',
-  'AVAX',
-].map((base) => ({ market: 'FUTURES' as const, symbol: `${base}_USDT` }));
+/** 出厂自选：两个市场各只有 BTC、ETH（0.1.11 起；老装机器的列表由下面的 `seedOnce` 一次性换掉）。 */
+export const DEFAULT_WATCHLIST: WatchItem[] = ['BTC', 'ETH'].flatMap((base) => [
+  { market: 'SPOT' as const, symbol: `${base}_USDT` },
+  { market: 'FUTURES' as const, symbol: `${base}_USDT` },
+]);
 
 /** 旧版纯字符串列表（全 Aster 永续、无下划线）：BTCUSDT → { FUTURES, BTC_USDT }。 */
 function migrate(value: unknown): WatchItem | null {
@@ -46,6 +41,26 @@ function migrate(value: unknown): WatchItem | null {
   return null;
 }
 
+/** 一次性种子迁移的记号：换成新出厂名单后落上，之后永不再动。 */
+const SEED_KEY = 'mm.watchlistSeeded';
+
+/**
+ * 0.1.11 的出厂自选换了（原来是 8 条永续 → 现在两市场各 BTC、ETH）。
+ *
+ * 光改 `DEFAULT_WATCHLIST` 对升级上来的机器没用：「存过就是真相」，旧列表会原样留着，
+ * 看起来就像「没生效」。所以这里做一次**强制替换**（用户要的就是「其他移除」），
+ * 跑完立刻落记号 —— 以后自己加回来的标的不会再被清。两窗谁先读谁执行，写入是幂等的。
+ */
+function seedOnce(): void {
+  try {
+    if (localStorage.getItem(SEED_KEY) != null) return;
+    localStorage.setItem(SEED_KEY, '1');
+    localStorage.setItem(KEY, JSON.stringify(DEFAULT_WATCHLIST));
+  } catch {
+    /* 隐私模式等拿不到 storage：什么都不写，读的那头会走默认值 */
+  }
+}
+
 /**
  * 从 localStorage 读一份当前自选（悬浮窗与主窗是两套 React 实例，各自读同一份数据）。
  *
@@ -54,6 +69,7 @@ function migrate(value: unknown): WatchItem | null {
  * 默认 8 条，两窗显示不一致，悬浮窗的「自选为空」提示也就永远到不了。
  */
 export function readWatchlist(): WatchItem[] {
+  seedOnce();
   let raw: string | null;
   try {
     raw = localStorage.getItem(KEY);

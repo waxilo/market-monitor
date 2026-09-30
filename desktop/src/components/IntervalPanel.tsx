@@ -5,11 +5,10 @@ import {
   composeInterval,
   DEFAULT_INTERVALS,
   INTERVAL_UNITS,
-  intervalInfo,
-  minutesLabel,
+  intervalLabel,
+  intervalNote,
   removeInterval,
   synthesisOf,
-  type IntervalInfo,
   type IntervalSynthesis,
 } from '../lib/intervals';
 import { useDragSort } from '../hooks/useDragSort';
@@ -29,19 +28,17 @@ interface Props {
 /** 行内容：网格里的行与拖动幽灵共用同一套 DOM，免得两处样式分叉。 */
 function RowInner({
   id,
-  note,
   origin,
   onRemove,
 }: {
   id: string;
-  note: string;
   origin: IntervalSynthesis | null;
   onRemove?: () => void;
 }) {
   return (
     <>
-      <span className="iv-name">{id}</span>
-      <span className="iv-note">{note}</span>
+      <span className="iv-name">{intervalLabel(id)}</span>
+      <span className="iv-note">{intervalNote(id)}</span>
       {origin && (
         <span className="iv-tag" title={origin.title}>
           {origin.tag}
@@ -91,7 +88,8 @@ export function IntervalPanel({ list, nativeMinutes, sourceLabel, onChange, onRe
       return { kind: 'idle', text: '填数字再选单位，例：45 分 / 4 时 / 1 天 · 7 天 = 1 周、30 天 = 1 月 · 上限 1 年' };
     }
     if (!parsed.ok) return { kind: 'bad', text: parsed.reason };
-    const shown = `${parsed.id} = ${minutesLabel(parsed.minutes)}`;
+    const note = intervalNote(parsed.id);
+    const shown = note ? `${intervalLabel(parsed.id)} = ${note}` : intervalLabel(parsed.id);
     if (list.includes(parsed.id)) return { kind: 'idle', text: `${shown} · 已经在周期条上` };
     const origin = synthesisOf(parsed.id, nativeMinutes);
     return { kind: 'ok', text: `${shown} · ${origin ? origin.title : `${sourceLabel} 原生支持`}` };
@@ -126,7 +124,6 @@ export function IntervalPanel({ list, nativeMinutes, sourceLabel, onChange, onRe
           </div>
           <div className="iv-group">
             {list.map((id) => {
-              const info: IntervalInfo | null = intervalInfo(id);
               const origin = synthesisOf(id, nativeMinutes);
               return (
                 <div
@@ -149,7 +146,6 @@ export function IntervalPanel({ list, nativeMinutes, sourceLabel, onChange, onRe
                 >
                   <RowInner
                     id={id}
-                    note={info?.note ?? ''}
                     origin={origin}
                     onRemove={() => onChange(removeInterval(list, id))}
                   />
@@ -199,7 +195,7 @@ export function IntervalPanel({ list, nativeMinutes, sourceLabel, onChange, onRe
 
           <div className="up-actions">
             <button className="up-btn" onClick={onReset}>
-              恢复默认（{DEFAULT_INTERVALS.join(' / ')}）
+              恢复默认（{DEFAULT_INTERVALS.map(intervalLabel).join(' / ')}）
             </button>
           </div>
         </div>
@@ -212,11 +208,7 @@ export function IntervalPanel({ list, nativeMinutes, sourceLabel, onChange, onRe
             ref={ghostRef}
             style={{ width: ghost.w, height: ghost.h }}
           >
-            <RowInner
-              id={ghost.id}
-              note={intervalInfo(ghost.id)?.note ?? ''}
-              origin={synthesisOf(ghost.id, nativeMinutes)}
-            />
+            <RowInner id={ghost.id} origin={synthesisOf(ghost.id, nativeMinutes)} />
           </div>,
           document.body,
         )}

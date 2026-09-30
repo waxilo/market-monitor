@@ -6,12 +6,19 @@ import {
   type Instrument,
   type Ticker24h,
 } from '../lib/api';
-import { SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
+import { MA_CHOICES, SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
+import {
+  INDICATORS_KEY,
+  parseIndicatorPrefs,
+  serializeIndicatorPrefs,
+  type IndicatorPrefs,
+} from '../lib/indicatorPrefs';
 import {
   DEFAULT_INTERVALS,
   FALLBACK_INTERVAL,
   firstSupported,
   INTERVALS_KEY,
+  intervalLabel,
   isKnownInterval,
   parseIntervals,
   serializeIntervals,
@@ -24,22 +31,8 @@ import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
 import { ChartMenu } from './ChartMenu';
-import { KlineCanvas, type ChartMenuRequest, type DrawTool } from './KlineCanvas';
+import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanvas';
 
-const MA_CHOICES = [5, 10, 20, 30, 60];
-
-/** 画线工具（**单选，再点一次取消**）：不选就是纯看图，左键动不了线。 */
-const DRAW_TOOLS: readonly { id: DrawTool; label: string; hint: string }[] = [
-  { id: 'hline', label: '水平线', hint: '在图上点一下就在那个价上落一条水平线；按住拖仍是平移。再点一次退出画图' },
-  { id: 'trend', label: '直线', hint: '两点定一条贯穿全图的直线 —— 按住从起点拖出来，或点两下。再点一次退出画图' },
-];
-/**
- * 第一次进来是**裸 K 线**：均线 / 布林带 / 副图全关。
- * （App 端默认开 5/10/30 + VOL，桌面端按需求改成从零开始 —— 指标是用户自己叠上去的，
- * 默认塞三条均线一块成交量反而看不清「现在这根 K 线长什么样」。）
- */
-const DEFAULT_MA: number[] = [];
-const DEFAULT_SUB_PANES: SubPaneKind[] = [];
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
 
@@ -49,9 +42,13 @@ interface Props {
   instrument?: Instrument;
   spark: number[] | undefined;
   theme: string;
+  /** 当前标的在不在自选里（详情页那枚 ☆/★ 的状态）。 */
+  watched: boolean;
+  /** 切换自选：★ = 加进左侧列表、☆ = 从左侧列表删掉（行内 × 是同一件事的另一个入口）。 */
+  onToggleWatch: (item: WatchItem) => void;
 }
 
-export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
+export function ChartView({ item, ticker, instrument, spark, theme, watched, onToggleWatch }: Props) {
   /** 周期条上放哪些周期、按什么顺序 —— 用户在「周期」弹窗里改，存 localStorage。 */
   const [intervals, setIntervals] = useState<string[]>(() =>
     parseIntervals(localStorage.getItem(INTERVALS_KEY)),
@@ -63,10 +60,17 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   const [interval, setInterval_] = useState(FALLBACK_INTERVAL);
   /** 周期增删排序的弹窗开关（弹窗本身挂在末尾那枚「＋」上）。 */
   const [intervalPanelOpen, setIntervalPanelOpen] = useState(false);
-  const [maPeriods, setMaPeriods] = useState<number[]>(DEFAULT_MA);
-  /** 布林带默认关，与 AppSettings 的 bollEnabled 默认值一致。 */
-  const [showBoll, setShowBoll] = useState(false);
-  const [subPanes, setSubPanes] = useState<SubPaneKind[]>(DEFAULT_SUB_PANES);
+  /**
+   * 指标的选择（均线 / 布林带 / 副图）—— 存 localStorage，重启回来照旧。
+   *
+   * 出厂是**裸 K 线**：一个都不叠（App 端默认开 5/10/30 + 成交量，桌面端按需求从零开始 ——
+   * 指标是用户自己叠上去的，默认塞三条均线一块成交量反而看不清「现在这根 K 线长什么样」）。
+   * 它是「怎么看图」，与看哪个标的无关，所以全局存一份（与周期条的 `mm.intervals` 同口径）。
+   */
+  const [prefs, setPrefs] = useState<IndicatorPrefs>(() =>
+    parseIndicatorPrefs(localStorage.getItem(INDICATORS_KEY)),
+  );
+  const { ma: maPeriods, boll: showBoll, panes: subPanes } = prefs;
   const [candles, setCandles] = useState<Bar[]>([]);
   const market = item?.market;
   const symbol = item?.symbol;
@@ -76,10 +80,10 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    */
   const drawings = useDrawings(item ? watchKey(item) : null);
   /**
-   * 选中的画线工具；`null` = 现在不画图，左键在画布上动不了线（线照旧显示、也照旧拖不动）。
-   * 落盘不必要：它是一次会话内的操作意图，默认给「不画」—— 谁都不希望一开机左键就在改图。
+   * 菜单里那条「从这里画直线」落下的一次性信号（第一点 = 右键落点，第二下左键成线）。
+   * 画布侧的动作（预览、成线、Esc 撤销）都住在 KlineCanvas，这一层只递信号。
    */
-  const [drawTool, setDrawTool] = useState<DrawTool | null>(null);
+  const [trendSeed, setTrendSeed] = useState<TrendSeed | null>(null);
   const drawingCount = drawings.priceLines.length + drawings.trendLines.length;
   const alertCount = drawings.priceLines.filter((l) => l.alert).length;
   /** 右键菜单：画布只报「落在哪儿、压着哪条线」，菜单长什么样、点完干什么都在这一层。 */
@@ -95,6 +99,10 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   useEffect(() => {
     localStorage.setItem(INTERVALS_KEY, serializeIntervals(intervals));
   }, [intervals]);
+
+  useEffect(() => {
+    localStorage.setItem(INDICATORS_KEY, serializeIndicatorPrefs(prefs));
+  }, [prefs]);
 
   // 当前周期必须在列表里，否则回落到列表里第一个。
   // 现在不存在「当前源不支持」这回事了 —— 表外周期由更细的原生周期聚合出来，
@@ -149,16 +157,20 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   }, [market, symbol, interval, source]);
 
   function toggleMa(p: number) {
-    setMaPeriods((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p].sort((a, b) => a - b)));
+    setPrefs((prev) => ({
+      ...prev,
+      ma: prev.ma.includes(p) ? prev.ma.filter((x) => x !== p) : [...prev.ma, p].sort((a, b) => a - b),
+    }));
   }
 
   /** 副图可多选，空集 = 不显示（与 App 的 toggleSubPane 同一语义）。 */
   function toggleSubPane(kind: SubPaneKind) {
-    setSubPanes((prev) =>
-      prev.includes(kind)
-        ? prev.filter((k) => k !== kind)
-        : [...prev, kind].sort((a, b) => SUB_PANE_KINDS.indexOf(a) - SUB_PANE_KINDS.indexOf(b)),
-    );
+    setPrefs((prev) => ({
+      ...prev,
+      panes: prev.panes.includes(kind)
+        ? prev.panes.filter((k) => k !== kind)
+        : SUB_PANE_KINDS.filter((k) => prev.panes.includes(k) || k === kind),
+    }));
   }
 
   const cls = changeClass(ticker?.priceChangePercent);
@@ -175,7 +187,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       <section className="panel">
         <div className="chart-empty">
           <span className="overline">K 线</span>
-          <span className="chart-empty-hint">从顶部搜索现货或永续合约全市场，加入自选后看图</span>
+          <span className="chart-empty-hint">从顶部搜索现货或永续合约全市场，搜到就能看图（入不入自选都行）</span>
         </div>
       </section>
     );
@@ -188,8 +200,19 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           <div className="base">
             {instrument?.baseAsset ?? item.symbol.split('_')[0]}
             <span className="sym">
-              {displaySymbol(item.symbol)} · {item.market === 'FUTURES' ? 'PERP' : 'SPOT'}
+              {displaySymbol(item.symbol)} · {item.market === 'FUTURES' ? '永续' : '现货'}
             </span>
+            {/* 详情页的「自选」标记：★ = 在左侧列表里、☆ = 只是搜来看看。
+                点一下就是加/删 —— 与行内 × 、搜索结果行内的 ＋ 同一件事。 */}
+            <button
+              type="button"
+              className={`star-btn${watched ? ' on' : ''}`}
+              aria-pressed={watched}
+              title={watched ? `从自选移除 ${displaySymbol(item.symbol)}` : `把 ${displaySymbol(item.symbol)} 加入自选`}
+              onClick={() => onToggleWatch(item)}
+            >
+              {watched ? '★' : '☆'}
+            </button>
           </div>
         </div>
         <div className="hero num" key={ticker?.lastPrice}>
@@ -198,19 +221,19 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         <span className={`pill ${cls}`}>{formatChange(ticker?.priceChangePercent)}</span>
         <div className="chart-metrics">
           <div className="metric-block">
-            <div className="overline">24H High</div>
+            <div className="overline">24小时最高</div>
             <div className="metric num">{formatPrice(ticker?.highPrice, instrument?.tickSize)}</div>
           </div>
           <div className="metric-block">
-            <div className="overline">24H Low</div>
+            <div className="overline">24小时最低</div>
             <div className="metric num">{formatPrice(ticker?.lowPrice, instrument?.tickSize)}</div>
           </div>
           <div className="metric-block">
-            <div className="overline">24H Vol</div>
+            <div className="overline">24小时成交额</div>
             <div className="metric num">{formatCompact(ticker?.quoteVolume)}</div>
           </div>
           <div className="metric-block">
-            <div className="overline">24H Trend</div>
+            <div className="overline">24小时走势</div>
             <div style={{ padding: '2px 0' }}>
               <Sparkline closes={spark} />
             </div>
@@ -218,10 +241,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         </div>
       </div>
 
-      {/* 工具条两行：第一行只有周期，第二行把指标 / 副图 / 画图三组一次铺开。
-          以前四格单选、每次只展开选中那一组，改任何一个开关都要先多点一下切格子；
-          现在周期（天天换）独占一行，另外三组（偶尔调）常驻第二行，不用再声明「我要改哪一组」。
-          宽度不够靠 .interval-bar 的 wrap 兜底；1280 宽的桌面两行都是单行。 */}
+      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组。
+          「画图」那组（水平线/直线选择、手势提示、清空）已整组拿掉 —— 画线一律走右键菜单，
+          工具条上只留「告警 N」这个纯状态读数。宽度不够靠 .interval-bar 的 wrap 兜底。 */}
       <div className="bar-stack">
         <div className="interval-bar">
           <span className="bar-label grp">周期</span>
@@ -240,7 +262,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                   title={synth ? synth.title : undefined}
                   onClick={() => setInterval_(iv)}
                 >
-                  {iv}
+                  {intervalLabel(iv)}
                 </button>
               );
             })}
@@ -273,7 +295,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             type="button"
             className={`chip${showBoll ? ' on' : ''}`}
             title="布林带：主图叠加开关（周期 20、倍数 2）"
-            onClick={() => setShowBoll((v) => !v)}
+            onClick={() => setPrefs((prev) => ({ ...prev, boll: !prev.boll }))}
           >
             BOLL
           </button>
@@ -293,44 +315,13 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             </button>
           ))}
 
-          <div className="sep" />
-
-          <span className="bar-label grp">画图</span>
-          <div className="bar-tabs" role="group" aria-label="画线工具">
-            {DRAW_TOOLS.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                aria-pressed={drawTool === t.id}
-                className={`chip${drawTool === t.id ? ' selected' : ''}`}
-                title={`${t.hint}`}
-                // 再点一次退回「不画图」：这组 chip 是开关，不是必须选一个的单选钮
-                onClick={() => setDrawTool((cur) => (cur === t.id ? null : t.id))}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          <span className="bar-label">
-            {drawTool === null
-              ? '右键图上任意处：设告警 / 删线'
-              : drawTool === 'hline'
-                ? '左键单击落线 · 拖动移线 · 右键弹菜单'
-                : '按住拖出直线 · 或点两下 · 拖动移线 · 右键弹菜单'}
-          </span>
-          <button
-            type="button"
-            className="chip"
-            disabled={drawingCount === 0}
-            onClick={drawings.clear}
-            title="删掉当前标的的全部画线（水平线 + 直线，含告警线）"
-          >
-            清空 {drawingCount}
-          </button>
           {alertCount > 0 && (
-            <span className="bar-label alert" title="价格穿越这些金色点线时弹系统通知（主窗收进托盘也照弹）">
-              告警 {alertCount}
-            </span>
+            <>
+              <div className="sep" />
+              <span className="bar-label alert" title="价格穿越这些金色点线时弹系统通知（主窗收进托盘也照弹）">
+                告警 {alertCount}
+              </span>
+            </>
           )}
         </div>
       </div>
@@ -346,12 +337,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         resetKey={`${item.market}|${item.symbol}|${interval}`}
         priceLines={drawings.priceLines}
         trendLines={drawings.trendLines}
-        drawTool={drawTool}
-        onAddLine={drawings.addPriceLine}
-        onMoveLine={drawings.movePriceLine}
+        trendSeed={trendSeed}
         onAddTrend={drawings.addTrendLine}
-        onMoveTrendBy={drawings.moveTrendLineBy}
-        onMoveTrendAnchor={drawings.moveTrendAnchor}
         onMenu={setMenu}
         resetPriceSignal={resetPriceSignal}
       />
@@ -362,11 +349,14 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           y={menu.y}
           hit={menu.hit}
           priceText={menuPriceText}
+          drawingCount={drawingCount}
           adjusted={menu.adjusted}
           onAddLine={drawings.addPriceLine}
           onRemoveLine={drawings.removePriceLine}
           onSetAlert={drawings.setPriceLineAlert}
           onRemoveTrend={drawings.removeTrendLine}
+          onStartTrend={(anchor) => setTrendSeed((prev) => ({ anchor, seq: (prev?.seq ?? 0) + 1 }))}
+          onClear={drawings.clear}
           onResetPrice={() => setResetPriceSignal((n) => n + 1)}
           onClose={() => setMenu(null)}
         />

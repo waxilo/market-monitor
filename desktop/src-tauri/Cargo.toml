@@ -52,9 +52,15 @@ tauri-plugin-global-shortcut = "2"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_System_Power",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }
+
+# 前台不息屏（macOS）：IOKit 的 IOPM 断言。core-foundation 本来就在 tauri 的依赖树里
+# （0.10.1），这里只是直接用它 —— 不引入新版本、不新增下载。
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
 
 # 价格告警的系统通知。为什么不走 `tauri-plugin-notification`：
 # 它把 `show()` 的返回值丢掉（弹不出来也不报错，实测在这台 Win11 上就是静默失败），

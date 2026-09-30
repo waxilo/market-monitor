@@ -1,4 +1,5 @@
 mod alert;
+mod awake;
 mod global_key;
 mod market;
 mod taskbar;
@@ -324,14 +325,18 @@ pub fn run() {
                 hide_mini(app);
             }
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
+            // 前台不息屏：焦点落在任一窗口上就压住显示器 idle sleep，全丢了就松开
+            // （判据与平台差异都在 `awake` 模块）。这个回调就在事件循环线程上，满足它的前提。
+            WindowEvent::Focused(_) => awake::refresh(window.app_handle()),
             // 主窗点关闭 = 收进托盘，进程继续跑，悬浮窗照常刷新
-            if let WindowEvent::CloseRequested { api, .. } = event {
+            WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == MAIN {
                     api.prevent_close();
                     let _ = window.hide();
                 }
             }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
