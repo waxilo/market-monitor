@@ -1,3 +1,4 @@
+mod global_key;
 mod market;
 mod taskbar;
 mod update;
@@ -135,9 +136,9 @@ fn show_main_window(app: AppHandle, symbol: Option<String>, market: Option<Strin
     show_main(&app);
 }
 
-/// 主窗图标 → 悬浮窗：主窗收起，只剩小块看盘面板（托盘菜单里是同一个开关）。
-#[tauri::command]
-fn switch_to_mini(app: AppHandle) {
+/// 收成悬浮窗：主窗收起，只剩小块看盘面板（托盘菜单里是同一个开关）。
+/// 全局热键走的也是这条（`global_key::toggle_view`），所以逻辑收在这里而不是命令里。
+fn to_mini(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MINI) {
         let _ = window.show();
         let _ = window.set_focus();
@@ -147,11 +148,22 @@ fn switch_to_mini(app: AppHandle) {
     }
 }
 
+/// 唤回主窗（同时把悬浮窗收掉）。
+fn to_main(app: &AppHandle) {
+    hide_mini(app);
+    show_main(app);
+}
+
+/// 主窗图标 → 悬浮窗。
+#[tauri::command]
+fn switch_to_mini(app: AppHandle) {
+    to_mini(&app);
+}
+
 /// 悬浮窗图标 → 主窗。
 #[tauri::command]
 fn switch_to_main(app: AppHandle) {
-    hide_mini(&app);
-    show_main(&app);
+    to_main(&app);
 }
 
 /// 悬浮窗右键菜单。
@@ -224,6 +236,10 @@ pub fn run() {
         // 更新通道（endpoints/公钥）来自 tauri.conf.json 的 plugins.updater；
         // 检查与安装细节在 update.rs 里包了一层（加速站 + 验签自验）
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // 系统级快捷键（默认 Alt+M）：判定与换键的规矩都在 `global_key` 模块，
+        // 和弦由主窗从 localStorage 推上来。
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(global_key::Shared::default())
         .manage(update::UpdateShared::default())
         .invoke_handler(tauri::generate_handler![
             show_main_window,
@@ -231,6 +247,8 @@ pub fn run() {
             switch_to_main,
             open_mini_menu,
             set_mini_rows,
+            global_key::set_global_shortcut,
+            global_key::global_shortcut_status,
             market::market_request,
             update::check_update,
             update::start_update_download,

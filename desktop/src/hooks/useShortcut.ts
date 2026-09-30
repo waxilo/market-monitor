@@ -4,6 +4,9 @@ import { matchesChord, readChord, type ShortcutId } from '../lib/shortcuts';
 /**
  * 把一条快捷键绑到 `window` 的 keydown 上。
  *
+ * 这是**只在窗口里生效**的那一层：平时按的是系统级那条（宿主收，见 lib/globalKey.ts），
+ * 这层只在系统级注册不上时被放开（`hooks/useGlobalKey` 给 `enabled`）。
+ *
  * 两个刻意的设计：
  *
  * 1. **和弦在按下时才读**（`readChord` 现读 localStorage），不作为 state 传进来。
@@ -13,7 +16,8 @@ import { matchesChord, readChord, type ShortcutId } from '../lib/shortcuts';
  * 2. `handler` 放 ref 里、`useEffect` 的依赖只留 `enabled` —— 事件监听不随
  *    每次渲染重绑（绑定/解绑发生在按键之间才安全，否则手势中途会丢事件）。
  *
- * `enabled=false` 时不响应（设置面板打开期间就是这种状态：录制要用同一批按键）。
+ * `enabled=false` 时干脆不绑。录制新组合键期间不靠它躲（录制那头是捕获阶段 +
+ * `preventDefault`，被上面 `defaultPrevented` 那一条挡掉），靠的是宿主先把系统级摘掉。
  */
 export function useShortcut(id: ShortcutId, handler: () => void, enabled = true) {
   const handlerRef = useRef(handler);

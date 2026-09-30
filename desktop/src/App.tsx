@@ -6,6 +6,7 @@ import { endpointOf, useFuturesSourceUrl } from './lib/sources';
 import { IS_TAURI, switchToMiniWindow } from './lib/tauri';
 import { useWindowDrag } from './lib/windowDrag';
 import { useShortcut } from './hooks/useShortcut';
+import { useGlobalKey } from './hooks/useGlobalKey';
 import { useWatchlist, type WatchItem } from './hooks/useWatchlist';
 import { useTickers } from './hooks/useTickers';
 import { useSparks } from './hooks/useSparks';
@@ -68,7 +69,10 @@ export default function App() {
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
 
   // 主窗 ⇄ 悬浮窗：默认 Alt+M，可在设置里改（判定与落盘见 lib/shortcuts.ts）。
-  useShortcut('toggleWindow', switchToMiniWindow);
+  // 这条是**系统级**的：主窗负责把落盘的和弦推给宿主（只有主窗推，见 hooks/useGlobalKey），
+  // 归宿主管了以后本窗口就不必再绑一份网页监听。
+  const globalTaken = useGlobalKey('toggleWindow');
+  useShortcut('toggleWindow', switchToMiniWindow, !globalTaken);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;

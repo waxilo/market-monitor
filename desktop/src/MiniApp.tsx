@@ -17,6 +17,7 @@ import { syncFuturesSource } from './lib/sources';
 import { MINI_MAX_ROWS, MINI_ROW_HEIGHT } from './lib/layout';
 import { usePointerInside } from './hooks/usePointerInside';
 import { useShortcut } from './hooks/useShortcut';
+import { useGlobalKey } from './hooks/useGlobalKey';
 import { useWindowDrag } from './lib/windowDrag';
 
 const MARKET_KEY = 'mm.market';
@@ -62,10 +63,12 @@ export function MiniApp() {
   const inside = usePointerInside(miniRef);
   /**
    * 快捷键（默认 Alt+M，可在主窗的设置里改）在悬浮窗里同样有效：按一下就换回主窗。
-   * 和弦在**按下时**才从 localStorage 现读（见 hooks/useShortcut），
-   * 所以主窗刚改完，这边下一次按键就是新键 —— 不需要等 4s 的自选同步轮询。
+   * 平时那一下由宿主收（系统级，见 lib/globalKey.ts），这边这条只是**兜底** ——
+   * 组合键被别的程序占了、注册不上时才轮到它。悬浮窗是启动后才加载的，
+   * 挂载时读一次状态就够用（之后再跟 `global-shortcut-state` 事件）。
    */
-  useShortcut('toggleWindow', switchToMainWindow);
+  const globalTaken = useGlobalKey();
+  useShortcut('toggleWindow', switchToMainWindow, !globalTaken);
 
   /** 点面板任意处 = 换到主窗（行按钮自己会先接手，事件不会冒泡到这儿）。 */
   const onPanelClick = (e: ReactMouseEvent<HTMLDivElement>) => {

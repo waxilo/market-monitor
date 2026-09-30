@@ -42,6 +42,7 @@ url = "2"
 # 安装包的 minisign 签名自验（与插件内部相同的校验实现）
 minisign-verify = "0.2"
 base64 = "0.22"
+tauri-plugin-global-shortcut = "2"
 
 # 悬浮窗与 Windows 任务栏同为 topmost：点击任务栏时系统会把任务栏提到 topmost 组最前，
 # 盖住悬浮窗，只能自己按 z 序轮询、被压住时用 `SetWindowPos` 重新置顶

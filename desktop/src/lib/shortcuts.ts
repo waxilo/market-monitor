@@ -10,6 +10,11 @@
  * 主窗与悬浮窗是**两个 JS 实例**，所以谁都不缓存它：按下时现读（`readChord`），
  * 在设置面板里改完，另一个窗口下一次按键就生效，不需要任何同步。
  *
+ * **键本身是系统级的**（不在窗口里也能按），所以生效的组合键要交给宿主注册
+ * （`lib/globalKey.ts` → Rust 的 `global_key` 模块）：`localStorage` 跨不过 FFI，
+ * Rust 读不到它，只有主窗在启动时把 `readChord` 的结果推上去。交出去前过
+ * `acceleratorOf` 那道翻译 —— 和弦的表示法是我们的，accelerator 的表示法是宿主的。
+ *
  * 键名用 `KeyboardEvent.code` 归一化（`KeyM` → `m`、`Digit1` → `1`、`F5` → `f5`），
  * 不用 `key`：`key` 会随修饰键变（Alt+M 在部分布局上给出别的字符），
  * 而 `code` 是物理位置，按「M 键」就是 M 键。
@@ -45,7 +50,7 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   {
     id: 'toggleWindow',
     label: '主窗 ⇄ 悬浮窗',
-    hint: '在哪个窗口里按都行，按一下就换成另一个窗口',
+    hint: '系统级：不在窗口里、程序在后台也能按',
     defaultChord: 'alt+m',
   },
 ];
@@ -168,6 +173,52 @@ export function formatChord(raw: string | null | undefined): string {
   const parts = MODIFIER_KEYS.filter((m) => c[m]).map((m) => MODIFIER_LABEL[m]);
   parts.push(KEY_LABEL[c.key] ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key));
   return parts.join(' + ');
+}
+
+/* ── 和弦 → 宿主 accelerator ─────────────────────────────── */
+
+/** 修饰键在 accelerator 那边的写法（`win` 那边叫 `Super`，它不认 `Win`）。 */
+const ACCELERATOR_MOD: Record<(typeof MODIFIER_KEYS)[number], string> = {
+  ctrl: 'Ctrl',
+  alt: 'Alt',
+  shift: 'Shift',
+  meta: 'Super',
+};
+
+/** 具名主键在 accelerator 那边的写法；单字母/数字/`fN` 直接大写即可。 */
+const ACCELERATOR_KEY: Record<string, string> = {
+  space: 'Space',
+  enter: 'Enter',
+  tab: 'Tab',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
+  up: 'ArrowUp',
+  down: 'ArrowDown',
+  left: 'ArrowLeft',
+  right: 'ArrowRight',
+};
+
+/**
+ * 和弦 → 交给宿主注册的那串（`alt+m` → `Alt+M`）。
+ *
+ * 认不出的主键（`keyNameOf` 兜底那条留下的怪 code、`F25` 之类）就返回 null
+ * —— 由调用方跳过注册、退回只在窗口里生效，比把一串注定注册失败的字符串递过去、
+ * 再把宿主那句英文报错摊到设置面板上干净。
+ */
+export function acceleratorOf(raw: string | null | undefined): string | null {
+  const c = parseChord(raw);
+  if (!c || !usableChord(c)) return null;
+  const key =
+    ACCELERATOR_KEY[c.key] ??
+    (/^[a-z0-9]$/.test(c.key) || /^f\d+$/.test(c.key) ? c.key.toUpperCase() : c.key);
+  // 符号键走的是「直接用 code」那条归一化（`semicolon`…），宿主解析大小写不敏感、认这些名字。
+  if (/[+\s]/.test(key)) return null;
+  const mods = MODIFIER_KEYS.filter((m) => c[m]).map((m) => ACCELERATOR_MOD[m]);
+  return [...mods, key].join('+');
 }
 
 /* ── 事件 ⇄ 和弦 ─────────────────────────────────────────── */
