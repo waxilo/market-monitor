@@ -39,6 +39,15 @@
     共同祖先，没这毛病。配套 `draggedPair`：搬窗手势（按下-拖走 ×2）常被配成一次双击，靠它把随之的 `dblclick`
     一起放过，否则拖完窗口顺手就最大化；复位点只有一个 = 新一轮那下没被吞的 `click`（`detail===1`），
     所以「拖过一次」不会把之后的正常双击一起堵死。`onClickCapture` 现在两件事：吞拖拽补发的 click + 复位 `draggedPair`。
+  - ⚠️ **窗口句柄 `winRef` 两条路径都得懒建**（0.1.9 修的回归，`6c37fad`）：0.1.8 把双击改成认 `dblclick` 时，
+    `getCurrentWindow()` 的赋值只剩在 `onDoubleClick` 里（未开 `dblClickMaximize` 的窗口还在那句开头就 `return`），
+    而拖动那条写的是 `winRef.current?.startDragging()` ⇒ 悬浮窗（只传 `blankOnly:false`，永远走不到双击）句柄恒 `null`，
+    **可选链把整次拖动静默吞掉 = 彻底拖不动**；主窗也要先双击最大化过一次，之后拖动才「神秘恢复」。
+    现在两处统一 `(winRef.current ??= getCurrentWindow())`。
+    ❗**发版验收口径要跟着改**：0.1.8 那次只重验双击、没重跑 `verify-mini-drag.mjs`（42 条），回归就这么发出去了。
+    本次改用内嵌浏览器挂假宿主（`__TAURI_INTERNALS__.invoke` 收命令名）断言 `plugin:window|start_dragging`：
+    8 条正向（含 4px 死区边界、死区内 click 仍送达、拖过的双下不最大化）**＋ A/B 反向** —— 把那一行退回旧写法后
+    悬浮窗 0 次调用，才证明探针真抓得住这个缺陷（只跑正向见绿就发，等于没验）。
   ⚠️ **别用「按住 N 百 ms 才拖」**：定时器与指针动没动无关，等于想拖必须先原地干等，且按下即移时前段位移被整段丢掉
   （先愣一下再跳着跟）；反向还会「快速拖一下被当成点击把窗口切走」。教训：`verify-mini-interaction.mjs` 里
   断言「按住 300ms → 拖窗口」的两条**是过期断言**，按新语义按住不动本来就该是点击 —— 改测试而不是改回产品。
