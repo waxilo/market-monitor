@@ -27,8 +27,11 @@
   用 `.workbuddy/tmp/verify-channel-local.py` 做**本机核对**（2026-09-29 发 0.1.7 起是 **38 条**，PASS 38/38：体积 /
   sha256 边车 / **逐平台** keyid 与上一版逐字节比 / manifest 内联签名 == `.sig` 文件内容 / URL 版本号 / 无旧版残留；
   2026-09-30 发 0.1.8 同样 PASS 38/38 = 脚本 31 条 + 基线对比 7 条）。⚠️ 脚本里版本号**写死**（仓库旁那份停在
-  0.1.5 形态），每次发版 sed 生成新副本（`0.1.5→新版`、`0.1.4→上一版`）再跑；`gh release download` 不在 git
-  目录里跑要加 `-R waxilo/market-monitor`。
+  **0.1.7 形态**：usage 例 0.1.7 / 基线 0.1.6），每次发版 sed 生成新副本再跑 —— 2026-09-30 发 0.1.11 实测要
+  sed **六处**：`0.1.7→新版`、`0.1.6→上一版`、`/tmp/mm-before→/tmp/mm-before-011`、`/tmp/mm-rel-before.json→…-011.json`、
+  `/tmp/mm-after→/tmp/mm-after-011`、`pub_date` 断言的日期 `2026-09-29→2026-09-30`（这条不改必红）；
+  基线 rel json 只需要 `{id, created_at}` 两个字段（`jq '{id, created_at}'` 从旧文件切）。`gh release download`
+  不在 git 目录里跑要加 `-R waxilo/market-monitor`。
   ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
   别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
   - 脚本自带「直连失败改走本机代理 `127.0.0.1:7897`」的兜底（发 0.1.7 时 TLS handshake timeout 反复出现，直连与代理谁通就用谁）；
@@ -38,14 +41,15 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
   `desktop 0.1.7`（两点画直线/趋势线 + 指标条 1280 折行修复；只发桌面端）→
   `desktop 0.1.8`（系统级全局热键 + 顶栏双击最大化改认 dblclick + 工具条四格单选、画线锁删除；只发桌面端）→
   `desktop 0.1.9`（悬浮窗拖不动的回归修复；只发桌面端）→
-  `desktop 0.1.10`（价格告警线 + 到价系统通知、悬浮窗独立混合列表、指标/副图/画图另起一行、默认纵向留白 6%→20%；只发桌面端）。
+  `desktop 0.1.10`（价格告警线 + 到价系统通知、悬浮窗独立混合列表、指标/副图/画图另起一行、默认纵向留白 6%→20%；只发桌面端）→
+  `desktop 0.1.11`（画线/删自选改右键菜单、前台不息屏、默认浅色+全中文、搜索居中、自选与指标持久化；只发桌面端）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
@@ -57,8 +61,11 @@
   `JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" "C:/Users/sloan.wang/android-sdk/build-tools/36.0.0/apksigner.bat" verify --print-certs <apk>`，
   指纹**必须与上面逐字一致** —— 不一致 = 覆盖安装必报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，那批用户只能卸载重装。
 
-- ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**：上次发版若走过 Git Data API 重建，
-  远端那个提交与本地是**同内容、不同 SHA**（时间戳被规范成 UTC）。先
-  `rev-parse <a>^{tree} <b>^{tree}` 比 tree + `git diff --stat` 确认等价，再
-  `git rebase --onto origin/main <本地那个等价提交>` 换基。（2026-09-29 发 0.1.6 实测：本地 `8f69de2` ↔ 远端
-  `ff4a0dd`，tree 同为 `665ae30…`。副作用：本地 `desktop-v0.1.5` tag 因此游离 ⇒ **推 tag 只写要发的名字，别用 `--tags`**。）
+- ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
+  - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先
+    `rev-parse <a>^{tree} <b>^{tree}` 比 tree + `git diff --stat` 确认等价，再
+    `git rebase --onto origin/main <本地那个等价提交>` 换基。（2026-09-29 发 0.1.6 实测：本地 `8f69de2` ↔ 远端
+    `ff4a0dd`，tree 同为 `665ae30…`。副作用：本地 `desktop-v0.1.5` tag 因此游离 ⇒ **推 tag 只写要发的名字，别用 `--tags`**。）
+  - **远端有本地没有的提交**（他机会话补的 `docs(memory)` 证据提交，如 2026-09-30 的 `17a6d8e`）：`git log origin/main`
+    会直接看到，`git rebase origin/main` 换基即可；两边都改过 memory 文件时会撞**追加型冲突**（两个 `## 段` 都要留），
+    按「旧的在前、新的在后」拼回去，别丢掉任一边。
