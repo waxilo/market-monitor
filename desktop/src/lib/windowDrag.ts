@@ -102,7 +102,9 @@ export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
       press.current = null;
       dragged.current = true;
       draggedPair.current = true;
-      void winRef.current?.startDragging();
+      // 句柄必须在这里也懒建：悬浮窗不开 `dblClickMaximize`，走不到下面那条双击路径，
+      // 若只在那儿建，这里拿到的永远是 `null`（可选链会静吞掉整次拖动 ⇒ 拖不动）。
+      void (winRef.current ??= getCurrentWindow()).startDragging();
     };
     // 没有按下行为时这两条纯属空转，所以不区分「是否按下」，常驻即可。
     const onEnd = (e: PointerEvent) => {
