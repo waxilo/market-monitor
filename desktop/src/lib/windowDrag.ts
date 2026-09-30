@@ -47,10 +47,14 @@ interface DragOptions {
   dblClickMaximize?: boolean;
 }
 
-/** 只留两个：按下记起点、松手后吞掉系统补发的 click。移动与松手挂在 window 上。 */
+/**
+ * 三个：按下记起点、松手后吞掉系统补发的 click、双击交给 `dblclick`。
+ * 移动与松手挂在 window 上。
+ */
 export interface WindowDragHandlers {
   onPointerDown: (e: ReactPointerEvent) => void;
   onClickCapture: (e: ReactMouseEvent) => void;
+  onDoubleClick: (e: ReactMouseEvent) => void;
 }
 
 export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
@@ -59,8 +63,15 @@ export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
   const winRef = useRef<ReturnType<typeof getCurrentWindow> | null>(null);
   /** 当前这次按下的起点（`null` = 没在按 / 已经拖起来了）。 */
   const press = useRef<{ id: number; x: number; y: number } | null>(null);
-  /** 本次按下是否已进入拖拽：拖完系统会补一个 click，必须吞掉。 */
+  /** 本次按下是否已进入拖拽：拖完系统会补一个 click，必须吞掉。只在下一次 `pointerdown` 复位。 */
   const dragged = useRef(false);
+  /**
+   * 这一对点击里拖动过窗口 —— 搬窗口的手势（按下-拖走、按下-拖走）经常被浏览器配成一次
+   * 「双击」，靠它把随之而来的 `dblclick` 一起放过，否则拖完窗口顺手就最大化了。
+   * 复位点只有一个：新配对的头一下那个**没被吞掉**的 `click`（`detail === 1`）。
+   * 所以「拖了一次窗口」不会把之后的正常双击一起堵死。
+   */
+  const draggedPair = useRef(false);
 
   const onPointerDown = useCallback(
     (e: ReactPointerEvent) => {
@@ -72,18 +83,12 @@ export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
       if (noDrag(e.target)) return;
       if (blankOnly && interactive(e.target)) return;
 
-      const win = (winRef.current ??= getCurrentWindow());
-      // 双击最大化必须抢在拖拽之前：一旦进了系统的窗口移动循环，第二个 down 就到不了
-      if (dblClickMaximize && e.detail === 2) {
-        void win.toggleMaximize();
-        return;
-      }
       // 这里**只是**记下起点。真正的拖动要等指针走出去超过死区，
       // 那一步在下面的 window 级 pointermove 里 —— 所以抬手时若没越过死区，
       // 就什么也没发生过，浏览器该发的 click 照发（点击语义完整保留）。
       press.current = { id: e.pointerId, x: e.clientX, y: e.clientY };
     },
-    [blankOnly, dblClickMaximize],
+    [blankOnly],
   );
 
   useEffect(() => {
@@ -96,6 +101,7 @@ export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
       // 之后的 pointerup/click 都可能到不了，标记必须提前立好。
       press.current = null;
       dragged.current = true;
+      draggedPair.current = true;
       void winRef.current?.startDragging();
     };
     // 没有按下行为时这两条纯属空转，所以不区分「是否按下」，常驻即可。
@@ -116,11 +122,29 @@ export function useWindowDrag(options: DragOptions = {}): WindowDragHandlers {
   }, [thresholdPx]);
 
   const onClickCapture = useCallback((e: ReactMouseEvent) => {
-    if (!dragged.current) return;
-    dragged.current = false;
-    e.preventDefault();
-    e.stopPropagation();
+    if (dragged.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    // 干净的一击 = 新一轮手势开始了：清掉上一轮拖拽留下的双击黑名单，
+    // 否则「拖完窗口之后再双击顶栏」会被一直拦着（那一下正是用户要的最大化）。
+    if (e.detail === 1) draggedPair.current = false;
   }, []);
 
-  return { onPointerDown, onClickCapture };
+  // 双击最大化认的是浏览器的 `dblclick`，不是第二次按下上的 `e.detail === 2`。
+  // 后者要求两次按下落在**同一个元素**上才累计到 2：顶栏是十几个并排的 span / button，
+  // 两下之间偏出一两个像素就换了元素，计数从头开始，于是「双击毫无反应」。
+  // `dblclick` 由浏览器按时间窗和位移配对好再投给共同祖先，没这个毛病。
+  const onDoubleClick = useCallback(
+    (e: ReactMouseEvent) => {
+      if (!dblClickMaximize || !IS_TAURI || draggedPair.current) return;
+      if (noDrag(e.target)) return;
+      if (blankOnly && interactive(e.target)) return;
+      void (winRef.current ??= getCurrentWindow()).toggleMaximize();
+    },
+    [blankOnly, dblClickMaximize],
+  );
+
+  return { onPointerDown, onClickCapture, onDoubleClick };
 }
