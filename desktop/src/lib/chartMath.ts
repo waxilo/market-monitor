@@ -10,7 +10,12 @@ export function clampNum(v: number, lo: number, hi: number): number {
 }
 
 const EPSILON = 1e-12;
-const DEFAULT_PADDING = 0.06;
+/**
+ * 自动量程的上下留白。0.06 时最长影线几乎顶到边框，蜡烛占满主图，
+ * 每次换标的都得手动 Shift+滚轮把刻度缩下来 —— 直接把这个默认值调松，
+ * 蜡烛占主图高约 71%（`1 / (1 + 2 * 0.20)`），一上来就是那个看着舒服的形。
+ */
+const DEFAULT_PADDING = 0.20;
 
 /** 可见区间（闭区间，含 NaN 则跳过）的极值。 */
 export function rangeOf(values: number[], from = 0, to = values.length - 1): Range | null {

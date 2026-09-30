@@ -189,6 +189,17 @@ function sourceLabelOf(market: MarketType): string {
 // —————————————————————————— 标的清单（搜索的数据源） ——————————————————————————
 
 const instrumentCache = new Map<MarketType, Promise<Instrument[]>>();
+/**
+ * 已经落到手里的清单（`instrumentCache` 存的是 Promise，量不出「已到」）。
+ * 给 hook 当初始值用：换市场时先渲染这一份，而不是先渲染一帧空清单 ——
+ * 空清单那几帧里币名只能走 symbol 回退，看起来就是「闪过一下 ETHUSDT」。
+ */
+const instrumentResolved = new Map<MarketType, Instrument[]>();
+
+/** 同步取已缓存的清单，没有就返回 null（调用方自己决定要不要拉）。 */
+export function peekInstruments(market: MarketType): Instrument[] | null {
+  return instrumentResolved.get(market) ?? null;
+}
 
 /**
  * 该市场全部可交易标的，只取一次并缓存；失败作废缓存（下次重试）。
@@ -197,10 +208,15 @@ const instrumentCache = new Map<MarketType, Promise<Instrument[]>>();
 export function fetchInstruments(market: MarketType): Promise<Instrument[]> {
   let pending = instrumentCache.get(market);
   if (!pending) {
-    pending = (market === 'FUTURES' ? futuresInstruments() : spotInstruments()).catch((e) => {
-      instrumentCache.delete(market);
-      throw e;
-    });
+    pending = (market === 'FUTURES' ? futuresInstruments() : spotInstruments())
+      .catch((e) => {
+        instrumentCache.delete(market);
+        throw e;
+      })
+      .then((rows) => {
+        instrumentResolved.set(market, rows);
+        return rows;
+      });
     instrumentCache.set(market, pending);
   }
   return pending;
@@ -215,7 +231,12 @@ async function futuresInstruments(): Promise<Instrument[]> {
  * 换源必须清掉：两个盘口的交易对清单混在一起，搜索会搜出「点进去没行情」的名字
  * （与 App 的 clearMarketCache 同）。改选择的入口只有 sources.ts，挂上去就覆盖全部路径。
  */
-onFuturesSourceChange(() => instrumentCache.clear());
+onFuturesSourceChange(() => {
+  instrumentCache.clear();
+  instrumentResolved.clear();
+  // 合约清单来自选定的那一家，换源后要重拉；现货恒走 Gate，跟选择无关，留着继续用
+  if (currentFuturesUrl()) void fetchInstruments('FUTURES').catch(() => {});
+});
 
 // —————————————————————————— Gate 现货（唯一固定盘口） ——————————————————————————
 

@@ -20,8 +20,8 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const itemsKey = items.map(watchKey).join(',');
-  // 调用方传进来的都是同一市场的条目，取第一条判断即可（现货恒为 ''）
-  const source = useSourceKey(items[0]?.market);
+  // 悬浮窗那份列表是跨市场混排的，不能拿第一条代表全部：只要有合约条目就得跟着合约源走
+  const source = useSourceKey(items.some((i) => i.market === 'FUTURES') ? 'FUTURES' : 'SPOT');
   const sourceRef = useRef(source);
 
   useEffect(() => {

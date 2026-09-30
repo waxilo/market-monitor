@@ -53,4 +53,13 @@ tauri-plugin-global-shortcut = "2"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
 ] }
+
+# 价格告警的系统通知。为什么不走 `tauri-plugin-notification`：
+# 它把 `show()` 的返回值丢掉（弹不出来也不报错，实测在这台 Win11 上就是静默失败），
+# 而且 Windows 上不显式给 AUMID 时 notify-rust 会退回它内置的 PowerShell AUMID ——
+# 那条开始菜单快捷方式在新装系统上已经没有了 ⇒ toast 被系统丢弃。
+# 显式用 bundle identifier（安装包注册的 AUMID 就是它），dev 与安装版走同一条路径。
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+notify-rust = "4.18"

@@ -9,12 +9,14 @@ import { useShortcut } from './hooks/useShortcut';
 import { useGlobalKey } from './hooks/useGlobalKey';
 import { useWatchlist, type WatchItem } from './hooks/useWatchlist';
 import { useTickers } from './hooks/useTickers';
+import { usePriceAlerts } from './hooks/usePriceAlerts';
 import { useSparks } from './hooks/useSparks';
 import { useInstruments, useMarketTickers } from './hooks/useMarketData';
 import { MarketList } from './components/MarketList';
 import { SearchDropdown } from './components/SearchDropdown';
 import { SourcePanel } from './components/SourcePanel';
 import { SettingsPanel } from './components/SettingsPanel';
+import { MiniListPanel } from './components/MiniListPanel';
 import { ChartView } from './components/ChartView';
 import { WindowChrome } from './components/WindowChrome';
 import { MiniWindowIcon, SidebarIcon } from './components/icons';
@@ -44,7 +46,7 @@ export default function App() {
   /** 搜索下拉框的显隐。与 `query` 分开：点击外部只收起浮层、保留已输入的关键词。 */
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const { items, add, remove } = useWatchlist();
+  const { items, setItems, add, remove } = useWatchlist();
   const instruments = useInstruments(market);
   const searchActive = query.trim().length > 0;
   // 全量快照只为搜索结果的成交额排序服务：不进搜索就不拉
@@ -53,6 +55,26 @@ export default function App() {
   const windowDrag = useWindowDrag({ dblClickMaximize: true });
 
   const marketItems = useMemo(() => items.filter((i) => i.market === market), [items, market]);
+  /**
+   * 侧栏拖动排序的写回：侧栏只看得到当前市场那几条，所以拖出来的是**本市场内**的顺序。
+   * 把它填回全局列表时只动「当前市场占据的那些位置」，另一市场的条目原地不动 ——
+   * 换市场时不会看到自己没拖过的列表被搅乱。
+   */
+  const reorderWithinMarket = (nextVisible: WatchItem[]) => {
+    setItems((prev) => {
+      const slots: number[] = [];
+      prev.forEach((it, idx) => {
+        if (it.market === market) slots.push(idx);
+      });
+      // 拖动过程中另一边加了/删了自选（搜索面板能这么干）：对不上就放弃这次写回
+      if (slots.length !== nextVisible.length) return prev;
+      const next = [...prev];
+      slots.forEach((pos, i) => {
+        next[pos] = nextVisible[i];
+      });
+      return next;
+    });
+  };
   const instrumentMap = useMemo(
     () => new Map(instruments.map((i) => [i.symbol, i])),
     [instruments],
@@ -60,12 +82,16 @@ export default function App() {
   const { cells, online } = useTickers(marketItems);
   const sparks = useSparks(marketItems);
   const update = useUpdate();
+  // 价格告警（右键设的告警线 → 系统通知）：只在主窗跑，宿主每 5s 敲一拍（见 hooks/usePriceAlerts）
+  usePriceAlerts();
   /** 设置面板的显隐。主题、快捷键、更新都在里面（原来前两个是顶栏的两个按钮）。 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const futuresSource = useFuturesSourceUrl();
   const sourceLabel = market === 'FUTURES' ? endpointOf(futuresSource).label : 'Gate';
   /** 数据源弹窗的显隐（弹窗自己负责探测与切换，见 SourcePanel）。 */
   const [sourceOpen, setSourceOpen] = useState(false);
+  /** 悬浮窗列表弹窗的显隐（勾选 + 拖动排序，见 MiniListPanel）。 */
+  const [miniOpen, setMiniOpen] = useState(false);
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
 
   // 主窗 ⇄ 悬浮窗：默认 Alt+M，可在设置里改（判定与落盘见 lib/shortcuts.ts）。
@@ -234,8 +260,16 @@ export default function App() {
         >
           数据源
         </button>
+        {/* 悬浮窗列表的入口直接在顶栏：它改的是「这会儿盯着看哪几条」，
+            和主题/快捷键不是一类东西，藏在设置里每次要多点两层。 */}
+        <button
+          className="icon-btn"
+          onClick={() => setMiniOpen(true)}
+          title="悬浮窗列表：勾选显示哪几条、拖动排序（不动自选）"
+        >
+          悬浮窗
+        </button>
         {/* 主题、快捷键、更新都在这一个入口里（`title` 会跟着更新状态变），
-            顶栏右端因此只剩「数据源 | 设置」两个内容按钮。
             圆点 = 更新的存在感：自动下载本身没有声音，这里必须看得见（见 .up-badge）。 */}
         <button
           className="icon-btn up-entry"
@@ -261,7 +295,7 @@ export default function App() {
         <button
           className="icon-btn icon-only mini-entry"
           onClick={switchToMiniWindow}
-          title="切到悬浮窗：只看自选价格（在悬浮窗上点一下切回这里，Alt+M 也行）"
+          title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+M 也行）"
         >
           <MiniWindowIcon />
         </button>
@@ -277,6 +311,7 @@ export default function App() {
           selected={selected}
           onSelect={setSelected}
           onRemove={remove}
+          onReorder={reorderWithinMarket}
         />
         <ChartView
           item={selected}
@@ -297,6 +332,7 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+      {miniOpen && <MiniListPanel onClose={() => setMiniOpen(false)} />}
       {/* 自动下载把下载过程变成了无声的，这条提示就是它唯一的出口 —— 别删。
           「稍后」之后仍可从设置里装（设置按钮上的圆点也会变回 idle）。 */}
       {update.ready && <UpdateReady controller={update} />}

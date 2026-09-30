@@ -49,7 +49,7 @@ import {
 } from '../lib/chartLayout';
 import { decimalsFor, formatCompact } from '../lib/format';
 import { minutesOf } from '../lib/intervals';
-import { nearestLineWithin } from '../lib/priceLines';
+import { nearestLineWithin, type PriceLine } from '../lib/priceLines';
 import {
   clipLineToRect,
   nearestTrendBody,
@@ -283,8 +283,27 @@ function anchorPx(
   return { x, y };
 }
 
-/** 「画图」那一格里的两种画线工具（**单选**，选择器在 ChartView 的工具条）。 */
+/** 两种画线工具（**单选，但可以不选**：不选就是纯看图，左键动不了线。选择器在 ChartView 工具条）。 */
 export type DrawTool = 'hline' | 'trend';
+
+/** 右键落在什么上面 —— 决定菜单给哪几条。 */
+export type ChartMenuHit =
+  /** 空白处：`price` 是落点反算出来的价格。 */
+  | { kind: 'empty'; price: number }
+  /** 一条水平线（`alert` 决定菜单里是「设成告警」还是「取消告警」）。 */
+  | { kind: 'hline'; index: number; price: number; alert: boolean }
+  /** 一条两点直线（含端点把手）。 */
+  | { kind: 'trend'; index: number };
+
+/** 画布请求弹右键菜单：菜单本身在 ChartView（画布只报落点，不画浮层）。 */
+export interface ChartMenuRequest {
+  /** 视口坐标（菜单是 `position: fixed` 的浮层，直接按光标定位）。 */
+  x: number;
+  y: number;
+  hit: ChartMenuHit;
+  /** 纵向刻度是否已被拖离自动量程 —— 决定给不给「复位纵向刻度」那一条。 */
+  adjusted: boolean;
+}
 
 interface Props {
   candles: Bar[];
@@ -297,30 +316,36 @@ interface Props {
   /** 换标的或换周期时视窗复位（App 的 remember(symbolKey, interval) 同理）。 */
   resetKey: string;
   /**
-   * 用户画的水平线（价格）与两点直线。状态与落盘都在 ChartView 侧（`useDrawings`），
+   * 用户画的水平线（价格 + 告警标记）与两点直线。状态与落盘都在 ChartView 侧（`useDrawings`），
    * 这里只负责画和手势 —— 画布不做持久化。
    */
-  priceLines: number[];
+  priceLines: PriceLine[];
   trendLines: TrendLine[];
   /**
-   * 当前选中的画线工具；`null` = 工具条没停在「画图」这一格，画布对画线手势完全免疫
-   * （线照旧显示，右键也删不动 —— 看图的时候不该有任何手滑改图的机会）。
+   * 当前选中的画线工具；`null` = 工具条上没选任何画线工具，画布对**左键**画线手势免疫
+   * （线照旧显示、拖不动 —— 看图的时候不该有任何手滑改图的机会）。
    *
    * 两种工具的手势分工：
    * - `hline`：左键**单击**空白落一条水平线（按住拖仍是平移），已有的线可拖；
    * - `trend`：左键**按住拖**拉出直线，或**点两下**定两点，已有的线可拖。
    *
-   * 相同的是：抓取已有线（把手 → 直线线身 → 水平线）在两种工具下都优先于起笔画新线，
-   * 右键统一删线。
+   * 抓取已有线（把手 → 直线线身 → 水平线）在两种工具下都优先于起笔画新线。
+   *
+   * 右键菜单**不受这个开关约束**：设告警是随时要做的事，不该先切工具。
    */
   drawTool: DrawTool | null;
   onAddLine: (price: number) => void;
-  onRemoveLine: (index: number) => void;
   onMoveLine: (index: number, price: number) => void;
   onAddTrend: (a: TrendAnchor, b: TrendAnchor) => void;
-  onRemoveTrend: (index: number) => void;
   onMoveTrendBy: (index: number, deltaTime: number, deltaPrice: number) => void;
   onMoveTrendAnchor: (index: number, end: TrendEnd, anchor: TrendAnchor) => void;
+  /** 右键落点上报（删线、设告警都由 ChartView 在菜单里做）。 */
+  onMenu: (request: ChartMenuRequest) => void;
+  /**
+   * 递增一次 = 把纵向刻度退回自动量程。菜单里那条「复位纵向刻度」走的就是这个：
+   * 量程意图住在画布的 ref 里，父层没有别的入口能改它。
+   */
+  resetPriceSignal: number;
 }
 
 export function KlineCanvas({
@@ -336,12 +361,12 @@ export function KlineCanvas({
   trendLines,
   drawTool,
   onAddLine,
-  onRemoveLine,
   onMoveLine,
   onAddTrend,
-  onRemoveTrend,
   onMoveTrendBy,
   onMoveTrendAnchor,
+  onMenu,
+  resetPriceSignal,
 }: Props) {
   const series = useMemo(
     () => buildSeries(candles, maPeriods, showBoll, subPanes),
@@ -404,12 +429,11 @@ export function KlineCanvas({
     trendLines,
     drawTool,
     onAddLine,
-    onRemoveLine,
     onMoveLine,
     onAddTrend,
-    onRemoveTrend,
     onMoveTrendBy,
     onMoveTrendAnchor,
+    onMenu,
   });
   useEffect(() => {
     modelRef.current = {
@@ -421,12 +445,11 @@ export function KlineCanvas({
       trendLines,
       drawTool,
       onAddLine,
-      onRemoveLine,
       onMoveLine,
       onAddTrend,
-      onRemoveTrend,
       onMoveTrendBy,
       onMoveTrendAnchor,
+      onMenu,
     };
   });
 
@@ -583,13 +606,14 @@ export function KlineCanvas({
 
     // 用户画的水平线：虚线横贯主图，压在 K 线/均线之上、最新价虚线之下
     // （最新价是行情本身，任何时候都不该被遮）。价格标在下面与最新价标一起画。
+    // 告警线单独用主色（金）+ 点线：它是要等着被触发的，得一眼从普通划线里分出来。
     if (pl.length > 0) {
-      ctx.strokeStyle = p.line;
       ctx.lineWidth = 1;
-      ctx.setLineDash([5, 3]);
-      for (const price of pl) {
-        const y = yOf(toFraction(mainR, price), mainTop, mh);
+      for (const line of pl) {
+        const y = yOf(toFraction(mainR, line.price), mainTop, mh);
         if (y < mainTop || y > mainBottom) continue;
+        ctx.strokeStyle = line.alert ? p.accent : p.line;
+        ctx.setLineDash(line.alert ? [1, 3] : [5, 3]);
         hline(ctx, 0, plotW, y);
       }
       ctx.setLineDash([]);
@@ -750,10 +774,10 @@ export function KlineCanvas({
     // 水平线的价格标先画：最新价标后画，同高时由它盖住（行情比画线重要）。
     // **不在可视区里的线不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
     // 看着像就在那个价上。
-    for (const price of pl) {
-      const y = yOf(toFraction(mainR, price), mainTop, mh);
+    for (const line of pl) {
+      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
       if (y < mainTop || y > mainBottom) continue;
-      drawBadge(priceText(price), y, p.line, p.paper);
+      drawBadge(priceText(line.price), y, line.alert ? p.accent : p.line, p.paper);
     }
     if (lastY >= mainTop && lastY <= mainBottom) {
       drawBadge(priceText(last.close), lastY, lastUp ? p.up : p.down, p.paper);
@@ -851,6 +875,16 @@ export function KlineCanvas({
     pendingRef.current = null;
     draw();
   }, [resetKey, draw]);
+
+  /**
+   * 右键菜单里那条「复位纵向刻度」：父层把信号递增一次，画布就只把**纵向**意图退回自动量程
+   * （时间视窗不动 —— 用户调的是刻度，不是看多宽）。0 是初始值，不做任何事。
+   */
+  useEffect(() => {
+    if (resetPriceSignal === 0) return;
+    priceRef.current = initialPriceView();
+    draw();
+  }, [resetPriceSignal, draw]);
 
   /**
    * 换画线工具时补一次光标（点工具条不经过画布的 pointermove），并撤掉画了一半的待定点 ——
@@ -960,7 +994,7 @@ export function KlineCanvas({
 
     /** 离落点最近的那条水平线的下标（4px 容差），没有则 -1。 */
     const hitLine = (y: number) =>
-      nearestLineWithin(modelRef.current.priceLines.map(yOfPrice), y);
+      nearestLineWithin(modelRef.current.priceLines.map((l) => yOfPrice(l.price)), y);
 
     /** 落点在主图**下方**（副图与时间轴）—— 只读区，手势与缩放都不响应。 */
     const belowMain = (y: number) => y > mainBounds().bottom;
@@ -1067,7 +1101,7 @@ export function KlineCanvas({
     };
 
     const onPointerDown = (e: PointerEvent) => {
-      // 只认左键：右键走 contextmenu（删线），按下时不吞掉它
+      // 只认左键：右键走 contextmenu（弹菜单），按下时不吞掉它
       if (e.button !== 0) return;
       clickPrice = null;
       const { rect, plotW } = geom();
@@ -1340,22 +1374,21 @@ export function KlineCanvas({
     };
 
     /**
-     * 右键 = **统一删线**（两种画线工具下都一样，不必先切工具）：
-     * 命中判定与抓取同序（把手 → 直线 → 水平线），落谁删谁；什么都没命中就撤掉画了一半的待定。
+     * 右键 = **一律弹菜单**（用户拍板）：先按「把手 → 直线线身 → 水平线 → 空白」判出落点
+     * 落在谁身上，连同这一点的价格与「刻度是否已被拖离自动」一起报给 ChartView，
+     * 由那边弹出浮层。删线、设告警都在菜单里做，画布自己不长菜单 —— 它只管像素，
+     * 菜单要的是「这条线现在能不能动」这类父层语义。
      *
-     * 右键不再画线了（用户拍板）：左键单击就能落水平线，一根键只管一件事，
-     * 用不着先猜「现在是不是画线模式」。
+     * 不再受画线开关约束：设告警是随时要做的事，不该逼用户先把工具切到「画图」。
      *
-     * 不弹自建菜单：操作本来就只有删这一个，菜单反而多一次点击；而且自绘菜单会被
-     * 窗口边界裁掉（悬浮窗那边就吃过这个亏，最后走了原生 popup）。
-     *
-     * 没选中「画图」这一格时**什么都不做**（连 preventDefault 之外的副作用都没有）：
-     * 周期/指标/副图那几格里右键就是右键，别偷偷改图。
+     * 只有主图里给菜单：副图、时间轴、右侧刻度列没有「这个价」的语义，右键仍是右键。
+     * 画了一半的直线例外 —— 那一下右键还是「撤销这次画线」（旧行为），弹菜单反而多一次点击。
      */
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault(); // 挡住 Chromium 自带的「另存为图片」
       const model = modelRef.current;
-      if (!model.drawTool) return;
+      const request = (hit: ChartMenuHit) =>
+        model.onMenu({ x: e.clientX, y: e.clientY, hit, adjusted: priceAdjusted(priceRef.current) });
       const { rect, plotW } = geom();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -1364,20 +1397,27 @@ export function KlineCanvas({
       if (x > plotW || y < top || y > bottom) return;
       const handle = nearestTrendHandle(trendHandles(plotW), x, y);
       if (handle) {
-        model.onRemoveTrend(handle.index);
+        request({ kind: 'trend', index: handle.index });
         return;
       }
       const body = nearestTrendBody(trendBodies(plotW), x, y);
       if (body >= 0) {
-        model.onRemoveTrend(body);
+        request({ kind: 'trend', index: body });
         return;
       }
       const hit = hitLine(y);
-      if (hit >= 0) model.onRemoveLine(hit);
-      else if (pendingRef.current) {
+      if (hit >= 0) {
+        const line = model.priceLines[hit];
+        request({ kind: 'hline', index: hit, price: line.price, alert: line.alert });
+        return;
+      }
+      if (pendingRef.current) {
         pendingRef.current = null;
         draw();
+        return;
       }
+      const price = priceOfY(y);
+      if (Number.isFinite(price)) request({ kind: 'empty', price });
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });

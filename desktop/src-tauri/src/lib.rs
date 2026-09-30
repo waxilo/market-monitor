@@ -1,3 +1,4 @@
+mod alert;
 mod global_key;
 mod market;
 mod taskbar;
@@ -247,6 +248,7 @@ pub fn run() {
             switch_to_main,
             open_mini_menu,
             set_mini_rows,
+            alert::notify_price_alert,
             global_key::set_global_shortcut,
             global_key::global_shortcut_status,
             market::market_request,
@@ -307,6 +309,11 @@ pub fn run() {
 
             // 看住悬浮窗的 z 序：被任务栏压住就重新置顶（事件驱动，见 `taskbar` 模块）
             taskbar::start();
+
+            // 价格告警的节拍：主窗隐藏时网页定时器会被 WebView2 节流，只能由宿主敲（见 alert 模块）。
+            // 先认领进程 AUMID，否则 dev 起的进程弹不出横幅（原因见 `alert::claim_app_user_model_id`）。
+            alert::claim_app_user_model_id(app.handle());
+            alert::start(app.handle());
 
             Ok(())
         })

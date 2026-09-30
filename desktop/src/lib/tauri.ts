@@ -49,3 +49,16 @@ export function openMiniMenu() {
     /* 见上：静默 */
   });
 }
+
+/**
+ * 弹一条系统通知（价格告警）。文案全由调用方给：宿主不参与措辞。
+ *
+ * 失败只在控制台留一句，不打断用户 —— 通知弹不出来是系统侧的事（比如用户在
+ * 「专注助手」里把它挡了），应用这边没法替用户解决，吼一声只会更吵。
+ */
+export function notifyPriceAlert(title: string, body: string) {
+  if (!IS_TAURI) return;
+  void invoke('notify_price_alert', { title, body }).catch((e: unknown) => {
+    console.warn('系统通知失败', e);
+  });
+}

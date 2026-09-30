@@ -4,7 +4,9 @@ import {
   movePriceLine,
   parseLineStore,
   removePriceLine,
+  setLineAlert,
   type LineStore,
+  type PriceLine,
 } from '../lib/priceLines';
 import {
   addTrendLine,
@@ -23,14 +25,14 @@ import {
  * 两种线都按「市场:标的」存（与自选同一个键，见 `watchKey`）—— 线画在这段行情上，
  * 换周期不该丢，换标的必须分开。
  *
- * 这里**没有锁**：能不能动线由工具条现在选在哪一格决定（选中「画图」才动得了，
- * 见 ChartView 的 `BAR_TABS`），所以那把独立的全局锁是多余的第二层开关。
+ * 这里**没有锁**：能不能动线由工具条上选没选中画线工具决定（不选就动不了，
+ * 见 ChartView 的 `drawTool`），所以那把独立的全局锁是多余的第二层开关。
  */
 const LINES_KEY = 'mm.priceLines';
 const TRENDS_KEY = 'mm.trendLines';
 
 /** 共享空数组：没有线的标的每帧都返回同一个引用，省掉无谓的重渲染。 */
-const NO_LINES: number[] = [];
+const NO_LINES: PriceLine[] = [];
 const NO_TRENDS: TrendLine[] = [];
 
 function readRaw(key: string): string | null {
@@ -42,11 +44,13 @@ function readRaw(key: string): string | null {
 }
 
 export interface DrawingsApi {
-  priceLines: number[];
+  priceLines: PriceLine[];
   trendLines: TrendLine[];
-  addPriceLine: (price: number) => void;
+  addPriceLine: (price: number, alert?: boolean) => void;
   removePriceLine: (index: number) => void;
   movePriceLine: (index: number, price: number) => void;
+  /** 开关某条水平线的价格告警（穿越时弹系统通知）。 */
+  setPriceLineAlert: (index: number, alert: boolean) => void;
   addTrendLine: (a: TrendAnchor, b: TrendAnchor) => void;
   removeTrendLine: (index: number) => void;
   /** 线身整体平移（拖拽；两个锚点同加一个数据空间位移）。 */
@@ -78,7 +82,7 @@ export function useDrawings(key: string | null): DrawingsApi {
   }, [trendStore]);
 
   const editLines = useCallback(
-    (change: (current: number[]) => number[]) => {
+    (change: (current: PriceLine[]) => PriceLine[]) => {
       if (!key) return;
       setLineStore((prev) => ({ ...prev, [key]: change(prev[key] ?? []) }));
     },
@@ -93,13 +97,20 @@ export function useDrawings(key: string | null): DrawingsApi {
     [key],
   );
 
-  const addLine = useCallback((price: number) => editLines((cur) => addPriceLine(cur, price)), [editLines]);
+  const addLine = useCallback(
+    (price: number, alert = false) => editLines((cur) => addPriceLine(cur, price, alert)),
+    [editLines],
+  );
   const removeLine = useCallback(
     (index: number) => editLines((cur) => removePriceLine(cur, index)),
     [editLines],
   );
   const moveLine = useCallback(
     (index: number, price: number) => editLines((cur) => movePriceLine(cur, index, price)),
+    [editLines],
+  );
+  const alertLine = useCallback(
+    (index: number, alert: boolean) => editLines((cur) => setLineAlert(cur, index, alert)),
     [editLines],
   );
 
@@ -133,6 +144,7 @@ export function useDrawings(key: string | null): DrawingsApi {
     addPriceLine: addLine,
     removePriceLine: removeLine,
     movePriceLine: moveLine,
+    setPriceLineAlert: alertLine,
     addTrendLine: addTrend,
     removeTrendLine: removeTrend,
     moveTrendLineBy: moveTrendBy,

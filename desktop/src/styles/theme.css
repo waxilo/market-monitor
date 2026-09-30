@@ -664,11 +664,25 @@ body {
 .metric-block .overline {
   margin-bottom: 2px;
 }
+/* 工具条两行：第一行周期，第二行指标 / 副图 / 画图 三组常驻铺开（不再单选切格）。
+   外框只管一根下边框，行内上下内边距收小一档 —— 两行合计比原来单行高约 28px，
+   换来的是改个 MA、开块副图都不用先点格子。 */
+.bar-stack {
+  border-bottom: 1px solid var(--hairline);
+}
+.bar-stack .interval-bar {
+  border-bottom: 0;
+  padding-top: 5px;
+  padding-bottom: 5px;
+}
+.bar-stack .interval-bar + .interval-bar {
+  border-top: 1px solid var(--hairline);
+}
 .interval-bar {
   display: flex;
   gap: 6px;
   padding: var(--sp-sm) var(--gutter);
-  /* 周期 8 + MA 5 + BOLL + 副图 4 全挤同一行：靠 wrap 兜底，正常桌面宽度必须单行 */
+  /* 宽度不够时靠 wrap 兜底；1280 的桌面两行都是单行 */
   flex-wrap: wrap;
   border-bottom: 1px solid var(--hairline);
 }
@@ -684,7 +698,17 @@ body {
   color: var(--muted);
   align-self: center;
 }
-/* 左四格（周期/指标/副图/画图）是一个**单选**组：它们不许被压窄，
+/* 组名（周期 / 指标 / 副图 / 画图）压一手实色，和同排那些手势提示小字分得开 */
+.interval-bar .bar-label.grp {
+  color: var(--ink);
+  flex-shrink: 0;
+}
+/* 告警条数：用主色（金色），和图上那些告警点线同一个信号 */
+.interval-bar .bar-label.alert {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+/* 分段选择器（周期条 / 画线工具）：它们不许被压窄，
    宁可让右边的选项组按 wrap 换行。flex-wrap 之外再禁掉 shrink，
    中文标签（2 字 ≈ 20px + padding 14px）才不会被挤成竖排。
    造型走分段选择器：共享一根外框、内部只留分隔线（与主题选择器 `.set-seg`、
@@ -720,6 +744,49 @@ body {
   font-size: 10px;
   padding: 3px 7px;
 }
+/* ── 图表右键菜单 ─────────────────────────────────────────
+   ChartMenu 用 portal 挂到 body、按光标 fixed 定位（贴边翻转）。
+   层级 62：压过拖动幽灵(60)、拉伸把手(55)、各类弹窗(50)——菜单是就地的一次操作，
+   开着的时候它必须最大。造型与更新弹窗同一套：实底 + 一圈强发丝线，不靠阴影。 */
+.chart-menu {
+  position: fixed;
+  z-index: 62;
+  min-width: 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+}
+.chart-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-sm);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chart-menu-item:hover {
+  background: var(--wash-strong);
+}
+.chart-menu-item.danger {
+  color: var(--down);
+}
+.chart-menu-aside {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* 自绘画布：主图 + 每块副图 110px 固定叠加（与 App 同）；超出容器就整块滚动，
    主图因此永不被副图压扁。pan-y 把纵向滑动留给页面，横向拖动归图表平移。 */
 .chart-scroll {
@@ -1327,7 +1394,8 @@ body {
 }
 /* 整行都能拖：`cursor: grab` 是唯一的「可拖」暗示（原来左侧还有点阵把手，
    2026-09-29 去掉 —— 它只是个装饰，而「拖哪儿都行」这件事把手说不出）。
-   `user-select: none` + `touch-action: none` 不是装饰 —— 少了它们，拖动会变成选文字 / 滚面板。 */
+   `user-select: none` + `touch-action: none` 在 `.drag-row` 里（三处列表共用），
+   少了它们拖动会变成选文字 / 滚面板。 */
 .iv-row {
   display: flex;
   align-items: center;
@@ -1336,8 +1404,6 @@ body {
   border: 1px solid var(--hairline);
   border-radius: var(--r-xs);
   cursor: grab;
-  user-select: none;
-  touch-action: none;
   transition:
     border-color var(--fast) var(--ease-standard),
     background var(--fast) var(--ease-standard);
@@ -1350,19 +1416,28 @@ body {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
+/* ── 拖动排序的公用外观（周期条 / 悬浮窗配置 / 侧栏自选 共用） ──────────
+   行为见 `hooks/useDragSort.ts`：它只认「行上有 .slot」「幽灵是 .drag-ghost」，
+   视觉全在这一段。改这里就同时改了三处，别再往某个列表里加私有副本。 */
+/* 拖动用的行：不许选字、不许被触摸滚动抢走（cursor 各列表自己定 ——
+   周期条/配置弹窗是 grab，侧栏行还能点选标的，留 pointer）。 */
+.drag-row {
+  user-select: none;
+  touch-action: none;
+}
 /* 被拖起来的那一行（幽灵）：描边 + 底色 + 阴影把它抬起来。
    ⚠️ 刻意**不加 scale** —— 缩放会把 transform 的基准点也挪走，
    而「把抓住的那一点钉在指针下」是按左上角算的，加了就会偏。 */
-.iv-row.dragging {
+.drag-row.dragging {
   cursor: grabbing;
   border-color: var(--accent);
   background: var(--wash-strong);
   box-shadow: 0 8px 20px rgb(0 0 0 / 32%);
 }
-/* 幽灵本体：portal 到 body 的 fixed 元素 —— 只有脱离 .up-body 这个滚动容器，
-   才不会被它的 overflow 裁掉（行和格子一样宽，贴在指针下必然探出右边缘一大截，
+/* 幽灵本体：portal 到 body 的 fixed 元素 —— 只有脱离滚动容器（`.up-body`、`.list-scroll`），
+   才不会被它的 overflow 裁掉（行和容器一样宽，贴在指针下必然探出右边缘一大截，
    留在容器里会被裁掉三分之一、还多出一条横向滚动条）。 */
-.iv-ghost {
+.drag-ghost {
   position: fixed;
   left: 0;
   top: 0;
@@ -1372,13 +1447,13 @@ body {
 }
 /* 原地留下的空位：虚线框标出「松手就落在这儿」。
    内容只藏不删 —— 行宽高不变，落点判定与挤动动效都不用为「少了一行」特判。 */
-.iv-row.slot {
+.drag-row.slot {
   cursor: grabbing;
   border-style: dashed;
   border-color: var(--accent);
   background: none;
 }
-.iv-row.slot > * {
+.drag-row.slot > * {
   visibility: hidden;
 }
 /* 行里不需要「抓取把手」：整行都能拖（cursor: grab + title 已经说清），
@@ -1521,6 +1596,87 @@ body {
 .set-seg button.on {
   color: var(--on-accent);
   background: var(--accent);
+}
+
+/* ── 悬浮窗配置弹窗：显示哪几条 ─────────────────────────────
+   两段列表（显示中 / 未加入），一行四列：币名 计价 〔市场〕 ⋯⋯ 操作。
+   「显示中」整行能拖 ⇒ cursor: grab；「未加入」那段整行都是入口，靠 .pick 换回 pointer。 */
+.mw-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  /* 自选可能几十条，不给上限就会把设置面板顶出屏外 */
+  max-height: 176px;
+  overflow-y: auto;
+}
+.mw-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px var(--sp-xs);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  cursor: grab;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard);
+}
+.mw-row:hover {
+  background: var(--wash);
+}
+.mw-row.pick {
+  cursor: pointer;
+}
+.mw-name {
+  font-weight: 600;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mw-quote {
+  font-size: 10px;
+  color: var(--muted);
+}
+/* 固定宽：合约/现货两档等宽，右侧操作位才不会左右跳 */
+.mw-market {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-full);
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+/* 定宽的操作列：一个按钮的位子。幽灵那一行不画按钮，但位子得留着，
+   否则「市场」胶囊会左右跳、飞起来的行也和原行对不齐。 */
+.mw-ops {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  gap: 2px;
+  min-width: 22px;
+}
+.mw-btn {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.mw-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--wash-strong);
+}
+.mw-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* ── 自定义周期：数值 + 单位（分 / 时 / 天 / 月 / 年） ───────────────────── */

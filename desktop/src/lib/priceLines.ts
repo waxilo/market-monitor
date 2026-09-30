@@ -14,8 +14,19 @@
 /** 判定「鼠标落在某条线上」的纵向容差（像素）。太小则难点中，太大则两条近线分不开。 */
 export const LINE_HIT_PX = 4;
 
+export interface PriceLine {
+  price: number;
+  /**
+   * 告警标记：价格穿越这条线时由宿主弹系统通知（文案按穿越方向分「上破 / 下破」）。
+   *
+   * 告警挂在**已有的水平线**上，而不是另存一份价位表 —— 同一个价既要画线又要告警是
+   * 常态，拆成两份就会在图上叠出两根重合的线（重合了删一条会看着像没反应）。
+   */
+  alert: boolean;
+}
+
 /** 按标的索引的价目表（键 = `市场:标的`）。 */
-export type LineStore = Record<string, number[]>;
+export type LineStore = Record<string, PriceLine[]>;
 
 /** 读一份价目表：坏数据一律丢弃而不是抛错 —— 它是用户右键点出来的，重建成本极低。 */
 export function parseLineStore(raw: string | null): LineStore {
@@ -30,38 +41,58 @@ export function parseLineStore(raw: string | null): LineStore {
   const out: LineStore = {};
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (!Array.isArray(value)) continue;
-    const prices = value.filter(
-      (v): v is number => typeof v === 'number' && Number.isFinite(v),
-    );
-    if (prices.length > 0) out[key] = prices;
+    // 旧格式是一条线存一个数字（`mm.priceLines` 最早就这么存的）：当成「不告警」迁上来
+    const lines = value
+      .map((v): PriceLine | null => {
+        if (typeof v === 'number') return Number.isFinite(v) ? { price: v, alert: false } : null;
+        if (v && typeof v === 'object') {
+          const o = v as { price?: unknown; alert?: unknown };
+          return typeof o.price === 'number' && Number.isFinite(o.price)
+            ? { price: o.price, alert: o.alert === true }
+            : null;
+        }
+        return null;
+      })
+      .filter((l): l is PriceLine => l != null);
+    if (lines.length > 0) out[key] = lines;
   }
   return out;
 }
 
 /**
- * 加一条线。**同价不重复加** —— 右键落在已有线上是「删除」而不是「再加一条」，
+ * 加一条线。**同价不重复加** —— 右键落在已有线上走菜单里的「删掉这条线」，
  * 这条规则保证了两条线不会重合成一根（重合了删一条会看着像没反应）。
  */
-export function addPriceLine(lines: readonly number[], price: number): number[] {
+export function addPriceLine(lines: readonly PriceLine[], price: number, alert = false): PriceLine[] {
   if (!Number.isFinite(price)) return [...lines];
-  if (lines.includes(price)) return [...lines];
-  return [...lines, price];
+  if (lines.some((l) => l.price === price)) return [...lines];
+  return [...lines, { price, alert }];
 }
 
 /** 删第 index 条。越界返回原样（调用方可能拿着上一帧的下标）。 */
-export function removePriceLine(lines: readonly number[], index: number): number[] {
+export function removePriceLine(lines: readonly PriceLine[], index: number): PriceLine[] {
   if (index < 0 || index >= lines.length) return [...lines];
   return lines.filter((_, i) => i !== index);
 }
 
 /** 把第 index 条改到 price（拖拽用；下标不变，见文件头）。 */
 export function movePriceLine(
-  lines: readonly number[],
+  lines: readonly PriceLine[],
   index: number,
   price: number,
-): number[] {
+): PriceLine[] {
   if (index < 0 || index >= lines.length || !Number.isFinite(price)) return [...lines];
-  return lines.map((p, i) => (i === index ? price : p));
+  return lines.map((l, i) => (i === index ? { ...l, price } : l));
+}
+
+/** 开关第 index 条的告警。 */
+export function setLineAlert(
+  lines: readonly PriceLine[],
+  index: number,
+  alert: boolean,
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  return lines.map((l, i) => (i === index ? { ...l, alert } : l));
 }
 
 /**
