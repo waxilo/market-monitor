@@ -33,6 +33,12 @@
   抬手照发 click（悬浮窗的行是按钮，点选语义必须完整）。移动/抬手监听挂在 **window 捕获阶段**（`setPointerCapture`
   会把 click 一起重定向、`pointerleave` 会在「往外拖」时误取消，两者都不能用）。
   `blankOnly: true`（主窗顶栏：按钮/输入框上按下永不拖）vs `false`（悬浮窗整块都能拖）。
+  - **顶栏双击最大化**（`dblClickMaximize: true`，只主窗开）认的是浏览器 `dblclick` 事件，不是第二次按下上的
+    `e.detail === 2`。❗0.1.8 前者的坑：`detail===2` 要求两次按下落在**同一元素**，顶栏是十几个并排 span/button，
+    两下偏一两个像素就换了元素、计数从头开始 ⇒「双击毫无反应」。`dblclick` 由浏览器按时间窗+位移配对好再投给
+    共同祖先，没这毛病。配套 `draggedPair`：搬窗手势（按下-拖走 ×2）常被配成一次双击，靠它把随之的 `dblclick`
+    一起放过，否则拖完窗口顺手就最大化；复位点只有一个 = 新一轮那下没被吞的 `click`（`detail===1`），
+    所以「拖过一次」不会把之后的正常双击一起堵死。`onClickCapture` 现在两件事：吞拖拽补发的 click + 复位 `draggedPair`。
   ⚠️ **别用「按住 N 百 ms 才拖」**：定时器与指针动没动无关，等于想拖必须先原地干等，且按下即移时前段位移被整段丢掉
   （先愣一下再跳着跟）；反向还会「快速拖一下被当成点击把窗口切走」。教训：`verify-mini-interaction.mjs` 里
   断言「按住 300ms → 拖窗口」的两条**是过期断言**，按新语义按住不动本来就该是点击 —— 改测试而不是改回产品。
@@ -69,6 +75,22 @@
   **精确修饰键匹配**（`Alt+M` 命中 ≠ `Alt+Shift+M` 命中）。⚠️ 该套件的桩必须给
   `get_update_download_state → {state:'idle'}`、`check_update → null`、`plugin:window|is_maximized → false`，
   否则主窗启动期就崩（见「本地校验」里那条「桩不能一律返回 null」）。
+- ❗**0.1.8 起这条键是系统级的**（`desktop-v0.1.8`，上面「两个窗口都要挂」的描述相应降级为**兜底层**）：
+  - 宿主侧 `src-tauri/src/global_key.rs`（插件 `tauri-plugin-global-shortcut`）收键并切窗——判定必须在 Rust：
+    主窗收进托盘时网页被隐藏、随时被 WebView2 节流。窗口显隐要 `run_on_main_thread` 回主线程（Windows 要求）。
+  - **和弦权威仍在 localStorage**（`mm.shortcut.toggleWindow`）：Rust 读不到它，由**主窗**经
+    `lib/globalKey.ts` → `set_global_shortcut(accelerator)` 推上去；`acceleratorOf` 负责「我们的和弦表示法 →
+    宿主 accelerator」翻译（`meta→Super`，认不出的主键返回 null 退回窗口内监听）。悬浮窗只靠
+    `global-shortcut-state` 事件跟状态。
+  - **一次只保留一把键**（先 unregister 再 register）；⚠️ 同一把键重复下发必须空转——插件 `unregister_all`
+    会先清账本再摘系统键，摘失败不回滚，下次注册直接撞 1409、键永久失效。注册失败时显式摘这一把再重试一次。
+  - 注册失败**不静默**：状态（registered/accelerator/error）回给前端，两窗据此放开自己那条 `useShortcut`
+    兜底，设置面板用 `.set-sub`（失败加 `.bad`）说清现在是「系统级已生效」还是「只在窗口里生效」。
+  - **录制新键期间必须先摘掉系统级那把**（`clearGlobalShortcut`）：否则按键被系统吃掉、网页 keydown 收不到，
+    不但录不上还会顺手切窗。退出录制（成功/取消/关面板）一律按 localStorage 现读那把重新挂回。
+  - 验收注：「按下真的会切窗」这步**没法自动化**（合成按键被拦、不抢前台），只能用
+    `RegisterHotKey` 探针（撞 1409 = 已被自家占住，配一把没人用的对照组合键证明探针本身有效）验注册生效，
+    手感留给用户手按。
 
 ## 悬浮窗几何
 前端只报**条数**（`set_mini_rows`），高度在 Rust 算。常量（行高 26 / 封顶 6 / 宽 **236**）权威定义在
@@ -168,6 +190,12 @@
   点了 2h 后**拦 fetch 断言真的请求了 `interval=2h`** → 预置 MEXC 源断言 12h 置灰 + 当前周期回落 → 恢复默认）。
 
 ## 画线（`src/lib/priceLines.ts` + `src/lib/trendLines.ts` + `hooks/useDrawings.ts`）
+> ❗**0.1.8 更新**（`desktop-v0.1.8`）：指标条改**四格单选**（周期/指标/副图/画图，`ChartView` 的 `BAR_TABS`），
+> 每行只展开当前一组，1280 宽不再折行吃图高。画线工具（水平线/直线）收进「画图」格，进那一格才能动线、
+> 离开即退回水平线；**那把全局锁 `mm.priceLineLock` 整个删了** —— 「能不能改线」和「选在哪一格」是同一个开关，
+> 留两层反而误导（chip 亮着、图上一片死寂）。所以下文凡提「锁 / 锁定 chip / `locked`」的都已作废。
+> 验收 `verify-trend-lines.mts` / `verify-price-lines.mts` 里「锁住后右键/拖拽全不生效」那类断言随之作废，改测
+> 「切到『画图』格才动得了线」。
 右键主图 = 加/删水平线（**不弹自绘菜单**：只有两个操作，菜单多一次点击，且会被窗口边界裁掉）；
 两点直线 = 「直线」chip 进画线模式，图上点两下、或按住直接拖出来（**贯穿全图的直线**，同花顺「直线」工具的口径）。
 - `lib/priceLines.ts`（零依赖纯函数）：`parseLineStore` / `addPriceLine`（同价不重复）/ `removePriceLine` /
