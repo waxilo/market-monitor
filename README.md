@@ -219,7 +219,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.11`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.12`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
