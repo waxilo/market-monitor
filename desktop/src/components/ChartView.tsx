@@ -318,7 +318,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           {alertCount > 0 && (
             <>
               <div className="sep" />
-              <span className="bar-label alert" title="价格穿越这些金色点线时弹系统通知（主窗收进托盘也照弹）">
+              <span className="bar-label alert" title="价格穿越这些红色点线时弹系统通知（主窗收进托盘也照弹）">
                 告警 {alertCount}
               </span>
             </>

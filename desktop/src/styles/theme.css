@@ -1,5 +1,5 @@
 /* 设计 token：与 App ui/theme/Color.kt / Tokens.kt / Type.kt 一一对应。
-   极简杂志风：墨黑/纸白两级中性色撑结构，饱和度只留给涨跌信号；
+   极简杂志风：墨黑/纸白两级中性色撑结构，饱和度只留给涨跌信号与图上画线；
    1px 发丝线代替阴影；等宽体承载数字与小标题，无衬线承载自然语言。 */
 
 :root,
@@ -19,8 +19,9 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
-  /* 用户画的水平线：刻意避开涨跌色（红/绿）与指标线的八色位，以免被读成行情信号 */
-  --line-mark: #8b9bff;
+  /* 用户画线（水平线 / 两点直线）：黄。告警线借 --down 的红、现价线借 --muted 的灰，
+     三种线色互不串；不给它们单开 token —— 借的两个 token 本来就有语义色可用 */
+  --line-mark: #f0b90b;
 }
 
 [data-theme='light'] {
@@ -39,7 +40,7 @@
   --flash-down: rgba(229, 56, 75, 0.06);
   --accent: #f0b90b;
   --on-accent: #1b1200;
-  --line-mark: #4b5bd6;
+  --line-mark: #f0b90b;
 }
 
 :root {
@@ -735,9 +736,9 @@ body {
   color: var(--ink);
   flex-shrink: 0;
 }
-/* 告警条数：用主色（金色），和图上那些告警点线同一个信号 */
+/* 告警条数：用告警红（--down），和图上那些告警点线同一个信号 */
 .interval-bar .bar-label.alert {
-  color: var(--accent);
+  color: var(--down);
   flex-shrink: 0;
 }
 /* 分段选择器（周期条）：它不许被压窄，

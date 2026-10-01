@@ -105,7 +105,9 @@ interface Palette {
   edge: string;
   /** 主色：布林带的填充色（App 用 scheme.primary 8% 透明度）。 */
   accent: string;
-  /** 用户画的水平线：刻意不取涨跌色，免得被读成行情信号。 */
+  /** 金/黄色徽标上的字（--on-accent）：黄底配纸色字在浅色主题下读不出来。 */
+  onAccent: string;
+  /** 用户画线（水平线 / 两点直线）：黄。告警线取 down 红、现价线取 muted 灰，三种互不串。 */
   line: string;
 }
 
@@ -123,7 +125,8 @@ function readPalette(): Palette {
     wash: v('--wash') || '#1b1e22',
     edge: v('--hairline-strong') || '#3a3f47',
     accent: v('--accent') || '#f0b90b',
-    line: v('--line-mark') || '#8b9bff',
+    onAccent: v('--on-accent') || '#1b1200',
+    line: v('--line-mark') || '#f0b90b',
   };
 }
 
@@ -587,13 +590,13 @@ export function KlineCanvas({
 
     // 用户画的水平线：虚线横贯主图，压在 K 线/均线之上、最新价虚线之下
     // （最新价是行情本身，任何时候都不该被遮）。价格标在下面与最新价标一起画。
-    // 告警线单独用主色（金）+ 点线：它是要等着被触发的，得一眼从普通划线里分出来。
+    // 告警线单独用红 + 点线：它是要等着被触发的，得一眼从普通划线里分出来。
     if (pl.length > 0) {
       ctx.lineWidth = 1;
       for (const line of pl) {
         const y = yOf(toFraction(mainR, line.price), mainTop, mh);
         if (y < mainTop || y > mainBottom) continue;
-        ctx.strokeStyle = line.alert ? p.accent : p.line;
+        ctx.strokeStyle = line.alert ? p.down : p.line;
         ctx.setLineDash(line.alert ? [1, 3] : [5, 3]);
         hline(ctx, 0, plotW, y);
       }
@@ -624,9 +627,9 @@ export function KlineCanvas({
 
     const last = list[n - 1];
     const lastY = yOf(toFraction(mainR, last.close), mainTop, mh);
-    const lastUp = last.close >= last.open;
     if (lastY >= mainTop && lastY <= mainBottom) {
-      ctx.strokeStyle = lastUp ? p.up : p.down;
+      // 最新价线走灰：它是「现在在哪儿」，不表态方向，别去跟涨跌色抢
+      ctx.strokeStyle = p.label;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       hline(ctx, 0, plotW, lastY);
@@ -751,10 +754,10 @@ export function KlineCanvas({
     for (const line of pl) {
       const y = yOf(toFraction(mainR, line.price), mainTop, mh);
       if (y < mainTop || y > mainBottom) continue;
-      drawBadge(priceText(line.price), y, line.alert ? p.accent : p.line, p.paper);
+      drawBadge(priceText(line.price), y, line.alert ? p.down : p.line, line.alert ? p.paper : p.onAccent);
     }
     if (lastY >= mainTop && lastY <= mainBottom) {
-      drawBadge(priceText(last.close), lastY, lastUp ? p.up : p.down, p.paper);
+      drawBadge(priceText(last.close), lastY, p.label, p.paper);
     }
     if (cross && cross.index >= rs && cross.index <= re && cross.y <= mainBottom) {
       const y = clampNum(cross.y, mainTop, mainBottom);
