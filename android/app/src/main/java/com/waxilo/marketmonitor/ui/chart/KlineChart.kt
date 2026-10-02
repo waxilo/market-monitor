@@ -208,6 +208,12 @@ fun KlineChart(
      * [CANDLE_READOUT_BAND_DP] 从绘图区顶部让出，不会压到蜡烛。
      */
     candleReadout: (@Composable () -> Unit)? = null,
+    /**
+     * 现价牌：顶部读数带**右端**（右侧价格轴正上方那截空带）的常驻现价读数，
+     * 右对齐、贴读数带上沿。它只叠在读数带上，不额外吃图高 ——
+     * 因此调用方要保证读数带本身有牌子的容身高度（与 [candleReadout] 同用即是）。
+     */
+    lastPriceBoard: (@Composable () -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -646,6 +652,16 @@ fun KlineChart(
                 mainGroups.forEach { group ->
                     IndicatorReadout(segments = group, palette = palette)
                 }
+            }
+            // 现价牌钉在读数带右端：读数带左侧读「这一根 K 线 / 这些指标」，
+            // 右侧这截（价格轴从绘图区才开始，上面本来空着）正好留给「现在多少钱」。
+            // 与左列互不打扰；整块牌子都落在读数带里 —— 压到绘图区会盖住右端那几根最新蜡烛。
+            if (lastPriceBoard != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(end = Spacing.Xxs),
+                ) { lastPriceBoard() }
             }
             val subReadouts = remember(series, readoutIndex, priceDecimals) {
                 series.subPanes.map { series.subReadoutAt(it, readoutIndex, priceDecimals) }

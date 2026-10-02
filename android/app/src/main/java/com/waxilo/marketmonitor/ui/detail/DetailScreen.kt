@@ -441,6 +441,9 @@ private fun FullscreenChart(
                     onCrosshairIndexChange = { crosshairIndex = it },
                     // 与竖屏同位：图表顶部、读数带正上方的同一个容器
                     candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
+                    // 全屏专属：竖屏那块 42sp 的 Hero 在这里没有立足之地（横屏要留给图），
+                    // 现价改钉在读数带右端，字号与位置都受读数带约束
+                    lastPriceBoard = { LastPriceBoard(state = state) },
                     alertLines = alertLines,
                     indicatorGuides = indicatorGuides,
                     bandGuides = bandGuides,
@@ -511,6 +514,60 @@ private fun FullscreenChart(
         }
     }
 }
+
+/**
+ * 全屏里的现价牌：读数带右端（右侧价格轴正上方）常驻的「现价 + 涨跌」。
+ *
+ * 竖屏那块 42sp 的 Hero 是全 App 最大的现价展示，全屏横屏后整块让位给了图 ——
+ * 此前全屏只剩右侧轴上 8sp 的价格签能读到现价。牌子与 Hero 同源
+ * （ticker 最新价，[DetailUiState.price]），价位随涨跌着色，用的也是 Hero 那套色规。
+ * 字号受读数带高度约束（46~58dp）只能收到 22sp；且不跟着十字光标走 ——
+ * 按住长按时图该读的是那一根 K 线，现价是另一件事。
+ */
+@Composable
+private fun LastPriceBoard(state: DetailUiState) {
+    if (state.price == PriceFormatter.NO_DATA) return
+    val colors = MarketTheme.colors
+    val priceColor by animateColorAsState(
+        targetValue = colors.forChange(state.changePercent),
+        animationSpec = tween(Motion.BaseMs),
+        label = "lastPriceBoardColor",
+    )
+    Column(
+        horizontalAlignment = Alignment.End,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Row {
+            Text(
+                text = "现价",
+                modifier = Modifier.alignByBaseline(),
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(Spacing.Xxs))
+            Text(
+                text = state.price,
+                modifier = Modifier.alignByBaseline(),
+                style = LastPriceBoardPriceStyle,
+                color = priceColor,
+                maxLines = 1,
+            )
+        }
+        ChangeText(changePercent = state.changePercent, fontSize = 12.sp)
+    }
+}
+
+/**
+ * 现价牌的价格字：Hero 的缩水版，读数带只有 46~58dp 高，用 Hero 字号会压到蜡烛。
+ * 行高压到 24sp —— 价格全是数字（无升部降部），24 的行盒足够，
+ * 也把整个牌子（价格 + 涨跌）压在读数带里。
+ */
+private val LastPriceBoardPriceStyle = HeroPriceStyle.copy(
+    fontSize = 22.sp,
+    lineHeight = 24.sp,
+    letterSpacing = (-0.8).sp,
+)
 
 /**
  * 顶栏：返回 + 币种名 + 自选 + 指标划线 + 预警铃铛。
