@@ -36,16 +36,24 @@
   2026-10-02 发 0.1.13 仍同形态（副本 `verify-channel-local-0113.py`：`0.1.11_→0.1.12_`（基线文件名）、
   三处 `/tmp` 路径 `0112→0113`、`pub_date` 日期 `2026-10-01→2026-10-02`、docstring 示例；PASS 38/38 一次过，
   run 36962803603 三 job 全绿）。
+  2026-10-03 发 0.1.14：sed 四条（`0.1.13→0.1.14`（含 docstring）、基线文件名 `0.1.12_→0.1.13_`、
+  三处 `/tmp` 路径 `0113→0114`）——**日期未改**（本机凌晨发版，pub_date 仍在 UTC 前一天 10-02）；
+  首跑三产物被截断，副本 fetch 加 `--max-time 300 --retry 3 --retry-all-errors` 后 PASS 38/38；
+  run 37035696005 三 job 全绿。
   ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
   别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
   - 脚本自带「直连失败改走本机代理 `127.0.0.1:7897`」的兜底（发 0.1.7 时 TLS handshake timeout 反复出现，直连与代理谁通就用谁）；
     **发版前先抓上一版基线**（`created_at` + 两个 `.sig` + 体积清单）到 `/tmp/mm-before/`，覆盖后就再也拿不到了
     （0.1.7/0.1.8 两次都照做兑现；⚠️ Windows 原生 Python 不认 `/tmp`，用 `cygpath -w` 换成实际路径）。
+- ⚠️ **curl 断流截断**（2026-10-03 实测）：HTTP 200 已回、连接中途断 ⇒ 落盘文件 60~92% 大小、无报错。
+  桌面脚本会把「下载完成」判 PASS、再在「字节 == API 体积」判 FAIL；自写 fetch 不比体积则完全无感。
+  大文件补下用 `-C - --retry-all-errors`（asset API 支持 Range）；0114 副本 fetch 已内置
+  `--max-time 300 --retry 3 --retry-all-errors`。
 - ⚠️ **SSH 推送会「假死」**：连接看起来建立、进程 3 分钟 0.01s CPU（死连接）⇒ `kill` 后**单次**重推即成功（2.8s）。
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -56,7 +64,8 @@
   `desktop 0.1.11`（画线/删自选改右键菜单、前台不息屏、默认浅色+全中文、搜索居中、自选与指标持久化；只发桌面端）→
   `desktop 0.1.12`（图上三线分色——现价灰 `--muted` / 告警红 `--down` / 画线黄 `--line-mark`；只发桌面端）→
   `desktop 0.1.13`（右键落点钉十字光标——菜单价与价格标同源、快捷键默认 alt+m→alt+d；只发桌面端）→
-  `0.9.29`（全屏现价牌——读数带右端常驻大号现价；只发 Android）。
+  `0.9.29`（全屏现价牌——读数带右端常驻大号现价；只发 Android）→
+  `0.9.30`/`desktop 0.1.14`（K 线视角全局持久化——缩放/位移跨周期、跨重启记住；双端同发）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
@@ -70,6 +79,7 @@
   - 0.9.29 复核（2026-10-02）：Mac 侧**无 JDK 跑不了 apksigner**，以 `Release` run 37023057982 的
     「Verify signature is consistent with the pinned key」步骤为准（CI 里 apksigner 逐字比对同一指纹、绿）
     ⇒ 指纹不变。
+  - 0.9.30 复核（2026-10-03）：同 0.9.29 —— 以 `Release` run 37035695601 的同一断言步骤为准（绿）⇒ 指纹不变。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
   - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先
