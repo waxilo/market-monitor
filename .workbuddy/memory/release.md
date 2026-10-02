@@ -45,7 +45,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -55,7 +55,8 @@
   `desktop 0.1.10`（价格告警线 + 到价系统通知、悬浮窗独立混合列表、指标/副图/画图另起一行、默认纵向留白 6%→20%；只发桌面端）→
   `desktop 0.1.11`（画线/删自选改右键菜单、前台不息屏、默认浅色+全中文、搜索居中、自选与指标持久化；只发桌面端）→
   `desktop 0.1.12`（图上三线分色——现价灰 `--muted` / 告警红 `--down` / 画线黄 `--line-mark`；只发桌面端）→
-  `desktop 0.1.13`（右键落点钉十字光标——菜单价与价格标同源、快捷键默认 alt+m→alt+d；只发桌面端）。
+  `desktop 0.1.13`（右键落点钉十字光标——菜单价与价格标同源、快捷键默认 alt+m→alt+d；只发桌面端）→
+  `0.9.29`（全屏现价牌——读数带右端常驻大号现价；只发 Android）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
@@ -66,6 +67,9 @@
   核法：下载新 APK 后跑
   `JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" "C:/Users/sloan.wang/android-sdk/build-tools/36.0.0/apksigner.bat" verify --print-certs <apk>`，
   指纹**必须与上面逐字一致** —— 不一致 = 覆盖安装必报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，那批用户只能卸载重装。
+  - 0.9.29 复核（2026-10-02）：Mac 侧**无 JDK 跑不了 apksigner**，以 `Release` run 37023057982 的
+    「Verify signature is consistent with the pinned key」步骤为准（CI 里 apksigner 逐字比对同一指纹、绿）
+    ⇒ 指纹不变。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
   - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先
