@@ -238,7 +238,7 @@ pub fn run() {
         // 更新通道（endpoints/公钥）来自 tauri.conf.json 的 plugins.updater；
         // 检查与安装细节在 update.rs 里包了一层（加速站 + 验签自验）
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // 系统级快捷键（默认 Alt+M）：判定与换键的规矩都在 `global_key` 模块，
+        // 系统级快捷键（默认 Alt+D）：判定与换键的规矩都在 `global_key` 模块，
         // 和弦由主窗从 localStorage 推上来。
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(global_key::Shared::default())

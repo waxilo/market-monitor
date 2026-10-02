@@ -19,7 +19,7 @@ const STATE_EVENT = 'global-shortcut-state';
 export interface GlobalKeyStatus {
   /** 系统级是否已生效。 */
   registered: boolean;
-  /** 当前这把键的 accelerator 写法（`Alt+M`），没设置过则是空串。 */
+  /** 当前这把键的 accelerator 写法（`Alt+D`），没设置过则是空串。 */
   accelerator: string;
   /** 注册失败的原因（生效时为 null）。 */
   error: string | null;

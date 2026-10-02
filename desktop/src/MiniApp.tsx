@@ -59,7 +59,7 @@ export function MiniApp() {
   const miniRef = useRef<HTMLDivElement>(null);
   const inside = usePointerInside(miniRef);
   /**
-   * 快捷键（默认 Alt+M，可在主窗的设置里改）在悬浮窗里同样有效：按一下就换回主窗。
+   * 快捷键（默认 Alt+D，可在主窗的设置里改）在悬浮窗里同样有效：按一下就换回主窗。
    * 平时那一下由宿主收（系统级，见 lib/globalKey.ts），这边这条只是**兜底** ——
    * 组合键被别的程序占了、注册不上时才轮到它。悬浮窗是启动后才加载的，
    * 挂载时读一次状态就够用（之后再跟 `global-shortcut-state` 事件）。

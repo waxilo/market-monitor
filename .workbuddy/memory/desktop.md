@@ -88,9 +88,10 @@
   `tauri.conf.json` 的 `"theme": "Dark"` 不动也行：主窗 `decorations:false` 看不到原生外框，JS 挂载后 `setTheme` 会纠。
 - **快捷键模块是零依赖纯函数 + 一个 hook**，改快捷键时只动这两处：
   - `lib/shortcuts.ts`：`Chord {ctrl,alt,shift,meta,key}`；注册表 `SHORTCUTS`（目前只有
-    `toggleWindow` = 「主窗 ⇄ 悬浮窗」，默认 `alt+m`）；`serializeChord`/`parseChord`（认不出的返回 null）/
+    `toggleWindow` = 「主窗 ⇄ 悬浮窗」，**默认 `alt+d`**（2026-10-02 由 `alt+m` 改，用户点名））；
+    `serializeChord`/`parseChord`（认不出的返回 null）/
     `usableChord`（**必须带 ctrl/alt/meta**）/`chordRejection`（只有 Shift 要给出「会打不出大写」的理由）/
-    `formatChord`（`Alt + M`）/`keyNameOf`（从 `KeyboardEvent.code` 归一：`KeyM`→`m`、`Digit1`→`1`、`F5`→`f5`）/
+    `formatChord`（`Alt + D`）/`keyNameOf`（从 `KeyboardEvent.code` 归一：`KeyD`→`d`、`Digit1`→`1`、`F5`→`f5`）/
     `chordOfEvent`/`matchesChord`（**修饰键精确相等**，多按一个 Shift 就不算命中）/`readChord`/`writeChord`/
     `resetChord`/`isDefaultChord`。落盘键 `mm.shortcut.<id>`（`resetChord` 是**删键**，不是写回默认值）。
   - `hooks/useShortcut.ts`：`useShortcut(id, handler, enabled)`。**和弦在按下那一刻才从 localStorage 现读**
@@ -102,6 +103,9 @@
   **精确修饰键匹配**（`Alt+M` 命中 ≠ `Alt+Shift+M` 命中）。⚠️ 该套件的桩必须给
   `get_update_download_state → {state:'idle'}`、`check_update → null`、`plugin:window|is_maximized → false`，
   否则主窗启动期就崩（见「本地校验」里那条「桩不能一律返回 null」）。
+- ❗**2026-10-02 默认值 `alt+m` → `alt+d`（用户点名）**：上面「精确修饰键匹配」的 Alt+M 例子随之作废
+  （判定逻辑没动，还是修饰键精确相等）；只改默认值、不做迁移 —— 存过自定义和弦的照旧，没存过的吃到新默认。
+  改后复核 `.workbuddy/tmp/verify-shortcut-default.mjs` **29 条**（**纯浏览器跑，无需 Tauri 桩**；见「本地校验」）。
 - ❗**0.1.8 起这条键是系统级的**（`desktop-v0.1.8`，上面「两个窗口都要挂」的描述相应降级为**兜底层**）：
   - 宿主侧 `src-tauri/src/global_key.rs`（插件 `tauri-plugin-global-shortcut`）收键并切窗——判定必须在 Rust：
     主窗收进托盘时网页被隐藏、随时被 WebView2 节流。窗口显隐要 `run_on_main_thread` 回主线程（Windows 要求）。
@@ -300,6 +304,12 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
 > 从 `useDrawings` 摘掉（库里的纯函数留着，`.mts` 验收还在用）。
 > ⚠️ 右键菜单是**自绘 HTML**（`createPortal` 到 body、`position: fixed`、z 62）：主窗有 1024×680 的底，
 > 贴边能翻回来；悬浮窗那边才非得走原生 popup（那块面板一整块就是窗口）。
+> ❗**右键落点先钉十字光标**（2026-10-02）：`onContextMenu` 里先把 `crossRef.current` 钉到这一下右键的
+> `{index, y, onBar}`（与 `pointermove` 同一套算法）并 `draw()`，之后才判命中、才 `priceOfY(y)` 算菜单价 ——
+> 菜单里的价和图上那枚价格标必须是**同一个 y** 出来的。光标跟着 `pointermove` 走，而右键事件的坐标可能和
+> 最后一次移动差一个物理像素（Retina 上就是半个 CSS 像素），这个刻度下足以差出 6 个价格单位
+> （菜单 3853.37 / 标 3847.10，用户截图报的就是这个）。验收脚本扩到 **78 条**：第 9 节用合成
+> `contextmenu` 事件「hover 一处、落点漂 3px」验价格标跟着落点走、且漂移与不漂移两帧**逐像素相同**。
 > ❗**0.1.8 更新**（`desktop-v0.1.8`）：指标条改**四格单选**（周期/指标/副图/画图，`ChartView` 的 `BAR_TABS`），
 > 每行只展开当前一组，1280 宽不再折行吃图高。画线工具（水平线/直线）收进「画图」格，进那一格才能动线、
 > 离开即退回水平线；**那把全局锁 `mm.priceLineLock` 整个删了** —— 「能不能改线」和「选在哪一格」是同一个开关，
@@ -472,8 +482,12 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
 `verify-desktop-search-drop.mjs` **38** / `verify-desktop-auto-update.mjs` **20** /
 `verify-mini-interaction.mjs` **22** / `verify-mini-drag.mjs` **42**（真手势位移判据）/
 `verify-mini-width.mjs` **12** / `verify-sub-panes.mjs` **28**（纵向空间分配，五场景）。
-**2026-09-30 新增**：`verify-draw-menu.mjs` **71**（右键菜单画线 + 画布只读；**0.1.12 起支持
-`VERIFY_THEME=light` 跑浅色**，浅色截图带 `-light` 后缀，主题经 `addInitScript` 传参）/
+**2026-10-02 新增**：`verify-shortcut-default.mjs` **29**（快捷键默认值改 `alt+d`：上半纯函数 —— 默认和弦 /
+`formatChord`+`acceleratorOf` 翻译链 / Alt+M 事件作废；下半无头 Chrome —— 面板显示「Alt + D」且「恢复默认」
+置灰、窗口内 Alt+D 被吃掉而 Alt+M 不再命中、录制成 `alt+shift+d` 后新键生效老键让位、恢复默认删落盘键且
+Alt+D 立刻复活。**纯浏览器跑，不碰 Tauri 桩**，可作后续快捷键改动的基线）。
+**2026-09-30 新增**：`verify-draw-menu.mjs` **78**（右键菜单画线 + 画布只读 + 第 9 节右键落点钉光标；
+**0.1.12 起支持** `VERIFY_THEME=light` 跑浅色，浅色截图带 `-light` 后缀，主题经 `addInitScript` 传参）/
 `verify-zh-prefs.mjs` **95**（0.1.11 第一批：出厂浅色 + 自选迁移 + 侧栏市场胶囊 + 中文文案 + 周期面板 +
 指标持久化 + 坏值容错 + 老机器迁移「自己加回的不会被二次清」；第二批：**顶栏几何**（1280/1600 搜索中心 =
 顶栏中点 ±1、左右两组等宽、1024 不重叠不折行、`.grow` 与顶栏胶囊计数为 0）+ **行上无按钮 + 行右键菜单**

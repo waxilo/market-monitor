@@ -45,7 +45,7 @@ struct Store {
 pub struct Status {
     /// 系统级是否已生效。
     pub registered: bool,
-    /// 当前这把键的 accelerator 写法（`Alt+M`）；没设置过则是空串。
+    /// 当前这把键的 accelerator 写法（`Alt+D`）；没设置过则是空串。
     pub accelerator: String,
     /// 注册失败的原因（生效时为 `None`）。
     pub error: Option<String>,

@@ -96,7 +96,7 @@ export default function App() {
   const [miniOpen, setMiniOpen] = useState(false);
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
 
-  // 主窗 ⇄ 悬浮窗：默认 Alt+M，可在设置里改（判定与落盘见 lib/shortcuts.ts）。
+  // 主窗 ⇄ 悬浮窗：默认 Alt+D，可在设置里改（判定与落盘见 lib/shortcuts.ts）。
   // 这条是**系统级**的：主窗负责把落盘的和弦推给宿主（只有主窗推，见 hooks/useGlobalKey），
   // 归宿主管了以后本窗口就不必再绑一份网页监听。
   const globalTaken = useGlobalKey('toggleWindow');
@@ -299,7 +299,7 @@ export default function App() {
           <button
             className="icon-btn icon-only mini-entry"
             onClick={switchToMiniWindow}
-            title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+M 也行）"
+            title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+D 也行）"
           >
             <MiniWindowIcon />
           </button>

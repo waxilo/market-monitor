@@ -1200,6 +1200,17 @@ export function KlineCanvas({
       const { top, bottom } = mainBounds();
       // 只有主图里能操作：副图、时间轴、右侧价格刻度列一律不管
       if (x > plotW || y < top || y > bottom) return;
+      // 把十字光标先钉到这一下右键的落点，再拿同一个 y 算菜单价：菜单里的价和图上那枚价格标
+      // 必须是同一个 y 出来的。光标跟着 pointermove 走，而右键事件的坐标可能和最后一次移动
+      // 差一个物理像素（Retina 上就是半个 CSS 像素）—— 这个刻度下足以差出 6 个价格单位，
+      // 于是同一个落点看着像有两个价（菜单 3853.37 / 标 3847.10）。
+      const n = model.series.candles.length;
+      const fraction = x / plotW;
+      const index = indexAt(vpRef.current, fraction, n);
+      crossRef.current = index >= 0
+        ? { index, y, onBar: overDataAt(vpRef.current, fraction, n) }
+        : null;
+      draw();
       const body = nearestTrendBody(trendBodies(plotW), x, y);
       if (body >= 0) {
         request({ kind: 'trend', index: body });

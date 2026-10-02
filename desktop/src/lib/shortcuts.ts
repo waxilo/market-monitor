@@ -6,7 +6,7 @@
  * 录制出来的东西按下时不生效，是最难查的一类问题。这里只有一处定义：
  * `Chord`（四个修饰键 + 一个归一化的主键），其余全是围绕它的纯函数。
  *
- * 落盘在 localStorage（`mm.shortcut.<id>`，值是 `serializeChord` 的产物，如 `alt+m`）。
+ * 落盘在 localStorage（`mm.shortcut.<id>`，值是 `serializeChord` 的产物，如 `alt+d`）。
  * 主窗与悬浮窗是**两个 JS 实例**，所以谁都不缓存它：按下时现读（`readChord`），
  * 在设置面板里改完，另一个窗口下一次按键就生效，不需要任何同步。
  *
@@ -15,9 +15,9 @@
  * Rust 读不到它，只有主窗在启动时把 `readChord` 的结果推上去。交出去前过
  * `acceleratorOf` 那道翻译 —— 和弦的表示法是我们的，accelerator 的表示法是宿主的。
  *
- * 键名用 `KeyboardEvent.code` 归一化（`KeyM` → `m`、`Digit1` → `1`、`F5` → `f5`），
- * 不用 `key`：`key` 会随修饰键变（Alt+M 在部分布局上给出别的字符），
- * 而 `code` 是物理位置，按「M 键」就是 M 键。
+ * 键名用 `KeyboardEvent.code` 归一化（`KeyD` → `d`、`Digit1` → `1`、`F5` → `f5`），
+ * 不用 `key`：`key` 会随修饰键变（Alt+D 在部分布局上给出别的字符），
+ * 而 `code` 是物理位置，按「D 键」就是 D 键。
  */
 
 export type ShortcutId = 'toggleWindow';
@@ -43,15 +43,15 @@ export interface ShortcutDef {
 
 /**
  * 注册表。**目前只有一条** —— 但面板是按这张表渲染的，加第二条不用碰组件。
- * 默认 `Alt+M`：`Alt` 组合不会被浏览器/输入框吃掉，`M` 又不与任何既有键冲突
- * （`Ctrl+K` 是搜索）。
+ * 默认 `Alt+D`（2026-10-02 由 `Alt+M` 改，用户点名）：`Alt` 组合不会被浏览器/输入框
+ * 吃掉，`D` 又不与任何既有键冲突（`Ctrl+K` 是搜索）。
  */
 export const SHORTCUTS: readonly ShortcutDef[] = [
   {
     id: 'toggleWindow',
     label: '主窗 ⇄ 悬浮窗',
     hint: '系统级：不在窗口里、程序在后台也能按',
-    defaultChord: 'alt+m',
+    defaultChord: 'alt+d',
   },
 ];
 
@@ -203,7 +203,7 @@ const ACCELERATOR_KEY: Record<string, string> = {
 };
 
 /**
- * 和弦 → 交给宿主注册的那串（`alt+m` → `Alt+M`）。
+ * 和弦 → 交给宿主注册的那串（`alt+d` → `Alt+D`）。
  *
  * 认不出的主键（`keyNameOf` 兜底那条留下的怪 code、`F25` 之类）就返回 null
  * —— 由调用方跳过注册、退回只在窗口里生效，比把一串注定注册失败的字符串递过去、
@@ -252,8 +252,8 @@ export function chordOfEvent(e: KeyboardEvent): Chord | null {
 }
 
 /**
- * 事件是否命中某个和弦。修饰键要求**完全一致** —— 否则 `Alt+M` 会在
- * `Ctrl+Alt+M`（或 `Alt+Shift+M`）时也触发，而那几个组合通常是别的东西在用。
+ * 事件是否命中某个和弦。修饰键要求**完全一致** —— 否则 `Alt+D` 会在
+ * `Ctrl+Alt+D`（或 `Alt+Shift+D`）时也触发，而那几个组合通常是别的东西在用。
  */
 export function matchesChord(e: KeyboardEvent, raw: string | null | undefined): boolean {
   const want = parseChord(raw);
@@ -273,7 +273,7 @@ export function matchesChord(e: KeyboardEvent, raw: string | null | undefined): 
 
 export function readChord(id: ShortcutId): string {
   // 认不出 ⇒ 用默认（不写回：坏值留着不动，下次仍走这条兜底，也没有副作用）。
-  // 认得出的走一遍 `serializeChord` 规范化 —— 手工写成 `Ctrl+M` / `ALT+M` 也照样生效。
+  // 认得出的走一遍 `serializeChord` 规范化 —— 手工写成 `Ctrl+D` / `ALT+D` 也照样生效。
   const c = parseChord(safeGet(STORAGE_PREFIX + id));
   return c ? serializeChord(c) : defOf(id).defaultChord;
 }
