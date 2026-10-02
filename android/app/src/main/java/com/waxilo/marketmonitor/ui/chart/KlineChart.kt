@@ -30,6 +30,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -72,6 +73,7 @@ import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Radius
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import com.waxilo.marketmonitor.ui.theme.UpGreen
+import kotlinx.coroutines.flow.drop
 import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -128,6 +130,21 @@ data class ChartCornerAction(
 )
 
 /**
+ * 图表的整份「用户意图」：横向视窗（[viewport]）+ 纵向刻度（[priceZoom] / [pricePan]）。
+ *
+ * 这套视角是**全局一份**的看图习惯（与均线、周期条同口径）：切周期、换标的、重启
+ * 都保持。图表自身不落盘 —— 实例首帧从 [KlineChart.initialView] 取值，之后每次
+ * 变化经 `onViewChange` 交还调用方（详情页由 ViewModel 同步持有 + 防抖写 DataStore）。
+ */
+data class ChartViewState(
+    val viewport: ChartViewport = ChartViewport.initial(),
+    /** 纵向缩放倍数（1f = 自动量程）；语义与 [KlineChart] 内部同名状态一致。 */
+    val priceZoom: Float = 1f,
+    /** 纵向平移（占主图高度的比例，0f = 不偏移）。 */
+    val pricePan: Float = 0f,
+)
+
+/**
  * 自研 K 线画布（PRD FR-2.1，已定不引入第三方图表库）。
  *
  * 分工：[ChartViewport] 决定「看哪几根」，[ChartSeries] 决定「画什么」，这里只做像素换算。
@@ -140,11 +157,19 @@ fun KlineChart(
     tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
     /**
-     * 标的身份（如 `BTCUSDT`）。换标的时纵向缩放/平移必须复位：
-     * 平移量是「按原始量程折算的比例」，BTC 上 0.2 的位移放到 ETH 上毫无意义；
-     * 缩放虽是无量纲倍数，但跨标的保留也只会让人莫名其妙。
+     * 标的身份（如 `BTCUSDT`）。只用于复位**过程状态**（十字光标、手势中的价格基准，
+     * 都挂在 `(symbolKey, interval)` 的 remember 上）：下标换到另一条序列后指向的
+     * 就是另一根蜡烛了。视角（[initialView]）不在此列 —— 它是全局看图习惯。
      */
     symbolKey: String = "",
+    /**
+     * 视角初值：看多宽、右端停哪、纵向刻度。**只在实例首帧生效** ——
+     * 图表只会在 K 线就绪后组合，彼时调用方的设置早已恢复完毕；
+     * 之后视角归图表自己持有，换标的/换周期都不复位，变化经 [onViewChange] 交回。
+     */
+    initialView: ChartViewState = ChartViewState(),
+    /** 视角每有变化（手势、复位小标）就回调一次，调用方负责落盘与两个实例间的交接。 */
+    onViewChange: (ChartViewState) -> Unit = {},
     upColor: Color = UpGreen,
     downColor: Color = DownRed,
     onLoadMore: () -> Unit = {},
@@ -220,15 +245,14 @@ fun KlineChart(
     /**
      * 视窗只存「用户意图」（看多宽、右端停哪儿）；序列长度每次查询时作为入参传入。
      *
-     * `remember` 的 key 就是**换序列的两件事**：换标的与换周期。key 一变就重建视窗，
-     * 复位天然发生在组合期、与 `series` 同帧生效，因此不再需要
-     * `LaunchedEffect(series.size)` 事后对齐、也不再需要两个复位用的 effect。
-     * 副作用里的复位永远慢一帧，而这一帧就是首屏错渲染的全部窗口期。
+     * 这是**全局一份**的看图习惯：切周期、换标的都保持，初值来自 [initialView]，
+     * 变化经 [onViewChange] 交回调用方落盘 —— 重启不重置。因此 `remember` **不挂** key：
+     * 挂上就会在换标的/换周期时把视角弹回默认，正是这次要修掉的老行为。
+     * 序列长短不一没关系 —— 越界由 [ChartViewport.clamp] 在每次查询时兜底，
+     * 存进来的只是「意图」，不是「当前序列下的有效值」。
      */
     val barCount = series.size
-    var viewport by remember(symbolKey, interval.storageKey) {
-        mutableStateOf(ChartViewport.initial())
-    }
+    var viewport by remember { mutableStateOf(initialView.viewport) }
     var crosshair by remember(symbolKey, interval.storageKey) { mutableStateOf<Crosshair?>(null) }
     // 下标变化就同步给调用方的 K 线详情小条（长按换根 / 松手归 null 都走这里）
     LaunchedEffect(crosshair?.index) { onCrosshairIndexChange(crosshair?.index) }
@@ -239,13 +263,25 @@ fun KlineChart(
      * 纵向缩放倍数（相对主图原始量程）。1f = 自动量程。
      * 手指在**价格轴一侧**上下拖会改它 —— 这是「拉伸/压缩金额刻度」的手势。
      *
-     * 与 [viewport] 同为「用户意图」，因此挂同一组 key：换标的/换周期一律复位。
-     * 跨标的保留毫无意义（BTC 上 0.2 的位移放到 ETH 上不是同一回事），
-     * 而换周期后价格量级也可能完全不同。
+     * 与 [viewport] 同为全局看图习惯（同样**不挂**序列 key）：换标的/换周期保持，
+     * 初值来自 [initialView]，变化经 [onViewChange] 落盘。平移量按原始量程的比例
+     * 折算，放到别的标的上本不是同一回事 —— 但用户选的就是全局口径，
+     * 真不合适时图上常驻的「刻度已缩放 · 复位」小标一键清掉。
      */
-    var priceZoom by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(1f) }
+    var priceZoom by remember { mutableFloatStateOf(initialView.priceZoom) }
     /** 纵向平移（占主图高度的比例）。手指上滑看更低价区。 */
-    var pricePan by remember(symbolKey, interval.storageKey) { mutableFloatStateOf(0f) }
+    var pricePan by remember { mutableFloatStateOf(initialView.pricePan) }
+    /**
+     * 视角每变一帧就交回调用方：状态更新**同步**（竖屏↔全屏切换时，新实例的
+     * 首帧初值读的就是它），落盘由调用方防抖。
+     * `drop(1)` 滤掉首帧的初值回声 —— 那个值本来就是调用方喂进来的。
+     */
+    val viewCommit by rememberUpdatedState(onViewChange)
+    LaunchedEffect(Unit) {
+        snapshotFlow { ChartViewState(viewport, priceZoom, pricePan) }
+            .drop(1)
+            .collect { viewCommit(it) }
+    }
     /**
      * 手势进行期间**冻结**的价格基准量程；`null` = 用实时的自动量程。
      *
@@ -419,12 +455,13 @@ fun KlineChart(
                 // 「缩放被打断，每次捏一下只动一根」，以及「整块图卡住、怎么拖都不动」。
                 // 这些值改从上面的 live* 里读实时值。
                 //
-                // 标的与周期**必须**进 key，原因是另一回事：下面的视窗状态挂在
-                // `remember(symbolKey, interval.storageKey)` 上，换周期会**重建 MutableState**，
-                // 而本协程的闭包捕获的是创建那一刻的委托对象。key 不含周期时协程不重启，
-                // 手势就一直在写**已经被丢弃的旧 state**，渲染读的却是新 state ——
-                // 表现为「切换周期后图表固定死、怎么拖都不动」。首次进入时两者同时创建，
-                // 所以「从条目进来的图能拖」而「切过周期的图拖不动」。
+                // 标的与周期**必须**进 key，原因是另一回事：十字光标与价格基准
+                // （priceBase）仍挂在 `remember(symbolKey, interval.storageKey)` 上，
+                // 换周期会**重建 MutableState**，而本协程的闭包捕获的是创建那一刻的
+                // 委托对象。key 不含周期时协程不重启，手势就一直在写**已经被丢弃的旧
+                // state**，渲染读的却是新 state —— 表现为「切过周期的图十字光标不出来、
+                // 捏合时价格基准冻结失效（量程逐帧抖）」。视窗与纵向刻度**不在此列**：
+                // 它们是全局视角偏好，不挂序列 key（见上），委托永远指向活的 state。
                 .pointerInput(alertLineMode, symbolKey, interval.storageKey) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
@@ -748,8 +785,9 @@ fun KlineChart(
                 }
             }
         }
-        // 纵向刻度被缩放过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
-        // 而且没有任何办法回去（双击复位这个手势不显眼）。
+        // 纵向刻度被调过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
+        // 而且没有任何办法回去（视角是全局持久化的，重启也带着走）。
+        // 复位只清纵向、保留横向视窗，并同样经 onViewChange 落盘 —— 按一次就彻底忘掉。
         // 位置选**绘图区左下角**：
         //   · 右侧不放 —— 最新/最该看的蜡烛就在右边，浮层压上去代价最大；
         //   · 顶部不放 —— 指标读数带占满左上，且绘图区顶端往往是近期高点；

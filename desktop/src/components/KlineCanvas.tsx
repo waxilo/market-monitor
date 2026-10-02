@@ -48,6 +48,11 @@ import {
   TIME_AXIS_H,
 } from '../lib/chartLayout';
 import { decimalsFor, formatCompact } from '../lib/format';
+import {
+  loadChartViewPrefs,
+  saveChartViewPrefs,
+  scheduleChartViewPrefsSave,
+} from '../lib/chartViewPrefs';
 import { minutesOf } from '../lib/intervals';
 import { nearestLineWithin, type PriceLine } from '../lib/priceLines';
 import {
@@ -323,7 +328,10 @@ interface Props {
   interval: string;
   tickSize?: string;
   theme: string;
-  /** 换标的或换周期时视窗复位（App 的 remember(symbolKey, interval) 同理）。 */
+  /**
+   * 换标的或换周期时作废**过程状态**（十字光标、画了一半的直线）。
+   * 视窗与价格刻度不在此列 —— 它们是全局记住的偏好（mm.chartView），跨切换保留。
+   */
   resetKey: string;
   /**
    * 用户画的水平线（价格 + 告警标记）与两点直线。状态与落盘都在 ChartView 侧（`useDrawings`），
@@ -370,12 +378,15 @@ export function KlineCanvas({
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const vpRef = useRef<Viewport>(initialViewport());
   /**
-   * 价格量程的用户意图（缩放倍数 + 平移量），1 / 0 = 自动量程。
-   * 与时间轴视窗同为「用户意图」，换标的/周期一律复位。
+   * 时间轴视窗与价格量程（缩放倍数 + 平移量，1 / 0 = 自动量程）—— 两枚「用户意图」。
+   *
+   * **全局记住**（mm.chartView，见 lib/chartViewPrefs）：切周期、换标的、重启都原样回来；
+   * 双击复位 = 回默认并遗忘。越界（存量视角碰上根数不够的新标的）由 chartMath 的
+   * 钳制在用时兜底，存储里保留原始意图。
    */
-  const priceRef = useRef<PriceView>(initialPriceView());
+  const vpRef = useRef<Viewport>(loadChartViewPrefs().viewport);
+  const priceRef = useRef<PriceView>(loadChartViewPrefs().price);
   /**
    * 十字光标。`index` 是**夹回序列内**的下标（读数带、横线与价格标都按它走），
    * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线只看这一个开关，
@@ -832,6 +843,15 @@ export function KlineCanvas({
     }
   }, []);
 
+  /**
+   * 视角落盘：拖拽松手、复位这类「一次性动作」立即写；滚轮连续缩放走防抖
+   * （停手才写，取最后的意图），避免每个滚轮事件都打一次 localStorage。
+   */
+  const persistView = useCallback((debounced = false) => {
+    if (debounced) scheduleChartViewPrefsSave(vpRef.current, priceRef.current);
+    else saveChartViewPrefs(vpRef.current, priceRef.current);
+  }, []);
+
   // 数据 / 尺寸 / 主题任一变化都重画；无依赖写法保证「每次渲染后」都会同步一次
   useEffect(() => {
     draw();
@@ -844,11 +864,10 @@ export function KlineCanvas({
   }, [theme, draw]);
 
   useEffect(() => {
-    vpRef.current = initialViewport();
-    priceRef.current = initialPriceView();
+    // 视窗与价格刻度**不再**随换标的/周期复位 —— 它们是全局记住的偏好（见 lib/chartViewPrefs）。
+    // 但十字光标与画了一半的直线仍是过程状态，跨数据一律作废：下标会越界，
+    // 半截直线的锚点（虽是时间戳）也没有跨标的的意义。
     crossRef.current = null;
-    // 换标的/周期时画一半的直线整体作废：锚点虽是时间戳、换周期也画得出来，但「正在画一半」
-    // 的状态跨标的是没有意义的（视窗已经复位，待定点会跳到别处）
     pendingRef.current = null;
     draw();
   }, [resetKey, draw]);
@@ -860,8 +879,9 @@ export function KlineCanvas({
   useEffect(() => {
     if (resetPriceSignal === 0) return;
     priceRef.current = initialPriceView();
+    persistView();
     draw();
-  }, [resetPriceSignal, draw]);
+  }, [resetPriceSignal, draw, persistView]);
 
   /**
    * 菜单里「从这里画直线」落下的一次性起点：把第一点落在锚点上，等下一次左键落点成线。
@@ -1020,6 +1040,7 @@ export function KlineCanvas({
           Math.exp(delta * 0.0015),
           currentBase(),
         );
+        persistView(true);
         draw();
         return;
       }
@@ -1031,6 +1052,7 @@ export function KlineCanvas({
         anchor,
         modelRef.current.series.candles.length,
       );
+      persistView(true);
       draw();
     };
 
@@ -1051,7 +1073,9 @@ export function KlineCanvas({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       if (hitBadge(e)) {
+        // 小标只复位**纵向**（用户调的是刻度，不是看多宽）——横向意图原样保留并落盘
         priceRef.current = initialPriceView();
+        persistView();
         draw();
         return;
       }
@@ -1150,6 +1174,8 @@ export function KlineCanvas({
       }
       pointerId = null;
       canvas.style.cursor = '';
+      // 一场拖拽结束时落盘一次：过程中每帧写没有意义，松手才是「我停在这儿」的意图
+      persistView();
     };
 
     const onLeave = () => {
@@ -1158,7 +1184,11 @@ export function KlineCanvas({
       draw();
     };
 
-    /** 双击复位：视窗与价格刻度一起回自动（App 的「双击复位」同理）。副图不参与。 */
+    /**
+     * 双击复位：视窗与价格刻度一起回默认（App 的「双击复位」同理），并**写回存档** ——
+     * 它也是「忘掉调过的视角」的出口：不写回的话，换个周期旧视角又被带回来，
+     * 复位就只是当下的假象。副图不参与。
+     */
     const onDblClick = (e: MouseEvent) => {
       const { rect } = geom();
       if (belowMain(e.clientY - rect.top)) return;
@@ -1167,6 +1197,7 @@ export function KlineCanvas({
       vpRef.current = initialViewport();
       priceRef.current = initialPriceView();
       crossRef.current = null;
+      persistView();
       draw();
     };
 
@@ -1253,7 +1284,7 @@ export function KlineCanvas({
       canvas.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [draw]);
+  }, [draw, persistView]);
 
   return (
     <div className="chart-scroll" ref={wrapRef}>

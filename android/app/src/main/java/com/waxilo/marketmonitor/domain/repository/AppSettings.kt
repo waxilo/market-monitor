@@ -60,6 +60,19 @@ data class AppSettings(
     val autoUpdateCheck: Boolean = true,
     /** 用户点「以后再说」的版本号，低于或等于该版本不再提示。 */
     val dismissedVersion: String = "",
+    /**
+     * K 线视角偏好（**全局一份**，与指标同口径）：看多宽（可见根数）、右端停哪
+     * （右侧留白 / 回看多少根）、纵向刻度（缩放倍数 + 平移比例）。
+     *
+     * 四个数就是 `ChartViewport` 的「用户意图」—— 切周期、换标的、重启一律保持；
+     * 双击复位 = 回默认**并遗忘**（写回这里的默认值）。缺省 = 默认视角
+     * （60 根、右侧留白 3 根、纵向自动量程），与 `ChartViewport.initial()` 对齐。
+     * 越界值在使用处由 `ChartViewport.clamp` / `ValueRange` 的钳制兜底。
+     */
+    val chartVisibleBars: Float = 60f,
+    val chartRightOffset: Float = 3f,
+    val chartPriceZoom: Float = 1f,
+    val chartPricePan: Float = 0f,
 )
 
 interface SettingsRepository {

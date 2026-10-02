@@ -91,6 +91,7 @@ import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
+import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
@@ -227,6 +228,10 @@ fun DetailScreen(
                     onRetry = viewModel::refresh,
                     onFullscreen = { fullscreen = true },
                     onCrosshairIndexChange = { crosshairIndex = it },
+                    // 视角全局一份：初值取 ViewModel 当前值（全屏那份的调整也在里面），
+                    // 变化交回去 —— 切周期、换标的、重启都不重置
+                    initialView = viewModel.chartView.value,
+                    onViewChange = viewModel::commitChartView,
                     // 小条不属于周期：它画进图表顶部、与指标读数带同一个容器，上下对读
                     candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
                 )
@@ -437,6 +442,10 @@ private fun FullscreenChart(
                     interval = state.interval,
                     tickSize = state.tickSize,
                     symbolKey = state.id.storageKey,
+                    // 视角是全局偏好：首帧初值从 ViewModel 读（竖屏那份的每次变化
+                    // 都同步在它上面），进去后的变化同样交回去 —— 两个实例接力不掉队
+                    initialView = viewModel.chartView.value,
+                    onViewChange = viewModel::commitChartView,
                     onLoadMore = viewModel::loadMore,
                     onCrosshairIndexChange = { crosshairIndex = it },
                     // 与竖屏同位：图表顶部、读数带正上方的同一个容器
@@ -875,6 +884,8 @@ private fun ChartArea(
     onRetry: () -> Unit,
     onFullscreen: () -> Unit,
     onCrosshairIndexChange: (Int?) -> Unit,
+    initialView: ChartViewState,
+    onViewChange: (ChartViewState) -> Unit,
     candleReadout: (@Composable () -> Unit)? = null,
 ) {
     val colors = MarketTheme.colors
@@ -921,6 +932,8 @@ private fun ChartArea(
                     interval = state.interval,
                     tickSize = state.tickSize,
                     symbolKey = state.id.storageKey,
+                    initialView = initialView,
+                    onViewChange = onViewChange,
                     onLoadMore = onLoadMore,
                     onCrosshairIndexChange = onCrosshairIndexChange,
                     candleReadout = candleReadout,

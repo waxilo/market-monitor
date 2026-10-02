@@ -21,6 +21,8 @@ import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
+import com.waxilo.marketmonitor.ui.chart.ChartViewport
+import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.common.displayMessage
@@ -114,6 +116,17 @@ class DetailViewModel(
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
     private val chart = MutableStateFlow(ChartData())
+
+    /**
+     * 全局视角偏好（横向视窗 + 纵向刻度）：跨标的、跨周期、跨会话。
+     *
+     * 图表实例**首帧读一次**（`chartView.value`）；之后每次变化经 [commitChartView] 回来。
+     * 放 ViewModel 而不是图表内部：竖屏与全屏是两个互斥的图表实例（旋屏还会重建
+     * Activity），交接初值只能靠一个比它们活得久的地方。
+     */
+    private val chartViewState = MutableStateFlow(ChartViewState())
+    val chartView: StateFlow<ChartViewState> = chartViewState.asStateFlow()
+    private var chartViewSaveJob: Job? = null
 
     /**
      * 正在拖动的那条线：手指未离开，价格只是临时状态。
@@ -438,10 +451,45 @@ class DetailViewModel(
         viewModelScope.launch { settings.edit { it.copy(lastIntervalKey = target.storageKey) } }
     }
 
-    /** 详情页的图表偏好跨会话保留（PRD 8 设置：周期、均线、副图、布林）。 */
+    /**
+     * 图表交回最新视角：手势每变一帧回调一次，复位小标同样走这里。
+     *
+     * 状态**同步**更新 —— 竖屏↔全屏切换时，新图表实例的首帧初值读的就是它；
+     * 落盘防抖：拖动时一帧写一次 DataStore 没有意义，停手
+     * [CHART_VIEW_SAVE_DEBOUNCE_MS] 后写一次即可（与桌面端滚轮的 250ms 同口径）。
+     *
+     * 非有限值一律丢弃（视窗宽度还必须为正）：这是存储边界的最后一道闸，
+     * 手抖出的一个 NaN 不该被写进持久化偏好。
+     */
+    fun commitChartView(view: ChartViewState) {
+        val vp = view.viewport
+        if (!vp.visibleBars.isFinite() || vp.visibleBars <= 0f) return
+        if (!vp.rightOffset.isFinite() || !view.priceZoom.isFinite() || !view.pricePan.isFinite()) return
+        chartViewState.value = view
+        chartViewSaveJob?.cancel()
+        chartViewSaveJob = viewModelScope.launch {
+            delay(CHART_VIEW_SAVE_DEBOUNCE_MS)
+            settings.edit {
+                it.copy(
+                    chartVisibleBars = vp.visibleBars,
+                    chartRightOffset = vp.rightOffset,
+                    chartPriceZoom = view.priceZoom,
+                    chartPricePan = view.pricePan,
+                )
+            }
+        }
+    }
+
+    /** 详情页的图表偏好跨会话保留（PRD 8 设置：周期、均线、副图、布林、视角）。 */
     private suspend fun restoreChartPreferences() {
         val saved = settings.current()
         CandleInterval.fromStorageKey(saved.lastIntervalKey)?.let { interval.value = it }
+        // 视角只按「意图」恢复：越界与否到用的时候由 ChartViewport.clamp 兜底
+        chartViewState.value = ChartViewState(
+            viewport = ChartViewport(saved.chartVisibleBars, saved.chartRightOffset),
+            priceZoom = saved.chartPriceZoom,
+            pricePan = saved.chartPricePan,
+        )
         chart.update {
             it.copy(
                 // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
@@ -732,6 +780,12 @@ class DetailViewModel(
 
         /** 详情页表头报价的 REST 轮询间隔（与仓库层 K 线轮询同频）。 */
         const val TICKER_POLL_MS = 2_000L
+
+        /**
+         * 视角落盘的防抖时长：手势停手后写一次。
+         * 防的是「拖一帧写一帧库」，不是怕写坏 —— DataStore 本身是原子写。
+         */
+        const val CHART_VIEW_SAVE_DEBOUNCE_MS = 250L
     }
 }
 
