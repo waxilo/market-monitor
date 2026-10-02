@@ -979,7 +979,9 @@ private data class ChartGeo(
 
     fun yOf(fraction: Float, top: Float, height: Float): Float = top + fraction * height
 
-    fun bodyWidth(visibleBars: Float): Float = (slot(visibleBars) * BODY_SHARE).coerceIn(1f, 26f)
+    // 实体随槽宽等比。曾钳 26px 上限：放大/短序列撑满后实体不再变宽、间距继续拉大，
+    // 就是「实体偏窄、间距巨大」那个散开观感的来源（2026-10-03 去上限）。
+    fun bodyWidth(visibleBars: Float): Float = max(1f, slot(visibleBars) * BODY_SHARE)
 
     /**
      * 主图顶边：读数带之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，

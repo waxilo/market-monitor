@@ -52,13 +52,22 @@ data class ChartViewport(
     val rightOffset: Float = 0f,
 ) {
 
-    /** 单屏最少 15 根（再多影线就糊成一条线），最多不超过序列长度与 [MAX_BARS]。 */
+    /** 单屏最少 15 根（再多影线就糊成一条线）；序列本身比它短时以序列为准。 */
     private fun minVisible(barCount: Int): Float = min(MIN_BARS, max(1, barCount)).toFloat()
 
-    private fun maxVisible(barCount: Int): Float = min(max(1, barCount), MAX_BARS).toFloat()
+    /**
+     * 窗口宽度上限 [MAX_BARS]，**与序列长短无关**：窗口允许比数据宽，多出来的部分
+     * 落在左侧 —— 序列保持原宽停在右端、左端留空（对齐 TradingView/币安，
+     * 2026-10-03 用户拍板）。
+     *
+     * 旧行为写作 `min(barCount, MAX_BARS)`：短序列（如 6 月周期只有 13 根）窗口被
+     * 收窄成「整段撑满一屏」，槽宽 = 绘图区宽 / 根数，而实体宽另有固定上限 ⇒
+     * 看起来是一张「实体窄、间距巨大」的散图，且 min=max 连缩放都锁死了。
+     */
+    private fun maxVisible(): Float = MAX_BARS.toFloat()
 
     private fun effectiveVisible(barCount: Int): Float =
-        visibleBars.coerceIn(minVisible(barCount), maxVisible(barCount))
+        visibleBars.coerceIn(minVisible(barCount), maxVisible())
 
     /**
      * 右侧最多能留出多少根空白（让最新一根可以被推到屏幕中间偏左）。
@@ -79,9 +88,13 @@ data class ChartViewport(
         // 左界：最多把窗口右端推到「只看得到 1 根」之前 —— 即移出 (barCount-visible) 根历史
         val minOffset = -max(0f, barCount - visible)
         // 右界：最新一根被推到屏幕内偏左，右侧最多留 maxRightBlank 根空白。
-        // 但**整段序列一屏就放得下**时不留白：此时屏幕里本来就没有多余空间，
-        // 留白只会把最老的那几根挤出左边界（新币的月线常常只有十几根）。
-        val maxOffset = if (barCount <= visible) 0f else maxRightBlank(visible)
+        // 但**序列比窗口窄**（整段一屏放得下）时窗口不收窄去撑满数据 —— 序列保持
+        // 原宽停在右端、左边留空；右侧留白以「不把最老一根挤出左边界」为限：
+        // 偏移到 (visible - barCount) 时最老一根恰好贴左边缘，再大就被挤出去了
+        // （默认的 3 根留白在这个上限内，原样保留）。
+        val maxOffset =
+            if (barCount <= visible) (visible - barCount).coerceIn(0f, maxRightBlank(visible))
+            else maxRightBlank(visible)
         val offset = rightOffset.coerceIn(minOffset, maxOffset)
         return copy(visibleBars = visible, rightOffset = offset)
     }
@@ -158,7 +171,7 @@ data class ChartViewport(
         val current = clamp(barCount)
         if (barCount <= 0 || !barFactor.isFinite() || barFactor <= 0f) return current
         val target = (current.visibleBars * barFactor.coerceIn(0.05f, 20f))
-            .coerceIn(minVisible(barCount), maxVisible(barCount))
+            .coerceIn(minVisible(barCount), maxVisible())
         // 当前绘图区左端 = (barCount - 1 + O) - V + 1 = barCount + O - V
         val start = barCount + current.rightOffset - current.visibleBars
         val ratio = anchorRatio.coerceIn(0f, 1f)
@@ -233,8 +246,8 @@ data class ChartViewport(
 
         /**
          * 初始视窗：最新一根右侧留 [DEFAULT_RIGHT_BLANK] 根空白、默认宽度。
-         * **与序列长度无关** —— 宽度会在 `clamp(barCount)` 里按实际根数收窄，
-         * 因此拿到短序列也安全。
+         * **与序列长度无关**：拿到短序列也不会撑满全屏 —— 窗口保持原宽，
+         * 序列停在右端、左侧留空（见 [maxVisible]）。
          */
         fun initial(): ChartViewport = ChartViewport(DEFAULT_VISIBLE, DEFAULT_RIGHT_BLANK)
     }

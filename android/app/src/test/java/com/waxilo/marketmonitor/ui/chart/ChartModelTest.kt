@@ -44,10 +44,21 @@ class ChartModelTest {
         assertTrue(ChartViewport(120f, 0f).window(0).isEmpty())
     }
 
+    /**
+     * 序列比窗口窄时窗口**不收窄**：序列保持原宽停在右端、左端留空。
+     *
+     * 旧版把可见根数收窄成实际长度（这里是 6），槽宽 = 绘图区宽 / 6 ⇒ 整段
+     * 「撑满一屏、间距巨大」，而且 min=max 连缩放都锁死（2026-10-03 用户拍板改掉，
+     * 见 [ChartViewport.maxVisible]）。
+     */
     @Test
-    fun `序列不足一屏时可见根数收到实际长度`() {
+    fun `序列不足一屏时窗口不收窄而是靠右留空`() {
         val viewport = ChartViewport(visibleBars = 120f).clamp(barCount = 6)
-        assertEquals(6f, viewport.visibleBars, 1e-6f)
+        assertEquals(120f, viewport.visibleBars, 1e-6f)
+        // 绘图区左端越出序列（左侧留空的那段），右端仍是末根
+        assertEquals(-114f, viewport.plotStart(6), 1e-6f)
+        assertEquals(-114..5, viewport.plotRange(6))
+        // 取数据的窗口仍是整段、绝不出现空窗口
         assertEquals(0..5, viewport.window(6))
     }
 
@@ -83,7 +94,7 @@ class ChartModelTest {
         assertEquals(20..119, viewport.window(120))
         assertEquals(0..99, viewport.window(100))
         assertEquals(420..519, viewport.window(520))
-        // 短序列收窄到实际根数，绝不出现空窗口
+        // 短序列时窗口比序列还宽（靠右留空），取数据的窗口仍是整段、绝不出现空窗口
         assertEquals(0..5, viewport.window(6))
     }
 
@@ -105,19 +116,36 @@ class ChartModelTest {
     }
 
     /**
-     * 整段序列一屏放得下时不留白。
+     * 短序列保留默认留白（在「不挤出最老一根」的上限内）。
      *
-     * 默认留白 3 根在长序列上是「最新一根离右边框远一点」，但在短序列上
-     * （新币的月线常常只有十几根）屏幕里本就没有多余空间，留白会把最老的几根
-     * 挤出左边界 —— 用户看到的是「少了几根蜡烛」。
+     * 旧版整段一屏放得下时强制不留白（`maxOffset = 0`）；改成「保持原宽靠右」后
+     * 留白的上限是 `visible - barCount` —— 偏移到这个值时最老一根恰好贴左边缘，
+     * 默认的 3 根留白远在上限内，原样保留。
      */
     @Test
-    fun `序列不足一屏时不留白以免挤掉最老的几根`() {
+    fun `序列不足一屏时保留默认留白`() {
         val viewport = ChartViewport.initial().clamp(barCount = 20)
-        assertEquals(0f, viewport.rightOffset, 1e-6f)
-        // 20 根全在窗口里，一根不少
+        assertEquals(60f, viewport.visibleBars, 1e-6f)
+        assertEquals(3f, viewport.rightOffset, 1e-6f)
+        // 绘图区左端在序列之前（左侧留空），右端越出末根 3 根（右侧留白）
+        assertEquals(-37f, viewport.plotStart(20), 1e-6f)
+        assertEquals(-37..22, viewport.plotRange(20))
+        // 真实数据的窗口仍是整段，20 根一根不少
         assertEquals(0..19, viewport.window(20))
-        assertEquals(0..19, viewport.plotRange(20))
+    }
+
+    @Test
+    fun `短序列的右侧留白上限是不把最老一根挤出左边界`() {
+        // 上限 = min(visible - barCount, maxRightBlank(visible)) = min(40, 45) = 40
+        val moved = ChartViewport(60f, 0f).pan(-1_000f, barCount = 20)
+        assertEquals(40f, moved.rightOffset, 1e-6f)
+        // 拖到上限时最老一根恰好贴左边缘（再多留白就把它挤出去了）
+        assertEquals(0f, moved.plotStart(20), 1e-6f)
+        assertEquals(0..19, moved.window(20))
+        // 窗口拉得很宽时上限取 maxRightBlank（数据区至少占 MIN_VISIBLE_SHARE），
+        // 而不是 600-20=580
+        val wide = ChartViewport(600f, 0f).pan(-1_000f, barCount = 20)
+        assertEquals(600f * (1f - ChartViewport.MIN_VISIBLE_SHARE), wide.rightOffset, 1e-6f)
     }
 
     @Test
@@ -215,6 +243,17 @@ class ChartModelTest {
             viewport.zoom(1_000f, barCount = 1_000).visibleBars,
             1e-6f,
         )
+    }
+
+    /**
+     * 短序列也能缩放 —— 旧版可见根数上界被钳到序列长（13 根时 min=max=13），
+     * 整张图既不能放大也不能缩小。
+     */
+    @Test
+    fun `短序列的缩放不再被锁死`() {
+        val viewport = ChartViewport(60f, 3f)
+        assertEquals(30f, viewport.zoom(0.5f, barCount = 13).visibleBars, 1e-6f)
+        assertEquals(120f, viewport.zoom(2f, barCount = 13).visibleBars, 1e-6f)
     }
 
     @Test

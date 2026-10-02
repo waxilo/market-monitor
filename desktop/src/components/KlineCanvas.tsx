@@ -500,7 +500,9 @@ export function KlineCanvas({
     const slot = plotW / Math.max(1, vp.visibleBars);
     const xOf = (i: number) => (i - start + 0.5) * slot;
     const yOf = (fraction: number, top: number, height: number) => top + fraction * height;
-    const bodyW = clampNum(slot * BODY_SHARE, 1, 26);
+    // 实体随槽宽等比。曾钳 26px 上限：放大/短序列撑满后实体不再变宽、间距继续拉大，
+    // 就是「实体偏窄、间距巨大」那个散开观感的来源（2026-10-03 去上限）。
+    const bodyW = Math.max(1, slot * BODY_SHARE);
     const dec = decimalsFor(ts);
     /** 一根 K 线的时长（直线锚点的时间 ⇄ 下标换算用）。 */
     const ivMs = (minutesOf(iv) ?? 15) * 60_000;

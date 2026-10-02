@@ -213,8 +213,16 @@ function minVisible(barCount: number): number {
   return Math.min(MIN_BARS, Math.max(1, barCount));
 }
 
-function maxVisible(barCount: number): number {
-  return Math.min(Math.max(1, barCount), MAX_BARS);
+/**
+ * 窗口宽度上限，**与序列长短无关**：窗口允许比数据宽，多出来的部分落在左侧 ——
+ * 序列保持原宽停在右端、左端留空（对齐 TradingView/币安，2026-10-03 用户拍板）。
+ *
+ * 旧行为写作 `min(barCount, MAX_BARS)`：短序列（如 6 月周期只有 13 根）窗口被收窄成
+ * 「整段撑满一屏」，槽宽 = 绘图宽 / 根数，而实体宽另有固定上限 ⇒ 看起来是一张
+ * 「实体窄、间距巨大」的散图，且 min=max 连缩放都锁死了。
+ */
+function maxVisible(): number {
+  return MAX_BARS;
 }
 
 function maxRightBlank(visible: number): number {
@@ -222,9 +230,16 @@ function maxRightBlank(visible: number): number {
 }
 
 export function clampViewport(v: Viewport, barCount: number): Viewport {
-  const visible = clampNum(v.visibleBars, minVisible(barCount), maxVisible(barCount));
+  const visible = clampNum(v.visibleBars, minVisible(barCount), maxVisible());
   const minOffset = -Math.max(0, barCount - visible);
-  const maxOffset = barCount <= visible ? 0 : maxRightBlank(visible);
+  // 序列比窗口窄（barCount ≤ visible）时，窗口不收窄去撑满数据；右侧留白以
+  // 「不把最老一根挤出左边界」为限 —— 偏移到 `visible - barCount` 时最老一根
+  // 恰好贴左边缘，再大就被挤出去了（默认的 3 根留白在这个上限内，原样保留）。
+  // 序列比窗口宽时仍按 maxRightBlank（数据区至少占 MIN_VISIBLE_SHARE）。
+  const maxOffset =
+    barCount <= visible
+      ? clampNum(visible - barCount, 0, maxRightBlank(visible))
+      : maxRightBlank(visible);
   return { visibleBars: visible, rightOffset: clampNum(v.rightOffset, minOffset, maxOffset) };
 }
 
@@ -271,7 +286,7 @@ export function zoomViewport(
   const target = clampNum(
     c.visibleBars * clampNum(barFactor, 0.05, 20),
     minVisible(barCount),
-    maxVisible(barCount),
+    maxVisible(),
   );
   const start = barCount + c.rightOffset - c.visibleBars;
   const ratio = clampNum(anchorRatio, 0, 1);
