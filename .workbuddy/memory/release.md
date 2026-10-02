@@ -33,6 +33,9 @@
   基线 rel json 只需要 `{id, created_at}` 两个字段（`jq '{id, created_at}'` 从旧文件切）。`gh release download`
   不在 git 目录里跑要加 `-R waxilo/market-monitor`。2026-10-01 发 0.1.12 同形态（副本 `verify-channel-local-0112.py`：
   `0.1.11→0.1.12`、`0.1.10→0.1.11`、三处 `/tmp` 路径、`pub_date` 日期；PASS 38/38 一次过）。
+  2026-10-02 发 0.1.13 仍同形态（副本 `verify-channel-local-0113.py`：`0.1.11_→0.1.12_`（基线文件名）、
+  三处 `/tmp` 路径 `0112→0113`、`pub_date` 日期 `2026-10-01→2026-10-02`、docstring 示例；PASS 38/38 一次过，
+  run 36962803603 三 job 全绿）。
   ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
   别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
   - 脚本自带「直连失败改走本机代理 `127.0.0.1:7897`」的兜底（发 0.1.7 时 TLS handshake timeout 反复出现，直连与代理谁通就用谁）；
@@ -42,7 +45,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -51,7 +54,8 @@
   `desktop 0.1.9`（悬浮窗拖不动的回归修复；只发桌面端）→
   `desktop 0.1.10`（价格告警线 + 到价系统通知、悬浮窗独立混合列表、指标/副图/画图另起一行、默认纵向留白 6%→20%；只发桌面端）→
   `desktop 0.1.11`（画线/删自选改右键菜单、前台不息屏、默认浅色+全中文、搜索居中、自选与指标持久化；只发桌面端）→
-  `desktop 0.1.12`（图上三线分色——现价灰 `--muted` / 告警红 `--down` / 画线黄 `--line-mark`；只发桌面端）。
+  `desktop 0.1.12`（图上三线分色——现价灰 `--muted` / 告警红 `--down` / 画线黄 `--line-mark`；只发桌面端）→
+  `desktop 0.1.13`（右键落点钉十字光标——菜单价与价格标同源、快捷键默认 alt+m→alt+d；只发桌面端）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
