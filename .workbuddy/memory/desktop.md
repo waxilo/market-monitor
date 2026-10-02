@@ -304,6 +304,24 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
 > 从 `useDrawings` 摘掉（库里的纯函数留着，`.mts` 验收还在用）。
 > ⚠️ 右键菜单是**自绘 HTML**（`createPortal` 到 body、`position: fixed`、z 62）：主窗有 1024×680 的底，
 > 贴边能翻回来；悬浮窗那边才非得走原生 popup（那块面板一整块就是窗口）。
+
+> ❗**2026-10-03 更新**（用户拍板：右键菜单加「锁定/解锁全部画线」；**粒度 = 整张图一个开关**（该标的的
+> 水平线+直线一起，明确否掉逐条锁）、**默认解锁**）—— 对上面「画布只读」的**有约束回退**：解锁时可拖、
+> 锁定时拖不动；锁**只管「拖」**，删线/告警/清空/画新线照旧。
+> - `lib/linesLock.ts`：`mm.linesLock` = `Record<string, true>`，**只存 `true`**、键不存在 = 解锁（默认解锁 ⇒
+>   老数据零迁移）。`withLinesLock(store, key, locked)` 解锁即删键；作用域与画线同键（`市场:标的`）。
+> - `useDrawings`：增 `linesLocked` / `setLinesLocked` + 拖动三 API（`movePriceLine` / `moveTrendBy` /
+>   `moveTrendAnchor` 重新接线到库里那三个纯函数）。`ChartMenu`：`drawingCount > 0` 才给这条
+>   （没线可锁不出现），文案随 `linesLocked` 翻转；`MENU_H` 208。
+> - `KlineCanvas`：`mode` 恢复 `'trend-anchor' | 'trend-body' | 'line'`；按下时抓取优先序
+>   把手(6px) → 线身(4px) → 水平线(4px)，**整段（含空闲光标 grab/move/ns-resize）当且仅当 `linesLocked` 跳过**；
+>   锁定时落点是「拖画布」（平移照旧）。把手（端点小圆点）只在解锁时画 —— 0.1.12 那条「不给能抓的错觉」就是这条。
+>   拖动位移按**当前映射**换算（线身：`timeAtIndex(indexOfX(x))` 之差 + `priceOfY` 之差；端点/水平线：绝对定位），
+>   指针坐标先夹进主图（甩出画布锚点不飞）。拖动重画走「state → props → modelRef → 绘制 effect」，拖拽分支不直接 draw。
+> - 验收 `npm run build` 绿 + `.workbuddy/tmp/verify-lines-lock-drag.mjs`（**无头 Chrome，36 条全 PASS**）：
+>   拖水平线改价落盘 → 锁后无提示/拖不动（pricePan 动了 = 落点退回拖画布）→ 解锁又能拖；直线端点 grab /
+>   线身 move / 平移两端 t 同增（增量 = 80px 折算，半根容差）/ 拖端点 a 不动 b 随指针；把手黄色像素差分
+>   （解锁 198 / 锁定 127）；锁定期两次拖尝试后双击复位；无页面 JS 报错。
 > ❗**右键落点先钉十字光标**（2026-10-02）：`onContextMenu` 里先把 `crossRef.current` 钉到这一下右键的
 > `{index, y, onBar}`（与 `pointermove` 同一套算法）并 `draw()`，之后才判命中、才 `priceOfY(y)` 算菜单价 ——
 > 菜单里的价和图上那枚价格标必须是**同一个 y** 出来的。光标跟着 `pointermove` 走，而右键事件的坐标可能和
@@ -486,6 +504,9 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
 `formatChord`+`acceleratorOf` 翻译链 / Alt+M 事件作废；下半无头 Chrome —— 面板显示「Alt + D」且「恢复默认」
 置灰、窗口内 Alt+D 被吃掉而 Alt+M 不再命中、录制成 `alt+shift+d` 后新键生效老键让位、恢复默认删落盘键且
 Alt+D 立刻复活。**纯浏览器跑，不碰 Tauri 桩**，可作后续快捷键改动的基线）。
+**2026-10-03 新增**：`verify-lines-lock-drag.mjs` **36**（画线拖动 + 右键锁：拖水平线改价落盘 → 锁定后
+悬停无提示/拖不动（落点退回拖画布）→ 解锁恢复；直线端点 grab / 线身 move / 平移与拖端点的落盘语义；
+把手黄色像素差分验「锁定时把手消失」）。靠预注入 fetch 桩喂确定性 15m K 线，不碰网络。
 **2026-09-30 新增**：`verify-draw-menu.mjs` **78**（右键菜单画线 + 画布只读 + 第 9 节右键落点钉光标；
 **0.1.12 起支持** `VERIFY_THEME=light` 跑浅色，浅色截图带 `-light` 后缀，主题经 `addInitScript` 传参）/
 `verify-zh-prefs.mjs` **95**（0.1.11 第一批：出厂浅色 + 自选迁移 + 侧栏市场胶囊 + 中文文案 + 周期面板 +

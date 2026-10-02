@@ -58,7 +58,10 @@ import { nearestLineWithin, type PriceLine } from '../lib/priceLines';
 import {
   clipLineToRect,
   nearestTrendBody,
+  nearestTrendHandle,
   type TrendAnchor,
+  type TrendEnd,
+  type TrendHandle,
   type TrendLine,
 } from '../lib/trendLines';
 
@@ -342,11 +345,17 @@ interface Props {
   /**
    * 菜单里「从这里画直线」落下的一次性起点；`null` = 没有画了一半的直线。
    * 换了它就把第一点落在这个锚点上，之后鼠标一动预览线跟着走、左键再落一下就成线
-   * （Esc / 右键撤销）。**画布上没有别的改线手势**：新增、删除、清空全在右键菜单里，
-   * 已有的线是只读的（看图时不该有任何手滑改图的机会）。
+   * （Esc / 右键撤销）。新增、删除、清空全在右键菜单里；已有线的**改位**手势是直接拖，
+   * 但只在未锁定时（见 `linesLocked`）。
    */
   trendSeed: TrendSeed | null;
   onAddTrend: (a: TrendAnchor, b: TrendAnchor) => void;
+  /** 整张图的画线是否锁定（默认解锁）：锁上后画布不抓线、不画把手，拖动落点一律还给「拖画布」。 */
+  linesLocked: boolean;
+  /** 拖动回报（状态与落盘都在 ChartView 的 useDrawings）：水平线改价、直线整体平移、直线端点。 */
+  onMovePriceLine: (index: number, price: number) => void;
+  onMoveTrendBy: (index: number, deltaTime: number, deltaPrice: number) => void;
+  onMoveTrendAnchor: (index: number, end: TrendEnd, anchor: TrendAnchor) => void;
   /** 右键落点上报（加线、删线、清空都由 ChartView 在菜单里做）。 */
   onMenu: (request: ChartMenuRequest) => void;
   /**
@@ -369,6 +378,10 @@ export function KlineCanvas({
   trendLines,
   trendSeed,
   onAddTrend,
+  linesLocked,
+  onMovePriceLine,
+  onMoveTrendBy,
+  onMoveTrendAnchor,
   onMenu,
   resetPriceSignal,
 }: Props) {
@@ -434,7 +447,11 @@ export function KlineCanvas({
     tickSize,
     priceLines,
     trendLines,
+    linesLocked,
     onAddTrend,
+    onMovePriceLine,
+    onMoveTrendBy,
+    onMoveTrendAnchor,
     onMenu,
   });
   useEffect(() => {
@@ -445,7 +462,11 @@ export function KlineCanvas({
       tickSize,
       priceLines,
       trendLines,
+      linesLocked,
       onAddTrend,
+      onMovePriceLine,
+      onMoveTrendBy,
+      onMoveTrendAnchor,
       onMenu,
     };
   });
@@ -462,6 +483,7 @@ export function KlineCanvas({
       tickSize: ts,
       priceLines: pl,
       trendLines: tl,
+      linesLocked: lock,
     } = modelRef.current;
     const mh = gh.mainH;
     const list = s.candles;
@@ -617,13 +639,22 @@ export function KlineCanvas({
     }
 
     // 用户画的两点直线：**实线**（与水平线的虚线同色系、不同线型 —— 虚线读作「一个价位」、
-    // 实线读作「一条斜率」）。端点不画把手：把手是「这东西能拖」的信号，现在拖不了。
+    // 实线读作「一条斜率」）。端点把手只在**未锁定**时画：把手是「这条线能拖」的信号，
+    // 锁上后画布不抓线，不留任何可拖的痕迹。
     ctx.strokeStyle = p.line;
     ctx.lineWidth = 1;
     for (const line of tl) {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       infiniteLine(a.x, a.y, b.x, b.y, []);
+    }
+    if (!lock) {
+      for (const line of tl) {
+        for (const anchor of [line.a, line.b]) {
+          const pt = anchorPx(anchor, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
+          drawTrendHandle(ctx, pt.x, pt.y, p, mainTop, mainBottom, plotW);
+        }
+      }
     }
 
     // 画了一半的直线（菜单里「从这里画直线」之后）的预览：起点把手 + 过起点与鼠标的**虚线**
@@ -913,11 +944,13 @@ export function KlineCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return;
     /**
-     * 本场手势的种类。只剩 `pan`（拖画布）—— 线是只读的，画线一律从右键菜单发起：
+     * 本场手势的种类，在**按下那一刻**由落点决定：
+     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖已有的画线（只在未锁定时
+     * 可能被抓到，锁上后落点一律走 `pan`）。画新线一律从右键菜单起笔 ——
      * 菜单里「从这里画直线」落下的起点在 `pendingRef`，左键那一下只是「落第二点」。
-     * 种类在**按下那一刻**由落点决定：副图（以及它下面的时间轴）不参与任何手势。
+     * 副图（以及它下面的时间轴）不参与任何手势。
      */
-    type Mode = 'none' | 'pan';
+    type Mode = 'none' | 'pan' | 'trend-anchor' | 'trend-body' | 'line';
     let mode: Mode = 'none';
     /**
      * 本场拖拽锁定的轴；`null` = 还没定性。
@@ -929,6 +962,11 @@ export function KlineCanvas({
     let lastX = 0;
     let lastY = 0;
     let pointerId: number | null = null;
+    /** 画线拖拽：抓的是哪条、哪个端点、上一帧的落点（trend-body 的位移换算用）。 */
+    let grabIndex = -1;
+    let grabEnd: TrendEnd = 'a';
+    let grabLastX = 0;
+    let grabLastY = 0;
 
     const geom = () => {
       const rect = canvas.getBoundingClientRect();
@@ -1021,6 +1059,17 @@ export function KlineCanvas({
         return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
       });
 
+    /** 所有直线的两端把手（抓取判定与空闲光标共用；锁定时不会被调用）。 */
+    const trendHandles = (plotW: number): TrendHandle[] =>
+      modelRef.current.trendLines.flatMap((line, index) => {
+        const a = pxOfAnchor(line.a, plotW);
+        const b = pxOfAnchor(line.b, plotW);
+        return [
+          { index, end: 'a' as const, x: a.x, y: a.y },
+          { index, end: 'b' as const, x: b.x, y: b.y },
+        ];
+      });
+
     /**
      * 滚轮缩放：默认横轴（时间窗），Shift 改成纵轴（价格量程）。
      * 纵轴这一支与纵向拖拽共用同一套意图量与钳制，方向对齐「向上滚 = 放大」。
@@ -1082,8 +1131,7 @@ export function KlineCanvas({
         return;
       }
       const { top, bottom } = mainBounds();
-      // 画布对已有的画线是**只读**的：没有抓手、没有拖动，落点一律按下面的规则走。
-      // 唯一一种「点击改图」是画了一半的直线：菜单里「从这里画直线」之后，这一下就是第二点。
+      // 画了一半的直线优先：菜单里「从这里画直线」之后，这一下就是第二点。
       if (pendingRef.current && x <= plotW && y >= top && y <= bottom) {
         const anchor = anchorAt(x, y, plotW);
         if (anchor) {
@@ -1094,6 +1142,46 @@ export function KlineCanvas({
             pendingRef.current = null;
           }
           crossRef.current = null;
+          draw();
+          return;
+        }
+      }
+      // 抓取已有的画线（只在**未锁定**时）：把手 → 直线线身 → 水平线 —— 与右键菜单的落点
+      // 判定同序（把手最小、最难中，排最前）。锁定时整段跳过：落点照旧是「拖画布」。
+      if (!modelRef.current.linesLocked && x <= plotW && y >= top && y <= bottom) {
+        const handle = nearestTrendHandle(trendHandles(plotW), x, y);
+        if (handle) {
+          mode = 'trend-anchor';
+          grabIndex = handle.index;
+          grabEnd = handle.end;
+          crossRef.current = null;
+          pointerId = e.pointerId;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'grabbing';
+          draw();
+          return;
+        }
+        const body = nearestTrendBody(trendBodies(plotW), x, y);
+        if (body >= 0) {
+          mode = 'trend-body';
+          grabIndex = body;
+          grabLastX = x;
+          grabLastY = y;
+          crossRef.current = null;
+          pointerId = e.pointerId;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'move';
+          draw();
+          return;
+        }
+        const hit = hitLine(y);
+        if (hit >= 0) {
+          mode = 'line';
+          grabIndex = hit;
+          crossRef.current = null;
+          pointerId = e.pointerId;
+          canvas.setPointerCapture(e.pointerId);
+          canvas.style.cursor = 'ns-resize';
           draw();
           return;
         }
@@ -1117,6 +1205,36 @@ export function KlineCanvas({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const n = modelRef.current.series.candles.length;
+      if (mode === 'trend-anchor') {
+        // 端点跟着指针走（另一端不动）。坐标夹在主图内：指针甩出画布后锚点不再继续飞。
+        const { top, bottom } = mainBounds();
+        const anchor = anchorAt(clampNum(x, 0, plotW), clampNum(y, top, bottom), plotW);
+        if (anchor) modelRef.current.onMoveTrendAnchor(grabIndex, grabEnd, anchor);
+        return; // 重画由上层（ChartView 的 useDrawings）随新 props 带回来
+      }
+      if (mode === 'trend-body') {
+        // 整体平移。位移按**当前映射**换算成数据空间增量：时间用像素反算
+        // （别自己推「像素 / 格宽 × 周期」—— 视窗被夹住时那个公式就不成立）。
+        const { top, bottom } = mainBounds();
+        const cx = clampNum(x, 0, plotW);
+        const cy = clampNum(y, top, bottom);
+        const list = modelRef.current.series.candles;
+        const ivMs = intervalMs();
+        const dTime =
+          timeAtIndex(list, indexOfX(cx, plotW), ivMs) -
+          timeAtIndex(list, indexOfX(grabLastX, plotW), ivMs);
+        const dPrice = priceOfY(cy) - priceOfY(clampNum(grabLastY, top, bottom));
+        grabLastX = cx;
+        grabLastY = cy;
+        modelRef.current.onMoveTrendBy(grabIndex, dTime, dPrice);
+        return;
+      }
+      if (mode === 'line') {
+        // 价格跟着指针走（绝对定位；抓取容差 4px，贴手不跳）。y 夹在主图内。
+        const { top, bottom } = mainBounds();
+        modelRef.current.onMovePriceLine(grabIndex, priceOfY(clampNum(y, top, bottom)));
+        return;
+      }
       if (mode === 'pan') {
         const dx = e.clientX - lastX;
         const dy = e.clientY - lastY;
@@ -1154,8 +1272,19 @@ export function KlineCanvas({
         const anchor = anchorAt(x, y, plotW);
         if (anchor) pendingRef.current = { a: pending.a, to: anchor };
       }
-      // 唯一可点的东西是量程复位小标；画布其余地方都是只读的十字光标（CSS 默认）。
-      canvas.style.cursor = hitBadge(e) ? 'pointer' : '';
+      // 空闲态的指针形状：复位小标 → pointer；未锁定时按「把手 / 线身 / 水平线」给
+      // grab / move / ns-resize（能抓什么就显示什么）；其余保持默认箭头。
+      // 待定期间不给抓取提示 —— 这一落点是「落第二点」，不是抓线。
+      let cursor = hitBadge(e) ? 'pointer' : '';
+      if (!cursor && !pending && !modelRef.current.linesLocked) {
+        const { top, bottom } = mainBounds();
+        if (x <= plotW && y >= top && y <= bottom) {
+          if (nearestTrendHandle(trendHandles(plotW), x, y)) cursor = 'grab';
+          else if (nearestTrendBody(trendBodies(plotW), x, y) >= 0) cursor = 'move';
+          else if (hitLine(y) >= 0) cursor = 'ns-resize';
+        }
+      }
+      canvas.style.cursor = cursor;
       // 十字光标照常贯穿副图：竖线跨窗格、副图读数带要能读值，那不属于「拖拽/缩放」
       // `onBar` 只关竖线（右侧留白里没有蜡烛），横线与读数带照旧。
       const px = e.clientX - rect.left;
@@ -1171,6 +1300,7 @@ export function KlineCanvas({
       if (mode === 'none') return;
       mode = 'none';
       axis = null;
+      grabIndex = -1;
       if (pointerId !== null && canvas.hasPointerCapture(pointerId)) {
         canvas.releasePointerCapture(pointerId);
       }

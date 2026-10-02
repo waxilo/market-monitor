@@ -339,6 +339,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         trendLines={drawings.trendLines}
         trendSeed={trendSeed}
         onAddTrend={drawings.addTrendLine}
+        linesLocked={drawings.linesLocked}
+        onMovePriceLine={drawings.movePriceLine}
+        onMoveTrendBy={drawings.moveTrendBy}
+        onMoveTrendAnchor={drawings.moveTrendAnchor}
         onMenu={setMenu}
         resetPriceSignal={resetPriceSignal}
       />
@@ -350,6 +354,8 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           hit={menu.hit}
           priceText={menuPriceText}
           drawingCount={drawingCount}
+          linesLocked={drawings.linesLocked}
+          onSetLinesLocked={drawings.setLinesLocked}
           adjusted={menu.adjusted}
           onAddLine={drawings.addPriceLine}
           onRemoveLine={drawings.removePriceLine}

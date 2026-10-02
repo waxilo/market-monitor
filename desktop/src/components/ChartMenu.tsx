@@ -12,6 +12,9 @@ interface Props {
   priceText: string;
   /** 当前标的的画线总数：清空那条要显示条数，一条都没有时整条不出现。 */
   drawingCount: number;
+  /** 画线是否已锁定 —— 决定锁定条目写「锁定全部画线」还是「解锁全部画线」。 */
+  linesLocked: boolean;
+  onSetLinesLocked: (locked: boolean) => void;
   /** 纵向刻度已被拖离自动量程 —— 多给一条「复位」。 */
   adjusted: boolean;
   onAddLine: (price: number, alert: boolean) => void;
@@ -34,9 +37,9 @@ interface Item {
   run: () => void;
 }
 
-/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可：最多 5 条）。 */
+/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可：最多 6 条）。 */
 const MENU_W = 208;
-const MENU_H = 168;
+const MENU_H = 200;
 
 /**
  * 图表区的右键菜单 —— **画线上唯一的入口**（0.1.11 起工具条上没有「画图」这组了）。
@@ -53,6 +56,8 @@ export function ChartMenu({
   hit,
   priceText,
   drawingCount,
+  linesLocked,
+  onSetLinesLocked,
   adjusted,
   onAddLine,
   onRemoveLine,
@@ -131,6 +136,13 @@ export function ChartMenu({
     items.push({ key: 'remove', label: '删掉这条直线', danger: true, run: () => onRemoveTrend(hit.index) });
   }
   if (drawingCount > 0) {
+    // 锁定管的是**能不能拖**（整张图一个开关，默认解锁，见 useDrawings/linesLock）。
+    // 一条线都没有时不给：没东西可锁，先画才有意义。
+    items.push({
+      key: 'lock',
+      label: linesLocked ? '解锁全部画线' : '锁定全部画线',
+      run: () => onSetLinesLocked(!linesLocked),
+    });
     items.push({
       key: 'clear',
       label: '清空全部画线',
