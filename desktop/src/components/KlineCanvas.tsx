@@ -82,6 +82,12 @@ const FONT = '10px ui-monospace, SFMono-Regular, Consolas, "Courier New", monosp
 
 /** 拖拽方向定性所需的累积位移（App 用触摸的 touchSlop，网页鼠标取固定值）。 */
 const DRAG_LOCK_PX = 6;
+/**
+ * 「该补历史了」的提前量（根）：视窗左缘推进到离最老一根还剩这么多根时就上报。
+ * 按当前视窗宽给（约一屏提前量），夹在 24~120 之间 —— 太窄来不及补、太宽在窄视窗上会一直挂着请求。
+ */
+const OLDER_MARGIN_MIN = 24;
+const OLDER_MARGIN_MAX = 120;
 /** 价格刻度偏离自动量程时的复位小标（缩放或平移都会出现）。 */
 const RESET_BADGE_TEXT = '刻度已调 · 复位';
 const RESET_BADGE_H = 16;
@@ -368,6 +374,11 @@ interface Props {
    * 量程意图住在画布的 ref 里，父层没有别的入口能改它。
    */
   resetPriceSignal: number;
+  /**
+   * 时间轴快够到最老一根了（还剩约一屏，见 OLDER_MARGIN_*）—— 请上层补一页更早的。
+   * 画布只负责上报「到墙了没」；去重、在飞、失败退避都在 ChartView（它才知道当前标的是谁）。
+   */
+  onNeedOlder: () => void;
 }
 
 export function KlineCanvas({
@@ -390,6 +401,7 @@ export function KlineCanvas({
   onMoveTrendAnchor,
   onMenu,
   resetPriceSignal,
+  onNeedOlder,
 }: Props) {
   const series = useMemo(
     () => buildSeries(candles, maPeriods, showBoll, subPanes, openInterest),
@@ -459,6 +471,7 @@ export function KlineCanvas({
     onMoveTrendBy,
     onMoveTrendAnchor,
     onMenu,
+    onNeedOlder,
   });
   useEffect(() => {
     modelRef.current = {
@@ -474,8 +487,32 @@ export function KlineCanvas({
       onMoveTrendBy,
       onMoveTrendAnchor,
       onMenu,
+      onNeedOlder,
     };
   });
+
+  /**
+   * 「快够到最老一根了」上报（提前量见 OLDER_MARGIN_*）。
+   * 平移的每一帧都可能进来 —— 去重、在飞、失败退避都在 ChartView 侧收口。
+   */
+  const reportOlder = useCallback(() => {
+    const n = modelRef.current.series.candles.length;
+    if (n === 0) return;
+    const margin = clampNum(
+      clampViewport(vpRef.current, n).visibleBars,
+      OLDER_MARGIN_MIN,
+      OLDER_MARGIN_MAX,
+    );
+    if (plotStart(vpRef.current, n) < margin) modelRef.current.onNeedOlder();
+  }, []);
+
+  /**
+   * 数据变了（补到更早的一页 / 换标的）再查一次是否到墙 —— 补页落地后视窗没动，
+   * 「更早的根数」却变多了：若视窗比补回来的还宽，要立刻继续要下一页。
+   */
+  useEffect(() => {
+    reportOlder();
+  }, [series, reportOlder]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1130,6 +1167,7 @@ export function KlineCanvas({
         anchor,
         modelRef.current.series.candles.length,
       );
+      reportOlder();
       persistView(true);
       draw();
     };
@@ -1279,6 +1317,7 @@ export function KlineCanvas({
           const vp = clampViewport(vpRef.current, n);
           const slot = plotW / Math.max(1, vp.visibleBars);
           vpRef.current = panViewport(vpRef.current, dx / slot, n);
+          reportOlder();
         } else {
           // 上下拖 = 拖拽画布：把价格刻度整体搬走，K 线跟着鼠标（缩放只留给 Shift+滚轮）。
           priceRef.current = panPriceView(
@@ -1443,7 +1482,7 @@ export function KlineCanvas({
       canvas.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [draw, persistView]);
+  }, [draw, persistView, reportOlder]);
 
   return (
     <div className="chart-scroll" ref={wrapRef}>

@@ -64,8 +64,25 @@ export interface FuturesDialect {
   intervalLadder: Record<number, string>;
   /** 单次 K 线请求的根数上限（超出会被接口截断）。 */
   maxKlineLimit: number;
+  /**
+   * 能不能按时间窗取「更早的一页」。缺省 true；只有实测确认服务端**无视**时间参数的
+   * 方言才显式设 false（目前 HTX）—— 那种来源翻页只会永远取回同一批最新数据，
+   * 上层必须停掉翻页（见 api.ts 的 `supportsOlderKlines` / `fetchKlinesBefore`）。
+   */
+  supportsTimeWindow?: boolean;
   probe(baseUrl: string): HttpCall;
-  klines(baseUrl: string, symbol: string, minutes: number, limit: number): HttpCall;
+  /**
+   * K 线。`startMs` / `endMs` 是可选的取数时间窗（毫秒）——「往更早翻一页」只给 `endMs`，
+   * 起点由 limit 倒推（参数名与单位各家不同，见各实现的换算）。
+   */
+  klines(
+    baseUrl: string,
+    symbol: string,
+    minutes: number,
+    limit: number,
+    startMs?: number | null,
+    endMs?: number | null,
+  ): HttpCall;
   /** 单标的 24h 快照。 */
   ticker(baseUrl: string, symbol: string): HttpCall;
   /** 全量 24h 快照：搜索结果要按成交额排序、给未自选的标的也显示价格。 */
@@ -143,6 +160,24 @@ function ladderCode(ladder: Record<number, string>, minutes: number, label: stri
   const code = ladder[minutes];
   if (code == null) throw new Error(`${label}不支持该周期`);
   return code;
+}
+
+/**
+ * 时间窗 → 查询串片段（空窗返回空串）。参数名与换算比由调用点给：
+ * 币安系叫 `startTime`/`endTime`（毫秒）、OKX 叫 `before`/`after`、Gate 是秒级的
+ * `from`/`to` —— 各家不同，统一在这里折算，避免九个方言各写一遍 Math.floor。
+ */
+function windowQuery(
+  startMs: number | null | undefined,
+  endMs: number | null | undefined,
+  startName: string,
+  endName: string,
+  scale = 1,
+): string {
+  let q = '';
+  if (startMs != null) q += `&${startName}=${Math.floor(startMs / scale)}`;
+  if (endMs != null) q += `&${endName}=${Math.floor(endMs / scale)}`;
+  return q;
 }
 
 /** 最小价位 → 定点字符串：`1e-7` 这种落成指数形式会让展示层数错小数位。 */
@@ -313,11 +348,11 @@ const binance: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/ping')),
-    klines: (base, symbol, minutes, limit) =>
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/klines?symbol=${coinOf(symbol)}USDT&interval=${ladderCode(ladder, minutes, '币安同构')}&limit=${cap(limit, max)}`,
+          `/klines?symbol=${coinOf(symbol)}USDT&interval=${ladderCode(ladder, minutes, '币安同构')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'startTime', 'endTime')}`,
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/ticker/24hr?symbol=${coinOf(symbol)}USDT`)),
@@ -436,11 +471,12 @@ const okx: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/public/time')),
-    klines: (base, symbol, minutes, limit) =>
+    // OKX 没有起止参数：`after` =「只要更早的」（等价币安的 endTime）、`before` =「只要更新的」
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/market/candles?instId=${native(symbol)}&bar=${ladderCode(ladder, minutes, 'OKX')}&limit=${cap(limit, max)}`,
+          `/market/candles?instId=${native(symbol)}&bar=${ladderCode(ladder, minutes, 'OKX')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'before', 'after')}`,
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/market/ticker?instId=${native(symbol)}`)),
@@ -555,11 +591,11 @@ const bybit: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/market/time')),
-    klines: (base, symbol, minutes, limit) =>
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/market/kline?category=linear&symbol=${coinOf(symbol)}USDT&interval=${ladderCode(ladder, minutes, 'Bybit')}&limit=${cap(limit, max)}`,
+          `/market/kline?category=linear&symbol=${coinOf(symbol)}USDT&interval=${ladderCode(ladder, minutes, 'Bybit')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'start', 'end')}`,
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/market/tickers?category=linear&symbol=${coinOf(symbol)}USDT`)),
@@ -639,11 +675,11 @@ const bitget: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/public/time')),
-    klines: (base, symbol, minutes, limit) =>
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/mix/market/candles?symbol=${coinOf(symbol)}USDT&productType=usdt-futures&granularity=${ladderCode(ladder, minutes, 'Bitget')}&limit=${cap(limit, max)}`,
+          `/mix/market/candles?symbol=${coinOf(symbol)}USDT&productType=usdt-futures&granularity=${ladderCode(ladder, minutes, 'Bitget')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'startTime', 'endTime')}`,
         ),
       ),
     ticker: (base, symbol) =>
@@ -770,11 +806,11 @@ const gate: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/contracts/BTC_USDT')),
-    klines: (base, symbol, minutes, limit) =>
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/candlesticks?contract=${native(symbol)}&interval=${ladderCode(ladder, minutes, 'Gate')}&limit=${cap(limit, max)}`,
+          `/candlesticks?contract=${native(symbol)}&interval=${ladderCode(ladder, minutes, 'Gate')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'from', 'to', 1000)}`,
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/tickers?contract=${native(symbol)}`)),
@@ -875,10 +911,14 @@ const mexc: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/ping')),
-    klines: (base, symbol, minutes, limit) => {
+    klines: (base, symbol, minutes, limit, startMs, endMs) => {
       const capped = cap(limit, max);
-      const endSec = Math.floor(Date.now() / 1000);
-      const startSec = endSec - capped * minutes * 60;
+      const windowEnd = endMs ?? (startMs != null ? startMs + capped * minutes * 60_000 : Date.now());
+      const endSec = Math.floor(windowEnd / 1000);
+      const startSec = Math.min(
+        startMs != null ? Math.floor(startMs / 1000) : endSec - capped * minutes * 60,
+        endSec,
+      );
       return get(
         url(
           base,
@@ -986,11 +1026,11 @@ const hyperliquid: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => info(base, { type: 'meta' }),
-    klines: (base, symbol, minutes, limit) => {
+    klines: (base, symbol, minutes, limit, startMs, endMs) => {
       const capped = cap(limit, max);
-      const end = Date.now();
+      const end = endMs ?? Date.now();
       // candleSnapshot 只认时间窗：按根数倒推起点，多给 20% 容忍缺数
-      const start = end - Math.round((capped * minutes * 60_000 * 6) / 5);
+      const start = startMs ?? end - Math.round((capped * minutes * 60_000 * 6) / 5);
       return info(base, {
         type: 'candleSnapshot',
         req: { coin: coinOf(symbol), interval: ladderCode(ladder, minutes, 'Hyperliquid'), startTime: start, endTime: end },
@@ -1122,6 +1162,7 @@ const htx: FuturesDialect = (() => {
   return {
     intervalLadder: ladder,
     maxKlineLimit: max,
+    supportsTimeWindow: false,
     probe: (base) => get(api(base, `/swap_contract_info?contract_code=${native('BTC_USDT')}`)),
     klines: (base, symbol, minutes, limit) =>
       get(
@@ -1233,11 +1274,11 @@ const bitunix: FuturesDialect = (() => {
     intervalLadder: ladder,
     maxKlineLimit: max,
     probe: (base) => get(url(base, '/time')),
-    klines: (base, symbol, minutes, limit) =>
+    klines: (base, symbol, minutes, limit, startMs, endMs) =>
       get(
         url(
           base,
-          `/kline?symbol=${native(symbol)}&interval=${ladderCode(ladder, minutes, 'Bitunix')}&limit=${cap(limit, max)}`,
+          `/kline?symbol=${native(symbol)}&interval=${ladderCode(ladder, minutes, 'Bitunix')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'startTime', 'endTime')}`,
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/tickers?symbols=${native(symbol)}`)),

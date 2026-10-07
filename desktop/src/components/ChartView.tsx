@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchKlines,
+  fetchKlinesBefore,
   fetchOpenInterest,
   nativeMinutes,
+  supportsOlderKlines,
   supportsOpenInterest,
   type Bar,
   type Instrument,
@@ -38,6 +40,11 @@ import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanva
 
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
+/**
+ * 翻旧页失败后的退避：拖到左墙时画布**逐帧**上报「还要更早的」，不设冷却就会每秒
+ * 打出一串失败请求。冷却过后由 2s 的实时轮询（数据一变就重新上报）自动重试。
+ */
+const OLDER_RETRY_MS = 5_000;
 /**
  * 持仓量的轮询节奏：最细的原生持仓量周期也是 5m（Gate 的 1m 是例外），一小时也就十几个点，
  * 跟 K 线那样 2s 一跳纯属浪费 —— 整段重拉（不搞增量），10s 已远快于数据本身的更新频率。
@@ -100,6 +107,18 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const [resetPriceSignal, setResetPriceSignal] = useState(0);
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
   const source = useSourceKey(market);
+  /**
+   * 补旧页的去重 / 状态机。放在 ref 里而不是 state：画布上报是**逐帧**的
+   * （拖动每一帧都可能在报「到墙了」），state 落后一帧就会重复发请求。
+   * `epoch` 每次换标的/周期/源递增一次：在飞的那页回来时对不上号就直接作废。
+   */
+  const olderRef = useRef({
+    inFlight: false,
+    exhausted: false,
+    requestedOldest: 0,
+    failedAt: 0,
+    epoch: 0,
+  });
   /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
   const natives = useMemo(() => nativeMinutes(market ?? 'FUTURES'), [market, source]);
   const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : 'Gate 现货';
@@ -137,6 +156,13 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     }
     let alive = true;
     setCandles([]);
+    // 换目标 = 上一段的历史翻页全部作废；旧页在飞也让它自生自灭（epoch 对不上不落地）
+    const older = olderRef.current;
+    older.inFlight = false;
+    older.exhausted = false;
+    older.requestedOldest = 0;
+    older.failedAt = 0;
+    older.epoch += 1;
     fetchKlines(market, symbol, interval, HISTORY_BARS)
       .then((bars) => {
         if (alive) setCandles(bars);
@@ -146,6 +172,52 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       alive = false;
     };
   }, [market, symbol, interval, source]);
+
+  /**
+   * 「时间轴快够到已加载的最老一根了」→ 往前补一页（画布逐帧上报，这里同步去重）。
+   *
+   * 补法是**前插**：视窗意图（rightOffset）不动，prepend k 根后老数据整体右移 k 个下标、
+   * plotStart 也右移 k —— 同一根蜡烛的落点像素级不变，**不跳**（这就是「流畅」从哪来）。
+   * 不设「最多存多少根」的上限：桌面端全在内存里（3 万根 ≈ 1MB 出头），
+   * 而截断反而是个坑 —— 深视窗下刚补回来的段被截掉、老端时间戳没变，补页会无限重复同一页。
+   */
+  const loadOlder = useCallback(() => {
+    const older = olderRef.current;
+    if (!market || !symbol || older.inFlight || older.exhausted) return;
+    // 来源不支持按时间窗翻页（HTX）：标记耗尽，不再问（见 api.supportsOlderKlines）
+    if (!supportsOlderKlines(market)) {
+      older.exhausted = true;
+      return;
+    }
+    const oldest = candles[0]?.timestamp;
+    if (oldest == null) return;
+    // 这一端已经为这个时间戳要过一页了（拖动逐帧上报、补页在飞都会走到这）
+    if (oldest === older.requestedOldest) return;
+    if (Date.now() - older.failedAt < OLDER_RETRY_MS) return;
+    older.inFlight = true;
+    older.requestedOldest = oldest;
+    const epoch = older.epoch;
+    fetchKlinesBefore(market, symbol, interval, oldest, HISTORY_BARS)
+      .then((bars) => {
+        if (olderRef.current.epoch !== epoch) return;
+        // 取回不足一页 = 这一端真的到头了（各家的 time-window 取数都是「尽量填满」，
+        // 有空洞也会往前补数，所以短页只可能发生在历史起点）
+        if (bars.length < HISTORY_BARS) older.exhausted = true;
+        if (bars.length === 0) return;
+        setCandles((prev) => {
+          // 以 prev 的老端为准再滤一次：请求在飞时实时轮询换过数组也不打紧
+          if (prev.length === 0 || prev[0].timestamp !== oldest) return prev;
+          const fresh = bars.filter((b) => b.timestamp < prev[0].timestamp);
+          return fresh.length === 0 ? prev : [...fresh, ...prev];
+        });
+      })
+      .catch(() => {
+        if (olderRef.current.epoch === epoch) older.failedAt = Date.now();
+      })
+      .finally(() => {
+        if (olderRef.current.epoch === epoch) older.inFlight = false;
+      });
+  }, [market, symbol, interval, candles]);
 
   // 增量轮询：只取末根更新实时数据（App 的 K 线增量节奏是 2s）
   useEffect(() => {
@@ -397,6 +469,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         onMoveTrendAnchor={drawings.moveTrendAnchor}
         onMenu={setMenu}
         resetPriceSignal={resetPriceSignal}
+        onNeedOlder={loadOlder}
       />
 
       {menu && (

@@ -158,23 +158,75 @@ export async function fetchKlines(
   return merged.length > limit ? merged.slice(merged.length - limit) : merged;
 }
 
-/** 单一原生周期的取数（`minutes` 必须真的在该源的表里）。 */
+/**
+ * 「往更早翻一页」：只取 `beforeTs` 之前的 `limit` 根（`beforeTs` = 当前最早那根的时间）。
+ *
+ * 出口口径与 `fetchKlines` 完全一致：升序、至多 `limit` 根、最后一根紧挨 `beforeTs` 前一根。
+ * 不支持时间窗的来源（HTX）返回空数组 —— 调用方据此把「还有更早」标记为耗尽、不再请求。
+ *
+ * 各家 `endMs` 的边界口径在方言层（见 dialects.ts）；这里出口再滤一道 `< beforeTs`：
+ * 有的来源的 `end` 是**闭区间**（会把边界那根也带回来），松紧各家不统一，收口收在这里。
+ */
+export async function fetchKlinesBefore(
+  market: MarketType,
+  symbol: string,
+  interval: string,
+  beforeTs: number,
+  limit = 300,
+): Promise<Bar[]> {
+  if (!supportsOlderKlines(market)) return [];
+  const minutes = minutesOf(interval);
+  if (minutes == null) throw new Error(`未知周期 ${interval}`);
+  const ladder = nativeLadder(market);
+  const base = coarsestBaseFor(Object.keys(ladder).map(Number), minutes);
+  if (base == null) throw new Error(`${sourceLabelOf(market)} 找不到能拼出 ${interval} 的原生周期`);
+  // 毫秒差一：`endMs` 是「取到这个时刻**之前**」，与各家的半开/闭区间口径在方言层对齐
+  const endMs = beforeTs - 1;
+
+  if (base === minutes) {
+    const rows = await fetchNativeKlines(market, symbol, ladder, minutes, limit, endMs);
+    return trimOlder(rows, beforeTs, limit);
+  }
+
+  const factor = minutes / base;
+  // 与正向同款多要一桶：窗口起点不落在桶边界上 ⇒ 最老那桶残、被 aggregateCandles 丢掉
+  const raw = await fetchNativeKlines(market, symbol, ladder, base, (limit + 1) * factor, endMs);
+  return trimOlder(aggregateCandles(raw, base, minutes), beforeTs, limit);
+}
+
+/** 翻旧页的出口收口：只要 `< beforeTs` 的、至多 `limit` 根（最老的截掉是防上面的多要）。 */
+function trimOlder(bars: Bar[], beforeTs: number, limit: number): Bar[] {
+  const cut = bars.filter((b) => b.timestamp < beforeTs);
+  return cut.length > limit ? cut.slice(cut.length - limit) : cut;
+}
+
+/** 当前来源能不能按时间窗翻旧页（HTX 服务端无视时间参数，见 dialects.ts 的 supportsTimeWindow）。 */
+export function supportsOlderKlines(market: MarketType): boolean {
+  return market !== 'FUTURES' || currentFutures().dialect.supportsTimeWindow !== false;
+}
+
+/** 单一原生周期的取数（`minutes` 必须真的在该源的表里）；`endMs` = 只要此时刻之前的（翻旧页用）。 */
 async function fetchNativeKlines(
   market: MarketType,
   symbol: string,
   ladder: Record<number, string>,
   minutes: number,
   limit: number,
+  endMs?: number,
 ): Promise<Bar[]> {
   const code = ladder[minutes];
   if (code == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
   if (market === 'FUTURES') {
     const { baseUrl, dialect } = currentFutures();
-    return dialect.parseKlines(await fetchText(dialect.klines(baseUrl, symbol, minutes, limit)), minutes);
+    return dialect.parseKlines(
+      await fetchText(dialect.klines(baseUrl, symbol, minutes, limit, null, endMs ?? null)),
+      minutes,
+    );
   }
   const limitClamped = Math.max(1, Math.min(limit, 1000));
+  const toQuery = endMs == null ? '' : `&to=${Math.floor(endMs / 1000)}`;
   const rows = await spotJson<string[][]>(
-    `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${code}&limit=${limitClamped}`,
+    `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${code}&limit=${limitClamped}${toQuery}`,
   );
   // 现货蜡烛是**数组**且字段顺序与币安不同：[秒级时间, 成交额, 收, 高, 低, 开, 成交量, 是否收线]
   return rows.map((r) => ({
