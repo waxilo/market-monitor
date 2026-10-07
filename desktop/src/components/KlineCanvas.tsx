@@ -96,7 +96,8 @@ const TREND_MIN_DRAW_PX = 8;
 /** 待定起点的把手半径（画出来的大小；命中不用它 —— 画布上没有抓取）。 */
 const TREND_HANDLE_R = 3.5;
 
-/** 与 App ui/theme/Color.kt 的 ChartLineColors 同一套八色位。 */
+/** 与 App ui/theme/Color.kt 的 ChartLineColors 同源的色板，扩到十一色位。
+ *  0~4 是 MA 的前五档，5~7 归 BOLL（MB/UP/DN），8~10 是 MA 第 6~8 条的补充色位。 */
 const LINE_COLORS = [
   '#5C8AC6',
   '#F09A3E',
@@ -106,6 +107,9 @@ const LINE_COLORS = [
   '#C9825E',
   '#D98CA6',
   '#9AA3AE',
+  '#6FBF73',
+  '#E0716B',
+  '#B487E0',
 ];
 
 interface Palette {
@@ -162,6 +166,12 @@ function roleColor(role: LineRole, p: Palette): string {
       return LINE_COLORS[6];
     case 'OCTONARY':
       return LINE_COLORS[7];
+    case 'NONARY':
+      return LINE_COLORS[8];
+    case 'DENARY':
+      return LINE_COLORS[9];
+    case 'UNDENARY':
+      return LINE_COLORS[10];
     case 'UP':
       return p.up;
     case 'DOWN':

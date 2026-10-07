@@ -11,7 +11,7 @@ import {
   type OpenInterestSeries,
   type Ticker24h,
 } from '../lib/api';
-import { MA_CHOICES, SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
+import { SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
 import {
   INDICATORS_KEY,
   parseIndicatorPrefs,
@@ -30,11 +30,13 @@ import {
   synthesisOf,
 } from '../lib/intervals';
 import { useSourceKey, endpointOf } from '../lib/sources';
+import { DEFAULT_MA_CATALOG } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
+import { MaPanel } from './MaPanel';
 import { ChartMenu } from './ChartMenu';
 import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanvas';
 
@@ -85,7 +87,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const [prefs, setPrefs] = useState<IndicatorPrefs>(() =>
     parseIndicatorPrefs(localStorage.getItem(INDICATORS_KEY)),
   );
-  const { ma: maPeriods, boll: showBoll, panes: subPanes } = prefs;
+  const { ma: maPeriods, maCatalog, boll: showBoll, panes: subPanes } = prefs;
+  /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
+  const [maPanelOpen, setMaPanelOpen] = useState(false);
   const [candles, setCandles] = useState<Bar[]>([]);
   const market = item?.market;
   const symbol = item?.symbol;
@@ -268,6 +272,17 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     };
   }, [oiSelected, oiSupported, market, symbol, interval, source]);
 
+  /**
+   * 更新均线**目录**（面板里增删/排序）：同时把 `ma` 过滤成新目录的子集 ——
+   * 删掉某条 chip 时，若它正画着，就该一起下线（不然会留一条没有开关能关掉的线）。
+   */
+  function setCatalog(next: number[]) {
+    setPrefs((prev) => {
+      const ma = prev.ma.filter((p) => next.includes(p)).sort((a, b) => a - b);
+      return { ...prev, maCatalog: next, ma };
+    });
+  }
+
   function toggleMa(p: number) {
     setPrefs((prev) => ({
       ...prev,
@@ -392,7 +407,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
 
         <div className="interval-bar">
           <span className="bar-label grp">指标</span>
-          {MA_CHOICES.map((p) => (
+          {maCatalog.map((p) => (
             <button
               key={p}
               type="button"
@@ -403,6 +418,15 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
               MA{p}
             </button>
           ))}
+          {/* 末尾这一枚「＋」是均线目录自己的编辑器：增删与排序都在弹窗里（MaPanel） */}
+          <button
+            type="button"
+            className="chip"
+            title="自定义 MA 均线（添加 / 移除 / 排序）"
+            onClick={() => setMaPanelOpen(true)}
+          >
+            ＋
+          </button>
           <button
             type="button"
             className={`chip${showBoll ? ' on' : ''}`}
@@ -501,6 +525,15 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           onChange={setIntervals}
           onReset={() => setIntervals([...DEFAULT_INTERVALS])}
           onClose={() => setIntervalPanelOpen(false)}
+        />
+      )}
+
+      {maPanelOpen && (
+        <MaPanel
+          list={maCatalog}
+          onChange={setCatalog}
+          onReset={() => setCatalog([...DEFAULT_MA_CATALOG])}
+          onClose={() => setMaPanelOpen(false)}
         />
       )}
     </section>

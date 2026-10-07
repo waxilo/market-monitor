@@ -7,7 +7,8 @@ import { boll, kdj, macd, rsi, sma } from './indicators';
 import { padded, rangeOf, type Range } from './chartMath';
 
 /** 线条配色只给语义角色，具体颜色由绘制层解析。
- *  PRIMARY~OCTONARY 是八个互不相同的色位，刚好覆盖最满配置（MA 五期 + BOLL 三线）。 */
+ *  PRIMARY~UNDENARY 是十一个互不相同的色位：MA 取 `[0,1,2,3,4,8,9,10]`（8 色，见 `MA_ROLES`），
+ *  BOLL 继续用 `[5,6,7]`（QUINARY/SENARY/OCTONARY），两族不撞色。 */
 export type LineRole =
   | 'PRIMARY'
   | 'SECONDARY'
@@ -17,6 +18,9 @@ export type LineRole =
   | 'QUINARY'
   | 'SENARY'
   | 'OCTONARY'
+  | 'NONARY'
+  | 'DENARY'
+  | 'UNDENARY'
   | 'UP'
   | 'DOWN'
   | 'LABEL';
@@ -44,8 +48,31 @@ export const SUB_PANE_LABEL: Record<SubPaneKind, string> = {
   OI: '持仓量',
 };
 
-/** 主图可叠的均线期数（指标行那五枚 chip；选择持久化见 `lib/indicatorPrefs.ts`）。 */
+/** 内置的均线档位 —— 面板「恢复默认」与坏值回落的目录（即用户可编辑前的那五档）。 */
 export const MA_CHOICES: number[] = [5, 10, 20, 30, 60];
+
+/** 均线期数的合法区间与条数上限（上限 = 色板给 MA 的 8 个色位）。 */
+export const MA_MIN = 1;
+export const MA_MAX = 1000;
+export const MA_LIMIT = 8;
+
+/** MA 一族占用的色位，按**升序序号**分配（第 1 条 MA 用 PRIMARY、第 2 条 SECONDARY …）。 */
+export const MA_ROLES: LineRole[] = [
+  'PRIMARY',
+  'SECONDARY',
+  'TERTIARY',
+  'ACCENT',
+  'QUATERNARY',
+  'NONARY',
+  'DENARY',
+  'UNDENARY',
+];
+
+/** 升序后第 `index` 条均线的色位；越界钳到两端（正常不会越界，`MA_LIMIT` 与色板等长）。 */
+export function maRoleAt(index: number): LineRole {
+  const i = Math.max(0, Math.min(MA_ROLES.length - 1, index));
+  return MA_ROLES[i] ?? 'PRIMARY';
+}
 
 export interface SubPaneData {
   kind: SubPaneKind;
@@ -71,22 +98,6 @@ export const RSI_PERIOD = 14;
 /** 布林带默认参数，与 App Indicators.BOLL_PERIOD / BOLL_MULTIPLIER 同值。 */
 export const BOLL_PERIOD = 20;
 export const BOLL_MULTIPLIER = 2;
-
-/** 均线颜色按周期长短稳定分配，MA5 与 MA60 永远不同色。 */
-export function roleFor(period: number): LineRole {
-  switch (period) {
-    case 5:
-      return 'PRIMARY';
-    case 10:
-      return 'SECONDARY';
-    case 20:
-      return 'TERTIARY';
-    case 30:
-      return 'ACCENT';
-    default:
-      return 'QUATERNARY';
-  }
-}
 
 function localeNumber(value: number | undefined, decimals: number): string {
   if (value === undefined || Number.isNaN(value)) return NO_DATA;
@@ -223,9 +234,9 @@ export function buildSeries(
   const closes = candles.map((c) => c.close);
   const overlayLines: ChartLine[] = [...maPeriods]
     .sort((a, b) => a - b)
-    .map((period) => ({
+    .map((period, i) => ({
       label: `MA${period}`,
-      role: roleFor(period),
+      role: maRoleAt(i),
       values: sma(closes, period),
     }));
   const bollData = showBoll ? boll(closes, BOLL_PERIOD, BOLL_MULTIPLIER) : null;
