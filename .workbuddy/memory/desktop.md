@@ -339,6 +339,12 @@
   Windows 上弹不出来也**静默不报错**；且不显式给 AUMID 时 dev 进程的通知会被系统收下、**横幅不弹**
   （Windows 比的是「进程 AUMID == 已注册 AUMID」）。现在显式 `app_id(identifier)` + `setup` 里
   `SetCurrentProcessExplicitAppUserModelID(bundle identifier)` ⇒ dev 与安装版同一条路径，错误如实回抛。
+- ❗**macOS 首条通知弹「Where is use_default?」定位选框（2026-10-07 修）**：mac-notification-sys 0.6.15
+  发**本进程第一条**通知前，拿字面量 `"use_default"` 当应用名跑 AppleScript（`get id of application "use_default"`）
+  找 bundle id（`ensure_application_set`）——系统里没这个 app，macOS 26 就把应用定位选框弹到窗口上、
+  **通知要等选框关掉才发**（AppleScript 在投递之前）。修：`setup` 里先 `notify_rust::set_application(identifier)`
+  把库内 `Once` 占掉（`alert::claim_notification_identity`，原 `claim_app_user_model_id` 并入同名多平台分支），
+  AppleScript 永不跑；横幅归属/图标才是 MarketMonitor（不认领时库的兜底是 Finder/Terminal）。
 - 文案按方向分「上破/下破」（`usePriceAlerts.notify()`），宿主不参与措辞。
 - ❗**0.1.16：穿越除系统通知外还推 webhook**（设置 → 告警通知页，`lib/webhooks.ts` + `components/WebhookSection.tsx`）：
   `notify()` 里同步调 `sendAlertWebhook(「标的 方向 价（现价 …）」)`，**fire-and-forget 不 await** ——
