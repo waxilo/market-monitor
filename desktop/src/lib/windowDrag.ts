@@ -24,7 +24,8 @@ import { DRAG_THRESHOLD_PX, pastDragThreshold } from './dragThreshold';
  *  - **别用 `pointerleave` 取消**：指针离开元素是拖动过程中的常态（悬浮窗才那么点大），
  *    拿它当取消条件会让「从边缘往外拖」直接失效。
  */
-const INTERACTIVE = 'button, input, textarea, select, a, [data-no-drag]';
+// [role="textbox"] 兜自绘输入框（EnglishField 不是 input 标签，但按输入框对待）
+const INTERACTIVE = 'button, input, textarea, select, a, [role="textbox"], [data-no-drag]';
 
 function isElement(target: EventTarget | null): target is Element {
   return target instanceof Element;

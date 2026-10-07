@@ -11,6 +11,18 @@ import { displaySymbol } from './format';
 export const EMPTY_QUERY_RANK = 4;
 
 /**
+ * 搜索框只收英文：顶栏全市场搜索与设置 → 悬浮窗的搜索框都是「敲交易对名」用的
+ * （`BTC_USDT`、`1000PEPE_USDT`），中文、全角、表情既匹配不到任何标的，也不该留在框里。
+ * 保留的字符集就是交易对名自己的字母表：英文字母 + 数字 + 下划线。
+ *
+ * 两个框都是自绘的 `EnglishField`（非编辑控件，输入法压根不启动 —— 没有组合中间态这回事），
+ * 它用它滤字符、滤粘贴进来的整段文本；这里只管字符集这一条。
+ */
+export function englishOnly(raw: string): string {
+  return raw.replace(/[^A-Za-z0-9_]/g, '');
+}
+
+/**
  * 匹配质量分层，数字越小越靠前；`null` = 不匹配。
  * - 0 币种完全等于关键词：`btc` → BTC
  * - 1 币种以关键词开头：`btc` → BTCDOM
@@ -121,4 +133,48 @@ export function rankInstruments(
     })
     .slice(0, limit)
     .map((r) => r.inst);
+}
+
+/** 混搜的一条命中：标的 + 它是哪个市场的（加进悬浮窗要连同市场一起带）。 */
+export interface MarketHit {
+  market: MarketType;
+  inst: Instrument;
+}
+
+/**
+ * 把多个市场的清单**混在一起搜**（设置 → 悬浮窗的搜索框；悬浮窗列表本来就现货/合约混排）。
+ *
+ * 排序链与 `rankInstruments` 同一套，只是去掉了「自选置顶」（那边是给侧栏搜索用的：
+ * 悬浮窗列表独立于自选，没有「已自选」这个概念）和成交额档（这里是偶发的一次搜索，
+ * 不值得为它常开一份全量快照）：
+ * 匹配分层 → 计价币主流度 → 交易对名字母序 → 市场（`lists` 的给定顺序，合约在前）。
+ *
+ * 同名的 `BTC_USDT` 在现货与合约各有一条，字母序打平后由市场顺序兜底 ——
+ * 排序结果必须**确定**，不然同名两条会在两次输入之间互换位置。
+ */
+export function rankAcrossMarkets(
+  lists: readonly { market: MarketType; instruments: readonly Instrument[] }[],
+  keyword: string,
+  limit: number = MAX_RESULTS,
+): MarketHit[] {
+  if (!keyword) return [];
+  const marketOrder = new Map(lists.map((l, i) => [l.market, i]));
+  return lists
+    .flatMap((l) =>
+      l.instruments.map((inst) => ({
+        market: l.market,
+        inst,
+        rank: rankSymbol(inst.symbol, inst.baseAsset, keyword),
+      })),
+    )
+    .filter((r): r is { market: MarketType; inst: Instrument; rank: number } => r.rank != null)
+    .sort(
+      (a, b) =>
+        a.rank - b.rank ||
+        quotePriority(a.inst.quoteAsset) - quotePriority(b.inst.quoteAsset) ||
+        a.inst.symbol.localeCompare(b.inst.symbol) ||
+        (marketOrder.get(a.market) ?? 0) - (marketOrder.get(b.market) ?? 0),
+    )
+    .slice(0, limit)
+    .map(({ market, inst }) => ({ market, inst }));
 }

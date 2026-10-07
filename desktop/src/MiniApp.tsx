@@ -45,8 +45,8 @@ const POLL_MS = 3000;
  */
 export function MiniApp() {
   /**
-   * 显示哪几条由主窗「设置 → 悬浮窗」勾选决定（自选的子集、可单独排序），
-   * 不再跟主窗的市场切换联动 —— 合约和现货可以同屏混着看。
+   * 显示哪几条由主窗「设置 → 悬浮窗」那份**独立列表**决定（搜索添加、可单独排序，
+   * 0.1.16 起不再挂在自选下面）；也不跟主窗的市场切换联动 —— 合约和现货同屏混着看。
    */
   const [rows, setRows] = useState<WatchItem[]>(readMiniWatchlist);
   /**
@@ -164,7 +164,7 @@ export function MiniApp() {
           );
         })}
         {/* 空列表那一行也是「点面板换主窗」的入口（Rust 侧高度算法也留了这一行） */}
-        {rows.length === 0 && <div className="mini-empty">悬浮窗列表为空 · 去主窗设置里勾选</div>}
+        {rows.length === 0 && <div className="mini-empty">悬浮窗列表为空 · 去主窗设置里搜索添加</div>}
       </div>
     </div>
   );

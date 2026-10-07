@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { MarketType } from '../lib/api';
 
 const KEY = 'mm.watchlist';
-/** 悬浮窗显示的那一份：自选的**子集**（可单独排序），与主窗侧栏分开配置。 */
+/** 悬浮窗显示的那一份：**独立列表**（0.1.16 起），与主窗侧栏各自增删、互不影响。 */
 const MINI_KEY = 'mm.miniWatchlist';
 
 /** 自选条目 = 市场 + 标的（Gate 的标的名自带计价币，如 BTC_USDT）。 */
@@ -104,52 +104,39 @@ function dedupe(items: WatchItem[]): WatchItem[] {
 }
 
 /**
- * 悬浮窗要显示的那几条。
+ * 悬浮窗要显示的那几条 —— 0.1.16 起是**独立列表**：在设置 → 悬浮窗里搜索添加，
+ * 增删/排序都不动自选（读的时候也不再拿自选过滤）。
  *
- * - **没单独配置过 = 整份自选**（老行为，升级上来的人不会看到空面板）；
- * - 配置过就是真相，空列表也算；
- * - 只保留仍在自选里的条目：主窗删掉某条自选，悬浮窗最迟 4s 跟着少一行，
- *   不需要谁去回写 `mm.miniWatchlist`（读的时候过滤，坏不了也漏不了）。
+ * 没存过（升级上来的机器 / 首装）就把当前自选**拷一份**落盘 —— 老行为「跟随自选」的
+ * 收尾：升级后面板内容不变，拷完两边各走各的。存过就是真相，空列表也算。
  */
 export function readMiniWatchlist(): WatchItem[] {
-  const watch = readWatchlist();
   let raw: string | null;
   try {
     raw = localStorage.getItem(MINI_KEY);
   } catch {
-    return watch;
+    return readWatchlist(); // 隐私模式等拿不到 storage：当成没配置，只读不写
   }
   const stored = parseWatchlist(raw);
-  if (stored == null) return watch;
-  const allowed = new Set(watch.map(watchKey));
-  return stored.filter((i) => allowed.has(watchKey(i)));
+  if (stored != null) return stored;
+  const seed = readWatchlist();
+  try {
+    localStorage.setItem(MINI_KEY, JSON.stringify(seed));
+  } catch {
+    /* 写不进去就只当这次读过，下次再拷 */
+  }
+  return seed;
 }
 
-/**
- * 悬浮窗列表的读写（只有配置弹窗用）。
- *
- * 首次挂载**不回写**：这时值很可能是「没配置 → 整份自选」推导出来的，
- * 一写就把「跟随自选」固化成「定死的子集」，以后加进自选的标的再也进不了悬浮窗。
- */
+/** 悬浮窗列表的读写（只有设置 → 悬浮窗 那一页用）。 */
 export function useMiniWatchlist() {
   const [items, setItems] = useState<WatchItem[]>(readMiniWatchlist);
-  const first = useRef(true);
 
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
     localStorage.setItem(MINI_KEY, JSON.stringify(items));
   }, [items]);
 
-  /** 恢复「跟随自选」：删掉这个键，下次读的时候重新取整份自选。 */
-  const reset = useCallback(() => {
-    localStorage.removeItem(MINI_KEY);
-    setItems(readWatchlist());
-  }, []);
-
-  return { items, setItems, reset };
+  return { items, setItems };
 }
 
 /** 自选列表持久化在 localStorage（App 端是 Room，且同样以市场为维度隔离）。 */

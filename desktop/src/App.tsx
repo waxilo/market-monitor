@@ -14,9 +14,9 @@ import { useSparks } from './hooks/useSparks';
 import { useInstruments, useMarketTickers } from './hooks/useMarketData';
 import { MarketList } from './components/MarketList';
 import { SearchDropdown } from './components/SearchDropdown';
+import { EnglishField, type EnglishFieldHandle } from './components/EnglishField';
 import { SourcePanel } from './components/SourcePanel';
 import { SettingsPanel } from './components/SettingsPanel';
-import { MiniListPanel } from './components/MiniListPanel';
 import { ChartView } from './components/ChartView';
 import { WindowChrome } from './components/WindowChrome';
 import { MiniWindowIcon, SidebarIcon } from './components/icons';
@@ -47,7 +47,7 @@ export default function App() {
   const [listOpen, setListOpen] = useState(() => localStorage.getItem(LIST_OPEN_KEY) !== '0');
   /** 搜索下拉框的显隐。与 `query` 分开：点击外部只收起浮层、保留已输入的关键词。 */
   const [searchOpen, setSearchOpen] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<EnglishFieldHandle>(null);
   const { items, setItems, add, remove } = useWatchlist();
   const instruments = useInstruments(market);
   const searchActive = query.trim().length > 0;
@@ -81,8 +81,6 @@ export default function App() {
     () => new Map(instruments.map((i) => [i.symbol, i])),
     [instruments],
   );
-  const { cells, online } = useTickers(marketItems);
-  const sparks = useSparks(marketItems);
   const update = useUpdate();
   // 价格告警（右键设的告警线 → 系统通知）：只在主窗跑，宿主每 5s 敲一拍（见 hooks/usePriceAlerts）
   usePriceAlerts();
@@ -92,9 +90,20 @@ export default function App() {
   const sourceLabel = market === 'FUTURES' ? endpointOf(futuresSource).label : 'Gate';
   /** 数据源弹窗的显隐（弹窗自己负责探测与切换，见 SourcePanel）。 */
   const [sourceOpen, setSourceOpen] = useState(false);
-  /** 悬浮窗列表弹窗的显隐（勾选 + 拖动排序，见 MiniListPanel）。 */
-  const [miniOpen, setMiniOpen] = useState(false);
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
+  /**
+   * 轮询哪些标的 = 当前市场自选 + 「正在看但不是自选」的那一条。
+   * 悬浮窗列表独立于自选（0.1.16 起），点它的行切到主窗时这一条可能不在自选里，
+   * 图表头部的现价、迷你走势也得跟着来（侧栏按 key 取价，多一条互不影响）。
+   */
+  const tickItems = useMemo(() => {
+    if (selected == null || selected.market !== market) return marketItems;
+    return marketItems.some((i) => watchKey(i) === watchKey(selected))
+      ? marketItems
+      : [...marketItems, selected];
+  }, [marketItems, selected, market]);
+  const { cells, online } = useTickers(tickItems);
+  const sparks = useSparks(tickItems);
 
   // 主窗 ⇄ 悬浮窗：默认 Alt+D，可在设置里改（判定与落盘见 lib/shortcuts.ts）。
   // 这条是**系统级**的：主窗负责把落盘的和弦推给宿主（只有主窗推，见 hooks/useGlobalKey），
@@ -167,6 +176,15 @@ export default function App() {
     else add(it);
   };
 
+  /**
+   * 「已连接」与「数据源」合成一个按钮（0.1.16 起）：两者本来就是同一个系统的两面 ——
+   * 点开都进数据源弹窗。常态安静（只留 ● 数据源），连接态异常（连接中/断线）才把字说出来；
+   * 完整信息（数据源 + 连接态）都在悬停提示里。
+   */
+  const connText =
+    marketItems.length === 0 ? '无自选' : online == null ? '连接中' : online ? '已连接' : '断线';
+  const connWord = connText === '连接中' || connText === '断线' ? connText : null;
+
   return (
     <div className="app">
       <header className="toolbar" {...windowDrag}>
@@ -193,14 +211,16 @@ export default function App() {
             放在它管着的那列上面比搁顶栏贴切（见 MarketList 的 panel-head）。 */}
 
         {/* 搜索框 + 结果浮层是一组：浮层贴着输入框下沿定位，所以外面要有个定位容器。
-            输入即开、点外部/Esc 收起，关键词保留在框里。 */}
+            输入即开、点外部/Esc 收起，关键词保留在框里。
+            框体是自绘的 EnglishField（非编辑控件）—— 选着中文输入法也不弹候选词、
+            字母直接进，见该组件的头注与 README 的搜索框条目。 */}
         <div className="search-wrap">
           <div className="search-field">
-            <input
+            <EnglishField
               ref={searchRef}
               value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
+              onChange={(next) => {
+                setQuery(next);
                 setSearchOpen(true);
               }}
               onFocus={() => setSearchOpen(true)}
@@ -209,9 +229,12 @@ export default function App() {
                   setQuery('');
                   setSearchOpen(false);
                 }
+                // 浮层开着时 ↑↓ 归列表翻高亮（SearchDropdown 挂在 document 上收 ——
+                // preventDefault 拦不住它上行；这儿的 preventDefault 只是告诉
+                // EnglishField「别把 ↑↓ 当 Home/End 用」，与原生单行框一致）
+                if (searchOpen && searchActive && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) e.preventDefault();
               }}
               placeholder={`搜索${MARKET_LABEL[market]}全市场，如 BTC（Ctrl+K）`}
-              spellCheck={false}
             />
             {searchActive && (
               <button
@@ -247,33 +270,18 @@ export default function App() {
         </div>
 
         <div className="tb-side right">
-          <span className="status" title={`数据源 ${sourceLabel} ${MARKET_LABEL[market]} · 只读`}>
-            <span className={`dot${online === false ? ' bad' : ''}`} />
-            {marketItems.length === 0
-              ? '无自选'
-              : online == null
-                ? '连接中'
-                : online
-                  ? '已连接'
-                  : '断线'}
-          </span>
+          {/* 「已连接」状态与「数据源」按钮合并成一个（0.1.16 起）：两者本来就是同一个
+              系统的两面，点开的入口也只有一个。常态安静 —— 只画 ● 数据源；连接态异常
+              （连接中/断线）才把字说出来（见 connWord）。悬停提示里两样信息都保留。 */}
           <button
-            className="icon-btn"
+            className={`icon-btn src-entry${online === false ? ' bad' : ''}`}
             onClick={() => setSourceOpen(true)}
-            title={`合约数据源：检测各接口延迟并切换 · 当前 ${sourceLabel}`}
+            title={`合约数据源：检测各接口延迟并切换 · 当前 ${sourceLabel}｜${MARKET_LABEL[market]}：${connText} · 只读`}
           >
-            数据源
+            <span className="dot" />
+            {connWord ? `${connWord} · 数据源` : '数据源'}
           </button>
-          {/* 悬浮窗列表的入口直接在顶栏：它改的是「这会儿盯着看哪几条」，
-              和主题/快捷键不是一类东西，藏在设置里每次要多点两层。 */}
-          <button
-            className="icon-btn"
-            onClick={() => setMiniOpen(true)}
-            title="悬浮窗列表：勾选显示哪几条、拖动排序（不动自选）"
-          >
-            悬浮窗
-          </button>
-          {/* 主题、快捷键、更新都在这一个入口里（`title` 会跟着更新状态变），
+          {/* 主题、快捷键、悬浮窗列表、更新都在这一个入口里（`title` 会跟着更新状态变），
               圆点 = 更新的存在感：自动下载本身没有声音，这里必须看得见（见 .up-badge）。 */}
           <button
             className="icon-btn up-entry"
@@ -281,7 +289,7 @@ export default function App() {
             title={
               update.ready
                 ? `设置：v${update.readyVersion} 已下载好，点这里进去安装`
-                : '设置：主题 / 快捷键 / 更新'
+                : '设置：主题 / 悬浮窗列表 / 快捷键 / 告警通知 / 更新'
             }
           >
             设置
@@ -299,7 +307,7 @@ export default function App() {
           <button
             className="icon-btn icon-only mini-entry"
             onClick={switchToMiniWindow}
-            title="切到悬浮窗：只看勾选给悬浮窗的那几条（显示哪些点顶栏「悬浮窗」改，点悬浮窗切回这里，Alt+D 也行）"
+            title="切到悬浮窗：只看悬浮窗列表里的那几条（显示哪些去设置 → 悬浮窗里搜，点悬浮窗切回这里，Alt+D 也行）"
           >
             <MiniWindowIcon />
           </button>
@@ -340,7 +348,6 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
-      {miniOpen && <MiniListPanel onClose={() => setMiniOpen(false)} />}
       {/* 自动下载把下载过程变成了无声的，这条提示就是它唯一的出口 —— 别删。
           「稍后」之后仍可从设置里装（设置按钮上的圆点也会变回 idle）。 */}
       {update.ready && <UpdateReady controller={update} />}

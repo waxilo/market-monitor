@@ -18,9 +18,22 @@ import {
   type GlobalKeyStatus,
 } from '../lib/globalKey';
 import { UpdateSection } from './UpdateSection';
+import { WebhookSection } from './WebhookSection';
+import { MiniListSection } from './MiniListSection';
 import type { UpdateController } from '../hooks/useUpdate';
 
 type Theme = 'dark' | 'light';
+
+type SectionId = 'appearance' | 'mini' | 'shortcuts' | 'webhook' | 'update';
+
+/** 左栏分类：点哪一类，右栏显示哪一类的内容（互斥，不分段混排）。 */
+const SECTIONS: { id: SectionId; label: string }[] = [
+  { id: 'appearance', label: '外观' },
+  { id: 'mini', label: '悬浮窗' },
+  { id: 'shortcuts', label: '快捷键' },
+  { id: 'webhook', label: '告警通知' },
+  { id: 'update', label: '更新' },
+];
 
 interface Props {
   theme: Theme;
@@ -30,13 +43,17 @@ interface Props {
 }
 
 /**
- * 设置：外观、快捷键、更新。
+ * 设置：外观、悬浮窗、快捷键、告警通知、更新。
  *
- * 这三件事的共同点是**偶尔改一次**，所以从顶栏收进来，顶栏只留一个「设置」按钮
+ * 这些事的共同点是**偶尔改一次**，所以从顶栏收进来，顶栏只留一个「设置」按钮
  * （它同时是更新的报信口：圆点表示正在下 / 下好了，见 App 的 `.up-badge`）。
+ * 类别只会越挂越多，所以弹窗是 90% 的固定画布 + 左栏分类 / 右栏内容：
+ * 换分类时框不动、右栏自己滚（见 theme.css 的 `.up-settings` / `.set-split`）。
+ * 更新包已下好时直接落在「更新」——顶栏那枚圆点写着「点这里进去安装」，
+ * 进来还停在「外观」就辜负了这句话。
  *
- * 悬浮窗显示哪几条**不在这里配** —— 它改的是「这会儿盯着看什么」，是日常操作不是设置，
- * 入口在顶栏，弹窗见 `MiniListPanel`。
+ * 悬浮窗列表（0.1.16 起）也在这里配：它是一份**独立于自选**的列表，
+ * 搜索添加、拖动排序，见 `MiniListSection`；顶栏只留「切到悬浮窗」那枚图标。
  *
  * 快捷键的录制规则：点「修改」先把系统级那条摘掉，然后**捕获阶段**的 keydown 把后续
  * 一切按键吃掉 —— 不摘的话这一下按键被系统吃掉、网页根本收不到（见 lib/globalKey）。
@@ -55,6 +72,8 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
   const [chords, setChords] = useState<Record<string, string>>(() =>
     Object.fromEntries(SHORTCUTS.map((def) => [def.id, readChord(def.id)])),
   );
+  /** 当前分类（记住本次会话里点的那个；关掉重开回到默认）。 */
+  const [section, setSection] = useState<SectionId>(() => (update.ready ? 'update' : 'appearance'));
 
   useEffect(() => {
     void readGlobalShortcutStatus().then(setGlobal);
@@ -105,7 +124,7 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
 
   return (
     <div className="up-backdrop" onMouseDown={onClose}>
-      <section className="up-panel up-wide" onMouseDown={(e) => e.stopPropagation()}>
+      <section className="up-panel up-settings" onMouseDown={(e) => e.stopPropagation()}>
         <header className="up-head">
           <span className="overline">设置</span>
           <span className="grow" />
@@ -114,84 +133,118 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
           </button>
         </header>
 
-        <div className="up-body">
-          <div className="set-block">
-            <div className="up-label">外观</div>
-            <div className="set-row">
-              <div className="set-name">
-                主题
-                <span className="set-sub">深色适合盯盘，浅色适合截图/投屏</span>
-              </div>
-              <div className="set-seg" role="radiogroup" aria-label="主题">
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === 'dark'}
-                  className={theme === 'dark' ? 'on' : ''}
-                  onClick={() => onTheme('dark')}
-                >
-                  深色
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  aria-checked={theme === 'light'}
-                  className={theme === 'light' ? 'on' : ''}
-                  onClick={() => onTheme('light')}
-                >
-                  浅色
-                </button>
-              </div>
-            </div>
-          </div>
+        <div className="set-split">
+          <nav className="set-nav">
+            {SECTIONS.map((item) => (
+              <button
+                key={item.id}
+                className={section === item.id ? 'on' : ''}
+                onClick={() => setSection(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
 
-          <div className="set-block">
-            <div className="up-label">快捷键</div>
-            {SHORTCUTS.map((def) => {
-              const live = recording === def.id;
-              const state = globalHint(global);
-              return (
-                <div className="set-row" key={def.id}>
+          <div className="up-body set-pane">
+            {section === 'appearance' && (
+              <div className="set-block">
+                <div className="up-label">外观</div>
+                <div className="set-row">
                   <div className="set-name">
-                    {def.label}
-                    <span className="set-sub">{live ? '按下新的组合键（Esc 取消）' : def.hint}</span>
-                    {!live && state && (
-                      <span className={`set-sub${global?.error ? ' bad' : ''}`}>{state}</span>
-                    )}
+                    主题
+                    <span className="set-sub">深色适合盯盘，浅色适合截图/投屏</span>
                   </div>
-                  <kbd className={`set-key${live ? ' on' : ''}`}>
-                    {live ? '按键…' : formatChord(chords[def.id])}
-                  </kbd>
-                  <button
-                    className="up-btn"
-                    onClick={() => {
-                      setError(null);
-                      setRecording(live ? null : def.id);
-                    }}
-                  >
-                    {live ? '取消' : '修改'}
-                  </button>
-                  <button
-                    className="up-btn"
-                    disabled={isDefaultChord(def.id, chords[def.id] ?? '')}
-                    title="恢复成默认组合键"
-                    onClick={() => {
-                      resetChord(def.id);
-                      setChords((prev) => ({ ...prev, [def.id]: readChord(def.id) }));
-                      void applyGlobalShortcut(def.id).then(setGlobal);
-                    }}
-                  >
-                    恢复默认
-                  </button>
+                  <div className="set-seg" role="radiogroup" aria-label="主题">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={theme === 'dark'}
+                      className={theme === 'dark' ? 'on' : ''}
+                      onClick={() => onTheme('dark')}
+                    >
+                      深色
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={theme === 'light'}
+                      className={theme === 'light' ? 'on' : ''}
+                      onClick={() => onTheme('light')}
+                    >
+                      浅色
+                    </button>
+                  </div>
                 </div>
-              );
-            })}
-            {error && <p className="up-error">{error}</p>}
-          </div>
+              </div>
+            )}
 
-          <div className="set-block">
-            <div className="up-label">更新</div>
-            <UpdateSection controller={update} />
+            {section === 'mini' && (
+              <div className="set-block">
+                <div className="up-label">悬浮窗</div>
+                <MiniListSection />
+              </div>
+            )}
+
+            {section === 'shortcuts' && (
+              <div className="set-block">
+                <div className="up-label">快捷键</div>
+                {SHORTCUTS.map((def) => {
+                  const live = recording === def.id;
+                  const state = globalHint(global);
+                  return (
+                    <div className="set-row" key={def.id}>
+                      <div className="set-name">
+                        {def.label}
+                        <span className="set-sub">{live ? '按下新的组合键（Esc 取消）' : def.hint}</span>
+                        {!live && state && (
+                          <span className={`set-sub${global?.error ? ' bad' : ''}`}>{state}</span>
+                        )}
+                      </div>
+                      <kbd className={`set-key${live ? ' on' : ''}`}>
+                        {live ? '按键…' : formatChord(chords[def.id])}
+                      </kbd>
+                      <button
+                        className="up-btn"
+                        onClick={() => {
+                          setError(null);
+                          setRecording(live ? null : def.id);
+                        }}
+                      >
+                        {live ? '取消' : '修改'}
+                      </button>
+                      <button
+                        className="up-btn"
+                        disabled={isDefaultChord(def.id, chords[def.id] ?? '')}
+                        title="恢复成默认组合键"
+                        onClick={() => {
+                          resetChord(def.id);
+                          setChords((prev) => ({ ...prev, [def.id]: readChord(def.id) }));
+                          void applyGlobalShortcut(def.id).then(setGlobal);
+                        }}
+                      >
+                        恢复默认
+                      </button>
+                    </div>
+                  );
+                })}
+                {error && <p className="up-error">{error}</p>}
+              </div>
+            )}
+
+            {section === 'webhook' && (
+              <div className="set-block">
+                <div className="up-label">告警通知</div>
+                <WebhookSection />
+              </div>
+            )}
+
+            {section === 'update' && (
+              <div className="set-block">
+                <div className="up-label">更新</div>
+                <UpdateSection controller={update} />
+              </div>
+            )}
           </div>
         </div>
       </section>

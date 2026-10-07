@@ -10,7 +10,13 @@
  */
 
 import { aggregateCandles } from './aggregate';
-import { DIALECTS, type FuturesDialect, type HttpCall, type TickerSnapshot } from './dialects';
+import {
+  DIALECTS,
+  type FuturesDialect,
+  type HttpCall,
+  type OpenInterestPoint,
+  type TickerSnapshot,
+} from './dialects';
 import { httpRequest } from './http';
 import { coarsestBaseFor, minutesOf } from './intervals';
 import { currentFuturesUrl, endpointOf, onFuturesSourceChange } from './sources';
@@ -184,6 +190,52 @@ async function fetchNativeKlines(
 /** 报错文案里点名的数据源。 */
 function sourceLabelOf(market: MarketType): string {
   return market === 'FUTURES' ? currentFutures().label : 'Gate 现货';
+}
+
+// —————————————————————————— 持仓量（永续副图） ——————————————————————————
+
+/** 历史持仓量 + 口径标记：`baseCoin` 为 true 时对齐层按 K 线收盘价折美元。 */
+export interface OpenInterestSeries {
+  points: OpenInterestPoint[];
+  baseCoin: boolean;
+}
+
+/** 当前数据源支不支持历史持仓量（副图 chip 的可用性）。现货恒 false。 */
+export function supportsOpenInterest(market: MarketType): boolean {
+  return market === 'FUTURES' && currentFutures().dialect.openInterest != null;
+}
+
+/**
+ * 持仓量取数周期：**≤ 图周期的最大原生周期** —— 比图粗会丢分辨率、比图细又要多请求；
+ * 原生周期全都比图周期粗时（1m 图碰上 OKX 那张 5m 起的表）取最细的那个。
+ */
+export function oiBaseFor(periods: number[], minutes: number): number {
+  const atMost = periods.filter((p) => p <= minutes);
+  return atMost.length > 0 ? Math.max(...atMost) : Math.min(...periods);
+}
+
+/**
+ * 历史持仓量，升序。点数按 `limit` 根 K 线倒推（周期选择见 `oiBaseFor`），
+ * 各家上限由方言的 `call` 自己夹（币安 500 / OKX 固定窗口 / Bybit 200 / Gate 1000）
+ * —— 所以持仓量线可能覆盖不满整屏，从有数据的 K 线才开始画。
+ */
+export async function fetchOpenInterest(
+  market: MarketType,
+  symbol: string,
+  interval: string,
+  limit = 300,
+): Promise<OpenInterestSeries> {
+  if (market !== 'FUTURES') throw new Error('现货没有持仓量');
+  const { baseUrl, dialect, label } = currentFutures();
+  const spec = dialect.openInterest;
+  if (!spec) throw new Error(`${label} 没有持仓量历史`);
+  const minutes = minutesOf(interval);
+  if (minutes == null) throw new Error(`未知周期 ${interval}`);
+  const base = oiBaseFor(Object.keys(spec.ladder).map(Number), minutes);
+  const needed = Math.max(1, Math.ceil((limit * minutes) / base));
+  const points = spec.parse(await fetchText(spec.call(baseUrl, symbol, base, needed)));
+  points.sort((a, b) => a.time - b.time);
+  return { points, baseCoin: spec.baseCoinValue === true };
 }
 
 // —————————————————————————— 标的清单（搜索的数据源） ——————————————————————————

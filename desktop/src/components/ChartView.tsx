@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   fetchKlines,
+  fetchOpenInterest,
   nativeMinutes,
+  supportsOpenInterest,
   type Bar,
   type Instrument,
+  type OpenInterestSeries,
   type Ticker24h,
 } from '../lib/api';
 import { MA_CHOICES, SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
@@ -35,6 +38,11 @@ import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanva
 
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
+/**
+ * 持仓量的轮询节奏：最细的原生持仓量周期也是 5m（Gate 的 1m 是例外），一小时也就十几个点，
+ * 跟 K 线那样 2s 一跳纯属浪费 —— 整段重拉（不搞增量），10s 已远快于数据本身的更新频率。
+ */
+const OI_POLL_MS = 10_000;
 
 interface Props {
   item: WatchItem | null;
@@ -95,6 +103,14 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
   const natives = useMemo(() => nativeMinutes(market ?? 'FUTURES'), [market, source]);
   const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : 'Gate 现货';
+  /** 当前数据源有没有历史持仓量（OI 副图那枚 chip 的可用性）；换源后重算（依赖 source）。 */
+  const oiSupported = useMemo(
+    () => (market === 'FUTURES' ? supportsOpenInterest(market) : false),
+    [market, source],
+  );
+  /** 持仓量序列（原始点，对齐在画布层做）；换标的 / 换源 / 关副图都会重取或清空。 */
+  const [oi, setOi] = useState<OpenInterestSeries | null>(null);
+  const oiSelected = subPanes.includes('OI');
 
   useEffect(() => {
     localStorage.setItem(INTERVALS_KEY, serializeIntervals(intervals));
@@ -155,6 +171,30 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       clearInterval(timer);
     };
   }, [market, symbol, interval, source]);
+
+  // 持仓量：选了 OI 副图且当前源支持才取；10s 整段重拉（见 OI_POLL_MS 的注释）
+  useEffect(() => {
+    if (!oiSelected || !market || !symbol || !oiSupported) {
+      setOi(null);
+      return;
+    }
+    let alive = true;
+    // 换标的 / 换周期时先清掉旧序列：上一段的持仓量画在新 K 线上就是一坨错线
+    setOi(null);
+    const load = () => {
+      fetchOpenInterest(market, symbol, interval, HISTORY_BARS)
+        .then((series) => {
+          if (alive) setOi(series);
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, OI_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [oiSelected, oiSupported, market, symbol, interval, source]);
 
   function toggleMa(p: number) {
     setPrefs((prev) => ({
@@ -303,17 +343,28 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           <div className="sep" />
 
           <span className="bar-label grp">副图</span>
-          {SUB_PANE_KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
-              title={`${SUB_PANE_LABEL[kind]} 副图（可多选，一个都不点亮 = 不显示副图）`}
-              onClick={() => toggleSubPane(kind)}
-            >
-              {SUB_PANE_LABEL[kind]}
-            </button>
-          ))}
+          {SUB_PANE_KINDS.map((kind) => {
+            // 持仓量是永续专属、且只有四家数据源提供；不满足就置灰（原因写在 title 里）
+            const unsupported = kind === 'OI' && !oiSupported;
+            return (
+              <button
+                key={kind}
+                type="button"
+                className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
+                disabled={unsupported}
+                title={
+                  unsupported
+                    ? market === 'SPOT'
+                      ? '现货没有持仓量（永续专属）'
+                      : `${sourceLabel} 没有持仓量历史（Gate / 币安系 / OKX / Bybit 有）`
+                    : `${SUB_PANE_LABEL[kind]} 副图（可多选，一个都不点亮 = 不显示副图）`
+                }
+                onClick={() => toggleSubPane(kind)}
+              >
+                {SUB_PANE_LABEL[kind]}
+              </button>
+            );
+          })}
 
           {alertCount > 0 && (
             <>
@@ -331,6 +382,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         maPeriods={maPeriods}
         showBoll={showBoll}
         subPanes={subPanes}
+        openInterest={oi}
         interval={interval}
         tickSize={instrument?.tickSize}
         theme={theme}

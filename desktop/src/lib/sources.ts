@@ -143,12 +143,18 @@ export interface ProbeOutcome {
   reason?: string;
 }
 
+/**
+ * 测速超时：**5 秒不响应即判超时**（用户口径，两端同）。只掐探测 —— 数据请求
+ * （K 线一次 300 根）在慢网直连上需要的时间比这长，不能吃这个口径。
+ */
+const PROBE_TIMEOUT_MS = 5_000;
+
 /** 对指定候选发一次探活请求（弹窗「全部重新检测」并行调用）。 */
 export async function probeEndpoint(endpoint: FuturesEndpoint): Promise<ProbeOutcome> {
   const call = dialectOf(endpoint.dialect).probe(endpoint.baseUrl);
   const started = performance.now();
   try {
-    const res = await httpRequest(call.method, call.url, call.body);
+    const res = await httpRequest(call.method, call.url, call.body, PROBE_TIMEOUT_MS);
     const latencyMs = Math.round(performance.now() - started);
     // 答了但状态码不对也算失败：能连通但取不到数，对用户没意义（与 App 的 probe 同）
     return res.status >= 200 && res.status < 300

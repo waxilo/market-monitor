@@ -40,6 +40,25 @@ export interface TickerSnapshot {
   quoteVolume: number;
 }
 
+/** 持仓量时间序列点：`time` 毫秒（与 K 线时间戳同口径）、`value` 美元名义值。 */
+export interface OpenInterestPoint {
+  time: number;
+  value: number;
+}
+
+/**
+ * 历史持仓量的方言规格。**与 K 线周期表是两张表**：这里的支持面窄得多（都以 5m 起、
+ * 点数/窗口各有上限），所以不并入 `intervalLadder`。取数逻辑见 `api.ts::fetchOpenInterest`。
+ */
+export interface OpenInterestSpec {
+  /** 分钟 → 该家原生周期码。 */
+  ladder: Record<number, string>;
+  /** 值为**基础币口径**时置 true（Bybit）—— 对齐时按 K 线收盘价折美元，与其余三家同口径。 */
+  baseCoinValue?: boolean;
+  call(baseUrl: string, symbol: string, minutes: number, limit: number): HttpCall;
+  parse(text: string): OpenInterestPoint[];
+}
+
 export interface FuturesDialect {
   /** 分钟数 → 该家原生周期码。 */
   intervalLadder: Record<number, string>;
@@ -52,6 +71,11 @@ export interface FuturesDialect {
   /** 全量 24h 快照：搜索结果要按成交额排序、给未自选的标的也显示价格。 */
   allTickers(baseUrl: string): HttpCall;
   exchangeInfo(baseUrl: string): HttpCall;
+  /**
+   * 历史持仓量（副图用）。先接了四家：币安同构 / OKX / Bybit / Gate。
+   * 其余五家为 `null`：Hyperliquid 只有当前快照没有历史；MEXC / Bitget / HTX / Bitunix 未核实。
+   */
+  openInterest: OpenInterestSpec | null;
   parseKlines(text: string, minutes: number): Bar[];
   parseTicker(text: string): TickerSnapshot | null;
   /** 全量快照 → [规范符号, 快照]。 */
@@ -245,6 +269,31 @@ const binance: FuturesDialect = (() => {
   const max = 1000;
   const url = (base: string, path: string) => `${trimBase(base)}/fapi/v1${path}`;
 
+  /**
+   * 历史持仓量：`/futures/data/openInterestHist`（与 fapi 同域、不同前缀）。
+   * 实测（经代理）：5m 正常返回；周期 5m/15m/30m/1h/2h/4h/6h/12h/1d（官方口径），
+   * 单次上限 500、深度约 30 天。取 `sumOpenInterestValue`（USDT 名义值）。
+   */
+  const oiLadder: Record<number, string> = {
+    5: '5m', 15: '15m', 30: '30m', 60: '1h', 120: '2h', 240: '4h', 360: '6h', 720: '12h', 1_440: '1d',
+  };
+  const oi: OpenInterestSpec = {
+    ladder: oiLadder,
+    call: (base, symbol, minutes, limit) =>
+      get(
+        `${trimBase(base)}/futures/data/openInterestHist?symbol=${coinOf(symbol)}USDT&period=${ladderCode(oiLadder, minutes, '币安同构持仓量')}&limit=${cap(limit, 500)}`,
+      ),
+    parse: (text) =>
+      compact(
+        arr(parse(text)).map((row) => {
+          const o = obj(row);
+          const time = numOrNull(o.timestamp);
+          const value = numOrNull(o.sumOpenInterestValue);
+          return time != null && value != null ? { time, value } : null;
+        }),
+      ),
+  };
+
   /** 价格精度来自 PRICE_FILTER（App 缺它就丢该标的：兜一个 0 更糟）。 */
   const tickOf = (row: Record<string, unknown>): string | undefined => {
     const filter = arr(row.filters).find((f) => str(obj(f).filterType) === 'PRICE_FILTER');
@@ -274,6 +323,7 @@ const binance: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/ticker/24hr?symbol=${coinOf(symbol)}USDT`)),
     allTickers: (base) => get(url(base, '/ticker/24hr')),
     exchangeInfo: (base) => get(url(base, '/exchangeInfo')),
+    openInterest: oi,
 
     // 官方顺序 [开盘时间, o, h, l, c, volume, 收盘时间, quoteVolume, trades, …]
     parseKlines: (text) =>
@@ -342,6 +392,33 @@ const okx: FuturesDialect = (() => {
   const instSymbol = (instId: string | undefined): string | null =>
     instId != null && instId.endsWith('-USDT-SWAP') ? canonical(instId.slice(0, -'-USDT-SWAP'.length)) : null;
 
+  /**
+   * 历史持仓量走 Rubik 统计：`/rubik/stat/contracts/open-interest-volume?ccy=BTC&period=5m`
+   * —— **按币种聚合所有合约**（不是单合约），行 `[ts, oi, vol]`，oi 即美元口径
+   * （实测 BTC ≈ 3.3e9，全站 BTC 永续的名义值量级）；周期只有三个。
+   * ⚠️ 实测 `limit` / `begin` 都改不动返回条数：窗口固定在 ~575 点（5m 时约 2 天）。
+   */
+  const oiLadder: Record<number, string> = { 5: '5m', 60: '1H', 1_440: '1D' };
+  const oi: OpenInterestSpec = {
+    ladder: oiLadder,
+    call: (base, symbol, minutes) =>
+      get(
+        url(
+          base,
+          `/rubik/stat/contracts/open-interest-volume?ccy=${coinOf(symbol)}&period=${ladderCode(oiLadder, minutes, 'OKX 持仓量')}`,
+        ),
+      ),
+    parse: (text) =>
+      compact(
+        data(text).map((row) => {
+          const a = arr(row);
+          const time = numOrNull(a[0]);
+          const value = numOrNull(a[1]);
+          return time != null && value != null ? { time, value } : null;
+        }),
+      ),
+  };
+
   const rowTicker = (row: Record<string, unknown>): TickerSnapshot | null => {
     // 衍生品口径无现成计价币量，按最新价折算
     const last = numOrNull(row.last);
@@ -369,6 +446,7 @@ const okx: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/market/ticker?instId=${native(symbol)}`)),
     allTickers: (base) => get(url(base, '/market/tickers?instType=SWAP')),
     exchangeInfo: (base) => get(url(base, '/public/instruments?instType=SWAP')),
+    openInterest: oi,
 
     parseKlines: (text) =>
       compact(
@@ -434,6 +512,35 @@ const bybit: FuturesDialect = (() => {
     return arr(obj(obj(root).result).list);
   };
 
+  /**
+   * 历史持仓量（`/market/open-interest`）。实测（经代理）：`result.list` **降序**返回；
+   * `openInterest` 是**基础币口径**（BTC ≈ 5.8 万；与 tickers 的 openInterestValue 4.9e9
+   * 对照 ≈ ×现价）⇒ `baseCoinValue`，对齐时折美元。周期 5min/15min/30min/1h/4h/1d，上限 200。
+   */
+  const oiLadder: Record<number, string> = {
+    5: '5min', 15: '15min', 30: '30min', 60: '1h', 240: '4h', 1_440: '1d',
+  };
+  const oi: OpenInterestSpec = {
+    ladder: oiLadder,
+    baseCoinValue: true,
+    call: (base, symbol, minutes, limit) =>
+      get(
+        url(
+          base,
+          `/market/open-interest?category=linear&symbol=${coinOf(symbol)}USDT&intervalTime=${ladderCode(oiLadder, minutes, 'Bybit 持仓量')}&limit=${cap(limit, 200)}`,
+        ),
+      ),
+    parse: (text) =>
+      compact(
+        rows(text).map((row) => {
+          const o = obj(row);
+          const time = numOrNull(o.timestamp);
+          const value = numOrNull(o.openInterest);
+          return time != null && value != null ? { time, value } : null;
+        }),
+      ),
+  };
+
   const rowTicker = (row: Record<string, unknown>): TickerSnapshot | null =>
     snapshotOf(
       numOrNull(row.lastPrice),
@@ -458,6 +565,7 @@ const bybit: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/market/tickers?category=linear&symbol=${coinOf(symbol)}USDT`)),
     allTickers: (base) => get(url(base, '/market/tickers?category=linear')),
     exchangeInfo: (base) => get(url(base, '/market/instruments-info?category=linear&limit=1000')),
+    openInterest: oi,
 
     parseKlines: (text) =>
       compact(
@@ -542,6 +650,7 @@ const bitget: FuturesDialect = (() => {
       get(url(base, `/mix/market/ticker?symbol=${coinOf(symbol)}USDT&productType=usdt-futures`)),
     allTickers: (base) => get(url(base, '/mix/market/tickers?productType=usdt-futures')),
     exchangeInfo: (base) => get(url(base, '/mix/market/contracts?productType=usdt-futures')),
+    openInterest: null,
 
     parseKlines: (text) =>
       compact(
@@ -611,6 +720,34 @@ const gate: FuturesDialect = (() => {
   const url = (base: string, path: string) => `${trimBase(base)}/api/v4/futures/usdt${path}`;
   const rows = (text: string): unknown[] => arr(parse(text));
 
+  /**
+   * 历史持仓量（`/contract_stats`）。逐周期实测：1m 5m 15m 30m 1h 4h 8h 12h 1d 全 200
+   * （⚠️ `limit=2` 回空数组——正常请求量级 ≥300，不受影响）；limit 上限 1000（1000 → 999 行）。
+   * 取 `open_interest_usd`（美元名义值；`open_interest` 是合约张数，≈ ÷0.0001÷现价）。
+   */
+  const oiLadder: Record<number, string> = {
+    1: '1m', 5: '5m', 15: '15m', 30: '30m', 60: '1h', 240: '4h', 480: '8h', 720: '12h', 1_440: '1d',
+  };
+  const oi: OpenInterestSpec = {
+    ladder: oiLadder,
+    call: (base, symbol, minutes, limit) =>
+      get(
+        url(
+          base,
+          `/contract_stats?contract=${native(symbol)}&interval=${ladderCode(oiLadder, minutes, 'Gate 持仓量')}&limit=${cap(limit, 1000)}`,
+        ),
+      ),
+    parse: (text) =>
+      compact(
+        rows(text).map((row) => {
+          const o = obj(row);
+          const seconds = numOrNull(o.time);
+          const value = numOrNull(o.open_interest_usd);
+          return seconds != null && value != null ? { time: seconds * 1000, value } : null;
+        }),
+      ),
+  };
+
   const rowTicker = (row: Record<string, unknown>): TickerSnapshot | null => {
     const last = numOrNull(row.last);
     const change = numOrNull(row.change_price);
@@ -643,6 +780,7 @@ const gate: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/tickers?contract=${native(symbol)}`)),
     allTickers: (base) => get(url(base, '/tickers')),
     exchangeInfo: (base) => get(url(base, '/contracts')),
+    openInterest: oi,
 
     parseKlines: (text) =>
       compact(
@@ -751,6 +889,7 @@ const mexc: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/ticker?symbol=${native(symbol)}`)),
     allTickers: (base) => get(url(base, '/ticker')),
     exchangeInfo: (base) => get(url(base, '/detail')),
+    openInterest: null,
 
     parseKlines: (text) => {
       const d = obj(data(text));
@@ -866,6 +1005,8 @@ const hyperliquid: FuturesDialect = (() => {
     },
     allTickers: (base) => info(base, { type: 'metaAndAssetCtxs' }),
     exchangeInfo: (base) => info(base, { type: 'meta' }),
+    // metaAndAssetCtxs 里有当前 openInterest，但没有历史序列
+    openInterest: null,
 
     parseKlines: (text) => barsOf(text),
 
@@ -992,6 +1133,7 @@ const htx: FuturesDialect = (() => {
     ticker: (base, symbol) => get(ex(base, `/market/detail/merged?contract_code=${native(symbol)}`)),
     allTickers: (base) => get(ex(base, '/market/detail/batch_merged')),
     exchangeInfo: (base) => get(api(base, '/swap_contract_info')),
+    openInterest: null,
 
     parseKlines: (text) =>
       compact(
@@ -1101,6 +1243,7 @@ const bitunix: FuturesDialect = (() => {
     ticker: (base, symbol) => get(url(base, `/tickers?symbols=${native(symbol)}`)),
     allTickers: (base) => get(url(base, '/tickers')),
     exchangeInfo: (base) => get(url(base, '/trading_pairs')),
+    openInterest: null,
 
     parseKlines: (text) =>
       compact(

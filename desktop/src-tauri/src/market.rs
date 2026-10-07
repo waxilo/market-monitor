@@ -62,6 +62,8 @@ fn short_error(err: &reqwest::Error) -> String {
 
 /// 发一次行情请求，原样带回状态码与响应体。
 ///
+/// `timeout_ms` 为请求级时限（测速用：「5 秒不响应即判超时」）；不传则用客户端的 20s。
+///
 /// 非 2xx 不在这里判错：「服务器答了」本身也是连通性证据，探测行要显示 `HTTP 403`
 /// 这种具体结论；数据请求与非 2xx 的取舍由前端按用途决定。
 #[tauri::command]
@@ -69,12 +71,13 @@ pub async fn market_request(
     method: String,
     url: String,
     body: Option<String>,
+    timeout_ms: Option<u64>,
 ) -> Result<MarketResponse, String> {
     // 数据源清单是内置的，正常到不了这里；挡一下被注入的明文请求
     if !url.starts_with("https://") {
         return Err("只允许 https 请求".to_string());
     }
-    let request = if method.eq_ignore_ascii_case("POST") {
+    let mut request = if method.eq_ignore_ascii_case("POST") {
         client()
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -82,6 +85,10 @@ pub async fn market_request(
     } else {
         client().get(&url)
     };
+    // 测速的请求级时限：5 秒不响应即判超时。数据请求不传，仍走客户端的 20s。
+    if let Some(ms) = timeout_ms {
+        request = request.timeout(Duration::from_millis(ms));
+    }
     let response = request.send().await.map_err(|e| short_error(&e))?;
     let status = response.status().as_u16();
     let body = response.text().await.map_err(|e| short_error(&e))?;
@@ -98,6 +105,7 @@ mod tests {
         let err = tauri::async_runtime::block_on(market_request(
             "GET".to_string(),
             "http://api.gateio.ws/api/v4/spot/tickers".to_string(),
+            None,
             None,
         ))
         .unwrap_err();

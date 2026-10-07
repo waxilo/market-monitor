@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Bar } from '../lib/api';
+import type { Bar, OpenInterestSeries } from '../lib/api';
 import {
   axisLock,
   clampNum,
@@ -328,6 +328,11 @@ interface Props {
   maPeriods: number[];
   showBoll: boolean;
   subPanes: SubPaneKind[];
+  /**
+   * 历史持仓量（原始时间点，没对齐）。`null` = 没有（没选 OI、源不支持、或还没取回来）——
+   * 那时 OI 副图整块不出。对齐（前向填充 + 可能的折美元）在 `chartSeries` 里做。
+   */
+  openInterest: OpenInterestSeries | null;
   interval: string;
   tickSize?: string;
   theme: string;
@@ -370,6 +375,7 @@ export function KlineCanvas({
   maPeriods,
   showBoll,
   subPanes,
+  openInterest,
   interval,
   tickSize,
   theme,
@@ -386,8 +392,8 @@ export function KlineCanvas({
   resetPriceSignal,
 }: Props) {
   const series = useMemo(
-    () => buildSeries(candles, maPeriods, showBoll, subPanes),
-    [candles, maPeriods, showBoll, subPanes],
+    () => buildSeries(candles, maPeriods, showBoll, subPanes, openInterest),
+    [candles, maPeriods, showBoll, subPanes, openInterest],
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -773,7 +779,8 @@ export function KlineCanvas({
         if (Math.abs(y - lastTickY) < AXIS_MIN_GAP) continue;
         lastTickY = y;
         ctx.fillText(
-          pane.kind === 'VOLUME' ? formatCompact(value) : value.toFixed(2),
+          // 成交量与持仓量都是大额（几亿起步），走 K/M/B 缩写；其余指标的小数刻度照旧
+          pane.kind === 'VOLUME' || pane.kind === 'OI' ? formatCompact(value) : value.toFixed(2),
           plotW + 4,
           y,
         );
@@ -832,6 +839,26 @@ export function KlineCanvas({
         placement.leftPx,
         plotBottom + TIME_AXIS_H / 2,
       );
+    }
+
+    // ── 十字光标的日期标 ──
+    // 与横线的价格标成对：两条线各答一个问题（哪个时间 / 哪个价位），不必自己数到轴上去。
+    // 显示条件与竖线一致（`onBar`）：右侧留白里 `indexAt` 会把位置夹回最后一根，
+    // 那时标出来的日期不属于鼠标下那一点。画在时间轴刻度之后 —— 压住同位的刻度文字。
+    if (cross && cross.onBar && cross.index >= rs && cross.index <= re) {
+      const c = list[cross.index];
+      if (c) {
+        const text = formatCandleTime(c.timestamp, minutes);
+        const w = ctx.measureText(text).width + 8;
+        const h = 14;
+        // 以竖线为心中、再夹进绘图区：贴着左右边缘时标会被切掉半个字
+        const x = clampNum(xOf(cross.index) - w / 2, 0, Math.max(0, plotW - w));
+        const y = plotBottom + (TIME_AXIS_H - h) / 2;
+        ctx.fillStyle = p.ink;
+        roundRect(ctx, x, y, w, h, 3);
+        ctx.fillStyle = p.paper;
+        ctx.fillText(text, x + 4, y + h / 2 + 0.5);
+      }
     }
 
     // ── 指标读数带（币安式：数值与它所属的线同色）──

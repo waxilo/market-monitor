@@ -1,6 +1,7 @@
 /** 图表序列：与 App ui/chart/ChartSeries.kt 的 ChartModel.build 同一套规则。 */
 
-import type { Bar } from './api';
+import type { Bar, OpenInterestSeries } from './api';
+import type { OpenInterestPoint } from './dialects';
 import { formatCompact, NO_DATA } from './format';
 import { boll, kdj, macd, rsi, sma } from './indicators';
 import { padded, rangeOf, type Range } from './chartMath';
@@ -32,7 +33,7 @@ export interface ReadoutSegment {
 }
 
 /** 可选副图：空数组本身就是「不显示」，用枚举值表达「无」会和「支持多选」互相打架。 */
-export const SUB_PANE_KINDS = ['VOLUME', 'MACD', 'RSI', 'KDJ'] as const;
+export const SUB_PANE_KINDS = ['VOLUME', 'MACD', 'RSI', 'KDJ', 'OI'] as const;
 export type SubPaneKind = (typeof SUB_PANE_KINDS)[number];
 
 export const SUB_PANE_LABEL: Record<SubPaneKind, string> = {
@@ -40,6 +41,7 @@ export const SUB_PANE_LABEL: Record<SubPaneKind, string> = {
   MACD: 'MACD',
   RSI: 'RSI',
   KDJ: 'KDJ',
+  OI: '持仓量',
 };
 
 /** 主图可叠的均线期数（指标行那五枚 chip；选择持久化见 `lib/indicatorPrefs.ts`）。 */
@@ -94,7 +96,36 @@ function localeNumber(value: number | undefined, decimals: number): string {
   });
 }
 
-function buildSubPane(candles: Bar[], closes: number[], kind: SubPaneKind): SubPaneData {
+/**
+ * 持仓量对齐：每根 K 线取「时间 ≤ 它开盘时间」的最新一个点（前向填充）—— 持仓量的原生
+ * 周期通常比图周期粗（5m 对 15m）或点数覆盖不满整屏，前向填充让两种情形都成立。
+ * 早于第一个点的 K 线给 NaN（线从有数据的地方才开始画）；`baseCoin` 时按该根收盘价折美元。
+ */
+export function alignOpenInterest(
+  candles: readonly Bar[],
+  points: readonly OpenInterestPoint[],
+  baseCoin = false,
+): number[] {
+  const values = new Array<number>(candles.length).fill(NaN);
+  let j = 0;
+  let current = NaN;
+  for (let i = 0; i < candles.length; i++) {
+    const t = candles[i].timestamp;
+    while (j < points.length && points[j].time <= t) {
+      current = points[j].value;
+      j++;
+    }
+    if (!Number.isNaN(current)) values[i] = baseCoin ? current * candles[i].close : current;
+  }
+  return values;
+}
+
+function buildSubPane(
+  candles: Bar[],
+  closes: number[],
+  kind: SubPaneKind,
+  oi: OpenInterestSeries | null,
+): SubPaneData | null {
   switch (kind) {
     case 'VOLUME': {
       const volumes = candles.map((c) => c.volume);
@@ -168,6 +199,17 @@ function buildSubPane(candles: Bar[], closes: number[], kind: SubPaneKind): SubP
         ],
       };
     }
+    case 'OI': {
+      // 取不到（源不支持 / 刚换标的还没回来）就整块不出现，而不是画一块空板
+      if (oi == null || oi.points.length === 0) return null;
+      const values = alignOpenInterest(candles, oi.points, oi.baseCoin);
+      return {
+        kind,
+        title: '持仓量',
+        lines: [{ label: '持仓量', role: 'PRIMARY', values }],
+        readoutAt: (i) => [{ text: `持仓量: ${formatCompact(values[i])}`, role: 'PRIMARY' }],
+      };
+    }
   }
 }
 
@@ -176,6 +218,7 @@ export function buildSeries(
   maPeriods: number[],
   showBoll: boolean,
   kinds: SubPaneKind[],
+  oi: OpenInterestSeries | null = null,
 ): ChartSeries {
   const closes = candles.map((c) => c.close);
   const overlayLines: ChartLine[] = [...maPeriods]
@@ -198,10 +241,11 @@ export function buildSeries(
     candles,
     overlayLines,
     bandFill: bollData ? { upper: bollData.upper, lower: bollData.lower } : null,
-    // 按枚举声明顺序输出，多选后副图自上而下的次序不随点击先后跳
-    subPanes: SUB_PANE_KINDS.filter((k) => kinds.includes(k)).map((k) =>
-      buildSubPane(candles, closes, k),
-    ),
+    // 按枚举声明顺序输出，多选后副图自上而下的次序不随点击先后跳；
+    // OI 没有数据时 buildSubPane 给 null，就地滤掉（它只是「暂时没得画」）
+    subPanes: SUB_PANE_KINDS.filter((k) => kinds.includes(k))
+      .map((k) => buildSubPane(candles, closes, k, oi))
+      .filter((pane): pane is SubPaneData => pane != null),
   };
 }
 

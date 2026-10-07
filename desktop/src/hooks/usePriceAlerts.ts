@@ -5,13 +5,15 @@ import { formatPrice } from '../lib/format';
 import { alertLines, judgeTick, type Side, type WatchLine } from '../lib/priceAlerts';
 import { parseLineStore } from '../lib/priceLines';
 import { IS_TAURI, notifyPriceAlert } from '../lib/tauri';
+import { sendAlertWebhook } from '../lib/webhooks';
 
 /** 画线的落盘键，与 `hooks/useDrawings.ts` 同一个（那边写、这里只读）。 */
 const LINES_KEY = 'mm.priceLines';
 
 /**
  * 价格告警：宿主的节拍（`alert-tick`，5s 一拍）进来，这里读一遍画线、拉一遍现价，
- * 判定交给纯函数 `judgeTick`，判出来的穿越调 `notify_price_alert` 弹系统通知。
+ * 判定交给纯函数 `judgeTick`，判出来的穿越弹系统通知、并推到设置里配的 webhook
+ * （不配就只有系统通知，见 lib/webhooks）。
  *
  * **判定为什么不放 Rust**：告警线存在 localStorage，取价要过 `lib/dialects.ts` 那六家盘口
  * 的 URL 构造与解析 —— 两边各留一份必然会分叉，所以数据与判定都留在前端，
@@ -81,7 +83,11 @@ export function usePriceAlerts() {
       }
     }
 
-    /** 弹一条系统通知；文案按方向分「上破 / 下破」。失败不往上报（宿主侧已记日志）。 */
+    /**
+     * 弹一条系统通知 + 推一条 webhook（设置里配了地址才有）；文案按方向分「上破 / 下破」。
+     * 系统通知失败不往上报（宿主侧已记日志）；webhook 不等结果（fire-and-forget，
+     * 结果落回设置页的「上次发送」，见 lib/webhooks）。
+     */
     function notify(key: string, linePrice: number, price: number, up: boolean) {
       const sep = key.indexOf(':');
       const market = key.slice(0, sep) as MarketType;
@@ -90,10 +96,10 @@ export function usePriceAlerts() {
       const label = instrument?.baseAsset ?? symbol;
       const tickSize = instrument?.tickSize ?? null;
       const lineText = formatPrice(linePrice, tickSize);
-      notifyPriceAlert(
-        `${label} ${MARKET_LABEL[market]} ${up ? '上破' : '下破'} ${lineText}`,
-        `告警线 ${lineText} · 现价 ${formatPrice(price, tickSize)}`,
-      );
+      const priceText = formatPrice(price, tickSize);
+      const title = `${label} ${MARKET_LABEL[market]} ${up ? '上破' : '下破'} ${lineText}`;
+      notifyPriceAlert(title, `告警线 ${lineText} · 现价 ${priceText}`);
+      sendAlertWebhook(`${title}（现价 ${priceText}）`);
     }
 
     const unlisten = listen('alert-tick', () => {

@@ -37,9 +37,12 @@ interface Item {
   run: () => void;
 }
 
-/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可：最多 6 条）。 */
+/** 菜单里的一行：一个动作，或两组之间的分隔线。 */
+type Row = Item | 'sep';
+
+/** 菜单尺寸上限：用于贴边翻转（真实高度随条目数变，取个够用的上界即可：最多 6 条 + 分隔线）。 */
 const MENU_W = 208;
-const MENU_H = 200;
+const MENU_H = 208;
 
 /**
  * 图表区的右键菜单 —— **画线上唯一的入口**（0.1.11 起工具条上没有「画图」这组了）。
@@ -48,7 +51,9 @@ const MENU_H = 200;
  * 画布不是整个窗口，菜单再怎么贴边也翻得回来；悬浮窗就一块面板，浮层一定被窗口边界裁掉。
  *
  * 每条动作做完立刻收起（`run` 之后父层就 `onClose`）：菜单是一次性的定点操作，
- * 不是常驻工具条。「清空全部画线」是唯一的破坏性条目，排在最后并走 danger 色。
+ * 不是常驻工具条。条目分两组、中间隔一条线：上面是**落点动作**（对光标下那条线/那个价位），
+ * 下面是**全局动作**（锁定 / 清空 / 复位刻度，对整个标的生效）。「清空全部画线」是唯一的
+ * 破坏性条目，排在最后并走 danger 色。
  */
 export function ChartMenu({
   x,
@@ -99,15 +104,17 @@ export function ChartMenu({
     };
   }, [onClose]);
 
-  const items: Item[] = [];
+  // 一组是「这一下点在哪儿就只能干嘛」的落点动作，另一组是整张图通用的开关，
+  // 中间隔一条线：两类都在时混排会让人误以为清空/复位也跟落点绑定。
+  const actions: Item[] = [];
   if (hit.kind === 'empty') {
-    items.push({
+    actions.push({
       key: 'alert',
       label: '设成告警线',
       aside: priceText,
       run: () => onAddLine(hit.price, true),
     });
-    items.push({
+    actions.push({
       key: 'hline',
       label: '画一条水平线',
       aside: priceText,
@@ -115,7 +122,7 @@ export function ChartMenu({
     });
     // 第一点直接取右键落点（anchor 为空 = 图上还没有数据，画出来的线没有时间锚点）
     if (hit.anchor) {
-      items.push({
+      actions.push({
         key: 'trend',
         label: '从这里画直线',
         aside: '再点一下成线',
@@ -124,26 +131,28 @@ export function ChartMenu({
     }
   }
   if (hit.kind === 'hline') {
-    items.push({
+    actions.push({
       key: 'toggle',
       label: hit.alert ? '取消这条告警' : '设成告警线',
       aside: priceText,
       run: () => onSetAlert(hit.index, !hit.alert),
     });
-    items.push({ key: 'remove', label: '删掉这条线', danger: true, run: () => onRemoveLine(hit.index) });
+    actions.push({ key: 'remove', label: '删掉这条线', danger: true, run: () => onRemoveLine(hit.index) });
   }
   if (hit.kind === 'trend') {
-    items.push({ key: 'remove', label: '删掉这条直线', danger: true, run: () => onRemoveTrend(hit.index) });
+    actions.push({ key: 'remove', label: '删掉这条直线', danger: true, run: () => onRemoveTrend(hit.index) });
   }
+
+  const globals: Item[] = [];
   if (drawingCount > 0) {
     // 锁定管的是**能不能拖**（整张图一个开关，默认解锁，见 useDrawings/linesLock）。
     // 一条线都没有时不给：没东西可锁，先画才有意义。
-    items.push({
+    globals.push({
       key: 'lock',
       label: linesLocked ? '解锁全部画线' : '锁定全部画线',
       run: () => onSetLinesLocked(!linesLocked),
     });
-    items.push({
+    globals.push({
       key: 'clear',
       label: '清空全部画线',
       aside: `${drawingCount}`,
@@ -152,26 +161,34 @@ export function ChartMenu({
     });
   }
   if (adjusted) {
-    items.push({ key: 'reset', label: '复位纵向刻度', run: onResetPrice });
+    globals.push({ key: 'reset', label: '复位纵向刻度', run: onResetPrice });
   }
+
+  const rows: Row[] = [...actions];
+  if (actions.length > 0 && globals.length > 0) rows.push('sep');
+  rows.push(...globals);
 
   return createPortal(
     <div className="chart-menu" ref={ref} style={{ left: pos.left, top: pos.top }} role="menu">
-      {items.map((it) => (
-        <button
-          key={it.key}
-          type="button"
-          role="menuitem"
-          className={`chart-menu-item${it.danger ? ' danger' : ''}`}
-          onClick={() => {
-            it.run();
-            onClose();
-          }}
-        >
-          <span>{it.label}</span>
-          {it.aside && <span className="chart-menu-aside num">{it.aside}</span>}
-        </button>
-      ))}
+      {rows.map((row) =>
+        row === 'sep' ? (
+          <div key="sep" className="chart-menu-sep" role="separator" />
+        ) : (
+          <button
+            key={row.key}
+            type="button"
+            role="menuitem"
+            className={`chart-menu-item${row.danger ? ' danger' : ''}`}
+            onClick={() => {
+              row.run();
+              onClose();
+            }}
+          >
+            <span>{row.label}</span>
+            {row.aside && <span className="chart-menu-aside num">{row.aside}</span>}
+          </button>
+        ),
+      )}
     </div>,
     document.body,
   );
