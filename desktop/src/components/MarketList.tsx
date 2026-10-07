@@ -4,7 +4,7 @@ import { MARKET_LABEL, MARKETS, type Instrument, type MarketType } from '../lib/
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { useDragSort } from '../hooks/useDragSort';
 import type { TickerCell } from '../hooks/useTickers';
-import { changeClass, displaySymbol, formatPrice } from '../lib/format';
+import { changeClass, displaySymbol, formatChange, formatPrice } from '../lib/format';
 
 interface Props {
   market: MarketType;
@@ -24,7 +24,7 @@ interface Props {
 }
 
 /**
- * 侧边栏 = **自选列表**：一行 = 币名 + 计价币 + 当前价格，行尾一个移除按钮。
+ * 侧边栏 = **自选列表**：一行 = 币名 + 计价币 + 当前价格 + 24h 涨跌幅。
  * 顶上还有**市场切换**（现货 / 永续）—— 它换的就是这一列显示哪个市场，所以长在这一列头上
  * （0.1.11 从顶栏搬下来的），两个胶囊平摊整行宽。
  *
@@ -39,9 +39,8 @@ interface Props {
  * 冲掉，清空关键词才恢复，来回打断视线。两者放在一起，也就势必共用一套行样式，
  * 于是自选行永远得迁就搜索行的形态（比如搜索结果没有价格，自选行就不敢显价格）。
  *
- * 价格只给自选行：`cells` 本来就在为图表轮询，显示它是零额外代价。
- * 涨跌幅不在这列里堆 —— 图表面板头（选中标的）和悬浮窗（全部自选）都有完整读数，
- * 而这一列越窄越好用。
+ * 价格与涨跌幅只给自选行：`cells` 本来就在为图表轮询，显示它们是零额外代价，
+ * 涨跌幅读法与图表头、悬浮窗同口径（`formatChange`，涨绿跌红）。
  */
 export function MarketList({
   market,
@@ -74,15 +73,17 @@ export function MarketList({
     selected != null && selected.market === item.market && selected.symbol === item.symbol;
 
   /**
-   * 行尾价格。**固定占位**：拿不到行情时渲染 `--` 而不是整块塌掉，
-   * 否则价格出现/消失会让「币名 + 计价币」左右抖动。
+   * 行尾两只读数：现价 + 24h 涨跌幅。**固定占位**：拿不到行情时都渲染 `--` 而不是整块塌掉，
+   * 否则数字出现/消失会让「币名 + 计价币」左右抖动。两只都按涨跌着色，与图表头、
+   * 悬浮窗同一套（见 `changeClass`）。
    */
-  const renderPrice = (item: WatchItem, inst: Instrument | undefined) => {
+  const renderTail = (item: WatchItem, inst: Instrument | undefined) => {
     const t = cells[watchKey(item)]?.data;
-    if (!t) return <span className="row-price num flat">{'--'}</span>;
+    const cls = changeClass(t?.priceChangePercent);
     return (
-      <span className={`row-price num ${changeClass(t.priceChangePercent)}`}>
-        {formatPrice(t.lastPrice, inst?.tickSize)}
+      <span className="row-tail">
+        <span className={`row-price num ${cls}`}>{formatPrice(t?.lastPrice, inst?.tickSize)}</span>
+        <span className={`row-chg num ${cls}`}>{formatChange(t?.priceChangePercent)}</span>
       </span>
     );
   };
@@ -96,7 +97,7 @@ export function MarketList({
       <>
         <span className="row-name">{base}</span>
         {quote && <span className="row-quote">{quote}</span>}
-        <span className="row-tail">{renderPrice(item, inst)}</span>
+        {renderTail(item, inst)}
       </>
     );
   };

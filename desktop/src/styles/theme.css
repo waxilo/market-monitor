@@ -191,13 +191,15 @@ body {
 }
 .main {
   display: grid;
-  /* 侧边栏是窄导航栏（交易对名 + 现价），宽度按最长一行算：
-     「BTC + USDT」≈ 96px + 现价列 66px + 移除按钮 20px + 左右 12px 内边距 ≈ 194，
-     208 留一点余量，长币名（DOGE/DASH）也不会把价格挤到换行。
+  /* 侧边栏是窄导航栏（交易对名 + 现价 + 24h 涨跌幅），宽度按最长一行算：
+     「1000 类九字符名」≈ 65px + 计价币 25px + 现价列 66px + 涨跌列 53px
+     + 两个 4px 间隙 + 行尾 6px + 左右 12px 内边距 ≈ 247，252 留一点余量；
+     更长的名字（1000000MOG 类）按设计走省略号。宽度账见
+     `.workbuddy/tmp/probe-sidebar-width.mjs`（候选宽度 × 截断名单）。
      minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动。
      收起 = 这一列收到 0（`.list-collapsed`），侧栏内容靠 .panel-list 的 overflow 裁掉，
      列表本身不卸载 —— 状态/行情格子留着，展开回来不用重拉。 */
-  --list-w: 208px;
+  --list-w: 252px;
   grid-template-columns: var(--list-w) minmax(0, 1fr);
   min-height: 0;
   transition: grid-template-columns var(--base) var(--ease-standard);
@@ -257,7 +259,7 @@ body {
   gap: var(--sp-xs);
 }
 /* 侧栏顶部（市场切换 + 自选计数）：竖着两行 —— 胶囊平摊整行宽，像个分段控件。
-   208px 的侧栏放不下「胶囊 + 计数」并排（永续合约那枚就 76px），所以不给它并排的机会。 */
+   252px 的侧栏放不下「胶囊 + 计数」并排（永续合约那枚就 76px），所以不给它并排的机会。 */
 .panel-head.list-head {
   flex-direction: column;
   align-items: stretch;
@@ -285,7 +287,7 @@ body {
   background: var(--wash-strong);
 }
 
-/* ── 自选列表行（窄导航栏：一行只放交易对名） ─────────────── */
+/* ── 自选列表行（窄导航栏：币名 + 计价币 + 现价 + 涨跌幅） ─────────────── */
 .list-scroll {
   overflow-y: auto;
   flex: 1;
@@ -341,7 +343,7 @@ body {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 6px;
 }
 /* 现价列：定宽 + 右对齐 + tabular-nums（`.num` 已带），三样合起来数字才竖着对齐。
    定宽同时兜住「拿不到行情」时那个 `--` 占位，行不会因为价格出现/消失而抖动。 */
@@ -350,6 +352,16 @@ body {
   text-align: right;
   font-size: 11px;
   letter-spacing: -0.2px;
+}
+/* 涨跌列：与现价列同款（定宽 + 右对齐 + tabular），数字竖着对齐；
+   定宽按三位数涨跌幅算（`+245.10%` 八字符 ≈ 51px），比现价列窄一档，
+   同样兜住拿不到行情时的 `--` 占位。`white-space: nowrap`：极端值宁可撑列不可换行。 */
+.row-chg {
+  min-width: 53px;
+  text-align: right;
+  font-size: 11px;
+  letter-spacing: -0.2px;
+  white-space: nowrap;
 }
 /* 搜索结果里的「加入自选」常驻可见：未加入才用强调色。
    （侧栏行上原来有个常显的 ×，0.1.11 用户要求撤掉、改右键菜单「从自选移除」—— 行不再是按钮的落点。） */
