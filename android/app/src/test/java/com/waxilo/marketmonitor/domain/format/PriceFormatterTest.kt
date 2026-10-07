@@ -67,6 +67,15 @@ class PriceFormatterTest {
     }
 
     @Test
+    fun `Double 版缩写供图表纵轴使用，NaN 与非数一律占位`() {
+        assertEquals("4.15B", PriceFormatter.formatCompact(4_150_000_000.0))
+        assertEquals("--", PriceFormatter.formatCompact(null))
+        // 图上的空档是 NaN 而不是 null：漏掉它会在轴刻度上印出 "NaN"
+        assertEquals("--", PriceFormatter.formatCompact(Double.NaN))
+        assertEquals("--", PriceFormatter.formatCompact(Double.POSITIVE_INFINITY))
+    }
+
+    @Test
     fun `非法价格字符串安全降级`() {
         assertNull(PriceFormatter.toBigDecimalOrEmpty("abc"))
         assertNull(PriceFormatter.toBigDecimalOrEmpty(""))

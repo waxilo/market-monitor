@@ -3,6 +3,8 @@ package com.waxilo.marketmonitor.ui.chart
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.Kline
+import com.waxilo.marketmonitor.domain.model.OpenInterestPoint
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -593,6 +595,76 @@ class ChartModelTest {
             subPanes = listOf(SubPaneKind.VOLUME),
         )
         assertEquals(listOf("VOL: 10"), series.subReadoutAt(series.subPanes.single(), 10, 2).map { it.text })
+    }
+
+    /* —— 持仓量：对齐与副图 —— */
+
+    /**
+     * 持仓量按「时间 ≤ 该根开盘时间」前向填充：采样之间保持阶梯，不插值；
+     * 序列开始前的根为 NaN —— 不足则缺，不拿未来的采样回填。
+     */
+    @Test
+    fun `持仓量按前向填充对齐到蜡烛时间轴`() {
+        val bars = candles(6) // 每根 1 天，开盘时间 0 / 86.4e6 / 172.8e6 ...
+        val points = listOf(
+            OpenInterestPoint(50_000_000L, 4.0e9),
+            OpenInterestPoint(120_000_000L, 5.0e9),
+        )
+        val aligned = alignOpenInterest(bars, points)
+        assertEquals(6, aligned.size)
+        assertTrue("首点之前没有可用采样", aligned[0].isNaN())
+        assertEquals(4.0e9, aligned[1], 1e-6)   // 开盘 86.4e6 ≥ 50e6
+        assertEquals(5.0e9, aligned[2], 1e-6)   // 开盘 172.8e6 ≥ 120e6
+        assertEquals(5.0e9, aligned[5], 1e-6)   // 一直是最近的采样
+    }
+
+    @Test
+    fun `没有采样点或没有蜡烛时给出空对齐`() {
+        assertTrue(alignOpenInterest(candles(5), emptyList()).all { it.isNaN() })
+        assertEquals(0, alignOpenInterest(emptyList(), listOf(OpenInterestPoint(0L, 1.0))).size)
+    }
+
+    /** Bybit 的采样是基础币数量：对齐时乘该根收盘价折美元，与其余三家同口径。 */
+    @Test
+    fun `基础币口径按该根收盘价折美元`() {
+        val bars = candles(4) // 收盘 100 / 101 / 102 / 103
+        val points = listOf(OpenInterestPoint(0L, 58_000.0))
+        val folded = alignOpenInterest(bars, points, baseCoin = true)
+        assertEquals(58_000.0 * 100.0, folded[0], 1e-6)
+        assertEquals(58_000.0 * 103.0, folded[3], 1e-6)
+        // 折价只影响数值，不改对齐本身
+        assertEquals(58_000.0, alignOpenInterest(bars, points)[0], 1e-6)
+    }
+
+    @Test
+    fun `选了 OI 但没有数据时那块整块不出现`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5),
+            showBoll = false,
+            subPanes = listOf(SubPaneKind.VOLUME, SubPaneKind.OI),
+        )
+        // 空序列不画空板：副图列表里只剩 VOL，调用方据此少算一块高度
+        assertEquals(listOf("VOL"), series.subPanes.map { it.title })
+    }
+
+    @Test
+    fun `OI 副图以美元序列出现且纵轴用缩写刻度`() {
+        val bars = candles(60)
+        val series = ChartModel.build(
+            bars,
+            listOf(5),
+            showBoll = false,
+            subPanes = listOf(SubPaneKind.VOLUME, SubPaneKind.OI),
+            openInterest = OpenInterestSeries(listOf(OpenInterestPoint(bars.first().openTime, 4_150_000_000.0))),
+        )
+        // 顺序仍是枚举声明顺序：VOL 在前、OI 在后
+        assertEquals(listOf("VOL", "OI"), series.subPanes.map { it.title })
+        val oi = series.subPanes.last()
+        assertTrue("上亿的量级，纵轴必须缩写", oi.compactAxis)
+        assertEquals(4_150_000_000.0, oi.lines.single().values[0], 1e-6)
+        // 读数同样是缩写：58,000 那种原数在读数行里放不下
+        assertEquals(listOf("OI: 4.15B"), series.subReadoutAt(oi, 0, 2).map { it.text })
     }
     // endregion
 

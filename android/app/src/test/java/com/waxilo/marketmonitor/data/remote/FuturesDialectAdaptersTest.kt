@@ -609,6 +609,91 @@ class FuturesDialectAdaptersTest {
         assertEquals("1M", bitunix.intervalLadder[43_200L])
     }
 
+    /* ───────────────────── 持仓量（OI 副图） ───────────────────── */
+
+    @Test
+    fun `只有币安同构 OKX Bybit Gate 提供了持仓量规格`() {
+        listOf(binance, okx, bybit, gate).forEach {
+            assertTrue("${it::class} 应有持仓量规格", it.openInterest != null)
+        }
+        // 其余家没有 OI 历史：chip 置灰说明，不允许悄悄给个空规格
+        listOf(bitget, mexc, hyper, htx, bitunix).forEach {
+            assertNull("${it::class} 不应有持仓量规格", it.openInterest)
+        }
+    }
+
+    @Test
+    fun `币安同构持仓量走 futures data 前缀，取美元名义值列`() {
+        val spec = binance.openInterest!!
+        // 与 K 线同域但不同前缀：不在 /fapi/v1 下
+        assertEquals(
+            "https://x/futures/data/openInterestHist?symbol=BTCUSDT&period=4h&limit=500",
+            spec.call("https://x", "BTCUSDT", 240, 5_000).url,
+        )
+        val points = spec.parse(binanceOiText)
+        assertEquals(listOf(1_700_000_000_000L, 1_700_003_600_000L), points.map { it.time })
+        assertEquals(4_900_000_000.1, points.first().value, 1e-6)
+        assertEquals(4_950_000_000.2, points.last().value, 1e-6)
+    }
+
+    @Test
+    fun `OKX 持仓量按币种聚合，行内第 1 列是美元值`() {
+        val spec = okx.openInterest!!
+        // rubik 是币种口径（ccy=BTC），不是 instId；limit 改不动窗口所以不传
+        val url = spec.call("https://x", "BTCUSDT", 60, 500).url
+        assertEquals(
+            "https://x/api/v5/rubik/stat/contracts/open-interest-volume?ccy=BTC&period=1H",
+            url,
+        )
+        val points = spec.parse(okxOiText)
+        assertEquals(listOf(1_700_000_000_000L, 1_700_003_600_000L), points.map { it.time })
+        assertEquals(4_900_000_000.0, points.first().value, 1e-6)
+        // 业务码非 0 要抛出来，不能当空数据（否则线画不出来还查不出原因）
+        assertThrowsIo { spec.parse("""{"code":"51001","msg":"param","data":[]}""") }
+    }
+
+    @Test
+    fun `Bybit 持仓量是基础币口径，解析时打上 baseCoin 标记`() {
+        val spec = bybit.openInterest!!
+        assertTrue("Bybit 的 openInterest 是基础币数量", spec.baseCoinValue)
+        assertEquals(
+            "https://x/v5/market/open-interest?category=linear&symbol=BTCUSDT&intervalTime=1h&limit=200",
+            spec.call("https://x", "BTCUSDT", 60, 5_000).url,
+        )
+        // 原生降序 → 解析后必须升序
+        val points = spec.parse(bybitOiText)
+        assertEquals(listOf(1_700_000_000_000L, 1_700_003_600_000L), points.map { it.time })
+        assertEquals(58_000.5, points.first().value, 1e-9)
+        assertThrowsIo { spec.parse("""{"retCode":10001,"retMsg":"param error","result":{}}""") }
+    }
+
+    @Test
+    fun `Gate 持仓量秒转毫秒，取 open_interest_usd 列`() {
+        val spec = gate.openInterest!!
+        assertEquals(
+            "https://x/api/v4/futures/usdt/contract_stats?contract=BTC_USDT&interval=5m&limit=1000",
+            spec.call("https://x", "BTCUSDT", 5, 5_000).url,
+        )
+        val points = spec.parse(gateOiText)
+        assertEquals(listOf(1_700_000_000_000L, 1_700_003_600_000L), points.map { it.time })
+        assertEquals(4_900_000_000.0, points.first().value, 1e-6)
+    }
+
+    @Test
+    fun `持仓量周期表都以 5m-1d 附近的原生周期为梯子，越界周期直接抛`() {
+        // 各家的原生周期集合各不相同，但断点语义一致：非梯子内的分钟数属于调用方错误
+        assertEquals("5m", binance.openInterest!!.ladder[5L])
+        assertEquals("1d", binance.openInterest!!.ladder[1_440L])
+        assertEquals("1D", okx.openInterest!!.ladder[1_440L])
+        assertEquals("4h", bybit.openInterest!!.ladder[240L])
+        assertEquals("1m", gate.openInterest!!.ladder[1L])
+        try {
+            binance.openInterest!!.call("https://x", "BTCUSDT", 200, 500)
+            throw AssertionError("200 不在梯子里，应抛 IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+
     /* ───────────────────── 样本 ───────────────────── */
 
     /** BigDecimal 的 equals 把标度也算进去（"1" != "1.0"），断言一律用 compareTo。 */
@@ -860,4 +945,36 @@ class FuturesDialectAdaptersTest {
     private val bitunixEmptyDataText = """{"code":0,"msg":"Success","data":[]}"""
 
     private fun bitunixExchangeInfo() = bitunix.parseExchangeInfo(bitunixPairsText)
+
+    /* —— 持仓量样本：字段形状对齐各家公开接口的真实响应（时间单位、包装层、口径列） —— */
+
+    private val binanceOiText = """
+        [
+          {"symbol":"BTCUSDT","sumOpenInterest":"58000.5","sumOpenInterestValue":"4900000000.1","timestamp":1700000000000},
+          {"symbol":"BTCUSDT","sumOpenInterest":"59000.1","sumOpenInterestValue":"4950000000.2","timestamp":1700003600000}
+        ]
+    """.trimIndent()
+
+    /** 原生降序（newest-first），故意保持这个顺序来验证适配器会倒过来。 */
+    private val okxOiText = """
+        {"code":"0","msg":"","data":[
+          ["1700003600000","4950000000","12345"],
+          ["1700000000000","4900000000","12000"]
+        ]}
+    """.trimIndent()
+
+    /** 原生降序；`openInterest` 是基础币口径（硬币数量），不是美元。 */
+    private val bybitOiText = """
+        {"retCode":0,"retMsg":"OK","result":{"symbol":"BTCUSDT","category":"linear","list":[
+          {"openInterest":"59000.1","timestamp":"1700003600000"},
+          {"openInterest":"58000.5","timestamp":"1700000000000"}
+        ]}}
+    """.trimIndent()
+
+    private val gateOiText = """
+        [
+          {"time":1700000000,"open_interest":"58000.5","open_interest_usd":"4900000000"},
+          {"time":1700003600,"open_interest":"59000.1","open_interest_usd":"4950000000"}
+        ]
+    """.trimIndent()
 }

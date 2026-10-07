@@ -161,8 +161,8 @@ fun DetailScreen(
     var lineEditing by remember { mutableStateOf<IndicatorLine?>(null) }
     /**
      * 十字光标下标，竖屏图与全屏图共用：K 线详情小条常显在图表顶部、读数带正上方，
-     * 长按跟着手指、松手回到最新一根（null）。图表内部已按标的/周期复位，
-     * 切页时它会以 null 回调一次，这里不必再挂 key。
+     * 长按跟着手指、松手**停住**（画布上的平移/缩放/轻点才把它清掉、回到最新一根）。
+     * 图表内部已按标的/周期复位，切页时它会以 null 回调一次，这里不必再挂 key。
      */
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
 
@@ -241,6 +241,7 @@ fun DetailScreen(
                     activeMa = state.maPeriods,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
+                    oiSupported = state.oiSupported,
                     onToggleMa = viewModel::toggleMaPeriod,
                     onToggleBoll = viewModel::toggleBoll,
                     onToggleSubPane = viewModel::toggleSubPane,
@@ -429,12 +430,13 @@ private fun FullscreenChart(
                     modifier = Modifier.align(Alignment.Center),
                 )
             } else {
-                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
+                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes, state.openInterest) {
                     ChartModel.build(
                         candles = state.candles,
                         maPeriods = state.maPeriods,
                         showBoll = state.showBoll,
                         subPanes = state.subPanes,
+                        openInterest = state.openInterest,
                     )
                 }
                 KlineChart(
@@ -491,6 +493,7 @@ private fun FullscreenChart(
                         activeMa = state.maPeriods,
                         showBoll = state.showBoll,
                         subPanes = state.subPanes,
+                        oiSupported = state.oiSupported,
                         onToggleMa = viewModel::toggleMaPeriod,
                         onToggleBoll = viewModel::toggleBoll,
                         onToggleSubPane = viewModel::toggleSubPane,
@@ -892,7 +895,7 @@ private fun ChartArea(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(chartHeight(state.subPanes.size))
+            .height(chartHeight(state.subPaneCount))
             .padding(top = Spacing.Sm),
     ) {
         when {
@@ -919,12 +922,13 @@ private fun ChartArea(
             else -> {
                 // 自研 Compose 画布而非 WebView：不依赖系统 WebView 与 GL 合成，
                 // 模拟器/低端机上同样能画出来，也少一套 HTML/JS 资源要维护。
-                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes) {
+                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes, state.openInterest) {
                     ChartModel.build(
                         candles = state.candles,
                         maPeriods = state.maPeriods,
                         showBoll = state.showBoll,
                         subPanes = state.subPanes,
+                        openInterest = state.openInterest,
                     )
                 }
                 KlineChart(
@@ -985,6 +989,8 @@ private fun IndicatorBar(
     activeMa: List<Int>,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
+    /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
+    oiSupported: Boolean,
     onToggleMa: (Int) -> Unit,
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
@@ -1021,6 +1027,7 @@ private fun IndicatorBar(
                 FilterChip(
                     text = kind.label,
                     selected = kind in subPanes,
+                    greyed = kind == SubPaneKind.OI && !oiSupported,
                     onClick = { onToggleSubPane(kind) },
                     compact = true,
                 )
@@ -1063,6 +1070,7 @@ private fun IndicatorBar(
                 FilterChip(
                     text = kind.label,
                     selected = kind in subPanes,
+                    greyed = kind == SubPaneKind.OI && !oiSupported,
                     onClick = { onToggleSubPane(kind) },
                     compact = true,
                 )

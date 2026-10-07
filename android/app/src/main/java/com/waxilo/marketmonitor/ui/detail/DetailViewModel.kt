@@ -17,6 +17,7 @@ import com.waxilo.marketmonitor.domain.kline.KlineAggregator
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -86,13 +88,27 @@ data class DetailUiState(
     val showBoll: Boolean = false,
     /** 选中的副图。空列表 = 不显示副图；支持多选。 */
     val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
+    /**
+     * OI chip 是否可用：当前合约接口提供持仓量历史才亮，现货与无 OI 的接口恒 false。
+     * 只看接口能力不看到没到数据 —— 亮不亮是「选不选得动」的问题。
+     */
+    val oiSupported: Boolean = false,
+    /** 持仓量序列（美元名义值；Bybit 的基础币口径在绘制层折价）。没选 OI 或还没取到时为 null。 */
+    val openInterest: OpenInterestSeries? = null,
     val watched: Boolean = false,
     val origin: DataOrigin = DataOrigin.REMOTE,
     val loadingCandles: Boolean = true,
     val loadingMore: Boolean = false,
     val hasMore: Boolean = true,
     val error: String? = null,
-)
+) {
+    /**
+     * 实际会画出来的副图块数：选了 OI 但数据还没到时那块整块不画。
+     * 图表高度按它算，否则会为不存在的那块留一条空档。
+     */
+    val subPaneCount: Int
+        get() = subPanes.count { it != SubPaneKind.OI || openInterest?.points?.isNotEmpty() == true }
+}
 
 /**
  * 单个交易对详情（PRD FR-1.3 / FR-2.1 / FR-2.3）。
@@ -116,6 +132,9 @@ class DetailViewModel(
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
     private val chart = MutableStateFlow(ChartData())
+
+    /** 当前合约接口是否提供持仓量历史（OI chip 的可用性）；现货恒 false，实例内不变。 */
+    private val oiSupported = repository.supportsOpenInterest(id.market)
 
     /**
      * 全局视角偏好（横向视窗 + 纵向刻度）：跨标的、跨周期、跨会话。
@@ -374,6 +393,8 @@ class DetailViewModel(
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
+        /** 持仓量序列（OI 副图用）；未选中 / 未取到时为 null，清空与加载同走这里。 */
+        val openInterest: OpenInterestSeries? = null,
         /** 周期条上摊开的方块，顺序即展示顺序（用户可通过「＋」管理）。 */
         val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
     )
@@ -411,6 +432,8 @@ class DetailViewModel(
             maPeriods = data.maPeriods,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
+            oiSupported = oiSupported,
+            openInterest = data.openInterest,
             watched = id in watched,
             origin = data.origin,
             loadingCandles = data.loading,
@@ -442,6 +465,25 @@ class DetailViewModel(
                 repository.refreshTicker(id)
                 delay(TICKER_POLL_MS)
             }
+        }
+        // 持仓量副图：只在「选中 OI 且当前接口有 OI 历史」时轮询。
+        // 组合里带上 interval —— 换周期要按新周期的基准间隔重取；distinctUntilChanged
+        // 比的是整对，只比 Boolean 会把换周期那一路吞掉。
+        // 先清旧序列再取：上一段的持仓量画在新 K 线上就是一坨错线（换标的时 VM 整体重建，同样干净）。
+        viewModelScope.launch {
+            combine(chart.map { SubPaneKind.OI in it.subPanes }, interval) { want, selected -> want to selected }
+                .distinctUntilChanged()
+                .flatMapLatest { (want, _) ->
+                    flow {
+                        chart.update { it.copy(openInterest = null) }
+                        if (!want || !oiSupported) return@flow
+                        while (viewModelScope.isActive) {
+                            loadOpenInterest()?.let { series -> chart.update { it.copy(openInterest = series) } }
+                            delay(OI_POLL_MS)
+                        }
+                    }
+                }
+                .collect {}
         }
     }
 
@@ -531,6 +573,18 @@ class DetailViewModel(
 
     /** 副图多选：点中即切换该块的显隐，全不选 = 只留主图。 */
     fun toggleSubPane(kind: SubPaneKind) {
+        // OI 是永续专属、且只有部分合约源提供历史：置灰的 chip 仍可点，点了给一句原因
+        // （Android 没有 hover，桌面那套 title 提示在这儿够不着用户）。
+        // 只挡「加上」不挡「撤下」—— 副图偏好是全局一份，在合约页选过 OI 再开现货页，
+        // 撤不掉就成了关不掉的死开关。
+        val selectedNow = kind in chart.value.subPanes
+        if (kind == SubPaneKind.OI && !oiSupported && !selectedNow) {
+            showNotice(
+                if (id.market.isFutures) "当前接口没有持仓量历史（Gate / 币安系 / OKX / Bybit 有）"
+                else "现货没有持仓量（永续专属）"
+            )
+            return
+        }
         chart.update {
             val next = if (kind in it.subPanes) it.subPanes - kind else it.subPanes + kind
             it.copy(subPanes = next.sortedBy { k -> SubPaneKind.entries.indexOf(k) })
@@ -747,6 +801,18 @@ class DetailViewModel(
         }
     }
 
+    /**
+     * 取持仓量序列（对齐到蜡烛时间轴在绘制层做）。
+     *
+     * 请求基准用**基础周期**而不是展示周期：自定义周期下展示根数 = 基础根数 ÷ 聚合倍率，
+     * 按基础口径取 500 根恰好覆盖整段原始窗口（官方周期两者相同，与桌面端一致）。
+     * 仓库层把网络失败归成 null —— 返回 null 表示「这一轮没拿到」，保留上一轮数据不覆盖。
+     */
+    private suspend fun loadOpenInterest(): OpenInterestSeries? {
+        val base = baseInterval() ?: return null
+        return repository.openInterest(id, base.minutes, BASE_PAGE)
+    }
+
     private fun mergeBaseCandle(update: Kline) {
         chart.update { state ->
             val list = state.raw
@@ -780,6 +846,12 @@ class DetailViewModel(
 
         /** 详情页表头报价的 REST 轮询间隔（与仓库层 K 线轮询同频）。 */
         const val TICKER_POLL_MS = 2_000L
+
+        /**
+         * 持仓量副图的轮询间隔。最细的原生 OI 周期是 5m（Gate 有 1m 是例外），
+         * 10 秒整段重拉已经远快于数据本身的更新速度；单次是一根轻请求（weight 1）。
+         */
+        const val OI_POLL_MS = 10_000L
 
         /**
          * 视角落盘的防抖时长：手势停手后写一次。

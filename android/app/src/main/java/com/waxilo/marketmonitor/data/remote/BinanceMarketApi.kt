@@ -14,7 +14,9 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -30,8 +32,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
+import java.net.SocketTimeoutException
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.ceil
+
+/** 测速（探测）超时：5 秒不响应即判超时（用户口径，与桌面端同）。 */
+private const val PROBE_TIMEOUT_MS = 5_000L
 
 /** REST 域名来源：现货走镜像+官方回退链；合约只用用户选定的单一接口（PRD 3.2）。 */
 interface RestHosts {
@@ -147,17 +154,46 @@ class BinanceMarketApi(
             true
         }
 
+    /** 当前合约接口是否提供持仓量历史（副图 chip 的可用性）；现货恒 false。 */
+    fun supportsOpenInterest(market: MarketType): Boolean =
+        market.isFutures && FuturesDialects.of(futuresEndpoint().dialect).openInterest != null
+
+    /**
+     * 历史持仓量，升序；[baseMinutes] 是当前图的**基础周期分钟数**（与 K 线原始序列同口径）。
+     * 点数按覆盖 [limit] 根基础蜡烛倒推，各家上限由方言的 call 自己夹
+     * —— 所以持仓量线可能覆盖不满整屏，从有数据的 K 线才开始画。
+     */
+    suspend fun openInterest(
+        market: MarketType,
+        symbol: String,
+        baseMinutes: Long,
+        limit: Int = 500,
+    ): OpenInterestSeries {
+        if (!market.isFutures) throw MarketApiException(0, 0, "现货没有持仓量")
+        val endpoint = futuresEndpoint()
+        val spec = FuturesDialects.of(endpoint.dialect).openInterest
+            ?: throw MarketApiException(0, 0, "${endpoint.label} 没有持仓量历史")
+        val base = oiBaseFor(spec.ladder.keys.toList(), baseMinutes)
+        val needed = maxOf(1, ceil(limit.toDouble() * baseMinutes / base).toInt())
+        budgets.getValue(market).await(1)
+        val text = executeText(spec.call(endpoint.baseUrl, symbol, base, needed))
+        return OpenInterestSeries(spec.parse(text), spec.baseCoinValue)
+    }
+
     /**
      * 对**指定候选接口**做一次性连通探测（弹窗「一键检测」并行调用），返回往返毫秒数。
      * 按该候选的方言构造其原生探测请求（GET 或 Hyperliquid 的 POST）。
      * 不经回退链、不计权重：探测的是「这个接口在这台设备上通不通」，
-     * 失败时抛 IOException（超时/DNS/HTTP 错误），由调用方转成每行的失败文案。
+     * 失败时抛 IOException（超时/DNS/HTTP 错误；**超时 = 5 秒不响应**），由调用方转成每行的失败文案。
      */
     suspend fun probeFutures(baseUrl: String): Long {
         val endpoint = FuturesEndpoints.of(baseUrl)
         val request = FuturesDialects.of(endpoint.dialect).probe(endpoint.baseUrl)
         val started = System.currentTimeMillis()
-        executeText(request)
+        // 5 秒不响应即判超时：探测要的是「现在通不通」，挂到 OkHttp 的 30s callTimeout
+        // 只会让弹窗里那一行一直转圈。取消经 awaitText 的 invokeOnCancellation 传进 OkHttp。
+        withTimeoutOrNull(PROBE_TIMEOUT_MS) { executeText(request) }
+            ?: throw SocketTimeoutException("探测超时")
         return System.currentTimeMillis() - started
     }
 
@@ -343,3 +379,13 @@ private fun Response.toApiError(body: String?): MarketApiException {
  */
 internal fun shouldTryNextHost(error: MarketApiException): Boolean =
     error.binanceCode == 0 || error.httpCode == 418 || error.httpCode == 429
+
+/**
+ * 持仓量取数周期：**≤ 图周期的最大原生周期** —— 比图粗会丢分辨率、比图细又要多请求；
+ * 原生周期全都比图周期粗时（1m 图碰上 OKX 那张 5m 起的表）取最细的那个。
+ * 抽成顶层函数是为了能直接落单测（成员版要先起整套依赖）。
+ */
+internal fun oiBaseFor(periods: List<Long>, minutes: Long): Long {
+    val atMost = periods.filter { it <= minutes }
+    return if (atMost.isNotEmpty()) atMost.max() else periods.min()
+}

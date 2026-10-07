@@ -4,6 +4,8 @@ import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.Indicators
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.Kline
+import com.waxilo.marketmonitor.domain.model.OpenInterestPoint
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.closeDouble
 import com.waxilo.marketmonitor.domain.model.highDouble
 import com.waxilo.marketmonitor.domain.model.lowDouble
@@ -53,6 +55,8 @@ data class SubPaneData(
     val fromZero: Boolean = false,
     val fixedRange: ValueRange? = null,
     val decimals: Int = PriceFormatter.DEFAULT_DECIMALS,
+    /** 纵轴刻度用 K/M/B 缩写（持仓量这种上亿的量级，58dp 的轴宽放不下原数）。 */
+    val compactAxis: Boolean = false,
     /**
      * 这块副图自己的读数行（币安式：参数名 + 各线数值，各自配色）。
      * 入参是「蜡烛下标」与「价格小数位」：MACD 与价格同量级所以跟着价格走，
@@ -70,6 +74,8 @@ enum class SubPaneKind(val label: String) {
     MACD("MACD"),
     RSI("RSI"),
     KDJ("KDJ"),
+    /** 持仓量：永续专属，且只有部分合约源提供历史（见 FuturesDialectAdapter.openInterest）。 */
+    OI("OI"),
     ;
 }
 
@@ -146,6 +152,33 @@ private fun readoutNumber(value: Double?, decimals: Int): String =
     else String.format(Locale.US, "%,.${decimals}f", value)
 
 /**
+ * 把持仓量采样对齐到蜡烛时间轴：每根蜡烛取「时间不晚于其开盘时间」的最近一个采样
+ * （阶梯保持，采样之间不插值）。序列开始前的根为 NaN——不足则缺，不拿未来的数据回填。
+ * [baseCoin] 为 true（Bybit）时采样是基础币数量，乘该根收盘价折美元，与其余三家同口径。
+ * [points] 必须已按时间升序（各解析器保证了这一点）。
+ */
+fun alignOpenInterest(
+    candles: List<Kline>,
+    points: List<OpenInterestPoint>,
+    baseCoin: Boolean = false,
+): DoubleArray {
+    val out = DoubleArray(candles.size) { Double.NaN }
+    if (points.isEmpty()) return out
+    var cursor = 0
+    var last = Double.NaN
+    for (i in candles.indices) {
+        val time = candles[i].openTime
+        while (cursor < points.size && points[cursor].time <= time) {
+            last = points[cursor].value
+            cursor++
+        }
+        if (last.isNaN()) continue
+        out[i] = if (baseCoin) last * candles[i].closeDouble() else last
+    }
+    return out
+}
+
+/**
  * 十字光标 tooltip（PRD FR-2.1：OHLC + 时间 + 涨幅）。
  * 涨幅按「与上一根收盘比」计算，这是行业惯例，也是 24h 涨幅之外的第二套口径，
  * 因此文案里显式写「较上根」。
@@ -171,6 +204,8 @@ object ChartModel {
         bollPeriod: Int = 20,
         macdParams: Triple<Int, Int, Int> = Triple(12, 26, 9),
         rsiPeriod: Int = 14,
+        /** 持仓量序列（副图 OI 用）。null / 空序列时该块整块不出现，不画空板。 */
+        openInterest: OpenInterestSeries? = null,
     ): ChartSeries {
         val closes = DoubleArray(candles.size) { candles[it].closeDouble() }
         val lines = Indicators.movingAverages(closes, maPeriods.sorted()).entries.sortedBy { it.key }.map { (period, values) ->
@@ -199,7 +234,7 @@ object ChartModel {
             // 不随用户点击先后跳来跳去。
             subPanes = SubPaneKind.entries
                 .filter { it in subPanes }
-                .mapNotNull { buildSubPane(candles, closes, it, macdParams, rsiPeriod) },
+                .mapNotNull { buildSubPane(candles, closes, it, macdParams, rsiPeriod, openInterest) },
         )
     }
 
@@ -236,6 +271,7 @@ object ChartModel {
         kind: SubPaneKind,
         macdParams: Triple<Int, Int, Int>,
         rsiPeriod: Int,
+        openInterest: OpenInterestSeries?,
     ): SubPaneData? = when (kind) {
         SubPaneKind.VOLUME -> {
             val volumes = DoubleArray(candles.size) { candles[it].volumeDouble() }
@@ -316,6 +352,25 @@ object ChartModel {
                     )
                 },
             )
+        }
+
+        SubPaneKind.OI -> {
+            if (openInterest == null || openInterest.points.isEmpty()) {
+                null
+            } else {
+                val values = alignOpenInterest(candles, openInterest.points, openInterest.baseCoin)
+                SubPaneData(
+                    title = "OI",
+                    lines = listOf(ChartLine("OI", LineRole.PRIMARY, values)),
+                    // 上亿的量级：纵轴用 K/M/B 缩写，原数（58dp 轴宽）放不下
+                    compactAxis = true,
+                    readoutAt = { i, _ ->
+                        listOf(
+                            ReadoutSegment("OI: ${PriceFormatter.formatCompact(values.getOrNull(i))}", LineRole.PRIMARY)
+                        )
+                    },
+                )
+            }
         }
     }
 

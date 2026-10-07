@@ -11,6 +11,7 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.OpenInterestPoint
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -46,6 +47,12 @@ sealed interface FuturesDialectAdapter {
     val maxKlineLimit: Int
 
     /**
+     * 历史持仓量的方言规格（副图用）。先接了四家：币安同构 / OKX / Bybit / Gate。
+     * 其余五家为 null：Hyperliquid 只有当前快照没有历史；MEXC / Bitget / HTX / Bitunix 未核实。
+     */
+    val openInterest: OpenInterestSpec? get() = null
+
+    /**
      * 是否支持按时间窗取数（即「往更早方向翻页」）。
      *
      * 默认 true；只有实测确认接口会**无视**时间参数的家才覆盖成 false（目前是 HTX）。
@@ -71,6 +78,21 @@ sealed interface FuturesDialectAdapter {
     fun parseTicker(text: String, symbol: String, now: Long): MarketTicker?
     fun parseExchangeInfo(text: String): List<InstrumentMeta>
 }
+
+/**
+ * 历史持仓量的方言规格。**与 K 线周期表是两张表**：支持面窄得多（都以 5m 起、
+ * 点数/窗口各有上限），所以不并入 [FuturesDialectAdapter.intervalLadder]。
+ */
+data class OpenInterestSpec(
+    /** 分钟数 → 该家的原生周期码。 */
+    val ladder: Map<Long, String>,
+    /** true = 值为**基础币口径**（Bybit）——对齐时按 K 线收盘价折美元，与其余三家同口径。 */
+    val baseCoinValue: Boolean = false,
+    /** 构造请求。点数上限由各家实现自己夹（币安 500 / Bybit 200 / Gate 1000）。 */
+    val call: (base: String, symbol: String, minutes: Long, limit: Int) -> FuturesDialectAdapter.Request,
+    /** 解析响应为升序的持仓量点（美元名义值，或 [baseCoinValue] 口径）。 */
+    val parse: (text: String) -> List<OpenInterestPoint>,
+)
 
 object FuturesDialects {
     fun of(kind: FuturesDialect): FuturesDialectAdapter = when (kind) {
@@ -237,6 +259,33 @@ internal object BinanceCompatibleDialect : FuturesDialectAdapter {
         OfficialInterval.entries.associate { it.minutes to it.apiCode }
     override val maxKlineLimit = 1000
 
+    /**
+     * 历史持仓量：`/futures/data/openInterestHist`（与 fapi 同域、**不同前缀**，不在 /fapi/v1 下）。
+     * 周期 5m/15m/30m/1h/2h/4h/6h/12h/1d，单次上限 500、深度约 30 天。
+     * 取 `sumOpenInterestValue`（USDT 名义值）。
+     */
+    override val openInterest = OpenInterestSpec(
+        ladder = mapOf(
+            5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h", 120L to "2h",
+            240L to "4h", 360L to "6h", 720L to "12h", 1_440L to "1d",
+        ),
+        call = { base, symbol, minutes, limit ->
+            FuturesDialectAdapter.Request(
+                base.trimEnd('/') + "/futures/data/openInterestHist" +
+                    "?symbol=$symbol&period=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "&limit=${limit.coerceIn(1, 500)}",
+            )
+        },
+        parse = { text ->
+            parse(text).asArray().mapNotNull { el ->
+                val row = el.asObject()
+                val time = row.str("timestamp")?.toLongOrNull() ?: return@mapNotNull null
+                val value = row.str("sumOpenInterestValue")?.toDoubleOrNull() ?: return@mapNotNull null
+                OpenInterestPoint(time, value)
+            }.sortedBy { it.time }
+        },
+    )
+
     override fun probe(base: String) = req(base, "/ping")
 
     override fun klines(
@@ -303,6 +352,29 @@ internal object OkxDialect : FuturesDialectAdapter {
         1_440L to "1D", 4_320L to "3D", 10_080L to "1W", 43_200L to "1M",
     )
     override val maxKlineLimit = 300
+
+    /**
+     * 历史持仓量走 Rubik 统计：`/rubik/stat/contracts/open-interest-volume?ccy=BTC&period=5m`
+     * —— **按币种聚合所有合约**（不是单合约），行 `[ts, oi, vol]`，oi 即美元口径。
+     * ⚠️ 实测 `limit` / `begin` 都改不动返回条数：窗口固定在 ~575 点（5m 时约 2 天）。
+     */
+    override val openInterest = OpenInterestSpec(
+        ladder = mapOf(5L to "5m", 60L to "1H", 1_440L to "1D"),
+        call = { base, symbol, minutes, _ ->
+            FuturesDialectAdapter.Request(
+                base.trimEnd('/') + "/api/v5/rubik/stat/contracts/open-interest-volume" +
+                    "?ccy=${stripUsdt(symbol)}&period=${requireNotNull(openInterest.ladder[minutes])}",
+            )
+        },
+        parse = { text ->
+            parse(text).also { it.checkOkx() }.asObject()["data"].asArray().mapNotNull { row ->
+                val a = row as? JsonArray ?: return@mapNotNull null
+                val time = a.str(0)?.toLongOrNull() ?: return@mapNotNull null
+                val value = a.str(1)?.toDoubleOrNull() ?: return@mapNotNull null
+                OpenInterestPoint(time, value)
+            }.sortedBy { it.time }
+        },
+    )
 
     private fun inst(symbol: String) = stripUsdt(symbol) + "-USDT-SWAP"
 
@@ -400,6 +472,37 @@ internal object BybitDialect : FuturesDialectAdapter {
         1_440L to "D", 10_080L to "W", 43_200L to "M",
     )
     override val maxKlineLimit = 1000
+
+    /**
+     * 历史持仓量（`/market/open-interest`）。`result.list` **降序**返回，统一排序；
+     * `openInterest` 是**基础币口径**（BTC ≈ 5.8 万；与 tickers 的 openInterestValue 4.9e9
+     * 对照 ≈ ×现价）⇒ [OpenInterestSpec.baseCoinValue]，对齐时折美元。
+     * 周期 5min/15min/30min/1h/4h/1d，上限 200。
+     */
+    override val openInterest = OpenInterestSpec(
+        ladder = mapOf(
+            5L to "5min", 15L to "15min", 30L to "30min",
+            60L to "1h", 240L to "4h", 1_440L to "1d",
+        ),
+        baseCoinValue = true,
+        call = { base, symbol, minutes, limit ->
+            FuturesDialectAdapter.Request(
+                base.trimEnd('/') + "/v5/market/open-interest" +
+                    "?category=linear&symbol=$symbol" +
+                    "&intervalTime=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "&limit=${limit.coerceIn(1, 200)}",
+            )
+        },
+        parse = { text ->
+            parse(text).also { it.checkBybit() }.asObject()["result"].asObject()["list"].asArray()
+                .mapNotNull { el ->
+                    val row = el.asObject()
+                    val time = row.str("timestamp")?.toLongOrNull() ?: return@mapNotNull null
+                    val value = row.str("openInterest")?.toDoubleOrNull() ?: return@mapNotNull null
+                    OpenInterestPoint(time, value)
+                }.sortedBy { it.time }
+        },
+    )
 
     override fun probe(base: String) =
         FuturesDialectAdapter.Request(base.trimEnd('/') + "/v5/market/time")
@@ -593,6 +696,33 @@ internal object GateDialect : FuturesDialectAdapter {
         1_440L to "1d", 10_080L to "7d",
     )
     override val maxKlineLimit = 2000
+
+    /**
+     * 历史持仓量：`/api/v4/futures/usdt/contract_stats?contract=BTC_USDT&interval=5m`，
+     * 行内 `open_interest_usd` 即美元名义值；时间是**秒**。周期含 1m，深度充足（上限 1000）。
+     */
+    override val openInterest = OpenInterestSpec(
+        ladder = mapOf(
+            1L to "1m", 5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h",
+            240L to "4h", 480L to "8h", 720L to "12h", 1_440L to "1d",
+        ),
+        call = { base, symbol, minutes, limit ->
+            FuturesDialectAdapter.Request(
+                base.trimEnd('/') + "/api/v4/futures/usdt/contract_stats" +
+                    "?contract=${contract(symbol)}" +
+                    "&interval=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "&limit=${limit.coerceIn(1, 1000)}",
+            )
+        },
+        parse = { text ->
+            parse(text).asArray().mapNotNull { el ->
+                val row = el.asObject()
+                val seconds = row.str("time")?.toLongOrNull() ?: return@mapNotNull null
+                val value = row.str("open_interest_usd")?.toDoubleOrNull() ?: return@mapNotNull null
+                OpenInterestPoint(seconds * 1000, value)
+            }.sortedBy { it.time }
+        },
+    )
 
     private fun contract(symbol: String) = stripUsdt(symbol) + "_USDT"
 

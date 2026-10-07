@@ -5,6 +5,7 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -81,6 +82,18 @@ interface MarketRepository {
 
     /** 连通性探测，供设置页与容灾切换使用。 */
     suspend fun ping(market: MarketType): Boolean
+
+    /** 当前合约接口是否提供持仓量历史（副图 chip 的可用性）；现货恒 false。 */
+    fun supportsOpenInterest(market: MarketType): Boolean
+
+    /**
+     * 历史持仓量（永续专属，副图用）。[baseMinutes] 为当前图的基础周期分钟数，
+     * 覆盖根数按 [limit] 根基础蜡烛倒推。
+     *
+     * 取不到就返回 null：来源没有 OI 历史（现货 / 未接入的盘口）与网络失败在
+     * 上层是同一件事——副图整块不出现，不画空板。
+     */
+    suspend fun openInterest(id: SymbolId, baseMinutes: Long, limit: Int = 500): OpenInterestSeries?
 
     /**
      * 清空某市场的本地行情缓存（快照/交易对清单/K 线），自选与预警规则保留。

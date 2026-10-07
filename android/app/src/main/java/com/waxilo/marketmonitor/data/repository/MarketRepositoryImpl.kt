@@ -12,6 +12,7 @@ import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.domain.repository.KlinePage
@@ -198,6 +199,17 @@ class MarketRepositoryImpl(
     }
 
     override suspend fun ping(market: MarketType): Boolean = api.ping(market)
+
+    override fun supportsOpenInterest(market: MarketType): Boolean = api.supportsOpenInterest(market)
+
+    /** 网络抖动或来源没有 OI 历史都归到 null：副图静默缺席，不弹错。 */
+    override suspend fun openInterest(id: SymbolId, baseMinutes: Long, limit: Int): OpenInterestSeries? = try {
+        api.openInterest(id.market, id.symbol, baseMinutes, limit)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        null
+    }
 
     override suspend fun clearMarketCache(market: MarketType) {
         tickerDao.clear(market.key)

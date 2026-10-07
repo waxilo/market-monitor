@@ -220,11 +220,11 @@ fun KlineChart(
     /** 左上角角标（进入全屏）。null 表示不画，读数带也就顶到最左。 */
     cornerAction: ChartCornerAction? = null,
     /**
-     * 十字光标当前指到的 K 线下标；null = 没在长按。
+     * 十字光标当前指到的 K 线下标；null = 没有十字光标。
      *
      * K 线详情（OHLC）不再浮在图上做弹窗 —— 弹窗那块字常年压着左上的蜡烛与形态。
      * 下标交给调用方，由调用方做成常显小条塞进 [candleReadout]：
-     * 长按跟着手指读那一根，松手回到最新一根。
+     * 长按跟着手指读那一根，松手**停在**那一根；被画布上的其他操作清掉时才回到最新一根。
      */
     onCrosshairIndexChange: (Int?) -> Unit = {},
     /**
@@ -254,8 +254,10 @@ fun KlineChart(
     val barCount = series.size
     var viewport by remember { mutableStateOf(initialView.viewport) }
     var crosshair by remember(symbolKey, interval.storageKey) { mutableStateOf<Crosshair?>(null) }
-    // 下标变化就同步给调用方的 K 线详情小条（长按换根 / 松手归 null 都走这里）
+    // 下标变化就同步给调用方的 K 线详情小条（长按换根、被其他操作清掉都走这里）
     LaunchedEffect(crosshair?.index) { onCrosshairIndexChange(crosshair?.index) }
+    // 进划线模式清掉遗留的十字光标：那场手势已经是「拖线」，读数标留着会跟线上的价位标抢位置
+    LaunchedEffect(alertLineMode) { if (alertLineMode) crosshair = null }
     var oldestRequested by remember { mutableLongStateOf(-1L) }
     // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
     val measurer = rememberTextMeasurer()
@@ -628,6 +630,16 @@ fun KlineChart(
             TimeAxisLabels(
                 series, plot, geo, interval, density,
                 Modifier.align(Alignment.TopStart),
+            )
+            // 排在时间轴刻度之后：竖线走到哪根，那一列的日期就以实底标压上去
+            CrosshairTimeBadge(
+                crosshair = crosshair,
+                series = series,
+                plot = plot,
+                geo = geo,
+                interval = interval,
+                density = density,
+                modifier = Modifier.align(Alignment.TopStart),
             )
 
             // ---- 角标（进入 / 退出全屏）：绘图区左下角 ----
@@ -1425,6 +1437,64 @@ private fun CrosshairPriceBadge(
 }
 
 /**
+ * 十字光标处的日期标：贴在时间轴上、与竖线同列。
+ *
+ * 与 [CrosshairPriceBadge]（横线读数贴右侧价格轴）成对 —— 十字光标的两条线各有一个读数：
+ * 横线读价、竖线读时间，用户不必自己数到轴上去比对。
+ *
+ * 显示条件跟**竖线**走（下标落在可视窗口里），与手指的高度无关：手指划到副图上时
+ * 竖线照画，它顶端的读数也不该少。取不到那根蜡烛（下标越出序列末尾的留白）则不画 ——
+ * 标一个不属于任何蜡烛的时间比不标更误导。
+ */
+@Composable
+private fun CrosshairTimeBadge(
+    crosshair: Crosshair?,
+    series: ChartSeries,
+    plot: PlotGeometry,
+    geo: ChartGeo,
+    interval: CandleInterval,
+    density: Density,
+    modifier: Modifier = Modifier,
+) {
+    val mark = crosshair ?: return
+    if (mark.index !in plot.indices) return
+    val candle = series.candles.getOrNull(mark.index) ?: return
+
+    val colors = MarketTheme.colors
+    val style = rememberPriceTagStyle()
+    val text = ChartModel.formatTime(candle.openTime, interval.minutes)
+    val measurer = rememberTextMeasurer()
+    val textSize = remember(text, style, density) {
+        measurer.measure(AnnotatedString(text), style, density = density).size
+    }
+    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
+    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
+    val boxWidth = textSize.width + padH * 2f
+    // 以竖线为心中、再夹进绘图区：贴着左右边缘时标会被切掉半个字
+    val left = (geo.xOf(mark.index, plot) - boxWidth / 2f)
+        .coerceIn(0f, (geo.plotWidthPx - boxWidth).coerceAtLeast(0f))
+    val centerY = geo.plotHeightPx + geo.timeAxisHeightPx / 2f
+    Text(
+        text = text,
+        modifier = modifier
+            .offset(
+                x = with(density) { left.toDp() },
+                // 以时间轴带的中线为心：先退掉文字高度的一半，再退掉上内边距
+                y = with(density) { (centerY - textSize.height / 2f - padV).toDp() },
+            )
+            .clip(Radius.xsShape)
+            .background(colors.ink)
+            .padding(
+                horizontal = with(density) { padH.toDp() },
+                vertical = with(density) { padV.toDp() },
+            ),
+        style = style,
+        color = colors.paper,
+        maxLines = 1,
+    )
+}
+
+/**
  * 告警线的价格标。与十字光标的价格标同一套定位，只是 y 由**已保存的价格**反算 ——
  * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
  * 线的指标身份不标在这里（右缘只放价位），画在虚线左端（见 [AlertLineLeftTag]）。
@@ -1625,7 +1695,7 @@ private fun SubAxisLabels(
     }
     val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
 
-    panes.forEachIndexed { index, _ ->
+    panes.forEachIndexed { index, pane ->
         val range = ranges.getOrNull(index) ?: return@forEachIndexed
         val top = geo.subTopOf(index)
         // 取首尾两条刻度：副图块普遍矮，画满会糊；挨太近时同样丢掉下面那条
@@ -1638,7 +1708,8 @@ private fun SubAxisLabels(
             if (abs(y - lastDrawnY) < minGapPx) return@forEach
             lastDrawnY = y
             Text(
-                text = PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS),
+                text = if (pane.compactAxis) PriceFormatter.formatCompact(value)
+                else PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS),
                 modifier = modifier.offset(
                     x = with(density) { geo.plotWidthPx.toDp() },
                     y = with(density) { (y - labelHeightPx / 2f).toDp() },
@@ -1775,7 +1846,7 @@ private fun IndicatorReadout(
  * - **单指纵向**（起点在右侧价格刻度区）→ 缩放价格刻度，**向上拖 = K 线变高**；
  * - **双指横向张合**（任意位置）→ 缩放时间轴，拉开 = 放大；
  * - **双指纵向张合**（两指都在绘图区）→ 缩放价格量程，拉开 = K 线变高；
- * - **长按** → 十字光标。
+ * - **长按** → 十字光标（松手**停在**那根上，下一次平移/缩放/轻点才把它收走）。
  *
  * 价格刻度区的纵向拖动必须**按起点**区分，不能按主方向：同一个纵向位移，
  * 落在绘图区里是平移、落在刻度上是缩放，两者语义完全不同。用起点判定还顺带
@@ -1898,6 +1969,9 @@ private suspend fun PointerInputScope.detectChartGestures(
                 zoomAxis = null
                 zoomAccumX = 0f
                 zoomAccumY = 0f
+                // 双指落下 = 这场手势是缩放：上一次留下的十字光标到此为止。
+                // 长按中加第二根手指（十字光标仍在跟手）不在此列 —— 那场手势还是它。
+                if (pressed.size >= 2 && !longPressActive) onCrosshair(null)
             }
 
             // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
@@ -1975,6 +2049,9 @@ private suspend fun PointerInputScope.detectChartGestures(
             val deltaY = primary.position.y - previous.y
             if (deltaX != 0f || deltaY != 0f) {
                 travelled += abs(deltaX) + abs(deltaY)
+                // 位移一旦超过 slop，长按就再也不可能成立（见上方的长按条件）——
+                // 这场手势是平移/翻页：遗留的十字光标到此为止，不陪着图一起滑
+                if (travelled > touchSlop) onCrosshair(null)
                 // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
                 if (axis == null) {
                     axisAccumX += deltaX
@@ -2011,7 +2088,10 @@ private suspend fun PointerInputScope.detectChartGestures(
             if (alertOverTrash) onAlertLineDelete(alertGrabbedId) else onAlertLineCommit(alertGrabbedId)
             if (alertOverTrash) onAlertLineOverTrash(false)
         }
-        onCrosshair(null)
+        // 松手**不清**十字光标：长按把它停在最后那根上，价格标、日期标与 K 线详情小条
+        // 一并留在那里 —— 手指一抬读数就消失的话根本来不及看。它交给「画布上的其他操作」
+        // 收走：平移/双指缩放在手势中清（见上），轻点与其他手势在这里清。
+        if (!longPressActive) onCrosshair(null)
         onGestureEnd()
     }
 }

@@ -51,6 +51,12 @@ object PriceFormatter {
         return value.divide(unit.first, DEFAULT_DECIMALS, RoundingMode.HALF_UP).toPlainString() + unit.second
     }
 
+    /** [formatCompact] 的 Double 重载：图表序列里的量（如持仓量）不走 BigDecimal。 */
+    fun formatCompact(value: Double?): String {
+        if (value == null || value.isNaN() || value.isInfinite()) return NO_DATA
+        return formatCompact(BigDecimal(value.toString()))
+    }
+
     /** 数量：去掉无意义的尾零，保留原始精度。 */
     fun formatQuantity(value: BigDecimal?): String {
         if (value == null) return NO_DATA

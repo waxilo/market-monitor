@@ -120,3 +120,30 @@ class RestHostFallbackTest {
         )
     }
 }
+
+/**
+ * 持仓量取数周期的选择。
+ *
+ * 规则是「≤ 图周期的最大原生周期」：比图粗会丢分辨率、比图细又要多请求；
+ * 原生周期全都比图周期粗时（1m 图碰上 OKX 那张 5m 起的表）取最细的那个兜底，
+ * 否则 `filter` 空集会让整个拉取路径直接崩掉。
+ */
+class OpenInterestPeriodTest {
+
+    private val ladder = listOf(5L, 15L, 30L, 60L, 240L, 720L, 1_440L)
+
+    @Test
+    fun `取不超过图周期的最大原生周期`() {
+        assertEquals(240L, oiBaseFor(ladder, minutes = 240))
+        assertEquals(60L, oiBaseFor(ladder, minutes = 200))
+        assertEquals(720L, oiBaseFor(ladder, minutes = 1_000))
+        assertEquals(1_440L, oiBaseFor(ladder, minutes = 10_080))
+    }
+
+    @Test
+    fun `原生周期全比图粗时取最细的那个`() {
+        assertEquals(5L, oiBaseFor(ladder, minutes = 1))
+        // 顺序无关：结果是最细周期而不是输入的第一个
+        assertEquals(5L, oiBaseFor(listOf(60L, 1_440L, 5L), minutes = 3))
+    }
+}

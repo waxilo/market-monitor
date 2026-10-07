@@ -311,6 +311,11 @@ fun FilterChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    /**
+     * 「当前用不了」的置灰样式（如现货页的 OI chip）。**照旧可点** ——
+     * Android 没有 hover，把原因藏进不可点的死块里没人看得到，点一下弹一句说明更直接。
+     */
+    greyed: Boolean = false,
 ) {
     val colors = MarketTheme.colors
     val bg by animateColorAsState(
@@ -319,12 +324,20 @@ fun FilterChip(
         label = "chipBg",
     )
     val fg by animateColorAsState(
-        targetValue = if (selected) colors.paper else colors.muted,
+        targetValue = when {
+            selected -> colors.paper
+            greyed -> colors.muted.copy(alpha = 0.45f)
+            else -> colors.muted
+        },
         animationSpec = tween(Motion.FastMs),
         label = "chipFg",
     )
     val border by animateColorAsState(
-        targetValue = if (selected) colors.ink else colors.hairline,
+        targetValue = when {
+            selected -> colors.ink
+            greyed -> colors.hairline.copy(alpha = 0.55f)
+            else -> colors.hairline
+        },
         animationSpec = tween(Motion.FastMs),
         label = "chipBorder",
     )
