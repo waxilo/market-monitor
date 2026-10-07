@@ -312,8 +312,9 @@ pub fn run() {
             taskbar::start();
 
             // 价格告警的节拍：主窗隐藏时网页定时器会被 WebView2 节流，只能由宿主敲（见 alert 模块）。
-            // 先认领进程 AUMID，否则 dev 起的进程弹不出横幅（原因见 `alert::claim_app_user_model_id`）。
-            alert::claim_app_user_model_id(app.handle());
+            // 先认领进程的通知身份（Windows=进程 AUMID / macOS=bundle identifier），否则 dev 起见
+            // 不弹横幅、macOS 见「Where is use_default?」选框（原因见 `alert::claim_notification_identity`）。
+            alert::claim_notification_identity(app.handle());
             alert::start(app.handle());
 
             Ok(())
