@@ -19,20 +19,31 @@
 - **顶栏「数据源」按钮在**（`.toolbar` 里 status 之后）：点开 = `SourcePanel.tsx`，打开即**并行探测**全部
   候选、按延迟排序、点一行即切换并关窗。别当成「下拉菜单」——它是居中弹窗。
   ❗**用户要的是「去掉弹窗里的滚动条」，不是去掉入口**（2026-09-29 明确纠正过一次：先把整个入口删了，是理解错）。
+- ❗**测速 5 秒不响应即判超时**（0.1.16，用户口径「数据源测速时 5 秒不响应就算超时」）：探测请求自带 5s
+  时限 —— `sources.ts` 的 `PROBE_TIMEOUT_MS` 经 `httpRequest` 第四参传进宿主 `market_request` 的 `timeout_ms`
+  （reqwest `RequestBuilder::timeout`，请求级覆盖）；浏览器回退走 `AbortSignal.timeout`，`TimeoutError`
+  折成「连接超时」（与 `market.rs::short_error` 同一句）。**只掐探测**：数据请求不传该参数、仍 20s。
 - ⚠️ **弹窗别用纵向长列表**：候选有 **12 条**（币安一家 5 个镜像），两行式行高 ×12 + 两段说明 ≈ **685px**，而弹窗上限是
   `calc(100vh - 72px)`（默认窗 748px、**最小窗 1024×680 下只有 608px**）⇒ 125%/150% 缩放的笔记本上必然溢出，
   右侧挂一条常显的经典滚动条（占 15px 布局宽）。现在 `.src-grid` 是**两列卡片**、单卡 ~49px ⇒ 整个弹窗 **472px**，
   最小窗余量 136px。**同一条规则也适用于 `IntervalPanel`**（15 行曾顶到 608 上限、同样 15px 滚动条 ⇒ 现已两列、525px）。
 - ⚠️ **顶栏是 `nowrap`，窗口窄下来总得有人让步**：让步落在搜索框身上：`.search-wrap { min-width: 120px }` +
-  `.search-field input { min-width: 0 }`（input 默认 `min-width: auto` = 内容宽 ≈180px，是它挡住了收缩）。
-  `.status` 也要 `white-space: nowrap`，否则「已连接」会断成两行。
+  `.search-field .ef-box { min-width: 0 }`（`min-width: auto` = 内容宽 ≈180px，谁在收缩链上挡路就归谁 ——
+  0.1.16 前是原生 input，现在是自绘盒，这条规则跟着搬了）。
+  ❗**0.1.16：「已连接」状态与「数据源」按钮合并成一个 `.src-entry`**
+  （用户点名「现在占了两个按钮的位置」；口径也是用户选的：**常态安静、异常报字** ——
+  常态只写 `● 数据源`，连接中/断线才写 `● 连接中 · 数据源` / `● 断线 · 数据源`，红点 = `online === false`；
+  悬停提示里两样信息都保留：合约数据源 + 当前 `市场：连接态`）。独立 `.status` span 与其 CSS 已删，
+  老「已连接断行」问题随 span 一起消失（`.icon-btn` 的 nowrap 仍是硬要求）。
   （原先的退让候选 `.market-pill` 0.1.11 起已不在顶栏，见「侧栏与搜索」。）
 - **0.1.11：搜索框落在整条顶栏的正中**（用户点名）。机制 = 顶栏分三块：`.tb-side`（brand + 侧栏开关）+
-  `.search-wrap` + `.tb-side.right`（状态/数据源/悬浮窗/设置/窗口组），两组侧翼 `flex: 1 1 0` **等分余量**
+  `.search-wrap` + `.tb-side.right`（数据源〔含连接态〕/设置/窗口组），两组侧翼 `flex: 1 1 0` **等分余量**
   ⇒ 搜索框自然落在整条顶栏的中点（不是「剩下的空档里居中」）。搜索框 `flex: 0 1 380px` —— 380 是
   「1280 下右组（自然宽 ≈415）不被压 + 两侧仍严格等宽」的最大值（400 时右组差 8px ⇒ 偏 6px，实测过）。
+  ❗**0.1.16 起右组里的「悬浮窗」文字按钮已撤**（列表挪进设置，见「悬浮窗显示列表独立」段落）——
+  右组自然宽因此小了一截，380 这个上限只更宽松、居中算式没动。
   ⚠️ **`.icon-btn` 必须 `white-space: nowrap`**：分组后按钮被 flex 压到自然宽以下时，中文标签
-  （「数据源/悬浮窗/设置」）会**折成两行**把顶栏撑到 61px（1024 下 78px）—— 第一版就踩了。
+  （「数据源/设置」）会**折成两行**把顶栏撑到 61px（1024 下 78px）—— 第一版就踩了。
   同理 `.winops-divider` 要 `flex: none`（否则被压到 0 宽）。
   实测：1280 中心 = 640、1600 中心 = 800（**精确相等**）；1024（最小窗）右组顶到自己的 min-content（≈415）
   ⇒ 搜索框左移 ~100px（中心 412），但不重叠、不折行、单行 44px 高 —— 接受。
@@ -41,7 +52,8 @@
   Windows 的 `SM_CXDRAG` 同值）：按下只记起点，指针走出死区才 `startDragging()`；**按住再久、原地不动都不搬**，
   抬手照发 click（悬浮窗的行是按钮，点选语义必须完整）。移动/抬手监听挂在 **window 捕获阶段**（`setPointerCapture`
   会把 click 一起重定向、`pointerleave` 会在「往外拖」时误取消，两者都不能用）。
-  `blankOnly: true`（主窗顶栏：按钮/输入框上按下永不拖）vs `false`（悬浮窗整块都能拖）。
+  `blankOnly: true`（主窗顶栏：按钮/输入框上按下永不拖；INTERACTIVE 选择器 0.1.16 起含
+  `[role="textbox"]` —— 自绘搜索框不是 input，漏了它顶栏就能从搜索框里拖窗）vs `false`（悬浮窗整块都能拖）。
   - **顶栏双击最大化**（`dblClickMaximize: true`，只主窗开）认的是浏览器 `dblclick` 事件，不是第二次按下上的
     `e.detail === 2`。❗0.1.8 前者的坑：`detail===2` 要求两次按下落在**同一元素**，顶栏是十几个并排 span/button，
     两下偏一两个像素就换了元素、计数从头开始 ⇒「双击毫无反应」。`dblclick` 由浏览器按时间窗+位移配对好再投给
@@ -74,12 +86,20 @@
 - **删 CSS 前先 `git grep` 类名的全部调用点**（`.mini-x` 曾是跨面板共用的关闭「×」，已改名 `.panel-close`）。
 
 ## 设置面板与快捷键（2026-09-29 新增）
-- 弹窗外壳仍复用 `.up-backdrop` / `.up-panel up-wide` / `.up-head` / `.up-body` / `.panel-close`（Esc 关），
-  与「更新」原来是同一个壳：`components/SettingsPanel.tsx` 现在是容器，**内容按块拆开**（`.set-block` +
-  `.set-block-body`，`:first-child` 不画上分隔线）——「更新」那坨被提成 `components/UpdateSection.tsx`
-  （**只出内容、不含 backdrop/标题/Esc**，面板壳由外层负责）。旧 `UpdatePanel.tsx` **已删**，别再去 import 它。
-- 三段：**外观**（主题 segmented，`theme.css` 的 `.set-seg` 与 `.iv-units` 同款）/ **快捷键** /
-  **更新**（`<UpdateSection/>`）。主题落盘仍是 `mm.theme`（`App.tsx`），`setTheme` 同时调
+- 弹窗外壳仍复用 `.up-backdrop` / `.up-panel` / `.up-head` / `.up-body` / `.panel-close`（Esc 关）：
+  `components/SettingsPanel.tsx` 是容器，**内容按块拆开**（`.set-block` + `.set-block-body`）——
+  「更新」那坨被提成 `components/UpdateSection.tsx`（**只出内容、不含 backdrop/标题/Esc**，面板壳由外层负责）。
+  旧 `UpdatePanel.tsx` **已删**，别再去 import 它。
+- ❗**0.1.16（2026-10-07）改成 90% 固定画布 + 左栏分类 / 右栏内容**（用户拍板「固定大小、铺满 90%、
+  左右分栏」；形态问过一次，选的「左栏分类 + 右栏内容」）：`.up-panel.up-settings` = `90vw × 90vh`
+  （`max-height: none` **盖掉** `.up-panel` 的 `calc(100vh - 72px)`，否则再压一道会矮一截）；
+  内部 `.set-split` = `.set-nav`（184px 分类列，选中 = wash 底 + 左侧主色竖条，与数据源卡片同语法）+
+  `.set-pane`（右栏独立滚动）。分栏的来由 = **类别只会越挂越多**、一列竖着摆摆不下；固定尺寸顺带
+  保证换分类时框不跳大小（各页内容多少不一）。
+- 五个类别：**外观**（主题 segmented，`theme.css` 的 `.set-seg` 与 `.iv-units` 同款）/ **悬浮窗**
+  （`<MiniListSection/>`，见「悬浮窗显示列表独立」）/ **快捷键** / **告警通知**（`<WebhookSection/>`，
+  见「价格告警」最末条）/ **更新**（`<UpdateSection/>`；更新包已下好时面板默认落在这一页 ——
+  顶栏那枚圆点写着「点这里进去安装」）。主题落盘仍是 `mm.theme`（`App.tsx`），`setTheme` 同时调
   `getCurrentWindow().setTheme(theme)` 把原生窗口主题对齐。
 - **0.1.11 出厂浅色**：`mm.theme` 的解析口径 = 「只有存过 `'dark'` 才是深色，其余（没存过 / 坏值）一律浅色」。
   ❗**首帧主题必须由 `desktop/index.html` 里的一段内联脚本在样式生效前定 `data-theme`** —— `:root` 的深色底
@@ -137,9 +157,26 @@
   ❗用户点名「放到左侧菜单栏上面」；副作用是**侧栏收起（`.list-collapsed`）时胶囊跟着宽度归零一起消失**，
   想切市场得先展开侧栏（开合开关就在顶栏左端）。
 侧栏 = 自选（名称 + 现价，取 `useTickers` 格子，零额外请求）；搜索结果走浮层（临时态塞进常驻容器会把自选冲掉）⇒
-`components/SearchDropdown.tsx` 锚在 `.search-wrap`（**不是 input**：wrap 含「清空」按钮，量 input 会得出「错位 10px、
+`components/SearchDropdown.tsx` 锚在 `.search-wrap`（**不是框体本身**：wrap 含「清空」按钮，量错对象会得出「错位 10px、
 窄 42px」的假问题）。排序口径 = `lib/search.ts::rankInstruments` 纯函数。⚠️ 浮层键盘事件必须挂 `document`（焦点全程在
-顶部输入框，事件不经过浮层 DOM）。
+顶部搜索框里，事件不经过浮层 DOM）；⚠️ 浮层开着时 ↑↓ 归列表 —— EnglishField 会把 ↑↓ 当 Home/End，得由
+`App` 的 onKeyDown 抢先 preventDefault（preventDefault 拦不住挂 document 的浮层导航，它俩各取所需）。
+- ❗**两个搜索框都只收英文，且中文输入法下不弹候选词**（0.1.16）：用户先要求「大输入框和设置-悬浮窗
+  的输入框，都仅输入英文」，随后追加「选中中文输入法，不出现候选词，能直接输入」。候选窗是系统层的、
+  网页侧无标准可关，**唯一出路是不给输入法机会启动** ⇒ 两框（顶栏 `.search-field`、设置 → 悬浮窗
+  `.ms-input`）都是自绘 `components/EnglishField.tsx`：**非编辑控件 `div[role="textbox"]`**，
+  焦点在非编辑元素上时 Chromium / WebKit 不建输入法上下文，「不出候选词、字母直接进」两端同机制。
+  ⚠️ 别再改回 `<input>` —— 改回去候选词就回来了。字符集 = `lib/search.ts::englishOnly`（`[A-Za-z0-9_]`，
+  交易对名字母表；中文/全角/空格/标点被拒）。自绘面：1px 光标画在文字流里（inline span，key 变更
+  重挂以重启闪烁）、选区（`--sel` 变量）、←→/Home End（↑↓ 也映射 Home/End）、Ctrl+A/C/X/V、
+  双击选全、拖选、caretRangeFromPoint 点击定位。粘贴 = Ctrl+V **不** preventDefault、焦点先让给
+  隐藏 `.ef-sink`，由它接原生 `paste` 事件读 clipboardData（400ms 没等到就收回焦点；不依赖
+  navigator.clipboard 权限；CDP 注入的 Ctrl+V 不触发真实粘贴——连普通 input 都不触发，套件在
+  DOM 边界上模拟）。场景键协议：`onKeyDown` prop 先过一手，preventDefault 了就轮到场景键
+  （顶栏 Esc；悬浮窗 Esc/↑↓/Enter）。⚠️ 顶栏浮层开着时 App 得替 ↑↓ 抢先 preventDefault，
+  否则 EnglishField 把 ↑↓ 当 Home/End（浮层导航挂 document，preventDefault 拦不住它）。
+  几何：26px 高（content 14 + padding 5×2 + border 1×2）、`.ef-box` line-height 14px、
+  `windowDrag.ts` 的 INTERACTIVE 已含 `[role="textbox"]`（否则顶栏能从搜索框里拖窗）。
 - **0.1.11：自选三个入口的分工**（用户点名；口径改过一次：先要「行内常显 ×」，随即又要求撤掉 ×、
   改「右键移除自选」）：① **行右键菜单**「从自选移除」（`MarketList` 里的 `RowMenu`，复用 `.chart-menu`
   壳与行为 —— 贴边翻转、点外面/Esc/滚轮收起、做完即收；单条 danger、aside 显示标的）——
@@ -191,13 +228,46 @@
   effect 落盘），别再拆回三个 useState。
 - 语义没变：MA chip 切 `prefs.ma`、BOLL 切 `prefs.boll`、副图组切 `prefs.panes`；panes 按 `SUB_PANE_KINDS`
   目录顺序存，不按点击顺序。出厂 = **裸 K 线**（一个都不叠）；这是「怎么看图」与标的无关 ⇒ 全局一份。
+  0.1.16 起支持集多一枚 `OI`（见下节）—— 解析按支持集过滤 ⇒ 旧落盘零迁移、新值自动放行。
+
+## 持仓量副图（OI，0.1.16，2026-10-07 新增）
+- **永续专属、且只有四家源有历史**（用户拍板：有持仓量的源才亮这枚 chip，其余置灰并说明）：币安同构 /
+  OKX / Bybit / Gate；其余五家方言 `openInterest = null`（Bitget / MEXC / Hyperliquid / HTX / Bitunix ——
+  Hyperliquid 的 `metaAndAssetCtxs` 只有当前快照、没有历史序列，其余四家未核实）。规格
+  `lib/dialects.ts::OpenInterestSpec` —— **与 K 线 period 表分开的两张表**
+  （OI 支持面窄得多，别并进 `intervalLadder`）：
+  - 币安同构：`/futures/data/openInterestHist`（与 fapi 同域、**不同前缀**），`sumOpenInterestValue`
+    即美元名义值；5m…1d，上限 500、深度约 30 天。
+  - OKX：rubik `open-interest-volume?ccy=BTC` —— **按币种聚合全站合约**（不是单合约）；行 `[ts, oi, vol]`；
+    ⚠️ `limit`/`begin` 改不动条数，窗口固定 ~575 点（5m ≈ 2 天）；周期只有 5m/1H/1D。
+  - Bybit：`/market/open-interest`，`openInterest` 是**基础币口径**（BTC ≈ 5.8 万，对照 tickers 的
+    `openInterestValue` ≈ ×现价）⇒ `baseCoinValue: true`，对齐时乘该根收盘价折美元；上限 200。
+  - Gate：`contract_stats` 的 `open_interest_usd`（时间**秒**，解析转毫秒）；周期含 1m，上限 1000。
+- **取值统一折美元名义值**；取数周期 = **不超过图周期的最大原生周期**（`lib/api.ts::oiBaseFor`；全比图粗
+  时取最细的，如 1m 图碰 OKX 的 5m 表）；点数按 `HISTORY_BARS`(300) 根图内 K 线倒推
+  （`needed = ceil(300 × 图周期 / 原生周期)`）。现货与无 OI 的源直接拒绝（抛错，上层归 null）。
+- **对齐 = 前向填充**（`lib/chartSeries.ts::alignOpenInterest`）：每根取「时间 ≤ 其开盘时间」的最新采样，
+  采样之间的阶梯保持、不插值，序列开始前的根 NaN（不拿未来值回填）；Bybit 基础币口径在这步折美元。
+- **副图**：`buildSeries` 出 `title: '持仓量'`、readout `持仓量: 4.15B`；纵轴刻度走 `formatCompact`
+  （`KlineCanvas` 里 `pane.kind === 'VOLUME' || 'OI'` 共用 K/M/B 缩写分支）。
+- **chip 门控**：`oiSupported = market === 'FUTURES' && dialect.openInterest != null`；不支持时 `disabled`
+  + title 写原因（现货「现货没有持仓量（永续专属）」／其余源「<源名> 没有持仓量历史（Gate / 币安系 /
+  OKX / Bybit 有）」）。桌面有 hover，置灰 = 点不动（App 的两端差异见 android.md）。
+- **取数**：`oiSelected && oiSupported` 才起 **10s** 轮询（`OI_POLL_MS`）整段重拉；不满足 → `setOi(null)`；
+  换标的/周期先清旧序列**再**取（上一段的持仓量画在新 K 线上是错线）。**取不到整块不画**（无空板、无弹错）。
+- 验收：`verify-open-interest.mjs` **58**（node 真接口：四家 parse 喂 /tmp/oi-captures 真实响应逐点核 +
+  URL 逐字符 + `oiBaseFor` + 对齐/折美元 + 出块与拒绝口径；不带代理 env 时三个需代理的源标 SKIP，
+  Gate 直连照跑）· `verify-open-interest-ui.mjs` **28**（无头 Chrome 桩数据端到端：点亮 chip 恰发一次
+  请求（URL 逐字）→ 读数带「持仓量: 4.15B」+ 右轴 B 级刻度 → 悬停中部读数随光标那根变（证明按 K 线
+  逐根携带、不是只画末值）→ 再点关闭文字消失且 1.5s 零新请求；换 MEXC 置灰 + title 指名四家、
+  切现货置灰，均零请求）。
 
 ## 界面文案（0.1.11 起全中文）
 - 用户要求「页面上所有参数用中文」，但**通用技术指标名保留英文**（MA5/MA10/…、BOLL、MACD、RSI、KDJ、
   DIF/DEA —— 用户在示例文案里自己拍的「基本全中文」）。已改：K 线明细带 `开 / 高 / 低 / 收`
   （`KlineCanvas.tsx::drawCandleRow`，`较上根 ±x%` 不变）；概览四块 `24小时最高 / 24小时最低 /
-  24小时成交额 / 24小时走势`；标的后缀 `永续 / 现货`；副图 `成交量`（`SUB_PANE_LABEL.VOLUME`，读数
-  `成交量: …`）；周期用短单位（见「K 线周期」）。
+  24小时成交额 / 24小时走势`；标的后缀 `永续 / 现货`；副图 `成交量` / `持仓量`（`SUB_PANE_LABEL`，读数
+  `成交量: …` / `持仓量: 4.15B`）；周期用短单位（见「K 线周期」）。
 - ⚠️ 改这些文案会牵动验收脚本的**文本断言**（画布上的字要靠 `fillText` 探针收，见「本地校验」）。
 
 ## K 线周期（`src/lib/intervals.ts` = 目录唯一出处）
@@ -270,11 +340,44 @@
   （Windows 比的是「进程 AUMID == 已注册 AUMID」）。现在显式 `app_id(identifier)` + `setup` 里
   `SetCurrentProcessExplicitAppUserModelID(bundle identifier)` ⇒ dev 与安装版同一条路径，错误如实回抛。
 - 文案按方向分「上破/下破」（`usePriceAlerts.notify()`），宿主不参与措辞。
+- ❗**0.1.16：穿越除系统通知外还推 webhook**（设置 → 告警通知页，`lib/webhooks.ts` + `components/WebhookSection.tsx`）：
+  `notify()` 里同步调 `sendAlertWebhook(「标的 方向 价（现价 …）」)`，**fire-and-forget 不 await** ——
+  对端慢/挂不许拖住 5s 的判定节拍（结果落 `last`，设置页看得见）；**不重试**（隔夜补发一串过时穿越比
+  少一条更糟，系统通知已报过一次）。只发 https（宿主 `market_request` 也只放行 https）、只认
+  `POST {"message": …}`（notify_hub 的 hook 约定，QQ 里的标题由那边 key 名定）；空着/不合规的地址行
+  不是目的地、直接跳过。存储 = `mm.webhooks`（`WebhookEndpoint[]`，**默认空表** ⇒ 不配就与从前一样）；
+  行底显示「测试 / 上次告警 14:32 已送达或失败：…」，**改地址顺手清 last**（换了一条路，旧结果不再
+  代表它）、改名字保留；「测试」按钮同步等结果并把整条短句落 last。
 - ⚠️ 右键**一律弹自绘菜单**（`ChartMenu.tsx`，见 0.1.10 更新），「加告警线」是菜单第一项。
 
 ## 悬浮窗显示列表独立（`mm.miniWatchlist`，2026-09-30 新增）
+> ❗**0.1.16 更新**（2026-10-07，用户拍板「把悬浮窗列表也挪到设置里，且改成搜索添加，不再使用
+> 当前的自选列表」）：列表与自选**完全脱钩**（下面「自选的一个子集」「删自选时同步剔掉」全部作废）——
+> - 入口 = **设置 → 悬浮窗**（`MiniListSection.tsx`，拖拽排序复用 `hooks/useDragSort.ts`，ghost portal
+>   到 body）；顶栏那个从自选里勾选的弹窗 `MiniListPanel.tsx` **已删**，别再去 import。
+> - ❗**2026-10-07 二次改版（用户拍板）：页面左右两栏** —— 左「显示中」列表（顺序即面板顺序、
+>   整行拖动/↑↓ 微调/× 摘掉），右「搜索添加」（输入框 + 结果）。两栏 `.mini-split`/`.mini-col` 等宽，
+>   `.mw-scroll` 封顶 240px（列表与结果同高；旧 `.ms-results` 280px 覆盖已删）。
+> - 搜索是**两市场混搜**（`lib/search.ts::rankAcrossMarkets`：匹配分层 → 计价币 → 字母序 → 给定市场
+>   顺序、合约在前；**不置顶自选、不算成交额** —— 悬浮窗面板本就两市场混排，只搜一边还得先想
+>   「它在哪个市场」；结果行带**永续/现货**胶囊区分同名标的）。**键盘**：↑↓ 循环高亮（`active` 下标，
+>   与主窗搜索下拉同款无高亮规则：↓ 从第一项、↑ 跳末项；`scrollIntoView({block:'nearest'})`），
+>   **Enter 加「高亮那条」**（没高亮时退回「加第一条未加入的」）；高亮 `.mw-row.pick.active`
+>   （同 `.sr-row.active` 底色）、行 `onMouseEnter` 设高亮、结果区 `onMouseDown preventDefault`
+>   保输入框焦点。点结果行仍按整行语义 添加/摘掉，已在列表的显示 ✓、再点摘掉；列表内 × 移除、
+>   整行拖动排序（也可 ↑ ↓）。
+> - `readMiniWatchlist()` **不再按自选过滤**：没存过 `mm.miniWatchlist` 的机器第一次读会**拷一份
+>   当前自选**当出厂值（升级/首装面板内容不变，之后两边各自增删、互不影响）；**存过就是真相
+>   （空列表也算）**、坏数据按「没存过」重拷（与 `useWatchlist` 落盘口径一致）。
+> - 连带：迷你列表行可以不是自选标的 ⇒ 主窗轮询源从 `marketItems` 换成 **`tickItems`**（`App.tsx`，
+>   选中项不在自选时并进 `useTickers`/`useSparks`），否则点行切过来标题价与迷你走势是空的。
+> - 验收 `.workbuddy/tmp/verify-mini-list.mjs`（node **15**）/ `verify-mini-list-ui.mjs`（无头 Chrome
+>   **40**：含两栏几何、↑↓ 高亮循环 + Enter 加高亮那条、顶栏合并按钮三态；截图 `mini-list-*.png`、
+>   `n0/n3/n4/n6-*.png`）。
+>
+> 以下为 0.1.16 前的旧口径（均已作废）：
 悬浮窗显示的是**自选的一个子集**，与自选列表同表混排但**单独一份存储 + 单独排序**（数据在 `useWatchlist`，
-UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
+UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.ts`）。
 - 两条拖拽语义**不同**：侧栏（自选）只在本市场内动；悬浮窗弹窗里是**整行跨市场混排**排序。
 - 进 `mm.miniWatchlist` 的键与自选同形（`市场:标的`），删自选时同步剔掉。
 
@@ -312,7 +415,7 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
 >   老数据零迁移）。`withLinesLock(store, key, locked)` 解锁即删键；作用域与画线同键（`市场:标的`）。
 > - `useDrawings`：增 `linesLocked` / `setLinesLocked` + 拖动三 API（`movePriceLine` / `moveTrendBy` /
 >   `moveTrendAnchor` 重新接线到库里那三个纯函数）。`ChartMenu`：`drawingCount > 0` 才给这条
->   （没线可锁不出现），文案随 `linesLocked` 翻转；`MENU_H` 208。
+>   （没线可锁不出现），文案随 `linesLocked` 翻转；`MENU_H` 168 → 200。
 > - `KlineCanvas`：`mode` 恢复 `'trend-anchor' | 'trend-body' | 'line'`；按下时抓取优先序
 >   把手(6px) → 线身(4px) → 水平线(4px)，**整段（含空闲光标 grab/move/ns-resize）当且仅当 `linesLocked` 跳过**；
 >   锁定时落点是「拖画布」（平移照旧）。把手（端点小圆点）只在解锁时画 —— 0.1.12 那条「不给能抓的错觉」就是这条。
@@ -322,6 +425,13 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
 >   拖水平线改价落盘 → 锁后无提示/拖不动（pricePan 动了 = 落点退回拖画布）→ 解锁又能拖；直线端点 grab /
 >   线身 move / 平移两端 t 同增（增量 = 80px 折算，半根容差）/ 拖端点 a 不动 b 随指针；把手黄色像素差分
 >   （解锁 198 / 锁定 127）；锁定期两次拖尝试后双击复位；无页面 JS 报错。
+> ❗**0.1.16（2026-10-07）菜单条目分两组、中间加分隔线**（用户拍板「画图和全局的清空、锁定复位，
+> 中间进行分隔，方便区分」）：上组 = **落点动作**（对光标下那条线/那个价位），下组 = **全局动作**
+> （锁定/解锁全部画线、清空全部画线、复位纵向刻度 —— 对整个标的生效）；两组都非空时中间插一条
+> `.chart-menu-sep`（1px `var(--hairline)`，`role="separator"`）。拼装 = `Row = Item | 'sep'` +
+> `actions`/`globals` 两个数组、条件插 `'sep'`（渲染对 `'sep'` 出 `key="sep"` 的 div）；`MENU_H` 200 → 208。
+> 混排时容易误以为清空/复位也跟落点绑定，这条线专门把两类分开。验收 `.workbuddy/tmp/verify-menu-sep.mjs`
+> （无头 Chrome **14**：无线时无 sep、有线后恰有一条、全部落点条目在 sep 前/全局在后；`menu-sep-*.png`）。
 > ❗**右键落点先钉十字光标**（2026-10-02）：`onContextMenu` 里先把 `crossRef.current` 钉到这一下右键的
 > `{index, y, onBar}`（与 `pointermove` 同一套算法）并 `draw()`，之后才判命中、才 `priceOfY(y)` 算菜单价 ——
 > 菜单里的价和图上那枚价格标必须是**同一个 y** 出来的。光标跟着 `pointermove` 走，而右键事件的坐标可能和
@@ -410,6 +520,17 @@ UI 在 `MiniListPanel.tsx`，拖拽排序抽成 `hooks/useDragSort.ts`）。
   与独立复算一致的 100 点扫描性质核对、「true ⇒ indexAt 给的必是离 raw 不超过半格的那根」）；
   `verify-chart-interaction.mjs` ⑪ 用**像素列增量**验真实渲染（压在蜡烛上时该列增量 ≥ 200px、
   挪回留白后增量归 0）——**「挪回去又消失」这条必须有**，否则只是「画上去没擦」。
+
+### 竖线日期标（0.1.16，2026-10-07）
+用户要求「横线展示价格标签，纵线应该展示日期标签」——价格标本就有（`drawBadge` 在右刻度列），这轮补竖线：
+
+- `cross.onBar` 为真且 `index` 在可视区内时，在**时间轴带**里画一枚实底标签（`p.ink` 底 / `p.paper` 字，
+  与断线明细同一样式）；文本 `formatCandleTime(c.timestamp, minutes)` —— 日线 `YYYY-MM-DD`、日内
+  `MM-DD HH:mm`（`minutes` 来自当前周期，同时间轴刻度）。
+- 位置：以竖线为心中，再 `clampNum(x, 0, plotW - w)` 夹进绘图区 —— 贴着左右边缘时标会被切掉半个字。
+- 绘制顺序：排在时间轴刻度循环**之后** ⇒ 压住同位的刻度文字（同一列会同时有刻度与标，标是实的）。
+- 两枚标同生同灭（都挂 `onBar`）：右侧留白里 `indexAt` 把位置夹回最后一根，那时标出来的日期
+  不属于鼠标下那一点。
 
 ## 前台不息屏（`src-tauri/src/awake.rs`，2026-09-30 新增）
 
@@ -503,12 +624,55 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
 **2026-10-02 新增**：`verify-shortcut-default.mjs` **29**（快捷键默认值改 `alt+d`：上半纯函数 —— 默认和弦 /
 `formatChord`+`acceleratorOf` 翻译链 / Alt+M 事件作废；下半无头 Chrome —— 面板显示「Alt + D」且「恢复默认」
 置灰、窗口内 Alt+D 被吃掉而 Alt+M 不再命中、录制成 `alt+shift+d` 后新键生效老键让位、恢复默认删落盘键且
-Alt+D 立刻复活。**纯浏览器跑，不碰 Tauri 桩**，可作后续快捷键改动的基线）。
+Alt+D 立刻复活。**纯浏览器跑，不碰 Tauri 桩**，可作后续快捷键改动的基线；**0.1.16 适配**：设置分了
+左栏后，打开面板要先点左栏「快捷键」节再验）。
 **2026-10-03 新增**：`verify-lines-lock-drag.mjs` **36**（画线拖动 + 右键锁：拖水平线改价落盘 → 锁定后
 悬停无提示/拖不动（落点退回拖画布）→ 解锁恢复；直线端点 grab / 线身 move / 平移与拖端点的落盘语义；
 把手黄色像素差分验「锁定时把手消失」）。靠预注入 fetch 桩喂确定性 15m K 线，不碰网络。
+**2026-10-07 新增（0.1.16 批）**：`verify-webhooks.mjs` **14**（node 真发 POST 到本地自签 https 桩：
+URL 校验口径 / 告警记账 / 空行不发送 / 测试标记 / 失败不抛 / 改址清 last；跑法见文件头 ——
+**桩证书在 /tmp，机器重启后要按文件头重新 openssl 生成再起桩**）·
+`verify-mini-list.mjs` **15**（node：混搜排序 + 独立列表一次性拷贝迁移；靠 esbuild 单模块 bundle，
+跑法见文件头）/ `verify-mini-list-ui.mjs` **40**（无头 Chrome：首装拷贝落盘 / 两市场混搜 /
+点行与 Enter 添加 / ✓ 摘掉 / × 移除 / ↑ 换位落盘 / **两栏几何（等宽、左右、顶端齐平）** /
+**↑↓ 高亮循环 + Enter 加高亮那条（已加入时原样）** / **顶栏合并按钮三态**（连接中 →
+已连接安静「数据源」→ `setOffline` 断网「断线 · 数据源」+ 红点 → 恢复；注意断网探针必须放在
+自选未被打空的阶段，`无自选` 分支不出「断线」字样）/ 与自选脱钩 / Esc 分层）·
+`verify-menu-sep.mjs` **14**（无头 Chrome：右键菜单分组分隔线）·
+`verify-english-input.mjs` **42**（无头 Chrome（dev server）：两个搜索框都是自绘 `EnglishField`
+（非编辑 `div[role="textbox"]`，焦点不在可编辑控件上 = 输入法起不来、「不出候选词」的机制前提——
+真候选窗由用户手验）—— 英文/数字/下划线原样、**CDP 原样派发的 CJK/全角/空格/标点被拒**
+（window keydown 记录仪证 `def:true`；playwright `keyboard.type` 打中文走 `Input.insertText`，
+对非编辑元素是 no-op，拒词只能 CDP 派发）、光标/选区三段文字、点击定位（caretRangeFromPoint）、
+Home/End、Shift+←、Ctrl+A、双击选全、Ctrl+K 聚焦全选、**粘贴经隐藏 sink 接原生 `paste`**
+（Ctrl+V 真按 → 焦点落到 `.ef-sink` → DOM 边界注入 paste 事件；中文被滤）、Esc、**浮层开着时
+↑↓ 翻高亮、框里光标不动、Enter 选中**。标的清单**打桩**（Gate 永续 `contracts` + Gate 现货
+`currency_pairs`，形状对齐 dialects.ts/api.ts）——不信外网；那次外网抖动（Gate 现货 25s 超时、
+应用自报断线）把「等真实结果」的写法全卡死过一次）·
+⚠️ **跑 dist 的套件**（`verify-zh-prefs` / `verify-draw-menu` / `verify-shortcut-default` /
+`verify-trend-lines-ui` 自建静态服务器伺服 `desktop/dist`）改完 src 要先 `npm run build` 再跑 ——
+否则测的是旧产物（这次 EnglishField 没进 dist，zh-prefs 卡在点不到 `.ef-box` 超时了 10s）。
+`verify-probe-timeout.mjs` **9**（无头 Chrome：测速 5s 判超时 —— 9 个候选域名打桩快速 200、
+Gate 的探测路径**挂起不响应**：1.5s 时 Gate 仍「检测中…」（不是立刻判失败）→ 两轮判定
+5.06s / 5.04s 落「连接超时」、其余 9 行照常 ms（自动探测 + 单行「重测」）；走浏览器回退 =
+`AbortSignal.timeout` + 折句；宿主侧超时语义靠 reqwest 请求级 `RequestBuilder::timeout`，
+cargo 单测覆盖到参数签名）·
+`verify-crosshair-labels.mjs` **15**（无头 Chrome：十字光标两枚标 —— 移出画布取基准帧 → hover 后
+时间轴带恰好多 1 枚文字（= 读数带那根的时间）、与鼠标 x 居中 ±40px；右刻度列恰好多 1 枚数字 = 价格标；
+上移 45px 数值跟着变；移出两枚一起消失。`__texts` 先按 `text@round(x),round(y)` **去重成集合**再差分 ——
+ticker 触发的重渲染会在等待窗里多跑一帧完全相同的 draw，多重集计数会假失败）。两支浏览器套件跑在
+[::1]:5173 的 dev server 上（**别动那个进程**）；顶栏改动的回归基线另有 `verify-zh-prefs.mjs` **95**（含顶栏几何）。
+**（0.1.16 批 · 持仓量副图）**：`verify-open-interest.mjs` **58**（node 真接口：四家 parse 喂
+/tmp/oi-captures 真实响应逐点核 + URL 逐字符 + `oiBaseFor` 选周期 + 对齐/折美元 + 出块与拒绝口径；
+不带代理 env 时三个需代理的源标 SKIP、Gate 直连照跑，跑法见文件头）·
+`verify-open-interest-ui.mjs` **28**（无头 Chrome，dev server 同上：桩住 Gate 永续 15m K 线 +
+contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数带「持仓量: 4.15B」+ 右轴 B 级刻度 →
+悬停中部读数随光标那根变（证明按 K 线逐根携带、不是只画末值）→ 再点关闭文字消失且 1.5s 零新请求；
+换 MEXC 置灰 + title 指名四家、切现货置灰，均零请求）。
 **2026-09-30 新增**：`verify-draw-menu.mjs` **78**（右键菜单画线 + 画布只读 + 第 9 节右键落点钉光标；
-**0.1.12 起支持** `VERIFY_THEME=light` 跑浅色，浅色截图带 `-light` 后缀，主题经 `addInitScript` 传参）/
+**0.1.12 起支持** `VERIFY_THEME=light` 跑浅色，浅色截图带 `-light` 后缀，主题经 `addInitScript` 传参；
+**0.1.16 适配**：菜单多了「锁定/解锁」开关（水平线四条、直线三条，清空的 aside 顺延到 `[3]`/`[2]`），
+第 6 节改成先经菜单锁定再验「拖不动 = 平移画布」——默认解锁下拖线是移线，那套语义归 verify-lines-lock-drag）/
 `verify-zh-prefs.mjs` **95**（0.1.11 第一批：出厂浅色 + 自选迁移 + 侧栏市场胶囊 + 中文文案 + 周期面板 +
 指标持久化 + 坏值容错 + 老机器迁移「自己加回的不会被二次清」；第二批：**顶栏几何**（1280/1600 搜索中心 =
 顶栏中点 ±1、左右两组等宽、1024 不重叠不折行、`.grow` 与顶栏胶囊计数为 0）+ **行上无按钮 + 行右键菜单**

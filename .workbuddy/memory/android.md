@@ -17,6 +17,55 @@
 `remember(symbolKey, interval.storageKey)`，别用 `LaunchedEffect` 事后对齐。`window()` 管量程、`plotRange()` 管像素
 （含留白）；每帧位移不足一根要累积。Sparkline 别硬要求周期：读不到按 `cachedIntervalCounts` 挑最粗回退（表 `kline`）。
 
+## 十字光标（0.1.16 批：松手保持 + 竖线日期标）
+- ❗**长按拖动松手后十字光标保持**（用户要求「拖动到 K 线，松手后十字线应该保持展示，只有在画布上做
+  其他操作才消失」）：手势循环里长按分支的松手段**不再清**（原来无条件 `onCrosshair(null)`，现行
+  `if (!longPressActive) …`）。清除时机 = ①平移/缩放开始（`travelled > touchSlop`，或两指落下
+  `pressed.size >= 2` 且非长按）②轻点（非长按的手势收尾）③进划线模式（`LaunchedEffect(alertLineMode)`）。
+  换标的/周期由 `remember(symbolKey, interval.storageKey)` 重挂自然归零，不用管。
+  ⚠️ 触发顺序不能动：长按激活要求 `travelled <= touchSlop`，所以「先判长按、再判位移清」是安全的。
+- **竖线日期标 `CrosshairTimeBadge`**：横线的价格标 `CrosshairPriceBadge` 早就有（`PriceTag` 样式，右轴），
+  这轮补竖线 —— 与时间轴刻度同带（`centerY = geo.plotHeightPx + geo.timeAxisHeightPx / 2`），文本
+  `ChartModel.formatTime(openTime, interval.minutes)`；以竖线为心中再 `coerceIn(0, plotWidthPx - boxWidth)`
+  夹进绘图区（贴边不切字）。排在 `TimeAxisLabels` 之后 ⇒ 实底压住同位的刻度文字。
+  样式复用 `rememberPriceTagStyle()`（`colors.ink` 底 / `colors.paper` 字 / `Radius.xsShape`）。
+
+## 测速 5 秒超时（0.1.16 批）
+- ❗**探测请求 5 秒不响应即判超时**（用户口径，与桌面端同）：`BinanceMarketApi.probeFutures` 用
+  `withTimeoutOrNull(PROBE_TIMEOUT_MS = 5_000L)` 包 `executeText`，到点抛 `SocketTimeoutException`
+  ⇒ 设置页 `probeFailure` 折成「连接超时」。取消链：withTimeout → `awaitText` 的
+  `invokeOnCancellation { cancel() }` → OkHttp `call.cancel()`。**只动探测**：数据请求仍是
+  OkHttp 的 30s callTimeout（`ping()` 借道 probeFutures、会顺带吃到 5s —— 它当前无生产调用点）。
+
+## 持仓量副图（OI，0.1.16 批）
+- 口径与桌面端对齐（见 desktop.md「持仓量副图」）：永续专属，四家源（Gate / 币安系 / OKX / Bybit）
+  有历史，值统一折美元名义值。数据层 = `MarketRepository.openInterest(id, baseMinutes, limit)` /
+  `supportsOpenInterest(market)`；模型 `domain/model/OpenInterest.kt`（`OpenInterestSeries.baseCoin`
+  标 Bybit 基础币口径）；方言规格 `FuturesDialectAdapter.openInterest`（`OpenInterestSpec`，
+  **与 K 线梯形表分开的两张表**）。
+- **取数周期 `oiBaseFor`**（`BinanceMarketApi.kt` 顶层 internal 函数，直接落单测）：不超过图周期的
+  最大原生周期；全比图粗时取最细。⚠️ 请求基准用**基础周期**（`baseInterval().minutes`）而非展示周期 ——
+  自定义周期下按基础口径取 500 根恰好覆盖整段原始窗口（官方周期两者相等，与桌面端一致）。
+  网络失败 / 来源无 OI 在仓库层都归 null（副图静默缺席，不弹错）。
+- **对齐**：`ChartSeries.alignOpenInterest` 前向填充（每根取 ≤ 开盘时间的最新采样、阶梯保持、
+  开始前 NaN；Bybit 基础币口径乘该根收盘价折美元）。副图 = `SubPaneKind.OI("OI")` +
+  `SubPaneData.compactAxis`（纵轴 K/M/B 缩写），readout `OI: 4.15B` —— ⚠️ App 用缩写 `OI`
+  （与 VOL / MACD 同规），桌面端用「持仓量」做标签/读数，两端标签有意不一致。
+- **ViewModel**：`oiSupported`（构造时定，只看接口能力）；`OI_POLL_MS = 10_000` 轮询，
+  `combine(OI 是否选中, interval).distinctUntilChanged().flatMapLatest` —— 组合里带 interval 让换周期
+  触发重取（只比 Boolean 会把换周期吞掉），进流先 `openInterest = null` 清旧序列（上一段的持仓量
+  画在新 K 线上是错线）。
+- **chip 置灰仍可点**（Android 没有 hover，桌面那套 title 提示够不着用户）：`toggleSubPane` 只挡
+  「加上」不挡「撤下」——副图偏好全局一份，在合约页选过 OI 再到现货页必须撤得掉（否则是关不掉的
+  死开关）；点击弹 `showNotice`「现货没有持仓量（永续专属）」/「当前接口没有持仓量历史
+  （Gate / 币安系 / OKX / Bybit 有）」。
+- **图表高度按有效块数**：`DetailUiState.subPaneCount`（选了 OI 但数据为 null 时那块不算）驱动
+  `ChartArea` 的 `chartHeight`，否则会为不存在的块留一条空档；两处 `ChartModel.build` 的 `remember`
+  key 都要带 `state.openInterest`。
+- 单测：`oiBaseFor` 周期选取（DataRemoteTest）/ 四家 OI 方言解析（FuturesDialectAdaptersTest，
+  含 Bybit 基础币标记与越界周期抛出）/ 对齐 + 出块 + 读数（ChartModelTest）/ `formatCompact(Double?)`
+  （PriceFormatterTest）。本地无 JDK 只做静态核对，编译过不过看 CI。
+
 ## ⚠️ LazyColumn 的 key 锚定
 给了 `key` 就按「第一个可见项」锚定：重排时（测速弹窗按延迟逐条回填）被锚定那条一旦排到后面，**视口跟着往下滚 ⇒
 排第一的反而跑到屏幕上方**（用户反馈「我明明在最上面，排序后还得往上滑」）。修法：`rememberLazyListState()` +

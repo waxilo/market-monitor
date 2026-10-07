@@ -24,7 +24,9 @@
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（窄侧栏导航 + 现价、搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
-| 桌面端合约多数据源（与 App 同一份 12 候选清单，顶栏「数据源」弹窗并行测速后点选，结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
+| 桌面端合约多数据源（与 App 同一份 12 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
+| 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置弹窗「告警通知」页管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
+| 桌面端悬浮窗列表（设置弹窗「悬浮窗」页：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
 
 Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
 仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
@@ -120,13 +122,20 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   规则只有一条：**只有指针自己的事件能点亮，任何能证明「指针位置已失效」的信号
   （离开面板 / 窗口失焦 / 页面不可见 / 被移动 / 被改尺寸）一律熄灭**，默认熄灭。
   hook 算出的 `.inside` 挂在面板根节点上，`theme.css` 里写的是 `.mini.inside .mini-row:hover`。
-- **悬浮窗高度 = 自选条数**：`min(条数, 6) × 26px + 2px 边框`，超过 6 条封顶并在行区内滚动。
+- **悬浮窗高度 = 列表条数**：`min(条数, 6) × 26px + 2px 边框`，超过 6 条封顶并在行区内滚动。
   前端只把**条数**报给 Rust（`set_mini_rows`），几何在 Rust 侧算（`MINI_ROW_H` / `MINI_MAX_ROWS`）。
   这两个值的**权威定义在 `desktop/src/lib/layout.ts`**（`MINI_ROW_HEIGHT` / `MINI_MAX_ROWS`），
   由 `MiniApp` 注入成内联 CSS 变量 `--mini-row-h` / `--mini-max-rows`（theme.css 里同名声明只是兜底默认值）；
   Rust 侧跨 FFI 没法共享常量，只能与 layout.ts 手工对齐。别改成「前端量高度上报」：
   悬浮窗出生即隐藏，隐藏窗口量不到排版、`getComputedStyle` 也读不到那两个字面量，
   上报会静默退化成「没变化」。Rust 调窗口时**保持下边缘与 x 不动**（右下角是它的锚点）。
+- **悬浮窗列表 = 设置里的独立一份**（设置 → 悬浮窗，`components/MiniListSection.tsx`）：0.1.16 起
+  不再挂在自选下面 —— 页面是**左右两栏**（左「显示中」列表、右「搜索添加」）；搜索是现货/永续
+  **混搜**（结果行带市场胶囊；排序口径是 `lib/search.ts` 的 `rankAcrossMarkets`），键盘 ↑↓ 高亮、
+  Enter 加高亮那条（没高亮时加第一条未加入的）、拖动排序，存 `mm.miniWatchlist`。没存过的机器
+  第一次读会把当前自选**拷一份**当出厂值（`readMiniWatchlist`），拷完两边各自增删、互不影响；
+  主窗轮询会把「正在看但不是自选」的那一条加进来（App 的 `tickItems`）—— 悬浮窗点行切过来时
+  得能看到实时价。
 - **悬浮窗要压在任务栏之上**（`lib.rs` 的 `watch_mini_above_taskbar` + `taskbar` 模块）：
   任务栏与悬浮窗同为 topmost 窗口，任务栏被点击/激活时会被 shell 提到 topmost 组最前、盖住悬浮窗；
   而这件事**不会给应用发任何事件**（用户点的是任务栏，我们连 `Focused(false)` 都收不到），
@@ -139,9 +148,19 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   不然时灵时不灵，验证就成了掷骰子。
 - **搜索结果是浮层，不进侧栏**（`components/SearchDropdown.tsx`）：侧栏只管自选（它是常驻的，
   内容要稳定），搜索结果是**临时态**、由输入驱动 —— 塞进侧栏会在输入时把自选冲掉，清空才恢复。
-  浮层锚在 `.search-wrap`（输入框 +「清空」按钮那一整块），不是锚在 input 上。
-  键盘 ↑↓/Enter/Esc 挂在 **document** 上而不是浮层根节点：焦点一直在顶部输入框里，
+  浮层锚在 `.search-wrap`（搜索框 +「清空」按钮那一整块），不是锚在框体上。
+  键盘 ↑↓/Enter/Esc 挂在 **document** 上而不是浮层根节点：焦点一直在顶部搜索框里，
   事件不经过浮层的 DOM，挂根节点一条都收不到。排序口径在 `lib/search.ts` 的 `rankInstruments`（纯函数）。
+- **两个搜索框都只收英文，选着中文输入法也不弹候选词**（顶栏全市场搜索、设置 → 悬浮窗的搜索添加，
+  0.1.16 起）：框体不是 `<input>`，而是自绘的 `components/EnglishField.tsx`（非编辑的
+  `div[role="textbox"]`）—— **焦点在非编辑元素上，输入法不会启动**：敲拼音不弹候选词、字母直接进
+  （Chromium / WebKit 只给可编辑元素建输入法上下文，Windows 与 macOS 同机制；候选窗是系统层的、
+  网页侧没有标准能关，这是唯一出路）。字符集口径仍收在 `lib/search.ts` 的 `englishOnly` ——
+  只留英文字母 / 数字 / 下划线，中文、全角、空格、标点进不来。框内行为全自绘：画在文字流里的
+  1px 光标、选区高亮（`--sel`）、←→ / Home End（↑↓ 也映射为它俩）/ Ctrl+A C X V / 双击选全 /
+  拖选 / 点击定位；粘贴走隐藏 sink 接原生 `paste`（不依赖剪贴板权限）。几何照旧输入框抄：
+  高 26px、两处同位同宽。浮层开着时 ↑↓ 归列表翻高亮、光标不动（App 的 onKeyDown 抢先
+  preventDefault，见上面那条）。改一处别忘另一处（两框同一套）。
 - **侧栏行 = 名称 + 现价**（`MarketList.tsx`）：现价直接取 `useTickers` 的格子 —— 那份轮询本来
   就在为图表跑，显示它是零额外代价。搜索结果那档**不给价格**：它没有现成的逐标的轮询源，
   硬要显示就得把主窗的全量快照扩成常开，得不偿失。
@@ -151,11 +170,35 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 - **图表纵向手势 = 平移价格刻度**（`PriceView` 的 `zoom`/`pan` 两个意图量），缩放只留给 Shift+滚轮；
   平移收口按**几何重叠**（可视区与数据区至少重叠 `min(可视跨度, 数据跨度) × 25%`），不按位移比例 ——
   后者在放大 12 倍时几乎拖不动，缩小时又能把 K 线整屏拖出去。
+- **十字光标两条线各带一枚标**（两端同规，0.1.16 起）：横线在右侧刻度列标**价格**，竖线在时间轴带
+  标**日期**（那根 K 线的开线时间，格式随周期：日线 `YYYY-MM-DD`、日内 `MM-DD HH:mm`）。日期标只在
+  竖线**真落在蜡烛上**时出现（与竖线同一判据，右侧留白里 `indexAt` 会夹回最后一根、标出来的是假日期）；
+  贴着左右边缘时以竖线为心中、再夹进绘图区 —— 否则会切掉半个字。**App 端松手后十字光标保持展示**
+  （长按拖动松手即停在那根上），要清掉它得在画布上另做动作：平移/双指缩放/轻点。
+- **持仓量副图是永续专属、且只有四家源有历史**（币安同构 / OKX / Bybit / Gate，0.1.16 起）：其余源
+  与现货页的 OI chip 置灰并写明原因 —— 桌面有 hover，`disabled` + 悬停提示；App 没有 hover，置灰
+  但仍可点，点一下弹同一句原因。四家原生口径在方言层统一折成美元名义值（Bybit 只给基础币数量，
+  对齐时按该根收盘价折），取数周期 = 不超过图周期的最大原生周期、对齐 = 按蜡烛时间前向填充
+  （不插值）；取不到就整块不画 —— 不画空板、不弹错。
+- **「已连接」状态与「数据源」按钮已合并**（顶栏 `.src-entry`，0.1.16 起）：两者本来就是同一个
+  系统的两面，点开都进数据源弹窗。常态安静（只写 `● 数据源`），连接中/断线才报字
+  （`● 断线 · 数据源`，圆点转红）；悬停提示保留「当前数据源 + 连接态」两样信息。
 - **换合约数据源 = 换盘口，缓存与视图一起作废**：弹窗里的 `setFuturesSource` 只改选择并广播，
   清缓存与重取靠两条线 —— `api.ts` 在模块加载时注册的 `onFuturesSourceChange`（清 `instrumentCache`），
   以及各取数 hook 的 `useSourceKey(market)` 依赖（现货恒为 `''`）。别把源写进 symbol：
   自选/搜索/图表一律用 Gate 形态的 `BTC_USDT`，`BTCUSDT`、`BTC-USDT-SWAP`、`BTC` 这些只出现在方言层内部。
   悬浮窗是另一套 React 实例，只在它那 4s 的 localStorage 轮询里跟进（记得保留 `syncFuturesSource()`）。
+- **数据源测速 5 秒不响应即判超时**（两端同口径，0.1.16 起）：只掐探测 —— 探测请求自带 5s 时限
+  （桌面：`lib/sources.ts` 的 `PROBE_TIMEOUT_MS` → `httpRequest(…)` 第四参 → 宿主 `market_request`
+  的 `timeout_ms`（reqwest 请求级覆盖）；App：`probeFutures` 的 `withTimeoutOrNull`），到点那一行
+  直接落「连接超时」，不再挂到数据请求的时限上。K 线这类数据请求不吃这个口径（桌面仍 20s、App 仍 30s）。
+- **设置弹窗 = 90% 固定画布 + 左栏分类 / 右栏内容**（`components/SettingsPanel.tsx`）：类别只会越挂越多
+  （外观 / 悬浮窗 / 快捷键 / 告警通知 / 更新），一列竖着摆摆不下；固定尺寸顺带保证换分类时框不跳大小。
+  更新包已下好时默认落在「更新」页 —— 顶栏那枚圆点写着「点这里进去安装」。告警通知页的 webhook
+  是**火忘式**发送（`lib/webhooks.ts` 的 `sendAlertWebhook`）：告警线穿越时同步调用、不 await，
+  对端慢或挂掉不许拖住 5s 的判定节拍；**不做补发**（隔夜补发一串过时的穿越比少一条更糟），
+  结果落回行底的「上次发送」，失败标红。只发 https、只认 `POST {"message": …}`
+  （notify_hub 的 hook 约定，标题由那边 key 名定），地址空着/不合规的行不参与发送。
 
 ## 当前版本
 
