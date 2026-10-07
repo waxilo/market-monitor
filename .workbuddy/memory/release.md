@@ -51,6 +51,11 @@
   三 job 全绿。⚠️ **基线 rel json 要 REST 原样（数字 id）**：`gh release view --json id` 给的是 **node id**
   （`RE_kwDOUhbi-c4XxTUm`）⇒ 必红「Release id 与上一版相同」一条；直接
   `curl -sL -H "Authorization: Bearer $(gh auth token)" https://api.github.com/repos/waxilo/market-monitor/releases/tags/desktop-latest -o /tmp/mm-rel-before-XXXX.json`（脚本只取 id/created_at 两个键）。
+  2026-10-07 晚发 0.1.18：同形 sed 三条（`0.1.17→0.1.18`（含 docstring）、基线文件名 `0.1.16_→0.1.17_`、
+  三处 /tmp 路径 `0117→0118`）；**日期未改**（19 时 CST = 11 时 UTC 同日）；PASS 38/38 一次过（基线已按
+  REST 全文抓），run 37611178513 三 job 全绿。新知识：**mac 包前端串/版本串都不可搜**（前端压缩嵌入 +
+  mac 二进制无版本资源；拿旧版就有的 `mm.chartView` 在新旧两包都对照过 0 次）—— 桌面端「包内新前端」
+  证据固定为 CI vite 指纹 == 本地 build。
   ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
   别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
   Mac 侧 `aapt2 dump badging` 用 Gradle transform 缓存里的可执行件：
@@ -66,7 +71,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -82,7 +87,9 @@
   `0.9.31`/`desktop 0.1.15`（短序列 K 线靠右留白——窗口恒宽/实体等比/缩放解锁 + 桌面端画线可拖、右键锁定/解锁全部画线；双端同发）→
   `0.9.32`/`desktop 0.1.16`（一整批：设置左右分栏 + 告警 webhook、悬浮窗独立列表、OI 副图（四家源）、自绘英文搜索框、
   测速 5s 判超时、十字光标两枚标；双端同发，CI 两轮红两轮修）→
-  `desktop 0.1.17`（macOS 首条通知弹「Where is use_default?」选框——启动时先认领 bundle identifier；只发桌面端）。
+  `desktop 0.1.17`（macOS 首条通知弹「Where is use_default?」选框——启动时先认领 bundle identifier；只发桌面端）→
+  `desktop 0.1.18`（自选侧栏行加 24h 涨跌幅读数；K 线滑到最早/缩小超界自动回填历史——9 家方言接时间窗参数、
+  同 Android loadMore 同口径；只发桌面端）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
