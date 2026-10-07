@@ -37,7 +37,8 @@ class PriceFormatterTest {
     fun `缺失数据显示占位符而非零`() {
         assertEquals("--", PriceFormatter.format(null, BigDecimal("0.01")))
         assertEquals("--", PriceFormatter.formatChange(null))
-        assertEquals("--", PriceFormatter.formatCompact(null))
+        // 显式钉住 BigDecimal 重载：裸 null 在 Double? 兄弟重载面前会歧义（0.9.32 CI）
+        assertEquals("--", PriceFormatter.formatCompact(null as BigDecimal?))
     }
 
     @Test
@@ -69,7 +70,7 @@ class PriceFormatterTest {
     @Test
     fun `Double 版缩写供图表纵轴使用，NaN 与非数一律占位`() {
         assertEquals("4.15B", PriceFormatter.formatCompact(4_150_000_000.0))
-        assertEquals("--", PriceFormatter.formatCompact(null))
+        assertEquals("--", PriceFormatter.formatCompact(null as Double?))
         // 图上的空档是 NaN 而不是 null：漏掉它会在轴刻度上印出 "NaN"
         assertEquals("--", PriceFormatter.formatCompact(Double.NaN))
         assertEquals("--", PriceFormatter.formatCompact(Double.POSITIVE_INFINITY))
