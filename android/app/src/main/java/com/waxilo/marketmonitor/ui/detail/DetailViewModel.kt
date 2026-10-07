@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -473,17 +474,16 @@ class DetailViewModel(
         viewModelScope.launch {
             combine(chart.map { SubPaneKind.OI in it.subPanes }, interval) { want, selected -> want to selected }
                 .distinctUntilChanged()
-                .flatMapLatest { (want, _) ->
-                    flow {
-                        chart.update { it.copy(openInterest = null) }
-                        if (!want || !oiSupported) return@flow
-                        while (viewModelScope.isActive) {
-                            loadOpenInterest()?.let { series -> chart.update { it.copy(openInterest = series) } }
-                            delay(OI_POLL_MS)
-                        }
+                // collectLatest 而非「flatMapLatest + 永不出值的 flow」：上游一变就掐掉
+                // 上一轮轮询重来（那写法里 flow 的 T 推不出来，是真编译错）
+                .collectLatest { (want, _) ->
+                    chart.update { it.copy(openInterest = null) }
+                    if (!want || !oiSupported) return@collectLatest
+                    while (viewModelScope.isActive) {
+                        loadOpenInterest()?.let { series -> chart.update { it.copy(openInterest = series) } }
+                        delay(OI_POLL_MS)
                     }
                 }
-                .collect {}
         }
     }
 

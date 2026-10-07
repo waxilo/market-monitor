@@ -259,20 +259,24 @@ internal object BinanceCompatibleDialect : FuturesDialectAdapter {
         OfficialInterval.entries.associate { it.minutes to it.apiCode }
     override val maxKlineLimit = 1000
 
+    // 周期表单独立成 val：call 里要用它。不能内联回 spec 里再引 openInterest 自身 ——
+    // 属性类型推断会撞「recursive problem」编译错（0.9.32 一轮 CI 的教训）
+    private val oiLadder = mapOf(
+        5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h", 120L to "2h",
+        240L to "4h", 360L to "6h", 720L to "12h", 1_440L to "1d",
+    )
+
     /**
      * 历史持仓量：`/futures/data/openInterestHist`（与 fapi 同域、**不同前缀**，不在 /fapi/v1 下）。
      * 周期 5m/15m/30m/1h/2h/4h/6h/12h/1d，单次上限 500、深度约 30 天。
      * 取 `sumOpenInterestValue`（USDT 名义值）。
      */
     override val openInterest = OpenInterestSpec(
-        ladder = mapOf(
-            5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h", 120L to "2h",
-            240L to "4h", 360L to "6h", 720L to "12h", 1_440L to "1d",
-        ),
+        ladder = oiLadder,
         call = { base, symbol, minutes, limit ->
             FuturesDialectAdapter.Request(
                 base.trimEnd('/') + "/futures/data/openInterestHist" +
-                    "?symbol=$symbol&period=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "?symbol=$symbol&period=${requireNotNull(oiLadder[minutes])}" +
                     "&limit=${limit.coerceIn(1, 500)}",
             )
         },
@@ -353,17 +357,20 @@ internal object OkxDialect : FuturesDialectAdapter {
     )
     override val maxKlineLimit = 300
 
+    // 周期表单独立成 val（理由同 BinanceCompatibleDialect.oiLadder）
+    private val oiLadder = mapOf(5L to "5m", 60L to "1H", 1_440L to "1D")
+
     /**
      * 历史持仓量走 Rubik 统计：`/rubik/stat/contracts/open-interest-volume?ccy=BTC&period=5m`
      * —— **按币种聚合所有合约**（不是单合约），行 `[ts, oi, vol]`，oi 即美元口径。
      * ⚠️ 实测 `limit` / `begin` 都改不动返回条数：窗口固定在 ~575 点（5m 时约 2 天）。
      */
     override val openInterest = OpenInterestSpec(
-        ladder = mapOf(5L to "5m", 60L to "1H", 1_440L to "1D"),
+        ladder = oiLadder,
         call = { base, symbol, minutes, _ ->
             FuturesDialectAdapter.Request(
                 base.trimEnd('/') + "/api/v5/rubik/stat/contracts/open-interest-volume" +
-                    "?ccy=${stripUsdt(symbol)}&period=${requireNotNull(openInterest.ladder[minutes])}",
+                    "?ccy=${stripUsdt(symbol)}&period=${requireNotNull(oiLadder[minutes])}",
             )
         },
         parse = { text ->
@@ -473,6 +480,12 @@ internal object BybitDialect : FuturesDialectAdapter {
     )
     override val maxKlineLimit = 1000
 
+    // 周期表单独立成 val（理由同 BinanceCompatibleDialect.oiLadder）
+    private val oiLadder = mapOf(
+        5L to "5min", 15L to "15min", 30L to "30min",
+        60L to "1h", 240L to "4h", 1_440L to "1d",
+    )
+
     /**
      * 历史持仓量（`/market/open-interest`）。`result.list` **降序**返回，统一排序；
      * `openInterest` 是**基础币口径**（BTC ≈ 5.8 万；与 tickers 的 openInterestValue 4.9e9
@@ -480,16 +493,13 @@ internal object BybitDialect : FuturesDialectAdapter {
      * 周期 5min/15min/30min/1h/4h/1d，上限 200。
      */
     override val openInterest = OpenInterestSpec(
-        ladder = mapOf(
-            5L to "5min", 15L to "15min", 30L to "30min",
-            60L to "1h", 240L to "4h", 1_440L to "1d",
-        ),
+        ladder = oiLadder,
         baseCoinValue = true,
         call = { base, symbol, minutes, limit ->
             FuturesDialectAdapter.Request(
                 base.trimEnd('/') + "/v5/market/open-interest" +
                     "?category=linear&symbol=$symbol" +
-                    "&intervalTime=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "&intervalTime=${requireNotNull(oiLadder[minutes])}" +
                     "&limit=${limit.coerceIn(1, 200)}",
             )
         },
@@ -697,20 +707,23 @@ internal object GateDialect : FuturesDialectAdapter {
     )
     override val maxKlineLimit = 2000
 
+    // 周期表单独立成 val（理由同 BinanceCompatibleDialect.oiLadder）
+    private val oiLadder = mapOf(
+        1L to "1m", 5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h",
+        240L to "4h", 480L to "8h", 720L to "12h", 1_440L to "1d",
+    )
+
     /**
      * 历史持仓量：`/api/v4/futures/usdt/contract_stats?contract=BTC_USDT&interval=5m`，
      * 行内 `open_interest_usd` 即美元名义值；时间是**秒**。周期含 1m，深度充足（上限 1000）。
      */
     override val openInterest = OpenInterestSpec(
-        ladder = mapOf(
-            1L to "1m", 5L to "5m", 15L to "15m", 30L to "30m", 60L to "1h",
-            240L to "4h", 480L to "8h", 720L to "12h", 1_440L to "1d",
-        ),
+        ladder = oiLadder,
         call = { base, symbol, minutes, limit ->
             FuturesDialectAdapter.Request(
                 base.trimEnd('/') + "/api/v4/futures/usdt/contract_stats" +
                     "?contract=${contract(symbol)}" +
-                    "&interval=${requireNotNull(openInterest.ladder[minutes])}" +
+                    "&interval=${requireNotNull(oiLadder[minutes])}" +
                     "&limit=${limit.coerceIn(1, 1000)}",
             )
         },
