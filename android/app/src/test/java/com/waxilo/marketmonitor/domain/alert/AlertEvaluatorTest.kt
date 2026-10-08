@@ -45,6 +45,43 @@ class AlertEvaluatorTest {
     }
 
     @Test
+    fun `达到条件双向穿越都触发且方向按来源判定`() {
+        val rule = rule(AlertCondition.REACH, threshold = "100")
+        // 首次观测只建档：没有「上一次」就无从谈穿越
+        val (first, s1) = AlertEvaluator.evaluate(rule, BigDecimal("90"), null, 0, AlertState())
+        assertTrue(first is AlertDecision.Silent)
+        assertEquals(BigDecimal("90"), s1.lastPrice)
+
+        // 从下方涨到目标价 = 上破（正好压在目标价上也算碰到）
+        val (up, s2) = AlertEvaluator.evaluate(rule, BigDecimal("100"), null, MINUTE, s1)
+        assertEquals(AlertDirection.ABOVE, (up as AlertDecision.Triggered).direction)
+
+        // 回到上方的过程不触发，再跌到目标价 = 下破
+        val (quiet, s3) = AlertEvaluator.evaluate(rule, BigDecimal("105"), null, 2 * MINUTE, s2)
+        assertTrue(quiet is AlertDecision.Silent)
+        val (down, _) = AlertEvaluator.evaluate(rule, BigDecimal("100"), null, 3 * MINUTE, s3)
+        assertEquals(AlertDirection.BELOW, (down as AlertDecision.Triggered).direction)
+    }
+
+    @Test
+    fun `达到条件同侧移动不触发`() {
+        val rule = rule(AlertCondition.REACH, threshold = "100")
+        var state = AlertEvaluator.evaluate(rule, BigDecimal("90"), null, 0, AlertState()).second
+
+        // 一直在目标价下方爬升但没碰到，不触发
+        listOf("95", "99", "99.9").forEachIndexed { i, p ->
+            val (decision, next) = AlertEvaluator.evaluate(rule, BigDecimal(p), null, (i + 1) * MINUTE, state)
+            assertTrue("[$p] 不该触发", decision is AlertDecision.Silent)
+            state = next
+        }
+        // 持续在上方也不触发（EVERY_CROSS 需要再次穿越）
+        val (above, s2) = AlertEvaluator.evaluate(rule, BigDecimal("101"), null, 4 * MINUTE, state)
+        assertTrue(above is AlertDecision.Triggered)
+        val (staying, _) = AlertEvaluator.evaluate(rule, BigDecimal("103"), null, 5 * MINUTE, s2)
+        assertTrue(staying is AlertDecision.Silent)
+    }
+
+    @Test
     fun `上破仅在穿越边沿触发`() {
         val rule = rule(AlertCondition.ABOVE, threshold = "100")
         var state = AlertEvaluator.evaluate(rule, BigDecimal("90"), null, 0, AlertState()).second
@@ -170,6 +207,7 @@ class AlertRuleValidatorTest {
 
     @Test
     fun `合法规则通过校验`() {
+        assertNull(AlertRuleValidator.validate(base(AlertCondition.REACH), tick))
         assertNull(AlertRuleValidator.validate(base(AlertCondition.ABOVE), tick))
         assertNull(AlertRuleValidator.validate(base(AlertCondition.BELOW), tick))
     }

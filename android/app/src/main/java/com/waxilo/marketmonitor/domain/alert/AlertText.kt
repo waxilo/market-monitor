@@ -24,6 +24,7 @@ object AlertText {
 
     /** 规则的条件描述，用于列表副标题。 */
     fun conditionLabel(rule: AlertRule): String = when (rule.condition) {
+        AlertCondition.REACH -> "达到 ${priceText(rule.threshold)}"
         AlertCondition.ABOVE -> "上破 ${priceText(rule.threshold)}"
         AlertCondition.BELOW -> "下破 ${priceText(rule.threshold)}"
         AlertCondition.OUT_OF_RANGE -> "超出 ${priceText(rule.rangeLower)} ~ ${priceText(rule.rangeUpper)}"

@@ -133,7 +133,8 @@ fun AlertEditorScreen(
 
         Section(title = "触发条件") {
             ChipRow(
-                options = AlertCondition.entries.toList(),
+                // 上破/下破是划线引擎内部条件，不对外提供；「达到」由系统在触发时自动判定方向
+                options = AlertCondition.EDITOR_CHOICES,
                 selected = form.condition,
                 labelOf = { it.label },
                 onSelect = { condition -> viewModel.on { it.copy(condition = condition) } },

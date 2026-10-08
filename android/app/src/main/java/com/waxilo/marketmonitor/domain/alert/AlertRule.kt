@@ -5,6 +5,10 @@ import java.math.BigDecimal
 
 /** 触发条件。key 为持久化与 Webhook 报文使用的稳定标识。 */
 enum class AlertCondition(val key: String, val label: String) {
+    /** 达到目标价即触发：涨到或跌到都算，方向在触发时按实际穿越自动判定。 */
+    REACH("reach", "达到"),
+
+    /** 上破/下破只由指标划线引擎内部使用（按线相对现价的位置挂方向），编辑器不提供。 */
     ABOVE("above", "上破"),
     BELOW("below", "下破"),
     OUT_OF_RANGE("out_of_range", "区间外"),
@@ -14,6 +18,9 @@ enum class AlertCondition(val key: String, val label: String) {
 
     companion object {
         fun fromKey(key: String): AlertCondition? = entries.firstOrNull { it.key == key }
+
+        /** 编辑器对外提供的条件选项：用户不选方向，「达到」自动判定。 */
+        val EDITOR_CHOICES: List<AlertCondition> = listOf(REACH, OUT_OF_RANGE, RISE_BY, FALL_BY)
     }
 }
 

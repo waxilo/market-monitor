@@ -239,6 +239,8 @@ class AlertsViewModel(private val container: AppContainer) : ViewModel() {
         val last = ticker.lastPrice.toDouble()
         if (last <= 0.0) return null to null
         val gap = when (rule.condition) {
+            // 「达到」双向都可触发，取与目标价距离的绝对值
+            AlertCondition.REACH -> rule.threshold?.let { kotlin.math.abs(it.toDouble() - last) / last }
             AlertCondition.ABOVE -> rule.threshold?.let { (it.toDouble() - last) / last }
             AlertCondition.BELOW -> rule.threshold?.let { (last - it.toDouble()) / last }
             AlertCondition.OUT_OF_RANGE -> listOfNotNull(

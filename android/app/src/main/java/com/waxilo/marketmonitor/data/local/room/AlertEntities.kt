@@ -102,26 +102,39 @@ data class AlertLogEntity(
     val webhookStatus: Int,
 )
 
-fun AlertRuleEntity.toDomain(): AlertRule = AlertRule(
-    id = id,
-    market = MarketType.fromKey(market),
-    symbol = symbol,
-    name = name,
-    condition = AlertCondition.fromKey(condition) ?: AlertCondition.ABOVE,
-    threshold = threshold?.toBigDecimalOrNull(),
-    rangeLower = rangeLower?.toBigDecimalOrNull(),
-    rangeUpper = rangeUpper?.toBigDecimalOrNull(),
-    changePercent = changePercent?.toBigDecimalOrNull(),
-    repeatMode = AlertRepeatMode.fromKey(repeatMode),
-    cooldownMinutes = cooldownMinutes,
-    enabled = enabled == 1,
-    playSound = playSound == 1,
-    vibrate = vibrate == 1,
-    webhookIds = webhookIds.split(',').mapNotNull { it.trim().toLongOrNull() },
-    createdAt = createdAt,
-    source = AlertRuleSource.fromKey(source),
-    indicatorLineId = indicatorLineId,
-)
+fun AlertRuleEntity.toDomain(): AlertRule {
+    val ruleSource = AlertRuleSource.fromKey(source)
+    val mapped = AlertCondition.fromKey(condition)
+    // 旧数据迁移：手动规则的上破/下破聚合为「达到」（双向到达，方向在触发时按实际穿越判定）。
+    // 指标划线规则的上破/下破由引擎按线位挂方向使用，保持原样
+    val migrated = when {
+        mapped == null ->
+            if (ruleSource == AlertRuleSource.MANUAL) AlertCondition.REACH else AlertCondition.ABOVE
+        ruleSource == AlertRuleSource.MANUAL &&
+            (mapped == AlertCondition.ABOVE || mapped == AlertCondition.BELOW) -> AlertCondition.REACH
+        else -> mapped
+    }
+    return AlertRule(
+        id = id,
+        market = MarketType.fromKey(market),
+        symbol = symbol,
+        name = name,
+        condition = migrated,
+        threshold = threshold?.toBigDecimalOrNull(),
+        rangeLower = rangeLower?.toBigDecimalOrNull(),
+        rangeUpper = rangeUpper?.toBigDecimalOrNull(),
+        changePercent = changePercent?.toBigDecimalOrNull(),
+        repeatMode = AlertRepeatMode.fromKey(repeatMode),
+        cooldownMinutes = cooldownMinutes,
+        enabled = enabled == 1,
+        playSound = playSound == 1,
+        vibrate = vibrate == 1,
+        webhookIds = webhookIds.split(',').mapNotNull { it.trim().toLongOrNull() },
+        createdAt = createdAt,
+        source = ruleSource,
+        indicatorLineId = indicatorLineId,
+    )
+}
 
 fun AlertRule.toEntity(): AlertRuleEntity = AlertRuleEntity(
     id = id,

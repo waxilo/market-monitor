@@ -23,7 +23,7 @@ object AlertEvaluator {
         nowMs: Long,
         state: AlertState,
     ): Pair<AlertDecision, AlertState> {
-        val satisfied = satisfiedOf(rule, price, changePercent)
+        val satisfied = satisfiedOf(rule, price, changePercent, state.lastPrice)
         if (!rule.enabled || satisfied == null || price == null) {
             return AlertDecision.Silent to state
         }
@@ -45,7 +45,7 @@ object AlertEvaluator {
 
         val decision = AlertDecision.Triggered(
             rule = rule,
-            direction = directionOf(rule, price),
+            direction = directionOf(rule, price, state.lastPrice),
             price = price,
             changePercent = changePercent,
             atMs = nowMs,
@@ -59,12 +59,24 @@ object AlertEvaluator {
         return decision to newState
     }
 
-    /** null 表示数据不足，无法判定。 */
+    /** null 表示数据不足，无法判定；[previous] 是上一次观测价，仅供 REACH 判穿越。 */
     private fun satisfiedOf(
         rule: AlertRule,
         price: BigDecimal?,
         changePercent: Double?,
+        previous: BigDecimal?,
     ): Boolean? = when (rule.condition) {
+        AlertCondition.REACH -> {
+            // 双向到达：相对上一次观测穿越目标价即满足，正好压在目标价上也算碰到。
+            // 首次观测没有「上一次」，返回 false 走基线建档，而不是当数据不足。
+            val target = rule.threshold
+            when {
+                target == null || price == null -> null
+                previous == null -> false
+                else -> (previous < target && price >= target) || (previous > target && price <= target)
+            }
+        }
+
         AlertCondition.ABOVE -> {
             val target = rule.threshold
             if (target == null || price == null) null else price >= target
@@ -93,7 +105,13 @@ object AlertEvaluator {
         }
     }
 
-    private fun directionOf(rule: AlertRule, price: BigDecimal): AlertDirection = when (rule.condition) {
+    private fun directionOf(rule: AlertRule, price: BigDecimal, previous: BigDecimal?): AlertDirection = when (rule.condition) {
+        AlertCondition.REACH -> {
+            // 「达到」不落方向，触发时按穿越来源判定：从下方到达 = 上破，从上方到达 = 下破
+            val target = rule.threshold
+            if (previous != null && target != null && previous > target) AlertDirection.BELOW
+            else AlertDirection.ABOVE
+        }
         AlertCondition.ABOVE -> AlertDirection.ABOVE
         AlertCondition.BELOW -> AlertDirection.BELOW
         AlertCondition.RISE_BY -> AlertDirection.UP
@@ -125,7 +143,7 @@ object AlertRuleValidator {
         if (tickProblem != null) return tickProblem
 
         return when (rule.condition) {
-            AlertCondition.ABOVE, AlertCondition.BELOW ->
+            AlertCondition.REACH, AlertCondition.ABOVE, AlertCondition.BELOW ->
                 if (rule.threshold == null || rule.threshold.signum() <= 0) "请填写有效的目标价格" else null
 
             AlertCondition.OUT_OF_RANGE -> {

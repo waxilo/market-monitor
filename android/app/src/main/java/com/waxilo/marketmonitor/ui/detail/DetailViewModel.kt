@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
+import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.alert.IndicatorKind
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
@@ -170,7 +171,7 @@ class DetailViewModel(
      * 回到详情页也能看到最新的那条线。拖动中的线覆盖掉对应规则的历史价位，
      * 松手落库后覆盖就没意义了（派生值已经是新价位）。
      *
-     * 只有 ABOVE/BELOW 这类带目标价的规则能画成一条线，区间/涨跌幅规则没有单一价位。
+     * 只有带目标价（threshold）的规则能画成一条线，区间/涨跌幅规则没有单一价位。
      */
     val alertLines: StateFlow<List<AlertPriceLine>> = combine(
         alerts.rules(),
@@ -627,20 +628,14 @@ class DetailViewModel(
      * 对齐是必须的 —— 校验器要求目标价是 tickSize 的整数倍，而手指落点换算出来的价格
      * 几乎不可能正好落在刻度上，不处理的话每次划线都会被精度校验挡下。
      *
-     * 上破还是下破**由线相对于现价的位置自动判定**：线在现价上方 = 涨上去才碰到 = 上破，
-     * 反之 = 下破。这也让「把上破的线拖到现价下方」自然变成下破 —— 方向不是一次性的选择，
-     * 而是线本身的位置属性。
+     * 条件统一为「达到」：涨到或跌到这条线都提醒，方向由引擎在触发时按实际穿越自动判定，
+     * 也就不再需要拿现价来分辨上破/下破。
      */
     fun commitAlertLine() {
         val drag = alertDrag.value ?: return
         val aligned = alignToTick(drag.price)
-        val reference = referencePrice() ?: run {
-            showNotice("拿不到现价，暂时无法判定上破/下破")
-            return
-        }
-        val above = aligned >= reference
         viewModelScope.launch {
-            if (upsertAlertLineRule(drag.ruleId, aligned, above)) alertDrag.value = null
+            if (upsertAlertLineRule(drag.ruleId, aligned)) alertDrag.value = null
         }
     }
 
@@ -678,20 +673,24 @@ class DetailViewModel(
     private suspend fun upsertAlertLineRule(
         ruleId: Long?,
         price: BigDecimal,
-        above: Boolean,
     ): Boolean {
         val label = PriceFormatter.format(price, state.value.tickSize)
-        val condition = if (above) AlertCondition.ABOVE else AlertCondition.BELOW
-        val name = "${id.symbol} ${if (above) "上破" else "下破"} $label"
+        val name = "${id.symbol} 达到 $label"
         return try {
             val existing = ruleId?.let { alerts.rule(it) }
             if (existing != null) {
-                // 价位与方向都没变就别写：光标清零触发状态就会让一条已经响过的「单次」
+                // 价位没变就别写：光标清零触发状态就会让一条已经响过的「单次」
                 // 预警重新响一次，而用户可能只是按住线又松手。
-                if (existing.threshold?.compareTo(price) == 0 && existing.condition == condition) return true
-                alerts.saveRule(existing.copy(name = name, condition = condition, threshold = price))
-                // 条件与价位都换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让
-                // 新条件一次都不提醒，wasSatisfied 也会把真正的「穿越」边沿吃掉。
+                if (existing.threshold?.compareTo(price) == 0) return true
+                // 划线引擎维护的指标规则只挪价位，名字与方向条件留给引擎下轮对号；
+                // 手动线则统一成「达到」，方向由触发时的实际穿越决定
+                if (existing.source == AlertRuleSource.MANUAL) {
+                    alerts.saveRule(existing.copy(name = name, condition = AlertCondition.REACH, threshold = price))
+                } else {
+                    alerts.saveRule(existing.copy(threshold = price))
+                }
+                // 价位换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让
+                // 新价位一次都不提醒，wasSatisfied 也会把真正的「穿越」边沿吃掉。
                 alerts.saveState(existing.id, AlertState())
             } else {
                 alerts.saveRule(
@@ -699,14 +698,14 @@ class DetailViewModel(
                         market = id.market,
                         symbol = id.symbol,
                         name = name,
-                        condition = condition,
+                        condition = AlertCondition.REACH,
                         threshold = price,
                         // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
                         createdAt = System.currentTimeMillis(),
                     ),
                 )
             }
-            showNotice("已设置${if (above) "上破" else "下破"}预警 · $label")
+            showNotice("已设置预警 · $label")
             true
         } catch (e: CancellationException) {
             throw e
@@ -715,14 +714,6 @@ class DetailViewModel(
             false
         }
     }
-
-    /**
-     * 自动判定方向的参考价：优先用实时行情，拿不到（标的未加自选时没有 ticker 推送）
-     * 就退到图上最后一根蜡烛的收盘价 —— 它本身就是「最近成交价」的另一种表达。
-     */
-    private fun referencePrice(): BigDecimal? =
-        state.value.lastPrice?.let { BigDecimal(it.toString()) }
-            ?: chart.value.raw.lastOrNull()?.close
 
     /** 把价格对齐到交易规则的最小变动单位，避免建规则时被精度校验挡下。 */
     private fun alignToTick(price: BigDecimal): BigDecimal {

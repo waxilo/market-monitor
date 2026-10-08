@@ -24,7 +24,7 @@ class AlertTextTest {
     }
 
     @Test
-    fun `条件文案覆盖五类条件`() {
+    fun `条件文案覆盖各类条件`() {
         val rule = AlertRule(
             market = MarketType.FUTURES,
             symbol = "ETHUSDT",
@@ -37,6 +37,10 @@ class AlertTextTest {
         )
         assertEquals("超出 2900.00 ~ 3100.50", AlertText.conditionLabel(rule))
         assertEquals("每 15 分钟重复", AlertText.repeatLabel(rule))
+        assertEquals(
+            "达到 100000.00",
+            AlertText.conditionLabel(rule.copy(condition = AlertCondition.REACH, threshold = BigDecimal("100000"))),
+        )
     }
 
     @Test

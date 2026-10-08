@@ -34,7 +34,7 @@ data class AlertEditorState(
     val market: MarketType = MarketType.SPOT,
     val symbol: String = "",
     val name: String = "",
-    val condition: AlertCondition = AlertCondition.ABOVE,
+    val condition: AlertCondition = AlertCondition.REACH,
     val threshold: String = "",
     val rangeLower: String = "",
     val rangeUpper: String = "",
@@ -50,7 +50,7 @@ data class AlertEditorState(
     val saved: Boolean = false,
     val saving: Boolean = false,
 ) {
-    val needsThreshold: Boolean get() = condition == AlertCondition.ABOVE || condition == AlertCondition.BELOW
+    val needsThreshold: Boolean get() = condition == AlertCondition.REACH
     val needsRange: Boolean get() = condition == AlertCondition.OUT_OF_RANGE
     val needsPercent: Boolean get() = condition == AlertCondition.RISE_BY || condition == AlertCondition.FALL_BY
     val usesCooldown: Boolean get() = repeatMode != AlertRepeatMode.ONCE
