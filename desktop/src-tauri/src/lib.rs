@@ -1,5 +1,6 @@
 mod alert;
 mod awake;
+mod frame;
 mod global_key;
 mod market;
 mod taskbar;
@@ -105,6 +106,9 @@ fn create_mini(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     // 取句柄的写法本身是平台相关的（`WebviewWindow::hwnd()` 只有 Windows 目标有），
     // 所以那件事封装在模块里，这里不出现 `cfg`。
     taskbar::claim(&window);
+    // 关掉 Win11 给前台焦点窗口描的那圈 1px DWM 边框（切过来那一刻描在胶囊外、
+    // 失焦才消失的那圈黑边，见 `frame` 模块）。平台差异同样收在模块里。
+    frame::clear_focus_border(&window);
     Some(window)
 }
 
