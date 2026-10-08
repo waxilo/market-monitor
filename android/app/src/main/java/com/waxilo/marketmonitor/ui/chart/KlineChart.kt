@@ -1130,10 +1130,10 @@ private fun DrawScope.drawCandles(
         val lowY = geo.yOf(range.toFraction(candle.lowDouble()), geo.mainTopPx, geo.mainHeightPx)
         if (slot < 1.5f) {
             // 密度太高时实体只会糊成一片，退化成一根影线
-            drawLine(color, Offset(x, min(highY, lowY)), Offset(x, max(highY, lowY)), 1f)
+            drawLine(color, Offset(x, min(highY, lowY)), Offset(x, max(highY, lowY)), 2f)
             continue
         }
-        drawLine(color, Offset(x, highY), Offset(x, lowY), 1f)
+        drawLine(color, Offset(x, highY), Offset(x, lowY), 2f)
         val openY = geo.yOf(range.toFraction(candle.openDouble()), geo.mainTopPx, geo.mainHeightPx)
         val closeY = geo.yOf(range.toFraction(candle.closeDouble()), geo.mainTopPx, geo.mainHeightPx)
         val top = min(openY, closeY)
@@ -1157,7 +1157,7 @@ private fun DrawScope.drawOverlays(
     }
     series.overlay.lines.forEach { line ->
         val path = linePath(line.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
-        if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.5f))
+        if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 2.5f))
     }
 }
 
@@ -1174,7 +1174,7 @@ private fun DrawScope.drawLastPrice(
         color = if (last.close >= last.open) palette.up else palette.down,
         start = Offset(0f, y),
         end = Offset(geo.plotWidthPx, y),
-        strokeWidth = 1f,
+        strokeWidth = 2f,
         pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f)),
     )
 }
@@ -1196,7 +1196,7 @@ private fun DrawScope.drawIndicatorGuides(
     guides.forEach { guide ->
         if (guide.values.size != series.size) return@forEach
         val path = linePath(guide.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
-        if (path != null) drawPath(path, palette.label.copy(alpha = 0.7f), style = Stroke(width = 1f))
+        if (path != null) drawPath(path, palette.label.copy(alpha = 0.7f), style = Stroke(width = 1.5f))
     }
 }
 
@@ -1220,7 +1220,7 @@ private fun DrawScope.drawBandGuides(
             color = palette.label.copy(alpha = 0.85f),
             start = Offset(0f, y),
             end = Offset(geo.plotWidthPx, y),
-            strokeWidth = 1.5f,
+            strokeWidth = 2.5f,
         )
     }
 }
@@ -1248,7 +1248,7 @@ private fun DrawScope.drawAlertLines(
             color = if (line.dragging) palette.crosshair else palette.crosshair.copy(alpha = STATIC_ALERT_ALPHA),
             start = Offset(0f, y),
             end = Offset(geo.plotWidthPx, y),
-            strokeWidth = if (line.dragging) 2f else 1.5f,
+            strokeWidth = if (line.dragging) 3f else 2.5f,
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
         )
     }
@@ -1283,7 +1283,7 @@ private fun DrawScope.drawSubPane(
     }
     pane.lines.forEach { line ->
         val path = linePath(line.values, plot, geo, range, height, top)
-        if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 1.2f))
+        if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 2f))
     }
 }
 
@@ -1301,7 +1301,7 @@ private fun DrawScope.drawCrosshair(
         palette.crosshair.copy(alpha = 0.7f),
         Offset(x, geo.plotTopPx),
         Offset(x, geo.plotHeightPx),
-        1.5f,
+        2.5f,
         pathEffect = dash,
     )
     // 横线只在主图内跟随手指：落到副图上时画一条横贯全高的线会盖住副图读数
@@ -1311,7 +1311,7 @@ private fun DrawScope.drawCrosshair(
         palette.crosshair.copy(alpha = 0.7f),
         Offset(0f, y),
         Offset(geo.plotWidthPx, y),
-        1.5f,
+        2.5f,
         pathEffect = dash,
     )
 }
