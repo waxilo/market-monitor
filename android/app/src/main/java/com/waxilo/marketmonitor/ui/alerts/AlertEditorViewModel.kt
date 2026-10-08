@@ -73,15 +73,17 @@ data class EditorHints(
 class AlertEditorViewModel(
     container: AppContainer,
     private val ruleId: Long?,
+    presetMarket: MarketType,
     presetSymbol: String,
 ) : ViewModel() {
 
     private val alerts = container.alertRepository
     private val repository = container.marketRepository
 
-    // 当前只做现货：表单不再让用户选市场，规则一律落在 SPOT
+    // 市场跟随创建入口（详情页所属市场）预填，编辑器内仍可切换：
+    // 同名交易对（如 BTCUSDT）在现货与合约是独立盘口，市场错了预警就永远打不中。
     private val form = MutableStateFlow(
-        AlertEditorState(market = MarketType.SPOT, symbol = presetSymbol.uppercase()),
+        AlertEditorState(market = presetMarket, symbol = presetSymbol.uppercase()),
     )
 
     val state: StateFlow<AlertEditorState> = form
@@ -122,7 +124,8 @@ class AlertEditorViewModel(
     init {
         viewModelScope.launch {
             val id = ruleId ?: return@launch
-            alerts.rule(id)?.let { form.value = it.toForm().copy(market = MarketType.SPOT) }
+            // 编辑既有规则沿用其自身市场，不做改写。
+            alerts.rule(id)?.let { form.value = it.toForm() }
         }
     }
 
@@ -175,7 +178,7 @@ class AlertEditorViewModel(
 
     private fun AlertEditorState.toRule(): AlertRule = AlertRule(
         id = ruleId ?: 0L,
-        market = MarketType.SPOT,
+        market = market,
         symbol = symbol.trim().uppercase(),
         name = name.trim().ifBlank {
             if (symbol.isBlank()) "未命名预警" else "${symbol.trim().uppercase()} 价格预警"

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRepeatMode
+import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.webhook.WebhookEndpoint
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.FilterChip
@@ -60,10 +61,11 @@ import java.math.BigDecimal
 @Composable
 fun AlertEditorScreen(
     ruleId: Long?,
+    presetMarket: MarketType,
     presetSymbol: String,
     onBack: () -> Unit,
-    viewModel: AlertEditorViewModel = appViewModel(key = "alert-editor:${ruleId ?: presetSymbol}") {
-        AlertEditorViewModel(it, ruleId, presetSymbol)
+    viewModel: AlertEditorViewModel = appViewModel(key = "alert-editor:${ruleId ?: "${presetMarket.key}:${presetSymbol}"}") {
+        AlertEditorViewModel(it, ruleId, presetMarket, presetSymbol)
     },
 ) {
     val form by viewModel.state.collectAsStateWithLifecycle()
@@ -90,11 +92,17 @@ fun AlertEditorScreen(
         }
 
         Section(title = "交易对", trailing = "必填") {
+            ChipRow(
+                options = MarketType.entries.toList(),
+                selected = form.market,
+                labelOf = { it.label },
+                onSelect = { market -> viewModel.on { it.copy(market = market) } },
+            )
             FieldRow(
                 label = "交易对代码",
                 value = form.symbol,
                 placeholder = "如 BTCUSDT",
-                supporting = "当前价 ${hints.currentPrice}",
+                supporting = "${form.market.sourceName} · 当前价 ${hints.currentPrice}",
                 onChange = { symbol -> viewModel.on { it.copy(symbol = symbol.uppercase()) } },
             )
             if (hints.quickPicks.isNotEmpty()) {

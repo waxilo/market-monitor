@@ -245,6 +245,9 @@ fun AppNavHost(
             ) { entry ->
                 AlertEditorScreen(
                     ruleId = null,
+                    presetMarket = MarketType.fromKey(
+                        entry.arguments?.getString("market") ?: MarketType.SPOT.key,
+                    ),
                     presetSymbol = entry.arguments?.getString("symbol").orEmpty(),
                     onBack = { navController.popBackStack() },
                 )
@@ -256,6 +259,7 @@ fun AppNavHost(
                 val id = entry.arguments?.getLong("ruleId") ?: 0L
                 AlertEditorScreen(
                     ruleId = id,
+                    presetMarket = MarketType.SPOT,
                     presetSymbol = "",
                     onBack = { navController.popBackStack() },
                 )
