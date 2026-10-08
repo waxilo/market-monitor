@@ -71,7 +71,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -89,7 +89,11 @@
   测速 5s 判超时、十字光标两枚标；双端同发，CI 两轮红两轮修）→
   `desktop 0.1.17`（macOS 首条通知弹「Where is use_default?」选框——启动时先认领 bundle identifier；只发桌面端）→
   `desktop 0.1.18`（自选侧栏行加 24h 涨跌幅读数；K 线滑到最早/缩小超界自动回填历史——9 家方言接时间窗参数、
-  同 Android loadMore 同口径；只发桌面端）。
+  同 Android loadMore 同口径；只发桌面端）→
+  `0.9.33`（图上拖线告警直达 + 全屏现价牌跟随市场域；只发 Android）→
+  `0.9.34`（新建预警的市场从详情页贯通到落库；只发 Android）→
+  `0.9.35`（预警条件聚合——上破/下破合并为「达到」，方向由触发时实际穿越自动判定；只发 Android，
+  Release run 37789464843、verify-channel 34/34）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
@@ -107,6 +111,8 @@
   - 0.9.31 复核（2026-10-03）：同上 —— 以 `Release` run 37044579950 的同一断言步骤为准（绿）⇒ 指纹不变。
   - 0.9.32 复核（2026-10-07）：同上（run 见 2026-10-07 流水）⇒ 指纹不变。
   - 0.9.33 复核（2026-10-08）：本机 apksigner 直验下载产物 `cf2e20c7…` == 基线逐字一致；边车 sha256 一致（6df873d2…）。
+  - 0.9.35 复核（2026-10-08）：本机 apksigner 直验下载产物 `cf2e20c7…` == 基线逐字一致；边车 sha256 一致（c7b5d401…）；
+    verify-channel.mjs 34/34；Release run 37789464843 全绿。
   - 0.9.32 复核（2026-10-07）：同上 —— 以 `Release` run 37579714368 的同一断言步骤为准（绿）⇒ 指纹不变。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
