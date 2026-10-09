@@ -5,7 +5,8 @@
 ## 环境
 - 单测：`JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" ANDROID_HOME="C:/Users/sloan.wang/android-sdk"
   ./gradlew --no-daemon testDebugUnitTest`（**默认 Java 8 会失败** —— 那才是「gradlew 跑不起来」的真因）。
-  基线 **250 全绿**。
+  基线 **284 全绿**（2026-10-09）。用户开着 IDEA 时 `android/app/build` 被占，改用 MEMORY.md 的
+  init script 挪 buildDir（`-I ../.workbuddy/tmp/init-builddir.gradle --project-cache-dir ../.workbuddy/tmp/agcache`）。
 - 设备 MuMu `emulator-5554`；坐标先 `uiautomator dump`（`screencap` 可能是上一帧）。
 - MuMu 的 WebView 会被反复 kill ⇒ 白屏，图表才改自研 Compose Canvas。
 
@@ -84,6 +85,66 @@
 - 单测：`oiBaseFor` 周期选取（DataRemoteTest）/ 四家 OI 方言解析（FuturesDialectAdaptersTest，
   含 Bybit 基础币标记与越界周期抛出）/ 对齐 + 出块 + 读数（ChartModelTest）/ `formatCompact(Double?)`
   （PriceFormatterTest）。本地无 JDK 只做静态核对，编译过不过看 CI。
+
+## 告警模型：无冷却 + 默认「每次穿越」（2026-10-09）
+用户口径：**图上划出的告警线默认每次穿越告警、不设冷却、每次穿越都推送**。冷却整体下线（连带
+「重复提醒」模式 —— 它本就靠冷却定义），规则只剩「单次 / 每次穿越」，默认取每次穿越。
+- 领域：`AlertRule.cooldownMinutes` 删；`AlertRepeatMode.REPEAT` 删、`fromKey` 未知 key 回落
+  `EVERY_CROSS`（历史值 `repeat` 即此）；`AlertEvaluator` 去 `cooldownMs`/`inCooldown`，触发收敛为
+  `satisfied && !fired && edge`。⚠️ `AlertState.lastTriggeredAt` **保留** —— 预警页「最近触发」在用。
+- `LineAlertMode.ONCE` 一并下线（划线只剩 OFF / EVERY_CROSS），`fromKey("once")` 归一到 EVERY_CROSS
+  （与迁移脚本同口径，免旧数据被静默降级成「不告警」）。⇒ `AlertEngine.retireIndicatorLine` 不可达已删，
+  `LineAlertMode.repeatMode` 属性已删，`syncLineRule` 直接写 `AlertRepeatMode.EVERY_CROSS`。
+- ❗**均线带「成员穿越后暂不进锚点池」不是告警冷却**，别一起删 —— 它防「刚穿过的均线贴价反复触发」。
+  为免混淆本轮改名 cooldown→settle：`bandSettleUntil` / `BAND_MEMBER_SETTLE_MS` /
+  `markBandMemberSettled` / `settleBandMember`。
+- 设置项 `AppSettings.alertDefaultCooldownMinutes` 删（**从来没有 UI 入口**，只有 DataStore 读写的死配置），
+  DataStore 的 `alert_cooldown_minutes` key 一并撤（老装机残留值成孤儿，无害）。
+- Room v7→v8：minSdk 26 无 DROP COLUMN ⇒ `alert_rule` **整表重建**去掉 `cooldownMinutes`；存量
+  `repeatMode` 一并归一：`repeat`→`every_cross`、`source='indicator'` 的 `once`→`every_cross`
+  （手动规则的 `once` 原样保留，那是用户显式选的单次）；`indicator_line.alertMode='once'`→`'every_cross'`。
+  ⚠️ 重建表的 `source` 必须带 `DEFAULT 'manual'`：Room 的 schema 校验对「实体声明了默认值、库里没有」
+  是硬失败，带上 DEFAULT 则在两种情形下都安全。
+- 迁移进不了单测（无 instrumentation）⇒ 另立**离线实证** `.workbuddy/tmp/verify_migration_7_8.py`
+  （Python sqlite3：按 v7 建表 → 灌 4 种存量组合 → 跑迁移 SQL → 断言列已去/归一正确/id 与字段无损/
+  重建后自增不倒退）。跑迁移这类改动值得照此办。
+
+## 全屏看图版面（2026-10-09）
+用户口径：**全屏（横屏）里「周期」与「指标」都常驻展示；全屏不展示副图**。
+- 顶部两条固定窄带：上 = `IntervalSelector(compact=true)`（周期左端可横滚，右侧只剩「划线 / 退出」——
+  **「指标」开关 chip 已删**，它原本只用于弹出底部浮层）；下 = `IndicatorBar(compact=true, showSubPanes=false)`。
+- `IndicatorBar` 新增 `showSubPanes: Boolean = true`：false 时「分隔竖线 + 副图标签 + 5 个 chip」整组不画
+  （全屏既然不画副图，留着能点却不生效的开关等于坏开关）；竖屏不传即老样子。
+- ❗**全屏不画副图**的实现是「`ChartModel.build(subPanes = emptyList())`」，**不是**改 `state.subPanes`
+  —— 副图选择是全局偏好（竖屏那份），全屏只影响这一帧；`remember` key 相应去掉 `state.subPanes`。
+  退出全屏后竖屏照旧显示原来选中的副图。
+- 原 `indicatorOpen` 状态与底部指标浮层整块删除（浮层压顶盖读数带、压底盖时间轴，都不如钉成图上方一条）。
+- 分组标签统一叫**「指标」**（2026-10-09 用户口径）：竖屏 `SectionOverline("叠加指标")` 与全屏 `InlineLabel("叠加")`
+  都改成 `"指标"`。只动显示文案，MA/BOLL 的自选逻辑与「副图 · 可多选」一行不变。
+  ⚠️ 代码里其余「叠加」多是技术含义（主图叠加均线、双指缩放不许叠加），**不要一起改**。
+- 两条窄带的**垂直留白用 `Spacing.Xxs`(4dp)**，不是竖屏的 `Sm`(12dp)（2026-10-09 用户反馈「周期和指标两行占屏太多」）：
+  横屏只有 540dp 高，按 12dp 走时两行（含分隔线）吃掉 ≈92dp，占 17% 屏高。收紧后**行距 153px→105px（-31%）**，
+  chip 本体 22dp 与点击区不变；竖屏走非 compact 分支，完全不受影响。
+  ⚠️ 量这类高度别只看截图：同一设备两次 `uiautomator dump`，取「周期」「指标」两个 label 的 bounds 中心差，
+  前后可比且能反推出理论值（实测比例 0.686 与「每行各省 16dp」的理论值完全吻合）。
+- 验收：`compileDebugKotlin` + `testDebugUnitTest` **284/284 绿**；**MuMu 真机验收通过**（见下）。
+  - 对照实验（这是关键，光看全屏不够）：先在竖屏**把 VOL 打开**（chip 变实心、图下出现 `VOL: 1579.399` 量柱副图）
+    → 再进全屏 ⇒ **副图消失、顶部只剩「周期 / 划线 ✕」+「指标 MA…BOLL」两行**；退出全屏 VOL 仍在。
+    同时 `uiautomator dump` 的全屏页里 `副图 / MACD / RSI / KDJ / VOL / OI` 命中数**全为 0**（非全屏页为 1）。
+  - 底包：装 debug APK（`assembleDebug`，applicationId 与正式版同名 `com.waxilo.marketmonitor`、无 suffix，
+    设备上原有 0.9.28 → `install -r` 覆盖成 0.9.36）。测完把误开/误触的状态还原（VOL 关、纵轴 `复位`）。
+
+### ⚠️ MuMu 验收的五个坑（2026-10-09 实测）
+1. **adb server 每次 Bash 调用都重启**（`* daemon not running` 反复出现）⇒ 命令里的**第一条 adb 会抢在设备就绪前
+   执行**，报 `device offline`（`install`、`force-stop`、`uiautomator dump` 都栽过，且失败得很像「命令本身不对」）。
+   解法：同一条命令开头先 `adb start-server >/dev/null; adb -s <S> wait-for-device`，再干正事。
+2. **MSYS 会把设备路径 `/sdcard/x.xml` 翻译成 Windows 路径**（dump 输出变成
+   `/C:/…/PortableGit/sdcard/x.xml`，`cat` 回来是 0 字节）。必须 `MSYS_NO_PATHCONV=1 adb … shell …`。
+3. MuMu 同时挂两个入口（`emulator-5554` 与 `127.0.0.1:16384`）⇒ 不带 `-s` 就 `more than one device`。
+4. **退出全屏后 MuMu 回竖屏有十几秒延迟**：`dumpsys` 立刻就是 `mCurrentAppOrientation=UNSPECIFIED` /
+   `ROTATION_0`，但 `screencap` 仍是 1920×1080 —— **别据此判定方向没恢复**（应用侧是对的）。
+5. ❗**在详情页做垂直滑动会被图表吃成纵轴刻度缩放**，页面根本不会滚（想滚下去找副图 chip，结果图被拉成
+   1000~4000、冒出「刻度已缩放 · 复位」chip）。要滚页面必须从**非图表区域**（如周期行）起手。
 
 ## ⚠️ LazyColumn 的 key 锚定
 给了 `key` 就按「第一个可见项」锚定：重排时（测速弹窗按延迟逐条回填）被锚定那条一旦排到后面，**视口跟着往下滚 ⇒
