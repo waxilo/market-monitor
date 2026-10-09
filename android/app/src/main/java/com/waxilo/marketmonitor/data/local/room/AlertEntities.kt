@@ -33,7 +33,6 @@ data class AlertRuleEntity(
     val rangeUpper: String?,
     val changePercent: String?,
     val repeatMode: String,
-    val cooldownMinutes: Int,
     val enabled: Int,
     val playSound: Int,
     val vibrate: Int,
@@ -71,7 +70,7 @@ data class IndicatorLineEntity(
     val createdAt: Long,
 )
 
-/** 规则的判定状态（边沿触发与冷却需要跨进程重启保持，PRD FR-3.2）。 */
+/** 规则的判定状态（边沿触发与 ONCE 闸门需要跨进程重启保持，PRD FR-3.2）。 */
 @Entity(tableName = "alert_state")
 data class AlertStateEntity(
     @PrimaryKey val ruleId: Long,
@@ -125,7 +124,6 @@ fun AlertRuleEntity.toDomain(): AlertRule {
         rangeUpper = rangeUpper?.toBigDecimalOrNull(),
         changePercent = changePercent?.toBigDecimalOrNull(),
         repeatMode = AlertRepeatMode.fromKey(repeatMode),
-        cooldownMinutes = cooldownMinutes,
         enabled = enabled == 1,
         playSound = playSound == 1,
         vibrate = vibrate == 1,
@@ -147,7 +145,6 @@ fun AlertRule.toEntity(): AlertRuleEntity = AlertRuleEntity(
     rangeUpper = rangeUpper?.toPlainString(),
     changePercent = changePercent?.toPlainString(),
     repeatMode = repeatMode.key,
-    cooldownMinutes = cooldownMinutes,
     enabled = if (enabled) 1 else 0,
     playSound = if (playSound) 1 else 0,
     vibrate = if (vibrate) 1 else 0,

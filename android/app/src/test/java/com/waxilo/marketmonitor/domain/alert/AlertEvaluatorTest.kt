@@ -18,7 +18,6 @@ class AlertEvaluatorTest {
         upper: String? = null,
         percent: String? = null,
         mode: AlertRepeatMode = AlertRepeatMode.EVERY_CROSS,
-        cooldown: Int = 0,
         enabled: Boolean = true,
     ) = AlertRule(
         id = 1,
@@ -31,7 +30,6 @@ class AlertEvaluatorTest {
         rangeUpper = upper?.let(::BigDecimal),
         changePercent = percent?.let(::BigDecimal),
         repeatMode = mode,
-        cooldownMinutes = cooldown,
         enabled = enabled,
     )
 
@@ -111,29 +109,6 @@ class AlertEvaluatorTest {
         state = AlertEvaluator.evaluate(rule, BigDecimal("110"), null, 2 * MINUTE, s1).second
         val (second, _) = AlertEvaluator.evaluate(rule, BigDecimal("98"), null, 3 * MINUTE, state)
         assertTrue("ONCE 不再触发", second is AlertDecision.Silent)
-    }
-
-    @Test
-    fun `冷却期内静默`() {
-        val rule = rule(AlertCondition.ABOVE, threshold = "100", cooldown = 5)
-        var state = AlertEvaluator.evaluate(rule, BigDecimal("90"), null, 0, AlertState()).second
-        val (first, s1) = AlertEvaluator.evaluate(rule, BigDecimal("101"), null, MINUTE, state)
-        assertTrue(first is AlertDecision.Triggered)
-
-        state = AlertEvaluator.evaluate(rule, BigDecimal("99"), null, 2 * MINUTE, s1).second
-        val (again, _) = AlertEvaluator.evaluate(rule, BigDecimal("102"), null, 2 * MINUTE + 30_000, state)
-        assertTrue("冷却 5 分钟未满", again is AlertDecision.Silent)
-    }
-
-    @Test
-    fun `REPEAT 模式在条件持续满足时按冷却重复提醒`() {
-        val rule = rule(AlertCondition.ABOVE, threshold = "100", mode = AlertRepeatMode.REPEAT, cooldown = 5)
-        var state = AlertEvaluator.evaluate(rule, BigDecimal("90"), null, 0, AlertState()).second
-        val (first, s1) = AlertEvaluator.evaluate(rule, BigDecimal("101"), null, MINUTE, state)
-        assertTrue(first is AlertDecision.Triggered)
-
-        val (repeat, _) = AlertEvaluator.evaluate(rule, BigDecimal("102"), null, 6 * MINUTE, s1)
-        assertTrue("冷却到期后再次提醒", repeat is AlertDecision.Triggered)
     }
 
     @Test

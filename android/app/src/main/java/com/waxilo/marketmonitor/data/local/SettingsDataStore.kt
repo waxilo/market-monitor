@@ -55,7 +55,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
             crosshairEnabled = this[Keys.CROSSHAIR] ?: d.crosshairEnabled,
             alertPollingSeconds = this[Keys.POLL] ?: d.alertPollingSeconds,
-            alertDefaultCooldownMinutes = this[Keys.COOLDOWN] ?: d.alertDefaultCooldownMinutes,
             notificationEnabled = this[Keys.NOTIFY] ?: d.notificationEnabled,
             soundEnabled = this[Keys.SOUND] ?: d.soundEnabled,
             vibrateEnabled = this[Keys.VIBRATE] ?: d.vibrateEnabled,
@@ -90,7 +89,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.PANE] = subPaneKeys
         prefs[Keys.CROSSHAIR] = crosshairEnabled
         prefs[Keys.POLL] = alertPollingSeconds
-        prefs[Keys.COOLDOWN] = alertDefaultCooldownMinutes
         prefs[Keys.NOTIFY] = notificationEnabled
         prefs[Keys.SOUND] = soundEnabled
         prefs[Keys.VIBRATE] = vibrateEnabled
@@ -124,7 +122,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             // key 从 alert_polling_seconds 改名：旧默认 30s 会被持久化下来，
             // 继续读旧 key 的话新默认 5s 对老装机永远不生效（看起来像没改）
             val POLL = intPreferencesKey("alert_polling_seconds_v2")
-            val COOLDOWN = intPreferencesKey("alert_cooldown_minutes")
             val NOTIFY = booleanPreferencesKey("notification_enabled")
             val SOUND = booleanPreferencesKey("sound_enabled")
             val VIBRATE = booleanPreferencesKey("vibrate_enabled")

@@ -157,15 +157,6 @@ fun AlertEditorScreen(
                 labelOf = { it.label },
                 onSelect = { mode -> viewModel.on { it.copy(repeatMode = mode) } },
             )
-            if (form.usesCooldown) {
-                FieldRow(
-                    label = "冷却分钟数",
-                    value = form.cooldownMinutes,
-                    placeholder = "两次提醒的最小间隔",
-                    numeric = true,
-                    onChange = { value -> viewModel.on { it.copy(cooldownMinutes = value) } },
-                )
-            }
             Rule()
             SwitchRow("启用规则", form.enabled) { checked -> viewModel.on { it.copy(enabled = checked) } }
             SwitchRow("提示音", form.playSound) { checked -> viewModel.on { it.copy(playSound = checked) } }

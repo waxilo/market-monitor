@@ -8,13 +8,11 @@ import java.math.BigDecimal
  * 语义约定：
  * - 只在「不满足 → 满足」的边沿触发；规则创建时价格已在阈值另一侧不成立，
  *   因此首次观测只用于建立基线，不触发，避免新增规则即刷屏。
- * - 冷却期内一律静默；REPEAT 模式在条件持续满足时于冷却到期后再次触发。
+ * - **每次穿越都推送，不设冷却**：同侧的连续观测不重复报，翻到另一侧再翻回来才会再报一次。
+ * - ONCE 模式命中一次后由 [AlertState.fired] 闸门永久关闭（引擎负责把规则从列表移除）。
  * - changePercent 为空（拿不到 24h 基准价）时，涨跌幅类条件静默跳过而不是误判为 0。
  */
 object AlertEvaluator {
-
-    fun cooldownMs(rule: AlertRule): Long =
-        rule.cooldownMinutes.coerceAtLeast(0) * 60_000L
 
     fun evaluate(
         rule: AlertRule,
@@ -32,14 +30,9 @@ object AlertEvaluator {
             return AlertDecision.Silent to state.copy(wasSatisfied = satisfied, lastPrice = price)
         }
 
-        val inCooldown = state.lastTriggeredAt?.let { nowMs - it < cooldownMs(rule) } == true
         val edge = satisfied && !state.wasSatisfied
-        val repeatDue = satisfied && state.wasSatisfied &&
-            rule.repeatMode == AlertRepeatMode.REPEAT && !inCooldown
         val blockedOnce = state.fired && rule.repeatMode == AlertRepeatMode.ONCE
-
-        val shouldFire = satisfied && !inCooldown && !blockedOnce && (edge || repeatDue)
-        if (!shouldFire) {
+        if (!(satisfied && !blockedOnce && edge)) {
             return AlertDecision.Silent to state.copy(wasSatisfied = satisfied, lastPrice = price)
         }
 
@@ -135,7 +128,6 @@ object AlertRuleValidator {
     fun validate(rule: AlertRule, priceTickSize: BigDecimal?): String? {
         if (rule.symbol.isBlank()) return "请选择交易对"
         if (rule.name.isBlank()) return "请填写预警名称"
-        if (rule.cooldownMinutes < 0) return "冷却时间不能为负"
 
         val tickProblem = rule.threshold?.let { tickProblem(it, priceTickSize) }
             ?: rule.rangeLower?.let { tickProblem(it, priceTickSize) }

@@ -25,18 +25,19 @@ enum class AlertCondition(val key: String, val label: String) {
 }
 
 enum class AlertRepeatMode(val key: String, val label: String) {
-    /** 命中一次后不再提醒。 */
+    /** 命中一次后不再提醒：触发即从列表退场。留给「只想响一次」的场景，不是默认。 */
     ONCE("once", "单次"),
 
-    /** 每次穿越都提醒（价格反复贴近阈值时配合冷却时间使用）。 */
+    /**
+     * 每次穿越都提醒：只在「不满足 → 满足」的边沿触发，翻到另一侧再翻回来就再报一次。
+     * 没有冷却压制 —— 每次穿越都推送（同侧连续不重复报）。**默认值**。
+     */
     EVERY_CROSS("every_cross", "每次穿越"),
-
-    /** 条件持续满足期间按冷却间隔重复提醒。 */
-    REPEAT("repeat", "重复提醒"),
     ;
 
     companion object {
-        fun fromKey(key: String): AlertRepeatMode = entries.firstOrNull { it.key == key } ?: ONCE
+        /** 未知 key 一律回落「每次穿越」：历史值 repeat 已下线，其语义本就是反复提醒。 */
+        fun fromKey(key: String): AlertRepeatMode = entries.firstOrNull { it.key == key } ?: EVERY_CROSS
     }
 }
 
@@ -54,7 +55,7 @@ enum class AlertDirection(val key: String) {
 
 /**
  * 规则由谁创建。INDICATOR 线是「指标划线」（[IndicatorLine]）自动维护的附属品：
- * 阈值跟随所属划线的指标取值，单次模式命中一次即退场并把划线告警置关。
+ * 阈值跟随所属划线的指标取值，穿越后由引擎换锚重挂。
  */
 enum class AlertRuleSource(val key: String) {
     MANUAL("manual"),
@@ -81,9 +82,8 @@ data class AlertRule(
     val rangeUpper: BigDecimal? = null,
     /** RISE_BY / FALL_BY 的百分数阈值，按 24h 开盘基准，正数填写。 */
     val changePercent: BigDecimal? = null,
-    val repeatMode: AlertRepeatMode = AlertRepeatMode.ONCE,
-    /** 防风暴冷却，单位分钟。 */
-    val cooldownMinutes: Int = 5,
+    /** 默认「每次穿越」：每次穿越都推送；需要只响一次才显式选 [AlertRepeatMode.ONCE]。 */
+    val repeatMode: AlertRepeatMode = AlertRepeatMode.EVERY_CROSS,
     val enabled: Boolean = true,
     val playSound: Boolean = true,
     val vibrate: Boolean = true,

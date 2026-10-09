@@ -35,7 +35,6 @@ object AlertText {
     fun repeatLabel(rule: AlertRule): String = when (rule.repeatMode) {
         AlertRepeatMode.ONCE -> "单次"
         AlertRepeatMode.EVERY_CROSS -> "每次穿越"
-        AlertRepeatMode.REPEAT -> "每 ${rule.cooldownMinutes} 分钟重复"
     }
 
     /** 指标划线预警的标题（通知栏与消息中心共用），如「BTCUSDT 上破 1h MA30均线264」；价格取线的阈值，补齐的零去掉。 */

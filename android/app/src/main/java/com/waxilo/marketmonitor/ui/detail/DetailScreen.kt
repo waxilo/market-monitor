@@ -143,7 +143,7 @@ fun DetailScreen(
     val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
     // 「不告警」的划线画成灰参考曲线，同样两种视图都要画
     val indicatorGuides by viewModel.indicatorGuides.collectAsStateWithLifecycle()
-    // 指标线模式均线带的两条灰色锚点水平线（引擎择近+冷却换锚），同样两种视图共用
+    // 指标线模式均线带的两条灰色锚点水平线（引擎择近 + 穿越后静默换锚），同样两种视图共用
     val bandGuides by viewModel.bandGuides.collectAsStateWithLifecycle()
     val indicatorLines by viewModel.indicatorLines.collectAsStateWithLifecycle()
     val symbolRules by viewModel.symbolRules.collectAsStateWithLifecycle()
@@ -363,9 +363,12 @@ private fun FullscreenController(active: Boolean) {
  *
  * 换周期与改指标也在这里给到：全屏是横屏，竖屏那套控件（周期条、指标条）整块被图表顶掉了，
  * 只剩一个「退出全屏」的话，用户每次想换个周期都得先退出、改完、再进来。
- * 周期是**常驻摊开**的一条（放在图表下方，不压时间轴）——换周期是全屏里最高频的动作，
- * 每次都要先展开再选、选完又收起的话，连换两个周期就得点三次。
- * 指标仍旧做成**按需展开的底部浮层**：它选项多、改得少，常驻会把蜡烛区压掉一大截。
+ * 两者都做成**常驻的窄带**、钉在图表上方，与竖屏「控件常驻在图的上/下方」语义一致：
+ * 周期是左端可横滚的一条，指标一条紧跟其下 —— 换周期与改指标都是高频动作，
+ * 做成「按需展开再选、选完又收起」的浮层的话，改一次要点三次。
+ * **全屏不画副图**：横屏高度本来就紧张，一条副图窗格换来的信息量抵不上它吃掉的蜡烛区，
+ * 副图留给竖屏看；指标条里的「副图」一组也一并收掉（`showSubPanes = false`），
+ * 免得留下点了在全屏里没有任何反应的开关。
  */
 @Composable
 private fun FullscreenChart(
@@ -382,15 +385,13 @@ private fun FullscreenChart(
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线模式
     var alertMode by rememberSaveable { mutableStateOf(false) }
-    // 同样挂在全屏内部：面板只是「临时看一眼」，退出全屏没必要带着走
-    var indicatorOpen by rememberSaveable { mutableStateOf(false) }
     // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
 
     Column(modifier = Modifier.fillMaxSize().background(colors.paper)) {
-        // 顶端这一行同时承载「周期」与「指标 / 划线 / 退出」：横屏时底部要留给时间轴，
-        // 把这些开关浮在图表上会盖住 K 线；并入周期行后图表整块干净，且和竖屏「周期在图表上方」一致。
-        // 周期在左侧可横滚，右侧三个动作固定常驻（退出入口不能被滚走）。
+        // 顶部两条常驻窄带：上面「周期 + 划线 / 退出」，下面「指标」。
+        // 两者都不压图：横屏高度紧，浮在图上会盖住 K 线，钉成图上方的一小段最省心。
+        // 周期在左侧可横滚，右侧两个动作固定常驻（退出入口不能被滚走）。
         IntervalSelector(
             options = state.intervals,
             selected = state.interval,
@@ -398,12 +399,6 @@ private fun FullscreenChart(
             onManage = onManageIntervals,
             compact = true,
             actions = {
-                FilterChip(
-                    text = "指标",
-                    selected = indicatorOpen,
-                    onClick = { indicatorOpen = !indicatorOpen },
-                    compact = true,
-                )
                 FilterChip(
                     text = "划线",
                     selected = alertMode,
@@ -421,6 +416,20 @@ private fun FullscreenChart(
             },
         )
         Rule(inset = 0.dp)
+        // 指标常驻：与竖屏一致，改 MA / BOLL 不必先展开浮层。副图全屏不画，选项也收掉。
+        IndicatorBar(
+            maChoices = state.maChoices,
+            activeMa = state.maPeriods,
+            showBoll = state.showBoll,
+            subPanes = state.subPanes,
+            oiSupported = state.oiSupported,
+            onToggleMa = viewModel::toggleMaPeriod,
+            onToggleBoll = viewModel::toggleBoll,
+            onToggleSubPane = viewModel::toggleSubPane,
+            compact = true,
+            showSubPanes = false,
+        )
+        Rule(inset = 0.dp)
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             when {
                 // 全屏里换周期也会经历「这一段序列还没到」：与竖屏同处理（空图 + 遮罩），
@@ -436,18 +445,19 @@ private fun FullscreenChart(
                 )
 
                 else -> {
+                    // 全屏不画副图：显式给空列表，序列与视口都按「没开副图」算。
+                    // 副图选择是全局偏好（竖屏那份），这里只影响全屏这一帧的渲染。
                     val series = remember(
                         state.candles,
                         state.maPeriods,
                         state.showBoll,
-                        state.subPanes,
                         state.openInterest,
                     ) {
                         ChartModel.build(
                             candles = state.candles,
                             maPeriods = state.maPeriods,
                             showBoll = state.showBoll,
-                            subPanes = state.subPanes,
+                            subPanes = emptyList(),
                             openInterest = state.openInterest,
                         )
                     }
@@ -490,31 +500,7 @@ private fun FullscreenChart(
                 }
             }
 
-            // 指标浮层压在图表底部而不是顶部：顶部要留给指标读数带，
-            // 底部只有时间轴，被临时盖住不影响看形态。
-            if (indicatorOpen) {
-                Column(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .background(colors.paper)
-                        .padding(bottom = Spacing.Sm),
-                ) {
-                    Rule(inset = 0.dp)
-                    IndicatorBar(
-                        maChoices = state.maChoices,
-                        activeMa = state.maPeriods,
-                        showBoll = state.showBoll,
-                        subPanes = state.subPanes,
-                        oiSupported = state.oiSupported,
-                        onToggleMa = viewModel::toggleMaPeriod,
-                        onToggleBoll = viewModel::toggleBoll,
-                        onToggleSubPane = viewModel::toggleSubPane,
-                        compact = true,
-                    )
-                }
-            }
-
+            // 指标改动走顶部常驻条，图上不再有浮层——浮层无论压顶部还是底部都要吃掉一截图。
             if (alertMode) {
                 Text(
                     text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 拖到右上角垃圾桶删除 · 涨跌碰到都提醒 · 落一根或删一条即自动退出，继续请重新点「划线」",
@@ -747,7 +733,7 @@ private fun IntervalSelector(
     onManage: () -> Unit,
     compact: Boolean = false,
     /**
-     * 仅 compact 模式生效：钉在这一行**右侧**的固定控件（全屏里的「指标 / 划线 / 退出」）。
+     * 仅 compact 模式生效：钉在这一行**右侧**的固定控件（全屏里的「划线 / 退出」）。
      * 周期 chips 在左侧横向滚动，actions 不参与滚动、始终常驻可见——退出入口不能被滚走。
      */
     actions: (@Composable RowScope.() -> Unit)? = null,
@@ -756,7 +742,9 @@ private fun IntervalSelector(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+                // 垂直留白收到 4dp：横屏只有 540dp 高，周期 + 指标两条窄带若照竖屏的 12dp 走，
+                // 这两行就要吃掉 92dp（≈17% 屏高）。chip 本体仍是 22dp，点击区不受影响。
+                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xxs),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -1020,8 +1008,8 @@ private fun chartHeight(subPaneCount: Int): Dp {
  * 这是看图的基本需求，不做「至少留一个」的兜底。
  *
  * [compact] 给全屏横屏用：两行式（两条小标题 + 两行方块）在竖屏里很舒展，
- * 到横屏会吃掉近 40% 屏高、把副图区整个盖住 —— 开副图却看不见副图，等于白开。
- * 横排把分组小标题降级成行内标签，只留一条窄带压住时间轴。
+ * 到横屏会吃掉近 40% 屏高、把蜡烛区整个压扁。横排把分组小标题降级成行内标签，
+ * 收成一条常驻的窄带（见 [FullscreenChart]），与竖屏「图表下方常驻」的语义一致。
  */
 @Composable
 private fun IndicatorBar(
@@ -1035,17 +1023,23 @@ private fun IndicatorBar(
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
     compact: Boolean = false,
+    /**
+     * 是否显示「副图」那一组 chip。全屏固定条传 false：全屏不画副图（见 [FullscreenChart]），
+     * 留着能点却不生效的开关只会让人以为坏了。竖屏照常两组都出。
+     */
+    showSubPanes: Boolean = true,
 ) {
     if (compact) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+                // 与 [IntervalSelector] 的 compact 分支同一套收紧后的留白（见那里的说明）
+                .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xxs),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            InlineLabel(text = "叠加")
+            InlineLabel(text = "指标")
             maChoices.forEach { period ->
                 FilterChip(
                     text = "MA$period",
@@ -1055,28 +1049,30 @@ private fun IndicatorBar(
                 )
             }
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
-            Box(
-                modifier = Modifier
-                    .padding(horizontal = Spacing.Xxs)
-                    .width(1.dp)
-                    .height(14.dp)
-                    .background(MarketTheme.colors.hairline),
-            )
-            InlineLabel(text = "副图")
-            SubPaneKind.entries.forEach { kind ->
-                FilterChip(
-                    text = kind.label,
-                    selected = kind in subPanes,
-                    greyed = kind == SubPaneKind.OI && !oiSupported,
-                    onClick = { onToggleSubPane(kind) },
-                    compact = true,
+            if (showSubPanes) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = Spacing.Xxs)
+                        .width(1.dp)
+                        .height(14.dp)
+                        .background(MarketTheme.colors.hairline),
                 )
+                InlineLabel(text = "副图")
+                SubPaneKind.entries.forEach { kind ->
+                    FilterChip(
+                        text = kind.label,
+                        selected = kind in subPanes,
+                        greyed = kind == SubPaneKind.OI && !oiSupported,
+                        onClick = { onToggleSubPane(kind) },
+                        compact = true,
+                    )
+                }
             }
         }
         return
     }
     Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md, bottom = Spacing.Md)) {
-        SectionOverline(text = "叠加指标")
+        SectionOverline(text = "指标")
         Spacer(Modifier.height(Spacing.Xs))
         Row(
             modifier = Modifier

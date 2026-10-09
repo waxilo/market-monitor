@@ -308,11 +308,10 @@ fun IndicatorLineDialog(
                 Text(text = "这条线怎么用", style = MaterialTheme.typography.labelMedium, color = colors.muted)
                 SegmentedControl(
                     options = listOf(LineAlertMode.OFF, LineAlertMode.EVERY_CROSS),
-                    selected = if (mode == LineAlertMode.ONCE) LineAlertMode.EVERY_CROSS else mode,
+                    selected = mode,
                     labelOf = {
                         when (it) {
                             LineAlertMode.OFF -> "指标线"
-                            LineAlertMode.ONCE -> "单次预警"
                             LineAlertMode.EVERY_CROSS -> "上下破预警"
                         }
                     },

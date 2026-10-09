@@ -31,31 +31,30 @@ data class LineMember(val interval: CandleInterval, val maPeriod: Int) {
 
 /**
  * 一条划线的告警方式。
- * [OFF] 只当参考不响；[ONCE] 命中一次后规则退场、模式自动回落到 OFF；
- * [EVERY_CROSS] 每次穿越都提醒（判定复用 [AlertRepeatMode] 的边沿语义）。
+ * [OFF] 只当参考不响；[EVERY_CROSS] 每次穿越都提醒（判定复用 [AlertRepeatMode.EVERY_CROSS] 的边沿语义）。
+ *
+ * 旧的 ONCE（命中一次即退场）已下线：划线告警一律每次穿越都推送，穿越后自动换锚下一条均线。
  */
 enum class LineAlertMode(val key: String, val label: String) {
     OFF("off", "不告警"),
-    ONCE("once", "单次"),
     EVERY_CROSS("every_cross", "每次穿越"),
     ;
 
-    val repeatMode: AlertRepeatMode
-        get() = when (this) {
-            EVERY_CROSS -> AlertRepeatMode.EVERY_CROSS
-            else -> AlertRepeatMode.ONCE
-        }
-
     companion object {
-        fun fromKey(key: String): LineAlertMode = entries.firstOrNull { it.key == key } ?: OFF
+        /** 历史值 once 与未知 key：按「每次穿越」对待，避免旧数据被静默降级成不告警。 */
+        fun fromKey(key: String): LineAlertMode =
+            if (key == LEGACY_ONCE) EVERY_CROSS else entries.firstOrNull { it.key == key } ?: OFF
+
+        /** 已下线的「单次」划线告警 key（DB 迁移脚本同口径归一为 every_cross）。 */
+        private const val LEGACY_ONCE = "once"
     }
 }
 
 /**
  * 「指标线」（[LineAlertMode.OFF]）模式均线带的实时锚点：现价上/下方各最近的一条成员均线。
  *
- * 引擎按预警轮询节奏算好（与上下破预警同一套候选集合与穿越冷却，只是不挂规则不响），
- * 图上各画一条灰色水平线。null = 该侧没有可选成员（全在价下同侧/都在冷却）。
+ * 引擎按预警轮询节奏算好（与上下破预警同一套候选集合与穿越静默，只是不挂规则不响），
+ * 图上各画一条灰色水平线。null = 该侧没有可选成员（全在价下同侧/都在静默）。
  */
 data class BandAnchorDisplay(
     val lineId: Long,
@@ -78,7 +77,7 @@ data class BandAnchorInfo(
     val lower: BandAnchorSide?,
 )
 
-/** 锚点的一侧：挂上的成员，以及整池均线值高于（下侧为低于）最新价的条数（含冷却中的成员）。 */
+/** 锚点的一侧：挂上的成员，以及整池均线值高于（下侧为低于）最新价的条数（含静默中的成员）。 */
 data class BandAnchorSide(
     val member: LineMember,
     val poolCount: Int,

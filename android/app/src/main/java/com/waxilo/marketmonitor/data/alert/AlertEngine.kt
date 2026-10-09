@@ -72,11 +72,11 @@ class AlertEngine(
     private val scope: CoroutineScope,
 ) {
 
-    /** 均线带当前锚点：lineId → 条件 → 成员键，触发时据此知道该让哪个成员进冷却。 */
+    /** 均线带当前锚点：lineId → 条件 → 成员键，触发时据此知道该让哪个成员进静默。 */
     private val bandAnchors = ConcurrentHashMap<Long, ConcurrentHashMap<AlertCondition, String>>()
 
-    /** 被穿越成员冷却到期时刻：成员键 → 毫秒；进程内状态，重启后重新跟随。 */
-    private val bandCooldownUntil = ConcurrentHashMap<String, Long>()
+    /** 被穿越成员静默到期时刻：成员键 → 毫秒；进程内状态，重启后重新跟随。 */
+    private val bandSettleUntil = ConcurrentHashMap<String, Long>()
 
     /** 「指标线」模式上一轮锚点值：lineId → 条件 → 值；价格越过它即视为穿越，据此换锚。 */
     private val bandDisplayValues = ConcurrentHashMap<Long, ConcurrentHashMap<AlertCondition, Double>>()
@@ -154,9 +154,9 @@ class AlertEngine(
      * 是纯粹的残留物。记录与通知都做完才删，避免删库把还没发出去的通知一起带走。
      */
     private suspend fun onTriggered(rule: AlertRule, decision: AlertDecision.Triggered): Boolean {
-        // 冷却必须先于一切挂起点记账：record/通知/Webhook 可能耗时数秒，期间同步循环（5s 一轮）
-        // 会把锚点换到新成员头上——晚到的冷却会错杀无辜，被穿越的线反而贴着现价反复触发
-        startBandCooldown(rule)
+        // 静默必须先于一切挂起点记账：record/通知/Webhook 可能耗时数秒，期间同步循环（5s 一轮）
+        // 会把锚点换到新成员头上——晚到的静默会错杀无辜，被穿越的线反而贴着现价反复触发
+        markBandMemberSettled(rule)
         val message = AlertMessage(
             ruleId = rule.id,
             market = rule.market,
@@ -175,10 +175,9 @@ class AlertEngine(
         if (prefs.notificationEnabled) notifier.notify(stored, rule, longVibrate = prefs.longVibrateEnabled)
         val delivery = deliver(rule, stored)
         if (delivery != WebhookDelivery.NONE) alerts.setDelivery(id, delivery)
-        startBandCooldown(rule)
+        markBandMemberSettled(rule)
         if (rule.repeatMode != AlertRepeatMode.ONCE) return false
         alerts.deleteRule(rule.id)
-        if (rule.source == AlertRuleSource.INDICATOR) retireIndicatorLine(rule)
         return true
     }
 
@@ -206,25 +205,16 @@ class AlertEngine(
     }
 
     /**
-     * 均线带成员被穿越即进冷却：刚穿过的线就在脚下/头顶，立刻当锚点只会画出贴着价、
-     * 反复触发的假信号。锚点键在 [ensureBandRule] 改阈值之前记好，这里取的是触发那一刻的旧锚。
+     * 均线带成员被穿越即静默一轮：刚穿过的线就在脚下/头顶，立刻当锚点只会画出贴着价、
+     * 反复触发的假信号；静默期内不参与上下破选取，下一轮换锚到池里下一条均线。
+     * 锚点键在 [ensureBandRule] 改阈值之前记好，这里取的是触发那一刻的旧锚。
      * [bandAnchors] 只由均线带链路（[ensureBandRule]/[syncBandDisplay]）填充，单周期线查不到键，
      * 不必再查库判型；全程同步无挂起，才能在换锚窗口关闭前记到人头上。
      */
-    private fun startBandCooldown(rule: AlertRule) {
+    private fun markBandMemberSettled(rule: AlertRule) {
         val lineId = rule.indicatorLineId ?: return
         val memberKey = bandAnchors[lineId]?.get(rule.condition) ?: return
-        bandCooldownUntil[memberKey] = System.currentTimeMillis() + BAND_MEMBER_COOLDOWN_MS
-    }
-
-    /**
-     * 单次模式的划线命中即作废：规则已随 ONCE 退场，把划线告警置回 OFF——
-     * 触发后现价站到线的另一侧，留着只会画出一条不再被任何逻辑更新的假线。
-     * 用户要再来一次得在划线管理里重新开启。
-     */
-    private suspend fun retireIndicatorLine(rule: AlertRule) {
-        val lineId = rule.indicatorLineId ?: return
-        alerts.setIndicatorLineAlertMode(lineId, LineAlertMode.OFF)
+        bandSettleUntil[memberKey] = System.currentTimeMillis() + BAND_MEMBER_SETTLE_MS
     }
 
     // ---- 指标划线的规则维护 ----
@@ -307,7 +297,8 @@ class AlertEngine(
                 val name = ruleNameOf(line, interval, condition)
                 wanted += name
                 val existing = mine.firstOrNull { it.name == name }
-                val repeat = line.alertMode.repeatMode
+                // 划线告警一律「每次穿越」：旧的单次划线模式已下线，不再有别的取值
+                val repeat = AlertRepeatMode.EVERY_CROSS
                 if (existing == null) {
                     alerts.saveRule(
                         AlertRule(
@@ -356,14 +347,14 @@ class AlertEngine(
      * 与单条线的关键差别是不锁方向也不退场：穿越后那个值落到现价另一侧，
      * 下一轮自动换锚到集合里下一条最近的均线，图上两条虚线始终贴着现价的上下沿。
      * 集合里某一侧空了（如价格在所有均线之上）就收掉那一侧的规则，等均线追上来再挂。
-     * 被穿越的成员进入 [BAND_MEMBER_COOLDOWN_MS] 冷却：刚穿过的线就在脚下/头顶，
-     * 立刻当锚点只会画出一条贴着价、反复触发的假信号，冷却期内不参与上下破选取。
+     * 被穿越的成员进入 [BAND_MEMBER_SETTLE_MS] 静默：刚穿过的线就在脚下/头顶，
+     * 立刻当锚点只会画出一条贴着价、反复触发的假信号，静默期内不参与上下破选取。
      */
     private suspend fun syncBandRules(line: IndicatorLine) {
         val id = SymbolId(line.market, line.symbol)
         val price = (market.refreshTicker(id) ?: market.ticker(id).first())?.lastPrice ?: return
         val now = System.currentTimeMillis()
-        bandCooldownUntil.entries.removeIf { it.value <= now }
+        bandSettleUntil.entries.removeIf { it.value <= now }
         val priceValue = price.toDouble()
         val pool = bandCandidates(line, id)
         val (upper, lower) = MaBand.pick(anchorable(pool, now), priceValue)
@@ -374,7 +365,7 @@ class AlertEngine(
 
     /**
      * 发布本轮锚点：成员标识（周期+均线）给虚线左端标签与预警页标题认人，
-     * 条数按整池统计（上侧 = 高于现价的成员数，含冷却中的），贴价的一侧同取低于。
+     * 条数按整池统计（上侧 = 高于现价的成员数，含静默中的），贴价的一侧同取低于。
      */
     private fun publishBandAnchorInfo(
         line: IndicatorLine,
@@ -397,25 +388,25 @@ class AlertEngine(
 
     /**
      * 「指标线」模式（不响）的均线带锚点维护：与 [syncBandRules] 共用同一套候选集合与
-     * 冷却——现价上/下各取最近成员，价格越过上一轮锚点即视为穿越，该成员进冷却、下轮换锚。
+     * 静默——现价上/下各取最近成员，价格越过上一轮锚点即视为穿越，该成员进静默、下轮换锚。
      * 差别只在产出：不挂任何规则，锚点值发布到 [bandDisplayLines] 供图上画灰色水平线。
      */
     private suspend fun syncBandDisplay(line: IndicatorLine) {
         val id = SymbolId(line.market, line.symbol)
         val price = (market.refreshTicker(id) ?: market.ticker(id).first())?.lastPrice ?: return
         val now = System.currentTimeMillis()
-        bandCooldownUntil.entries.removeIf { it.value <= now }
+        bandSettleUntil.entries.removeIf { it.value <= now }
         val priceValue = price.toDouble()
         bandDisplayValues[line.id]?.let { previous ->
             previous[AlertCondition.ABOVE]?.takeIf { priceValue >= it }
-                ?.let { coolBandMember(line.id, AlertCondition.ABOVE, now) }
+                ?.let { settleBandMember(line.id, AlertCondition.ABOVE, now) }
             previous[AlertCondition.BELOW]?.takeIf { priceValue <= it }
-                ?.let { coolBandMember(line.id, AlertCondition.BELOW, now) }
+                ?.let { settleBandMember(line.id, AlertCondition.BELOW, now) }
         }
         val (upper, lower) = MaBand.pick(anchorable(bandCandidates(line, id), now), priceValue)
         val anchors = bandAnchors.getOrPut(line.id) { ConcurrentHashMap() }
         val values = bandDisplayValues.getOrPut(line.id) { ConcurrentHashMap() }
-        // 记下本轮锚点：成员键供穿越时进冷却，数值供下一轮判断价格是否越过
+        // 记下本轮锚点：成员键供穿越时进静默，数值供下一轮判断价格是否越过
         upper?.let { anchors[AlertCondition.ABOVE] = it.first } ?: anchors.remove(AlertCondition.ABOVE)
         lower?.let { anchors[AlertCondition.BELOW] = it.first } ?: anchors.remove(AlertCondition.BELOW)
         upper?.let { values[AlertCondition.ABOVE] = it.second } ?: values.remove(AlertCondition.ABOVE)
@@ -427,15 +418,15 @@ class AlertEngine(
         }
     }
 
-    /** 让某一侧的当前锚点成员进冷却（「指标线」模式靠价格越过锚点判定穿越）。 */
-    private fun coolBandMember(lineId: Long, condition: AlertCondition, now: Long) {
+    /** 让某一侧的当前锚点成员进静默（「指标线」模式靠价格越过锚点判定穿越）。 */
+    private fun settleBandMember(lineId: Long, condition: AlertCondition, now: Long) {
         val memberKey = bandAnchors[lineId]?.remove(condition) ?: return
-        bandCooldownUntil[memberKey] = now + BAND_MEMBER_COOLDOWN_MS
+        bandSettleUntil[memberKey] = now + BAND_MEMBER_SETTLE_MS
     }
 
     /**
-     * 均线带的候选集合（整个池）：能算出末根均线值的成员，键为可反查的冷却成员标识。
-     * 冷却中的成员也在池里——选锚时要剔除它们，但「现价上/下共几条均线」的条数要算上它们。
+     * 均线带的候选集合（整个池）：能算出末根均线值的成员，键为可反查的静默成员标识。
+     * 静默中的成员也在池里——选锚时要剔除它们，但「现价上/下共几条均线」的条数要算上它们。
      */
     private suspend fun bandCandidates(
         line: IndicatorLine,
@@ -450,9 +441,9 @@ class AlertEngine(
         }.getOrNull()
     }
 
-    /** 剔除冷却中成员后的可锚集合。 */
+    /** 剔除静默中成员后的可锚集合。 */
     private fun anchorable(pool: List<Pair<String, Double>>, now: Long): List<Pair<String, Double>> =
-        pool.filter { (bandCooldownUntil[it.first] ?: 0L) <= now }
+        pool.filter { (bandSettleUntil[it.first] ?: 0L) <= now }
 
     /** 挂/移/更新均线带在某一侧的规则；anchor 为 null 表示该侧无候选，规则退场。 */
     private suspend fun ensureBandRule(
@@ -493,7 +484,7 @@ class AlertEngine(
             bandAnchors.getOrPut(line.id) { ConcurrentHashMap() }[condition] = memberKey
             return
         }
-        // 先记锚点再改阈值：两者之间若有触发，冷却要记到旧成员头上
+        // 先记锚点再改阈值：两者之间若有触发，静默要记到旧成员头上
         bandAnchors.getOrPut(line.id) { ConcurrentHashMap() }[condition] = memberKey
         if (existing.name == name && existing.threshold?.compareTo(target) == 0) return
         alerts.saveRule(existing.copy(name = name, threshold = target))
@@ -605,6 +596,6 @@ class AlertEngine(
         const val MESSAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000L
 
         /** 均线带成员被穿越后的静默时长。 */
-        const val BAND_MEMBER_COOLDOWN_MS = 5 * 60_000L
+        const val BAND_MEMBER_SETTLE_MS = 5 * 60_000L
     }
 }

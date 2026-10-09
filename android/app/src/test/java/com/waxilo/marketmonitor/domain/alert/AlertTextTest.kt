@@ -32,11 +32,11 @@ class AlertTextTest {
             condition = AlertCondition.OUT_OF_RANGE,
             rangeLower = BigDecimal("2900"),
             rangeUpper = BigDecimal("3100.5"),
-            repeatMode = AlertRepeatMode.REPEAT,
-            cooldownMinutes = 15,
+            repeatMode = AlertRepeatMode.EVERY_CROSS,
         )
         assertEquals("超出 2900.00 ~ 3100.50", AlertText.conditionLabel(rule))
-        assertEquals("每 15 分钟重复", AlertText.repeatLabel(rule))
+        assertEquals("每次穿越", AlertText.repeatLabel(rule))
+        assertEquals("单次", AlertText.repeatLabel(rule.copy(repeatMode = AlertRepeatMode.ONCE)))
         assertEquals(
             "达到 100000.00",
             AlertText.conditionLabel(rule.copy(condition = AlertCondition.REACH, threshold = BigDecimal("100000"))),

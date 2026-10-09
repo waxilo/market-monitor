@@ -266,7 +266,7 @@ class DetailViewModel(
 
     /**
      * 「指标线」模式均线带的锚点水平线：引擎把所有成员均线值当一个集合，
-     * 现价上/下最近各取一条发布过来（被穿越的成员进冷却、自动换锚），
+     * 现价上/下最近各取一条发布过来（刚被穿越的成员先静默一轮、自动换锚），
      * 这里只按标的过滤后转成图上的灰色水平线。不挂规则、不会响。
      */
     val bandGuides: StateFlow<List<BandGuideLine>> = engine.bandDisplayLines
@@ -712,7 +712,7 @@ class DetailViewModel(
     /**
      * 建/改这条线对应的规则，成功返回 true。
      *
-     * 有 ruleId 就更新（保留 repeatMode / 冷却 / Webhook 等用户可能调过的字段），
+     * 有 ruleId 就更新（保留 repeatMode / Webhook 等用户可能调过的字段），
      * 没有就新建 —— 拖动同一个价位反复松手不该堆出一串规则。
      * 失败时保留拖动中的线，让用户能换个价位再试一次。
      */

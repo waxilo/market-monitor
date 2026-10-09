@@ -39,8 +39,7 @@ data class AlertEditorState(
     val rangeLower: String = "",
     val rangeUpper: String = "",
     val percent: String = "",
-    val repeatMode: AlertRepeatMode = AlertRepeatMode.ONCE,
-    val cooldownMinutes: String = "5",
+    val repeatMode: AlertRepeatMode = AlertRepeatMode.EVERY_CROSS,
     val enabled: Boolean = true,
     val playSound: Boolean = true,
     val vibrate: Boolean = true,
@@ -53,7 +52,6 @@ data class AlertEditorState(
     val needsThreshold: Boolean get() = condition == AlertCondition.REACH
     val needsRange: Boolean get() = condition == AlertCondition.OUT_OF_RANGE
     val needsPercent: Boolean get() = condition == AlertCondition.RISE_BY || condition == AlertCondition.FALL_BY
-    val usesCooldown: Boolean get() = repeatMode != AlertRepeatMode.ONCE
 }
 
 /** 编辑器右侧的动态提示：来自本地交易规则与自选，不额外消耗权重。 */
@@ -164,15 +162,9 @@ class AlertEditorViewModel(
         }
     }
 
-    /** 冷却时间是整数，不在 [AlertRuleValidator] 的射程内（它只管价格与条件）。 */
+    /** 编辑器自有的必填校验；价格与条件的校验在 [AlertRuleValidator] 里。 */
     private fun parseProblem(state: AlertEditorState): String? {
         if (state.symbol.isBlank()) return "请填写交易对"
-        if (state.usesCooldown && state.cooldownMinutes.trim().toIntOrNull() == null) {
-            return "冷却时间需为整数分钟"
-        }
-        if (state.usesCooldown && (state.cooldownMinutes.trim().toIntOrNull() ?: 0) <= 0) {
-            return "重复提醒需要大于 0 的冷却分钟数"
-        }
         return null
     }
 
@@ -189,7 +181,6 @@ class AlertEditorViewModel(
         rangeUpper = decimal(rangeUpper),
         changePercent = decimal(percent),
         repeatMode = repeatMode,
-        cooldownMinutes = cooldownMinutes.trim().toIntOrNull() ?: 0,
         enabled = enabled,
         playSound = playSound,
         vibrate = vibrate,
@@ -210,7 +201,6 @@ class AlertEditorViewModel(
         rangeUpper = rangeUpper?.toPlainString().orEmpty(),
         percent = changePercent?.toPlainString().orEmpty(),
         repeatMode = repeatMode,
-        cooldownMinutes = cooldownMinutes.toString(),
         enabled = enabled,
         playSound = playSound,
         vibrate = vibrate,

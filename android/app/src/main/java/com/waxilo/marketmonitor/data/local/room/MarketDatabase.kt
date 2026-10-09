@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AlertLogEntity::class,
         IndicatorLineEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class MarketDatabase : RoomDatabase() {
@@ -162,9 +162,78 @@ abstract class MarketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v7→v8：告警冷却整体下线 —— 判定不再有冷却压制，每次穿越都推送；
+         * 依赖冷却才有意义的「重复提醒」模式一并不用。
+         *
+         * minSdk 26 的 SQLite 无 DROP COLUMN，alert_rule 只能整表重建来去掉 cooldownMinutes。
+         * 重建的同时把存量 repeatMode 归一：已下线的 repeat 一律 every_cross；
+         * 划线自动挂的 indicator 规则原本的 once（旧的「单次划线」）也一并归一 ——
+         * 划线告警现在是「每次穿越」。手动规则的 once（用户显式选的单次）原样保留。
+         */
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE `alert_rule_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `market` TEXT NOT NULL,
+                        `symbol` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `condition` TEXT NOT NULL,
+                        `threshold` TEXT,
+                        `rangeLower` TEXT,
+                        `rangeUpper` TEXT,
+                        `changePercent` TEXT,
+                        `repeatMode` TEXT NOT NULL,
+                        `enabled` INTEGER NOT NULL,
+                        `playSound` INTEGER NOT NULL,
+                        `vibrate` INTEGER NOT NULL,
+                        `webhookIds` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `source` TEXT NOT NULL DEFAULT 'manual',
+                        `maPeriod` INTEGER,
+                        `indicatorAlertId` INTEGER,
+                        `indicatorLineId` INTEGER
+                    )
+                    """
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `alert_rule_new`
+                        (id, market, symbol, name, condition, threshold, rangeLower, rangeUpper,
+                         changePercent, repeatMode, enabled, playSound, vibrate, webhookIds,
+                         createdAt, source, maPeriod, indicatorAlertId, indicatorLineId)
+                    SELECT id, market, symbol, name, condition, threshold, rangeLower, rangeUpper,
+                           changePercent,
+                           CASE
+                               WHEN repeatMode = 'repeat' THEN 'every_cross'
+                               WHEN repeatMode = 'once' AND source = 'indicator' THEN 'every_cross'
+                               ELSE repeatMode
+                           END,
+                           enabled, playSound, vibrate, webhookIds, createdAt, source,
+                           maPeriod, indicatorAlertId, indicatorLineId
+                    FROM `alert_rule`
+                    """
+                )
+                db.execSQL("DROP TABLE `alert_rule`")
+                db.execSQL("ALTER TABLE `alert_rule_new` RENAME TO `alert_rule`")
+                // 旧的「单次划线」告警随 ONCE 下线一并归一（与 LineAlertMode.fromKey 同口径）
+                db.execSQL("UPDATE `indicator_line` SET `alertMode` = 'every_cross' WHERE `alertMode` = 'once'")
+            }
+        }
+
         fun create(context: Context): MarketDatabase =
             Room.databaseBuilder(context.applicationContext, MarketDatabase::class.java, NAME)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                    MIGRATION_7_8,
+                )
                 .build()
     }
 }

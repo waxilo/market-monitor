@@ -187,7 +187,7 @@ fun KlineChart(
     indicatorGuides: List<IndicatorGuideLine> = emptyList(),
     /**
      * 指标线（OFF）模式均线带在图上的锚点参考线：现价上方/下方最近成员各一条
-     * **灰色水平线**（引擎按集合择近 + 5 分钟冷却换锚算好，始终至多两条、不会响）。
+     * **灰色水平线**（引擎按集合择近 + 穿越后静默换锚算好，始终至多两条、不会响）。
      * 与 [indicatorGuides] 同样只随眼睛显隐、不参与拖拽；划线模式下同样不画。
      */
     bandGuides: List<BandGuideLine> = emptyList(),
