@@ -91,6 +91,7 @@ import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
+import com.waxilo.marketmonitor.ui.chart.ChartSkeleton
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
@@ -421,60 +422,72 @@ private fun FullscreenChart(
         )
         Rule(inset = 0.dp)
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            if (state.candles.isEmpty()) {
-                HintRow(
+            when {
+                // 全屏里换周期也会经历「这一段序列还没到」：与竖屏同处理（空图 + 遮罩），
+                // 否则这个空窗里会报一句「没有取到 K 线」
+                state.loadingCandles && state.candles.isEmpty() -> ChartLoading(state)
+
+                state.candles.isEmpty() -> HintRow(
                     title = "没有取到 K 线",
                     subtitle = state.error ?: "换个周期或重新加载试试",
                     actionLabel = "重新加载 →",
                     onAction = viewModel::refresh,
                     modifier = Modifier.align(Alignment.Center),
                 )
-            } else {
-                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes, state.openInterest) {
-                    ChartModel.build(
-                        candles = state.candles,
-                        maPeriods = state.maPeriods,
-                        showBoll = state.showBoll,
-                        subPanes = state.subPanes,
-                        openInterest = state.openInterest,
+
+                else -> {
+                    val series = remember(
+                        state.candles,
+                        state.maPeriods,
+                        state.showBoll,
+                        state.subPanes,
+                        state.openInterest,
+                    ) {
+                        ChartModel.build(
+                            candles = state.candles,
+                            maPeriods = state.maPeriods,
+                            showBoll = state.showBoll,
+                            subPanes = state.subPanes,
+                            openInterest = state.openInterest,
+                        )
+                    }
+                    KlineChart(
+                        series = series,
+                        interval = state.interval,
+                        tickSize = state.tickSize,
+                        symbolKey = state.id.storageKey,
+                        // 视角是全局偏好：首帧初值从 ViewModel 读（竖屏那份的每次变化
+                        // 都同步在它上面），进去后的变化同样交回去 —— 两个实例接力不掉队
+                        initialView = viewModel.chartView.value,
+                        onViewChange = viewModel::commitChartView,
+                        onLoadMore = viewModel::loadMore,
+                        onCrosshairIndexChange = { crosshairIndex = it },
+                        // 与竖屏同位：图表顶部、读数带正上方的同一个容器
+                        candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
+                        // 全屏专属：竖屏那块 42sp 的 Hero 在这里没有立足之地（横屏要留给图），
+                        // 现价改钉在读数带右端，字号与位置都受读数带约束
+                        lastPriceBoard = { LastPriceBoard(state = state) },
+                        alertLines = alertLines,
+                        indicatorGuides = indicatorGuides,
+                        bandGuides = bandGuides,
+                        alertLineMode = alertMode,
+                        alertLinesVisible = alertLinesVisible,
+                        onToggleAlertLines = viewModel::toggleAlertLines,
+                        onAlertLineDrag = viewModel::dragAlertLine,
+                        onAlertLineCommit = {
+                            viewModel.commitAlertLine()
+                            // 划线是一次性动作：落一根就退出模式，单指拖动立刻还给平移画布；
+                            // 画下一根需重新点「划线」。删除同样退出，见 onAlertLineDelete。
+                            alertMode = false
+                        },
+                        onAlertLineDelete = { id ->
+                            viewModel.deleteAlertLine(id)
+                            // 删一条也算「用完一次划线」：留在模式里只会让人误以为还能继续拖线
+                            alertMode = false
+                        },
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
-                KlineChart(
-                    series = series,
-                    interval = state.interval,
-                    tickSize = state.tickSize,
-                    symbolKey = state.id.storageKey,
-                    // 视角是全局偏好：首帧初值从 ViewModel 读（竖屏那份的每次变化
-                    // 都同步在它上面），进去后的变化同样交回去 —— 两个实例接力不掉队
-                    initialView = viewModel.chartView.value,
-                    onViewChange = viewModel::commitChartView,
-                    onLoadMore = viewModel::loadMore,
-                    onCrosshairIndexChange = { crosshairIndex = it },
-                    // 与竖屏同位：图表顶部、读数带正上方的同一个容器
-                    candleReadout = { CandleReadoutRow(state = state, index = crosshairIndex) },
-                    // 全屏专属：竖屏那块 42sp 的 Hero 在这里没有立足之地（横屏要留给图），
-                    // 现价改钉在读数带右端，字号与位置都受读数带约束
-                    lastPriceBoard = { LastPriceBoard(state = state) },
-                    alertLines = alertLines,
-                    indicatorGuides = indicatorGuides,
-                    bandGuides = bandGuides,
-                    alertLineMode = alertMode,
-                    alertLinesVisible = alertLinesVisible,
-                    onToggleAlertLines = viewModel::toggleAlertLines,
-                    onAlertLineDrag = viewModel::dragAlertLine,
-                    onAlertLineCommit = {
-                        viewModel.commitAlertLine()
-                        // 划线是一次性动作：落一根就退出模式，单指拖动立刻还给平移画布；
-                        // 画下一根需重新点「划线」。删除同样退出，见 onAlertLineDelete。
-                        alertMode = false
-                    },
-                    onAlertLineDelete = { id ->
-                        viewModel.deleteAlertLine(id)
-                        // 删一条也算「用完一次划线」：留在模式里只会让人误以为还能继续拖线
-                        alertMode = false
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                )
             }
 
             // 指标浮层压在图表底部而不是顶部：顶部要留给指标读数带，
@@ -899,15 +912,9 @@ private fun ChartArea(
             .padding(top = Spacing.Sm),
     ) {
         when {
-            state.loadingCandles && state.candles.isEmpty() -> {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(28.dp),
-                        strokeWidth = 2.dp,
-                        color = colors.muted,
-                    )
-                }
-            }
+            // 加载中：**空图表 + 遮罩层**，而不是「白底上一个转圈」——
+            // 网格与轴先就位，数据到了是把蜡烛填进去，不是换一张图
+            state.loadingCandles && state.candles.isEmpty() -> ChartLoading(state)
 
             state.candles.isEmpty() -> {
                 HintRow(
@@ -958,6 +965,39 @@ private fun ChartArea(
         if (state.loadingMore) {
             CircularProgressIndicator(
                 modifier = Modifier.align(Alignment.Center).size(24.dp),
+                strokeWidth = 2.dp,
+                color = colors.muted,
+            )
+        }
+    }
+}
+
+/**
+ * 加载中的图表：一张**空图** + 一层遮罩。
+ *
+ * 空图与真实图共用几何（见 [ChartSkeleton]），所以它是「这一张图还没画上蜡烛」，
+ * 而不是另开一张图 —— 数据到位的瞬间只有蜡烛浮现，图形本身不重排。
+ * 遮罩压在空图上：既把网格压淡到不喧宾夺主，又给「正在取」一个明确的位置
+ * （正中的转圈），不至于让人以为这张空图就是全部。
+ */
+@Composable
+private fun ChartLoading(state: DetailUiState) {
+    val colors = MarketTheme.colors
+    Box(Modifier.fillMaxSize()) {
+        ChartSkeleton(
+            subCount = state.subPaneCount,
+            readoutLines = state.mainReadoutLines,
+            modifier = Modifier.fillMaxSize(),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                // 半透明而不是实底：骨架的网格要透出来，否则就退回「白底转圈」了
+                .background(colors.paper.copy(alpha = 0.5f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(28.dp),
                 strokeWidth = 2.dp,
                 color = colors.muted,
             )

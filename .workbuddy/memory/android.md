@@ -17,6 +17,25 @@
 `remember(symbolKey, interval.storageKey)`，别用 `LaunchedEffect` 事后对齐。`window()` 管量程、`plotRange()` 管像素
 （含留白）；每帧位移不足一根要累积。Sparkline 别硬要求周期：读不到按 `cachedIntervalCounts` 挑最粗回退（表 `kline`）。
 
+## 序列就绪 = (raw, rawBase) 这一对（2026-10-09）
+`ChartData` 里 `raw`（基础周期蜡烛）**必须**与 `rawBase: CandleInterval?`（它归属的基础周期）成对更新。
+三条推论，缺一条就出「一根柱子的图」或「假图」：
+- `displayCandles` 只在 `rawBase == baseOf(selected)` 时聚合 —— 否则换周期会把上一段按新周期重新分桶；
+- **实时增量对不上就丢**：`klineUpdate` 是 limit=2 的轻请求，必然快过首屏 500 根整页；
+  不判 base 就会把这「先到的一根」当整段序列画出来（用户报的「先冒一根柱子、再跳出正确的图」）；
+- 判「图上没东西」用 `loadingCandles = data.loading || (rawBase != base && error == null)`：
+  空 `candles` 有三种（还在取 / 取失败 / 取到了是空的），只看 `loading` 会在换周期那一帧误报空态。
+`loading = false` 由取数链独占（增量、翻页都别碰它）。`baseOf(selected)` 是唯一的取数周期口径
+（官方即自身，自定义取最大整除官方周期），首屏/翻页/OI/增量四处共用。
+
+## 加载态 = 空图表 + 遮罩（2026-10-09）
+`ChartSkeleton(subCount, readoutLines)`（在 KlineChart.kt 内，与真实图共用 `ChartGeo` + `drawGridAndAxes`）
+只画网格与副图分隔线；`DetailScreen.ChartLoading` = 骨架 + 55% `paper` 遮罩 + 转圈，竖屏/全屏两处共用。
+❗骨架图**不能挂手势**：`barCount = 0` 时 pan/zoom 会把 `visibleBars` 夹成 1 写进持久化视角偏好。
+❗读数带行数有两个取法（真实图按曲线标签数、骨架图按配置数），已抽成
+`ChartSeries.mainReadoutLineCount()` / `mainReadoutLineCount(maPeriods, showBoll)`，等价性有单测
+（ChartModelTest「读数带行数的配置口径与序列口径完全等价」）—— 分叉就会在数据到位时整图跳一格。
+
 ## 十字光标（0.1.16 批：松手保持 + 竖线日期标）
 - ❗**长按拖动松手后十字光标保持**（用户要求「拖动到 K 线，松手后十字线应该保持展示，只有在画布上做
   其他操作才消失」）：手势循环里长按分支的松手段**不再清**（原来无条件 `onCrosshair(null)`，现行

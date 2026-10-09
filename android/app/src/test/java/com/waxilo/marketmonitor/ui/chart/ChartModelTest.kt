@@ -668,6 +668,42 @@ class ChartModelTest {
     }
     // endregion
 
+    // region 读数带行数（真实图与加载骨架图必须同高）
+    /**
+     * 读数带行数有两个取法：真实图按序列的曲线标签数，骨架图（还没有序列）按配置数。
+     * 两者一旦分叉，读数带就差一行 —— 数据到位的瞬间整张图会往下跳一格。
+     * 这里把全部组合都过一遍，等于把「两个口径等价」钉死。
+     */
+    @Test
+    fun `读数带行数的配置口径与序列口径完全等价`() {
+        // 详情页可选的均线周期（5/10/20/30/60）全开也照样等价
+        val maCombos = listOf(emptyList(), listOf(5), listOf(5, 10, 30), listOf(5, 10, 20, 30, 60))
+        for (ma in maCombos) {
+            for (boll in listOf(false, true)) {
+                val series = ChartModel.build(candles(60), ma, showBoll = boll, subPanes = emptyList())
+                assertEquals(
+                    "MA=$ma BOLL=$boll 两个口径的行数必须一致",
+                    series.mainReadoutLineCount(),
+                    mainReadoutLineCount(maPeriods = ma, showBoll = boll),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `裸 K 图没有主图读数行`() {
+        val series = ChartModel.build(candles(60), emptyList(), showBoll = false, subPanes = emptyList())
+        assertEquals(0, series.mainReadoutLineCount())
+    }
+
+    @Test
+    fun `MA 与 BOLL 各占一行`() {
+        // 一族指标一行：两条 MA 也只算一行（它们挤在同一行里）
+        val series = ChartModel.build(candles(60), listOf(5, 10), showBoll = true, subPanes = emptyList())
+        assertEquals(2, series.mainReadoutLineCount())
+    }
+    // endregion
+
     // region tooltip
     @Test
     fun `tooltip 的涨幅按上一根收盘计算`() {

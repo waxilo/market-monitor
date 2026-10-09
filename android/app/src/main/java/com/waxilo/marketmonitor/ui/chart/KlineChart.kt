@@ -299,16 +299,11 @@ fun KlineChart(
     /**
      * 主读数带按「指标族」分行（MA 一族一行、BOLL 一族一行）：加一个指标就多占一行，
      * 而不是把所有数值挤在同一行。行数只取决于开了哪些指标，与十字光标下标无关，
-     * 因此从 `overlay.lines` 的标签直接数出来，喂给顶部读数带的高度。
+     * 因此可以直接数出来 —— 加载中的骨架图用同一套口径（见 [mainReadoutLineCount]）。
      */
-    val mainReadoutLines = remember(series) {
-        val labels = series.overlay.lines.map { it.label }
-        (if (labels.any { it.startsWith("MA") }) 1 else 0) +
-            (if (labels.any { it.startsWith("BOLL") }) 1 else 0)
-    }
-    val readoutHeightDp = ChartGeo.readoutBandHeight(mainReadoutLines) +
-        // 小条与读数带同容器：它的高度也计进读数带，绘图区整体下移
-        (if (candleReadout != null) CANDLE_READOUT_BAND_DP else 0f)
+    val mainReadoutLines = remember(series) { series.mainReadoutLineCount() }
+    // 小条与读数带同容器：它的高度也计进读数带，绘图区整体下移
+    val readoutHeightDp = chartReadoutBandDp(mainReadoutLines, candleReadout != null)
     val geo = remember(canvasSize, density, series.subPanes.size, readoutHeightDp) {
         ChartGeo.of(canvasSize, density, series.subPanes.size, readoutHeightDp)
     }
@@ -843,6 +838,78 @@ fun KlineChart(
         }
     }
 }
+
+/**
+ * 图表骨架：**加载中先摆好的那张空图**。
+ *
+ * 与真实图表共用 [ChartGeo] 与 [drawGridAndAxes]：读数带占多高、时间轴占多高、
+ * 每块副图落在哪，全走同一套公式，数据到了只是把蜡烛**填进去**，不是换一张图。
+ * 这也是「先冒一根柱子、再跳出正确的 K 线图」的另一半 —— 中间那段空窗有东西可看，
+ * 不会先画一张半成品再整个换掉。
+ *
+ * 三条刻意的「不画」：
+ * - **不画刻度数字**：还不知道任何价位，画出来只能是编的；
+ * - **不画蜡烛与读数**：读数为空时那几行全是占位符（`--`），比留白更吵；
+ * - **不挂手势**：视窗与纵向刻度是**持久化**的看图偏好，骨架期（`barCount = 0`）
+ *   接手势会把 `visibleBars` 夹成 1 写进偏好 —— 数据到了图只剩十几根，还得手动复位。
+ *
+ * @param subCount 副图块数（按「选了几块」算，与 [ChartGeo.of] 的口径一致）
+ * @param readoutLines 主图读数带的行数（MA / BOLL 各一行，见 `DetailUiState.mainReadoutLines`）
+ */
+@Composable
+fun ChartSkeleton(
+    subCount: Int,
+    readoutLines: Int,
+    modifier: Modifier = Modifier,
+) {
+    val density = LocalDensity.current
+    val scheme = MaterialTheme.colorScheme
+    // 每帧重建这几个 Color 引用代价极低，与 [KlineChart] 同一写法（key 里不能放 MaterialTheme 调用）
+    val palette = ChartPalette(
+        up = UpGreen,
+        down = DownRed,
+        grid = scheme.outlineVariant,
+        label = scheme.onSurfaceVariant,
+        lines = ChartLineColors,
+        band = scheme.primary.copy(alpha = 0.08f),
+        crosshair = scheme.onSurface,
+    )
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    // 与真实图用同一个读数带高度，否则网格与分隔线会差一行
+    val readoutHeightDp = chartReadoutBandDp(readoutLines, hasCandleReadout = true)
+    val geo = remember(canvasSize, density, subCount, readoutHeightDp) {
+        ChartGeo.of(canvasSize, density, subCount, readoutHeightDp)
+    }
+    Canvas(modifier = modifier.fillMaxSize().onSizeChanged { canvasSize = it }) {
+        if (!geo.isUsable) return@Canvas
+        clipRect(
+            left = 0f,
+            top = geo.mainTopPx,
+            right = geo.plotWidthPx,
+            bottom = geo.mainTopPx + geo.mainHeightPx,
+        ) {
+            drawGridAndAxes(geo, palette, SKELETON_RANGE, List(subCount) { SKELETON_RANGE })
+        }
+    }
+}
+
+/**
+ * 骨架的网格量程：**任取一段等距区间**即可 —— 网格的条数与间距由
+ * [ValueRange.gridLines] 的 1-2-5 阶梯决定，取 (0,1) 恰好落成 6 条等距横线，
+ * 就是一张「还没有数据的图」该有的样子。数值本身不参与任何绘制（不画刻度）。
+ */
+private val SKELETON_RANGE = ValueRange(0.0, 1.0)
+
+/**
+ * 顶部读数带的高度（dp）：一族指标一行（见 [ChartGeo.readoutBandHeight]），
+ * 有 K 线详情小条时再加上小条那条（[CANDLE_READOUT_BAND_DP]）。
+ *
+ * 真实图（[KlineChart]）与骨架图（[ChartSkeleton]）**必须用同一个公式**：
+ * 两边各算各的，读数带就差一截，数据到的瞬间整张图会往下跳一格。
+ */
+private fun chartReadoutBandDp(readoutLines: Int, hasCandleReadout: Boolean): Float =
+    ChartGeo.readoutBandHeight(readoutLines) +
+        if (hasCandleReadout) CANDLE_READOUT_BAND_DP else 0f
 
 /**
  * 划线显隐的「眼睛」：开 = 眼眶 + 瞳孔，关 = 再加一道斜杠。

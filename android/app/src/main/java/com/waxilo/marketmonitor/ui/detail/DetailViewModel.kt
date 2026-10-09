@@ -27,6 +27,7 @@ import com.waxilo.marketmonitor.ui.chart.ChartViewport
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
+import com.waxilo.marketmonitor.ui.chart.mainReadoutLineCount
 import com.waxilo.marketmonitor.ui.common.displayMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -44,6 +45,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -99,6 +101,12 @@ data class DetailUiState(
     val openInterest: OpenInterestSeries? = null,
     val watched: Boolean = false,
     val origin: DataOrigin = DataOrigin.REMOTE,
+    /**
+     * 当前展示周期的序列还在取（首屏 / 刚换了周期 / 手动重载）。
+     *
+     * 与「[candles] 是空的」是两件事：这个为真时图上画**空图表 + 遮罩**，
+     * 为假而 [candles] 仍空才是「取到了，是空的」（新标的没有历史）或「取失败」。
+     */
     val loadingCandles: Boolean = true,
     val loadingMore: Boolean = false,
     val hasMore: Boolean = true,
@@ -110,6 +118,15 @@ data class DetailUiState(
      */
     val subPaneCount: Int
         get() = subPanes.count { it != SubPaneKind.OI || openInterest?.points?.isNotEmpty() == true }
+
+    /**
+     * 主图读数带的行数：MA 一族一行、BOLL 一族一行（均线全关的裸 K 图没有主图读数行）。
+     *
+     * 顶部读数带高度由它决定，而**加载中的骨架图与真实图必须同高** ——
+     * 两边各算各的行数，网格就会差一行，数据到了整张图会往上/往下跳一格。
+     */
+    val mainReadoutLines: Int
+        get() = mainReadoutLineCount(maPeriods, showBoll)
 }
 
 /**
@@ -385,7 +402,20 @@ class DetailViewModel(
 
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
     private data class ChartData(
+        /** 已加载的原始蜡烛（**基础周期**，展示序列由它重聚合而来）。 */
         val raw: List<Kline> = emptyList(),
+        /**
+         * [raw] 是在哪个基础周期上取的；`null` = 还没有可用的序列。
+         *
+         * 与「[raw] 是空的」是两件事，也是本类里最容易混的一处：
+         * [raw] 空只说明「这次取到的是空的」（新上市的币确实可能一根都没有），
+         * 而这里是「还没取到」—— 首屏还在路上，或者刚换了周期、新的那一段还没回来。
+         *
+         * 展示序列只在它与当前周期的 [baseOf] 相等时才派生。少了这个约束，
+         * 换周期时会把上一段的蜡烛按新周期重新分桶画出来（图是假的），
+         * 而首屏的实时增量会把单根推送当整段序列画出来（进页面先冒一根柱子）。
+         */
+        val rawBase: CandleInterval? = null,
         val origin: DataOrigin = DataOrigin.REMOTE,
         val hasMore: Boolean = true,
         val loading: Boolean = true,
@@ -408,6 +438,8 @@ class DetailViewModel(
         chart,
         interval,
     ) { price, rule, watched, data, selected ->
+        // 当前展示周期对应的取数周期：「序列就绪 / 序列为空 / 取失败」全按这一对 (rawBase, base) 判
+        val base = baseOf(selected)
         DetailUiState(
             id = id,
             title = rule?.let { "${it.baseAsset}/${it.quoteAsset}" } ?: id.symbol,
@@ -430,7 +462,7 @@ class DetailViewModel(
             ),
             interval = selected,
             intervals = data.intervals,
-            candles = KlineAggregator.aggregate(data.raw, selected),
+            candles = displayCandles(data, selected),
             maPeriods = data.maPeriods,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
@@ -438,7 +470,13 @@ class DetailViewModel(
             openInterest = data.openInterest,
             watched = id in watched,
             origin = data.origin,
-            loadingCandles = data.loading,
+            // 「还在取」→ 图上画空图表 + 遮罩。图上没东西有三种，别混：
+            //   · 这一段序列还没到（rawBase 不是它）或正在取 → 骨架 + 遮罩
+            //   · 取失败（error 有话说）                      → 让位给错误空态与「重新加载」
+            //   · 取到了但一根都没有（新标的没有历史）        → 同上，空态
+            // 只看 `loading` 不够：换周期时 state 的重组可能排到「立 loading」之前，
+            // 那一帧会掉进空态、闪一下「没有取到 K 线」。
+            loadingCandles = data.loading || (data.rawBase != base && data.error == null),
             loadingMore = data.loadingMore,
             hasMore = data.hasMore,
             error = data.error,
@@ -450,13 +488,21 @@ class DetailViewModel(
             // 先恢复上次使用的周期与指标开关，再开始加载：顺序反了会被首次加载的 copy 覆盖
             restoreChartPreferences()
             combine(interval, reloadToken) { selected, token -> selected to token }
+                // 「正在取」这条标志由取数的链**独占**：实时增量不再顺手把它清掉
+                // （那会让手上的重载被误判成已就绪），换周期的那一瞬也要先立起来 ——
+                // 此刻 ChartData.rawBase 还指着旧周期，新的那一段得有个状态可落。
+                .onEach { chart.update { data -> data.copy(loading = true) } }
                 .flatMapLatest { (selected, _) -> flow { emit(loadBase(selected)) } }
                 .collect { loaded -> chart.value = loaded }
         }
         viewModelScope.launch {
             interval
-                .flatMapLatest { selected -> repository.klineUpdate(id, selected) }
-                .collect { candle -> mergeBaseCandle(candle) }
+                // 增量要带上它在哪个**基础周期**上产生：与已加载序列对不上就不能并
+                // （见 mergeBaseCandle —— 进页面时闪出来的那「一根柱子」就是错并进去的）
+                .flatMapLatest { selected ->
+                    repository.klineUpdate(id, selected).map { baseOf(selected) to it }
+                }
+                .collect { (base, candle) -> mergeBaseCandle(base, candle) }
         }
         // 交易规则决定显示位数；首启可能还没落库，失败留给刷新兜底
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
@@ -749,7 +795,7 @@ class DetailViewModel(
     fun loadMore() {
         val current = chart.value
         if (current.loadingMore || !current.hasMore || current.raw.isEmpty()) return
-        val base = baseInterval() ?: return
+        val base = baseInterval()
         val oldest = current.raw.first().openTime
         viewModelScope.launch {
             chart.update { it.copy(loadingMore = true) }
@@ -761,7 +807,6 @@ class DetailViewModel(
                         raw = merged.takeLast(MAX_RAW),
                         hasMore = page.hasMore && page.klines.isNotEmpty(),
                         loadingMore = false,
-                        loading = false,
                     )
                 }
             } catch (e: CancellationException) {
@@ -772,13 +817,20 @@ class DetailViewModel(
         }
     }
 
+    /**
+     * 取一段完整的序列（[BASE_PAGE] 根基础周期蜡烛）+ 它归属的基础周期。
+     *
+     * **`rawBase` 与 `raw` 必须同时更新**：这一对就是「哪一段序列是就绪的」的答案。
+     * 取失败时两者一起作废（不能只清 raw 留着 rawBase，也不能反过来）。
+     */
     private suspend fun loadBase(selected: CandleInterval): ChartData {
-        val base = selected.baseInterval?.let { CandleInterval.of(it) } ?: selected
+        val base = baseOf(selected)
         val previous = chart.value
         return try {
             val page = repository.klines(id, base, BASE_PAGE)
             previous.copy(
                 raw = page.klines,
+                rawBase = base,
                 origin = page.origin,
                 hasMore = page.hasMore,
                 loading = false,
@@ -788,7 +840,13 @@ class DetailViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            previous.copy(raw = emptyList(), loading = false, loadingMore = false, error = e.displayMessage())
+            previous.copy(
+                raw = emptyList(),
+                rawBase = null,
+                loading = false,
+                loadingMore = false,
+                error = e.displayMessage(),
+            )
         }
     }
 
@@ -799,27 +857,54 @@ class DetailViewModel(
      * 按基础口径取 500 根恰好覆盖整段原始窗口（官方周期两者相同，与桌面端一致）。
      * 仓库层把网络失败归成 null —— 返回 null 表示「这一轮没拿到」，保留上一轮数据不覆盖。
      */
-    private suspend fun loadOpenInterest(): OpenInterestSeries? {
-        val base = baseInterval() ?: return null
-        return repository.openInterest(id, base.minutes, BASE_PAGE)
-    }
+    private suspend fun loadOpenInterest(): OpenInterestSeries? =
+        repository.openInterest(id, baseInterval().minutes, BASE_PAGE)
 
-    private fun mergeBaseCandle(update: Kline) {
+    /**
+     * 把实时推送的最新一根并进已加载序列（同一根替换、更新的一根追加；迟到的旧蜡烛丢掉）。
+     *
+     * [base] 是这根增量所属的基础周期。**对不上就不能并**：增量是「往序列上补一根」，
+     * 序列本身还没到（首屏）或者还在别的周期上（刚换了周期）时，凭空补出来的就是
+     * 「一根柱子的图」—— 等整页到齐再整个换掉，正是用户看到的「先冒一根、再跳出正确的图」。
+     * 首屏那一根也不需要在这里补：整页请求本身就会带回最新一根。
+     *
+     * 这里**不碰 `loading`**：加载与否由取数的链说了算，增量顺手把它清掉会让
+     * 重载途中误判成已就绪。
+     */
+    private fun mergeBaseCandle(base: CandleInterval, update: Kline) {
         chart.update { state ->
             val list = state.raw
-            if (list.isEmpty()) return@update state.copy(raw = listOf(update), loading = false)
+            if (state.rawBase != base || list.isEmpty()) return@update state
             val last = list.last()
             val merged = when {
                 update.openTime == last.openTime -> list.dropLast(1) + update
                 update.openTime > last.openTime -> (list + update).takeLast(MAX_RAW)
                 else -> list // 重连后迟到的旧蜡烛交给刷新，不倒着改历史
             }
-            if (merged === list) state else state.copy(raw = merged, loading = false)
+            if (merged === list) state else state.copy(raw = merged)
         }
     }
 
-    private fun baseInterval(): CandleInterval? =
-        interval.value.baseInterval?.let { CandleInterval.of(it) }
+    /**
+     * 当前展示周期的序列；还没取到（[ChartData.rawBase] 与它不符）时为空。
+     *
+     * 空不等于「没有数据」—— 调用方用 [DetailUiState.loadingCandles] 区分
+     * 「正在取」与「取到了是空的」。
+     */
+    private fun displayCandles(data: ChartData, selected: CandleInterval): List<Kline> {
+        if (data.rawBase != baseOf(selected)) return emptyList()
+        return KlineAggregator.aggregate(data.raw, selected)
+    }
+
+    /**
+     * 展示周期对应的**取数周期**：官方周期就是它自己，自定义周期取能整除它的最大官方周期
+     * （原始蜡烛按这个周期存，展示时再聚合）。详情页里所有「按基础周期取数」的地方
+     * （首屏整页、翻页、持仓量、实时增量）都走它，口径只有一处。
+     */
+    private fun baseOf(selected: CandleInterval): CandleInterval =
+        selected.baseInterval?.let(CandleInterval::of) ?: selected
+
+    private fun baseInterval(): CandleInterval = baseOf(interval.value)
 
     private companion object {
         /** 基础周期的请求条数；自定义周期下展示根数按聚合倍率减少。 */

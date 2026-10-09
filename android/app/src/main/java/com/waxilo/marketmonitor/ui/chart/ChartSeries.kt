@@ -146,6 +146,25 @@ data class ChartSeries(
         pane.readoutAt(index, priceDecimals)
 }
 
+/**
+ * 主图读数带的行数（MA 一族一行、BOLL 一族一行）。
+ *
+ * 这个数决定顶部读数带占多高（见 `KlineChart` 的 `readoutBandHeight`），
+ * 而**加载中的骨架图也要算它** —— 那时还没有序列，只能按「开了哪些指标」数。
+ * 两个取法必须等价，否则读数带差一行，数据到位的瞬间整张图往下跳一格
+ * （等价性有单测锁，见 ChartModelTest）。
+ */
+fun ChartSeries.mainReadoutLineCount(): Int {
+    val labels = overlay.lines.map { it.label }
+    return (if (labels.any { it.startsWith("MA") }) 1 else 0) +
+        (if (labels.any { it.startsWith("BOLL") }) 1 else 0)
+}
+
+/** 同一件事的「配置口径」：与 [mainReadoutLineCount] 等价，供还没有序列的骨架图用。 */
+fun mainReadoutLineCount(maPeriods: List<Int>, showBoll: Boolean): Int =
+    // 只认正周期：与 [Indicators.movingAverages] 的过滤一致，否则负周期上两口径会分叉
+    (if (maPeriods.any { it > 0 }) 1 else 0) + (if (showBoll) 1 else 0)
+
 /** 读数用的数字：千分位分组，缺值与 NaN 走统一占位而不是 0。 */
 private fun readoutNumber(value: Double?, decimals: Int): String =
     if (value == null || value.isNaN()) PriceFormatter.NO_DATA
