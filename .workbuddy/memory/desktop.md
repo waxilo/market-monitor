@@ -538,12 +538,18 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
 - 两枚标同生同灭（都挂 `onBar`）：右侧留白里 `indexAt` 把位置夹回最后一根，那时标出来的日期
   不属于鼠标下那一点。
 
-## 前台不息屏（`src-tauri/src/awake.rs`，2026-09-30 新增）
+## 前台不息屏（`src-tauri/src/awake.rs`，2026-09-30 新增；2026-10-09 收窄口径）
 
-- 口径（用户拍板）：**任一窗口有焦点才算前台** —— 主窗/悬浮窗谁在前台都压住息屏；全丢焦点（切去别的应用）
-  就松开，按系统原本的时间息屏。「窗口只摊着但没焦点」不算。
+- ❗**口径（2026-10-09 用户改的口径）：只有「大窗（主窗）既可见又有焦点」才压住息屏**，其余一律松开 ——
+  缩成悬浮窗（或点一下悬浮窗）、收进托盘、切去别的应用，都按系统原本的时间息屏。
+  判据 = `keep_awake(main_visible, main_focused)`（纯函数，单测 4 条钉着真值表），`refresh` 只负责
+  `get_webview_window(crate::MAIN)` 取 `is_visible()` / `is_focused()` 喂给它 —— 所以 `MAIN` 得是
+  `pub(crate)`。**可见性一并看**：主窗 `hide()` 后焦点标志可能还留一帧旧值，隐藏的窗口谈不上「在前台」。
+  > 旧口径（已作废）是「任一窗口有焦点」——`webview_windows().values().any(|w| w.is_focused())`。
+  > 留住旧写法做对照：**新老口径唯一分水岭** = 「主窗可见但没焦点、悬浮窗有焦点」，老 = 压住、新 = 松开。
 - 调用点只有一个：`run()` 里 `on_window_event` 的 `WindowEvent::Focused(_)` → `awake::refresh(app)`（幂等）。
   它必须在事件循环线程上跑：macOS 那支要读 `NSWindow.isKeyWindow()`（AppKit 只许主线程碰）。
+  悬浮窗自己的焦点变化也会触发它 —— 但按新判据不再影响结果。
 - macOS：IOKit 断言 `IOPMAssertionCreateWithName(PreventUserIdleDisplaySleep)`。语义（本机 SDK `IOPMLib.h`）：
   屏幕不因空闲关闭，且**屏幕压着时系统也不会 idle sleep**。`IOPMAssertionRelease` 松开；断言归属进程、
   任何线程都能建/销（`static HELD: Mutex<Option<AssertionId>>` 防重复建）。失败只 `log::warn`，退化成照常息屏。
@@ -555,6 +561,22 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
   `mpsc` 收请求（`static TX: OnceLock<Sender<bool>>`），谁调 `set` 都只是发消息。少写 `ES_SYSTEM_REQUIRED`
   机器照样能睡（屏幕一样会黑）。新依赖 feature = `Win32_System_Power`。
 - 其它平台空实现（本项目只发 Windows 安装包；macOS 是 dev 机上的顺手实现）。
+- **验收怎么做（2026-10-09 摸出来的）**：`.workbuddy/tmp/verify-awake-mode.py`（dev 身份 + 按 pid 认领窗口）。
+  光看窗口状态只能验「我猜它怎么判」，所以先**临时**在 `refresh` 里埋一行 `log::info!("AWAKE-PROBE …")`
+  并顺手把老口径也算出来（`old_any_focused=`），**A/B 就落在同一行日志上**，跑完回退（debug 构建的
+  tauri-plugin-log 打 stdout，Popen 时重定向成文件）。实测三段全绿：`(T,T)→true`、`(T,F)→false`（老口径 true）、
+  `(F,*)→false`（老口径 true）。
+  ⚠️ **`powercfg /requests` 要管理员权限**（非提权直说「此命令需要管理员权限」）⇒
+  「判定 → `SetThreadExecutionState`」到 OS 那一步**本机不可观测**，只能让用户在提权终端里核。
+  ⚠️ tao 的 `is_focused() = is_active && is_focused`，而 **`is_active` 只由 `WM_NCACTIVATE` 设**
+  （`WM_SETFOCUS`/`WM_ACTIVATE` 单独发一律不生效，实测过）；**锁屏期间系统会立刻把激活收回**
+  ⇒ 合成激活要**反复补发**，以「日志里真出现那一行」为准，别假设一发给上就成立。
+  ⚠️ **锁屏时的坑**：`SetForegroundWindow` 一律失败、真鼠标点击落到 explorer 的
+  `LockScreenBackstopFrame`（全屏且吞落点）、`PrintWindow`/`ImageGrab` 抓 WebView2 要么全黑要么是
+  DWM 画的 ghost 白框（**安装版窗口抓出来全黑 = 抓法限制，不是它坏了**）⇒ 验收前先确认桌面没锁。
+  ❗**验收绝不能按 Alt+D**：全局热键全局唯一，用户那份安装版已注册它，dev 实例注册必然 1409 失败，
+  按下去切的是**用户那一份**。要切窗只能走主窗顶栏的 ◫（真鼠标，且点前必须 `WindowFromPoint`
+  确认落点属于 dev 那个 pid —— 守卫拦了两次，都是被锁屏挡住）。
 
 ## 悬浮窗压在任务栏之上（`src-tauri/src/taskbar/`）
 `mod.rs` + `zorder.rs`（纯 Win32）+ `guard.rs`（事件源）。任务栏与悬浮窗同为 topmost，任务栏被激活时会被 shell 提到

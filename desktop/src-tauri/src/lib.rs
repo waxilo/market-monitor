@@ -13,7 +13,8 @@ use tauri::{
     Window, WindowEvent,
 };
 
-const MAIN: &str = "main";
+/// 主窗的 label。`awake` 也要用（只看主窗的可见 + 焦点来收放不息屏），所以是 `pub(crate)`。
+pub(crate) const MAIN: &str = "main";
 const MINI: &str = "mini";
 /// 悬浮窗右键菜单里「隐藏」那一条的 id（菜单在 `open_mini_menu` 里建，
 /// 语义统一在 `run()` 的全局 `on_menu_event` 里处理）。
@@ -331,8 +332,9 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| match event {
-            // 前台不息屏：焦点落在任一窗口上就压住显示器 idle sleep，全丢了就松开
-            // （判据与平台差异都在 `awake` 模块）。这个回调就在事件循环线程上，满足它的前提。
+            // 前台不息屏：**大窗**摊在前台（可见 + 有焦点）才压住显示器 idle sleep，其余一律松开
+            // —— 悬浮窗不算前台（用户要求「使用悬浮窗时允许息屏」）。判据与平台差异都在 `awake` 模块。
+            // 这个回调就在事件循环线程上，满足它的前提。
             WindowEvent::Focused(_) => awake::refresh(window.app_handle()),
             // 主窗点关闭 = 收进托盘，进程继续跑，悬浮窗照常刷新
             WindowEvent::CloseRequested { api, .. } => {

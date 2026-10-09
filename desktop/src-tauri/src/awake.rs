@@ -1,8 +1,13 @@
-//! 前台不息屏：应用在前台时压住显示器的空闲息屏，退到后台立刻松开。
+//! 前台不息屏：**大窗（主窗）摊在前台**时压住显示器的空闲息屏，退到后台立刻松开。
 //!
-//! 判据只有一条：**任一窗口有焦点才算前台**（2026-09-30 用户拍板 —— 窗口只摊着但没焦点
-//! 不算，切去别的应用打字时该按系统原本的息屏时间来）。判据由 `refresh` 算，
-//! 调用点只有一个：`run()` 里 `on_window_event` 的 `Focused`（显隐切换、换窗都会走它）。
+//! 判据只有一条：**主窗既可见又有焦点**（2026-10-09 收窄）。原先写的是「任一窗口有焦点」，
+//! 把悬浮窗也算作了前台 —— 而悬浮窗是缩起来挂着看的小面板，点它一下（或被它夺走焦点）就把
+//! 屏幕钉住，用户要求「使用悬浮窗时允许息屏」，于是判据只留主窗。
+//! 「窗口只摊着但没焦点不算」这条不变：切去别的应用打字时该按系统原本的息屏时间来。
+//!
+//! 判据由 `keep_awake` 算（纯函数，单测钉着），`refresh` 只负责取窗口状态喂给它；
+//! 调用点只有一个：`run()` 里 `on_window_event` 的 `Focused`（显隐切换、换窗都会走它，
+//! 悬浮窗自己的焦点变化也会触发 —— 但按新判据它不再影响结果）。
 //!
 //! 平台实现各有一处必须照做的规矩，见下面两个 `imp`：
 //! - macOS 是 IOKit 的 PreventUserIdleDisplaySleep 断言。语义（本机 SDK 的 IOPMLib.h）：
@@ -13,16 +18,23 @@
 
 use tauri::{AppHandle, Manager};
 
-/// 按「有没有窗口聚焦」收放不息屏（幂等）。窗口焦点变化时调用。
+/// 按「主窗在不在前台」收放不息屏（幂等）。有窗口焦点变化时调用。
 ///
 /// **必须在主线程调用**：macOS 那支要读 `NSWindow.isKeyWindow()`（AppKit 只许主线程碰），
 /// 而 `on_window_event` 就在事件循环线程上 —— 别把它接到别的线程上去。
 pub fn refresh(app: &AppHandle) {
-    let focused = app
-        .webview_windows()
-        .values()
-        .any(|w| w.is_focused().unwrap_or(false));
-    imp::set(focused);
+    let main = app.get_webview_window(crate::MAIN);
+    let visible = main.as_ref().and_then(|w| w.is_visible().ok()).unwrap_or(false);
+    let focused = main.as_ref().and_then(|w| w.is_focused().ok()).unwrap_or(false);
+    imp::set(keep_awake(visible, focused));
+}
+
+/// 「主窗既可见又有焦点」才压住息屏。
+///
+/// 可见性一并看，是为了去掉一类边角状态：主窗收进托盘（`hide()`）后焦点标志可能还留着一帧
+/// 旧值，而隐藏的窗口谈不上「在前台」，不该继续钉着屏幕。
+fn keep_awake(main_visible: bool, main_focused: bool) -> bool {
+    main_visible && main_focused
 }
 
 #[cfg(target_os = "macos")]
@@ -162,4 +174,22 @@ mod imp {
 #[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
     pub fn set(_active: bool) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_awake;
+
+    /// 钉住产品约定（2026-10-09）：**只有「大窗可见且在前台」才压住息屏**。
+    ///
+    /// 第二行是这次改动本身：主窗失焦（切去别的应用）要松开 —— 老口径下这条也成立；
+    /// 第三行是老口径与新口径的分水岭：收进托盘 / 缩成悬浮窗之后，**即便焦点标志还留着**
+    /// 也不许再钉着屏幕。
+    #[test]
+    fn only_main_window_in_foreground_keeps_display_awake() {
+        assert!(keep_awake(true, true), "大窗摊在前台 = 压住息屏");
+        assert!(!keep_awake(true, false), "切去别的应用（大窗失焦）→ 松开");
+        assert!(!keep_awake(false, true), "大窗收进托盘 / 缩成悬浮窗 → 松开");
+        assert!(!keep_awake(false, false), "两个都不占 → 松开");
+    }
 }
