@@ -204,8 +204,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.36` |
-| versionCode | `48` |
+| versionName | `0.9.37` |
+| versionCode | `49` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
