@@ -71,7 +71,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -100,7 +100,11 @@
   `desktop 0.1.21`（前台不息屏判据收窄到「主窗可见 + 有焦点」——用悬浮窗时允许息屏；只发桌面端，
   run 37884914736 绿 6m26s）→
   `0.9.36`（详情页首屏不再先冒一根柱子 + 加载态改空图表/遮罩；只发 Android，
-  run 37885961349 绿 3m10s、verify-channel 34/34）。
+  run 37885961349 绿 3m10s、verify-channel 34/34）→
+  `0.9.37`（告警去冷却、默认「每次穿越」+ 全屏指标条常驻/不画副图/标签统一「指标」/两条窄带收紧；
+  含 Room v7→v8 迁移；只发 Android，run 37897610292 绿 3m14s、verify-channel 34/34）。
+  ⚠️ 相邻两版 APK **压缩后大小完全相同**（都 11088520）——别拿「体积没变」当「没换包」的证据，
+  要比 `classes3.dex` / `AndroidManifest.xml` 的 CRC（解压后总字节 0.9.36 = 30491721、0.9.37 = 30487422）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
@@ -124,6 +128,12 @@
     （`8f201359…`）；aapt2 读包内 `versionCode=48 / versionName=0.9.36` 与产物名自洽；
     verify-channel.mjs 34/34；Release run 37885961349 全绿（含 CI 里那条 pinned-key 断言）。
     ⚠️ 本次**没做真机验收**（`adb devices` 为空，MuMu 没开）—— 改的是 Compose 自绘渲染，单测覆盖不到。
+  - 0.9.37 复核（2026-10-09）：**发版前**先把上一版存下来（`gh release download` 会断流只剩 4.7MB，
+    必须 `curl -C - --retry-all-errors` 续传，字节 == 声明 11088520 才算完整），再核基线：
+    `cf2e20c7…` 逐字一致、边车 sha256 一致、包内 48/0.9.36 自洽。发版后新包同样三项复核
+    （`cf2e20c7…` / `78a80da4…` / 49-0.9.37），verify-channel.mjs **34/34**，Release run 37897610292 全绿。
+    ⚠️ **`adb root` 会把 MuMu 的 adb 连接打断**（`devices` 空、`connect 127.0.0.1:16384` 与 `:7555` 都 10061 拒绝）
+    —— 想拿 root 去备份 `/data/data` 之前先想清楚，恢复要用户重启 MuMu 或重开 ADB 调试。
   - 0.9.32 复核（2026-10-07）：同上 —— 以 `Release` run 37579714368 的同一断言步骤为准（绿）⇒ 指纹不变。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
