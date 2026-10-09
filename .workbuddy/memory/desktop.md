@@ -548,7 +548,12 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
   > 旧口径（已作废）是「任一窗口有焦点」——`webview_windows().values().any(|w| w.is_focused())`。
   > 留住旧写法做对照：**新老口径唯一分水岭** = 「主窗可见但没焦点、悬浮窗有焦点」，老 = 压住、新 = 松开。
 - 调用点只有一个：`run()` 里 `on_window_event` 的 `WindowEvent::Focused(_)` → `awake::refresh(app)`（幂等）。
-  它必须在事件循环线程上跑：macOS 那支要读 `NSWindow.isKeyWindow()`（AppKit 只许主线程碰）。
+  ❗它必须在事件循环线程上跑，但**理由不是本模块的 macOS 那支**（那支走 IOKit，归属进程、任何线程都行）——
+  是 `refresh` 里那句 `w.is_focused()`：macOS 上 tao 的实现就是 `self.ns_window.isKeyWindow()`
+  （实查 `tao-0.37.1/src/platform_impl/macos/window.rs:696`；AppKit 只许主线程碰）。
+  Windows 侧则完全无此约束：`is_focused()` 读的是 `window_state.has_active_focus()`（内存态 + `Mutex`）、
+  `is_visible()` 就是 `IsWindowVisible` —— 两者都与线程无关（同文件 `:164` / `:628`）。
+  （2026-10-09 实查源码纠正：原注释把理由挂在模块自己的 macOS 那支上，**结论对、理由错**。）
   悬浮窗自己的焦点变化也会触发它 —— 但按新判据不再影响结果。
 - macOS：IOKit 断言 `IOPMAssertionCreateWithName(PreventUserIdleDisplaySleep)`。语义（本机 SDK `IOPMLib.h`）：
   屏幕不因空闲关闭，且**屏幕压着时系统也不会 idle sleep**。`IOPMAssertionRelease` 松开；断言归属进程、
@@ -577,6 +582,10 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
   ❗**验收绝不能按 Alt+D**：全局热键全局唯一，用户那份安装版已注册它，dev 实例注册必然 1409 失败，
   按下去切的是**用户那一份**。要切窗只能走主窗顶栏的 ◫（真鼠标，且点前必须 `WindowFromPoint`
   确认落点属于 dev 那个 pid —— 守卫拦了两次，都是被锁屏挡住）。
+- **已随 `desktop-v0.1.21` 发出去**（2026-10-09，`Desktop Release` run 37884914736 绿 6m44s；
+  通道验收 34/34 + 前端指纹逐字一致见 `release.md`）。这条改动**不碰平台相关 API**：
+  `is_visible` / `is_focused` 都是 Tauri 跨平台方法，两个 `imp` 仍各自 `#[cfg]` 隔离
+  ⇒ CI 的 macOS job 编得过（本机 `cargo check --target aarch64-apple-darwin` 跑不了，缺 `cc`）。
 
 ## 悬浮窗压在任务栏之上（`src-tauri/src/taskbar/`）
 `mod.rs` + `zorder.rs`（纯 Win32）+ `guard.rs`（事件源）。任务栏与悬浮窗同为 topmost，任务栏被激活时会被 shell 提到

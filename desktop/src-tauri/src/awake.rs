@@ -20,8 +20,10 @@ use tauri::{AppHandle, Manager};
 
 /// 按「主窗在不在前台」收放不息屏（幂等）。有窗口焦点变化时调用。
 ///
-/// **必须在主线程调用**：macOS 那支要读 `NSWindow.isKeyWindow()`（AppKit 只许主线程碰），
-/// 而 `on_window_event` 就在事件循环线程上 —— 别把它接到别的线程上去。
+/// **必须在主线程调用**：`is_focused()` 在 macOS 上就是 tao 的 `ns_window.isKeyWindow()`
+/// （`tao-0.37.1/src/platform_impl/macos/window.rs`，AppKit 只许主线程碰）；而 `on_window_event`
+/// 就在事件循环线程上 —— 别把它接到别的线程上去。约束来自这行窗口状态查询，**不是**本模块自己的
+/// macOS 那支（它用 IOKit 断言，归属进程、任何线程都能建/销）。
 pub fn refresh(app: &AppHandle) {
     let main = app.get_webview_window(crate::MAIN);
     let visible = main.as_ref().and_then(|w| w.is_visible().ok()).unwrap_or(false);
