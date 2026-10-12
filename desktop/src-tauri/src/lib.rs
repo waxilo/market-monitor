@@ -240,6 +240,11 @@ fn set_mini_rows(app: AppHandle, rows: u32) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例必须挂在最前：第二个实例在这里就被拦下，不再往下起窗口/托盘/热键。
+        // 重复启动 = 唤起已运行实例的主窗（与悬浮窗二选一，同 `switch_to_main` 的语义）。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            to_main(app);
+        }))
         // 更新通道（endpoints/公钥）来自 tauri.conf.json 的 plugins.updater；
         // 检查与安装细节在 update.rs 里包了一层（加速站 + 验签自验）
         .plugin(tauri_plugin_updater::Builder::new().build())

@@ -43,6 +43,10 @@ url = "2"
 minisign-verify = "0.2"
 base64 = "0.22"
 tauri-plugin-global-shortcut = "2"
+# 单实例：重复启动不允许多开，唤起已运行实例的主窗。
+# 必须注册在所有插件最前（见 lib.rs）：第二个实例在热键/托盘初始化前就被拦下退出，
+# 不会与已运行实例抢全局热键。
+tauri-plugin-single-instance = "2"
 
 # 悬浮窗与 Windows 任务栏同为 topmost：点击任务栏时系统会把任务栏提到 topmost 组最前，
 # 盖住悬浮窗，只能自己按 z 序轮询、被压住时用 `SetWindowPos` 重新置顶
