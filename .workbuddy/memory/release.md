@@ -71,7 +71,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -106,6 +106,14 @@
   `desktop 0.1.22`（单实例——重复启动不允许多开、唤起已运行实例的主窗（tauri-plugin-single-instance，
   注册在全插件最前；本机 dev 构建端到端验过：第二实例自动退出、收进托盘的主窗被恢复可见）；只发桌面端，
   run 38195463434 绿，通道验收 latest.json = 0.1.22、darwin-aarch64/windows-x86_64 两产物 URL 指向本版）。
+  `0.9.38`/`desktop 0.1.23`（双端同发，两个 tag 同指一个 commit `cb262b3`）——Android「全屏划线竖栏瘦身 +
+  点垃圾桶删线 + 清空全部划线」（Room v8→v9 新增 `chart_line`）、桌面端「换标的/周期/数据源改成骨架画布 +
+  遮罩 + 失败重试」。Release run 38222196441 绿 3m17s（含 CI 内 pinned-key 断言）、Desktop Release run
+  38222195529 绿 8m3s（windows/macos/发布三 job）、main 的 CI run 38222182738 绿 1m55s；
+  verify-channel.mjs **34/34**。两通道 `id`/`createdAt` 发版前后逐字不变（原地换）；桌面端 CI 日志里 vite
+  指纹 `index-Cyat4dNX.js 292.29 kB` + `index-BhzAcPd-.css 27.75 kB`（92 modules）== 本地 `npm run build`；
+  新 exe 内嵌 `0.1.23`（utf-16le 命中 2）且 `0.1.22` 命中 0。⚠️ 本次**跳过真机走查**：release buildType
+  `isMinifyEnabled = false`（未开混淆），release APK 与已逐态验过的 debug 包同观感。
   ⚠️ 相邻两版 APK **压缩后大小完全相同**（都 11088520）——别拿「体积没变」当「没换包」的证据，
   要比 `classes3.dex` / `AndroidManifest.xml` 的 CRC（解压后总字节 0.9.36 = 30491721、0.9.37 = 30487422）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
@@ -138,6 +146,12 @@
     ⚠️ **`adb root` 会把 MuMu 的 adb 连接打断**（`devices` 空、`connect 127.0.0.1:16384` 与 `:7555` 都 10061 拒绝）
     —— 想拿 root 去备份 `/data/data` 之前先想清楚，恢复要用户重启 MuMu 或重开 ADB 调试。
   - 0.9.32 复核（2026-10-07）：同上 —— 以 `Release` run 37579714368 的同一断言步骤为准（绿）⇒ 指纹不变。
+  - 0.9.38 复核（2026-10-12）：**本机 apksigner 直验下载产物** `cf2e20c7…` == 基线逐字一致（SHA-1 仍
+    `b539f267…`、DN 仍 `CN=Waxilo, OU=Market Monitor, O=Waxilo, L=Beijing, ST=Beijing, C=CN`）；
+    边车 sha256 自算 == 边车文件（`bbad2325…`），体积 11137672 == 声明（`curl --max-time 300 --retry 3
+    --retry-all-errors` 一次下全，没触发断流）；aapt2 读包内 `versionCode=50 / versionName=0.9.38` 与产物名自洽；
+    verify-channel.mjs 34/34；Release run 38222196441 全绿。桌面端两个平台的新 `.sig` keyid
+    `226b03192e5df60b` == 发版前基线（0.1.22 那两份逐字相同）。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
   - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先

@@ -8,7 +8,8 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   **十字光标（竖线规则 + 两枚标）** / **搜索框只收英文 + 测速 5s 判超时** / **持仓量副图（四家源方言 + 对齐）** /
   **z 序守护（压住任务栏）** / 构建与身份分离 / 自动更新 / 本地校验
 - `android.md` —— Android 环境、设计系统、图表视窗、**十字光标（松手保持 + 日期标）**、**测速 5s 超时**、
-  **持仓量副图（chip 置灰可点 + 基础周期取数）**、`LazyColumn` 锚定坑
+  **持仓量副图（chip 置灰可点 + 基础周期取数）**、**全屏划线（竖栏五枚 + 垃圾桶删除 + 清空 /
+  竖栏不许 fillMaxHeight / 24dp 按钮触控区重叠的坑）**、`LazyColumn` 锚定坑
 - `release.md` —— 通道模型与发版验收
 - `YYYY-MM-DD.md` —— 当日流水（含每次探测/踩坑的完整过程）
 
@@ -20,6 +21,10 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   `export APPDATA="C:\Users\sloan.wang\AppData\Roaming"`。taskkill 的 `/PID` 要写 `//PID`（MSYS 把它当路径）。
 - 沙箱 `tasklist` 看不到外部进程（用 Python `CreateToolhelp32Snapshot`）；`rm` 被 safe-delete 拦时 `os.rename` 能过。
 - `.workbuddy/tmp/` 已被 gitignore（校验脚本是本地工具，不入库）。
+  ❗**但它是跨会话累积的**（里面躺着几个月的一次性探测脚本与基线包）—— **只删本次自己新建的文件**，
+  绝不要「按后缀/整目录扫一遍清干净」（2026-10-12 犯过：一次 `os.remove` 扫掉了几十个历史 `verify-*.mjs`
+  / `cdp-*.js` / `probe-*.mjs` 与若干 `.db`/`.apk` 基线，`os.remove` 不过回收站，**不可恢复**）。
+  自己新写的验证脚本用完可以留着（下次回归还能跑），嫌乱就在当日日志里点明文件名。
 - ✅ **Android 构建本机跑得动**（2026-09-29 纠正，此前一直以为无 JDK）：JDK 17 在 `~/.jdks/ms-17.0.19`，
   用 `JAVA_HOME="C:/Users/sloan.wang/.jdks/ms-17.0.19" ./gradlew :app:testDebugUnitTest`
   （系统 `java` 只有 1.8，直接用会失败）。

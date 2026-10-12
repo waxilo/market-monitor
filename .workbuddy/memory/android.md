@@ -152,6 +152,95 @@
 重排时 `scrollToItem(0)`；但**单行「重测」别抢视口**（用户正盯着那行看结果，key 锚定恰好是他要的），用 `pinToTop`
 标志区分批量与单行。排序规则抽成纯函数 `ui/settings/ProbeOrdering.kt`（+7 单测）。
 
+## 全屏划线：竖栏五枚 + 删除走「垃圾桶 → 点线」+ 清空（2026-10-12）
+
+`DrawTool = { NONE, ALERT, HORIZONTAL, TREND, ERASE }`，单指手势一次只有一种语义。
+第五枚「清空」**不进 `DrawTool`** —— 它不是一种模式，按一次就完事。
+
+**规格（第二轮收窄，2026-10-12 晚）**：竖栏占位 30dp（含右留白 4dp）/ 按钮 24dp / 图形 12dp /
+间距 4dp，常量在 `RAIL_BUTTON` / `RAIL_GLYPH`（图形一律手搓 Canvas，不拖进 `material-icons-extended`）。
+图形线宽 `size.width * 0.11f`：12dp 画布在 3x 屏上是 36px，0.11 正好落 4px；沿用 0.10 落在 3.6px，
+两侧被抗锯齿吃掉一圈会发虚。
+
+**❗最关键的一条：竖栏不许 `fillMaxHeight()`**。原先 `.width(34.dp).fillMaxHeight().background(wash)`
+会在屏幕右缘拉出一条 **102px 宽 × 1080px 高**的整条灰带 —— 用户连着两轮说「太大」，指的就是它，
+按钮本身一直很小。改成跟着内容走（5 枚 ≈ 150dp）+ `Radius.fullShape` 胶囊底，占位面积降到 1/3。
+判定「大不大」要**按像素量**，别只看 dp 数字：实测改造前 102×1080、改造后 78×443（含 4dp 右留白共 90px 宽）。
+
+**⚠️ 24dp 按钮的触控区是被 Compose 撑开的，会**互相重叠**（实测）**：pitch 只有 28dp（=84px），
+在 4dp 间距正中（y=324，上一枚下沿 318、下一枚上沿 330）点一下，落到的是**下面那一枚**
+（选中态出现在 330–401）。所以「点偏一点」会选错工具 —— 可接受的原因有二：选中的按钮有实心反色、
+底部提示条会报出当前工具名，用户看得见也能改。想彻底避免就得把间距拉到 ≥8dp 或按钮回到 30dp，
+那是拿宽度换精度，别再无声地改回去。
+
+**删线的三个粒度**（`onAlertLineDelete` / `onDrawLineDelete` / `onClearAllLines`）：
+① 拖到右上角垃圾桶（工具激活且**有同类线可删时**常驻）；② 竖栏「删除」工具点线即删；
+③ **清空**一次删光本标的的全部划线。第 ③ 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
+于是手动在预警页建的价位预警也会被一起清 —— 这是有意的，否则会出现「清空了但还剩一条线」。
+
+**清空的实现分两拨**（存储上本来就不是一回事，别硬凑成一个 delete）：
+告警线由规则派生 ⇒ 逐条 `alerts.deleteRule`；水平线/直线在 `chart_line` ⇒ 新增
+`ChartLineDao.deleteAll(market, symbol)` 一条语句删净（逐条删中途失败会留下半清空的图）。
+`clearAllLines()` 再把 `drawDraft` 与 `alertDrag` 清掉（手上那笔还没落库的）。
+**必须先弹确认框**（`ClearAllLinesDialog`）：清空连带走预警规则、不可撤销，而这一下是闭着眼扫掉一整张图；
+框里报两类线的条数（条数只有在 `FullscreenChart` 里同时拿得到 `alertLines` 与 `chartLines` 时才算得准，
+所以是调用方算好传进去）。没有可清的线时这一枚**置灰**（`enabled=false` → `hairlineStrong`）。
+`DrawToolButton` 因此多了 `enabled` 参数（默认 true）。
+
+**清空的图形**：不用第二只垃圾桶（会与「删一条」那只混淆），画的是**内容** ——
+三条横线 + 一道贯穿斜杠（`ClearAllGlyph`），形状自己说明「这些线全没了」。
+
+**设备实测（MuMu，1080×1920/480dpi，横屏 640×360dp）**：
+空图时清空图形最暗像素 (211,211,206)=`hairlineStrong`（置灰）→ 画 2 水平线+1 直线后变
+(109,115,128)=`muted`（可用）→ 点清空弹框文案「1 条告警线（对应的预警规则一并删除）、3 条水平线 / 直线」
+→ 确认后 `chart_line` 0 条、`alert_rule` 里**只**少了 BTCUSDT 那条（2 条 ETHUSDT 原样保留，证明按标的作用域对）
+→ 图形回到置灰。取消路径单独验过：画 1 条 → 清空 → 取消 → `chart_line` 仍为 1。
+
+**分组**：前三枚（画什么）与后两枚（怎么撤）之间隔一条 12×1dp 的 `hairline`；
+不隔开的话五枚圆钮看着像一个集合里的五种线型。未选中图形用 `muted` 不用 `ink`
+（三根纯黑粗条曾是全屏最重的墨迹）。
+
+**`DrawTool.ERASE` 的两条设计约束**：
+- 可点的都必须看得见 ⇒ `visibleDrawLines` 在 ERASE 下取**全部**（不看同型过滤、也不看那只眼睛），
+  `alertLinesShown` 强制为真。藏起来一半等于「明明有这条线却删不掉」。
+- 它不拖线 ⇒ `alertDeleteRect()` 在 ERASE 返回 null、`showTrash` 排除 ERASE，
+  右上角那个「拖到这里删除」的落点不该出现。
+
+**命中判定 `eraseHitAt(point)`**：告警线 / 水平线 / 直线**放在一起比距离**取最近的一条。
+分类各判一次再按优先级挑会删错（水平线与告警线只差一个价位、直线能从任何东西上穿过）。
+距离口径随线型：水平类是 `|y - point.y|`，直线复用 `closestTrend`（点到**线段**）。
+容差沿用拖拽抓取半径 `ALERT_GRAB_WIDTH`(24dp)。
+`EraseHit` 分 `Alert(ruleId)` / `Draw(lineId)` 两型 —— 告警线删的是**规则**（顺带通知配置），
+画线删的是 `chart_line` 一行，两张表两条回调，混成一个 id 空间迟早删错。
+
+**手势接线（这次的真 bug，务必别再踩）**：所有「按下命中什么」的判定都必须在 **down 那一刻**
+用 `first.position` 定死。`awaitFirstDown()` 已经把 down 事件消费掉，循环里第一帧
+`awaitPointerEvent()` 拿到的是**第一个 MOVE**；手指一动就滑出抓取半径，
+「按住已有的线拖走」会被判成「新建一根」⇒ 表象就是「划的线无法删除」。
+（直线工具从一开始就是 down 定性，所以它没这个毛病 —— 水平/告警线是这次补上的。）
+删除动作放在**松手后**：手指没抬起就给结果，误按一下没有回头路。
+ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命中 ——
+不设这道闸，一次想吃掉误触的横滑会把它路过的线删掉（已实测：横滑穿过直线不删）。
+
+**别的两条删除入口**（都还在）：拖线到右上角垃圾桶（工具激活且**有同类线可删时**常驻显示，
+原先只在拖动浮现 ⇒ 等于没有提示）；`删除` 工具点线。
+
+**单击也要落线（2026-10-12 用户反馈后补）**：光有上面的 down 定性还不够 —— 轻点（down→up、
+中间没有 MOVE）时循环首帧 `pressed` 已空，而 `break` 排在**循环体之前**，循环体一次都不进，
+首帧落点根本发不出来，表象变成「单击不划线、非得拖一下」。修法：ALERT/HORIZONTAL 在 down
+定性之后**立刻补发一帧 `onHorizontalDrag(grabbedId, y)` 并把 `dragActive` 一起置真**
+（y 同样夹进主图区），与循环里那帧同源，于是「点一下」与「点一下再拖」落点语义完全一致。
+`dragActive` 的语义随之从「拖过」改成「这场落到线上」，不再拿它当防误触闸门。
+对照实测（同一个模拟器，先旧包后新包）：旧包单击 → `chart_line` 仍 0；新包单击 → 落 1 行，
+价位与 `input tap` 的 y 经刻度线性换算吻合（y=600 → 83754.20）。
+`README.md` 也补了「Android 端画线交互」一节（与桌面端交互约定同体例）。
+
 ## 发版
 改 `versionCode`/`versionName` → 推裸版本号 tag → 出 APK + `.sha256`。**签名固定**（`cf2e20c7…52f034`），别换。
 步骤与验收见 skill `android-gh-release-verify`；通道模型见 `MEMORY.md` 的「通道与发版」。
+
+✅ **release buildType 是 `isMinifyEnabled = false`**（CI 里注明「暂不启用混淆以免定位困难」）⇒
+**release APK 与 debug 包行为同观感**，模拟器上验过的改动不必再装一遍 release 包。
+这条也解释了「为什么可以不发真机走查就发版」（0.9.38 就是这么发的）。
+⚠️ 但**同 applicationId（`com.waxilo.marketmonitor`）**⇒ 想在装过 debug 包的模拟器上装 release 包，
+必须先 `adb uninstall`（会清掉机器上的自选/规则），所以「顺手装一下官方包」并不廉价 —— 先问值不值。

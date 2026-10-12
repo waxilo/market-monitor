@@ -221,6 +221,40 @@
   ⚠️ 周期条里加控件会改这条链上的可视高（新按钮按通用 `.icon-btn` 尺寸比 chip 高 5px ⇒ 可视区少 5px），
   所以 `.interval-bar .icon-btn` 单独收了字号与内边距。
 
+## 图表加载态：骨架 + 遮罩（2026-10-12 新增）
+- 需求是用户提的：**「切换周期加载时都需要遮罩层、空画布、加载中让用户感知」**。对齐 App 的
+  `DetailScreen.ChartLoading`（空图表骨架 + `paper 50%` 遮罩 + 转圈），桌面端补齐同款。
+- ❗**旧行为不是「空白」而是「上一张图留着不动」**：`KlineCanvas.draw()` 原本 `if (n === 0) return`
+  是**提前返回、没有清画布**（clearRect 在它后面）⇒ 换周期后屏幕上仍是上一张图 + 新周期 chip 已高亮，
+  看着完全像「没反应」。所以这次不是「加个转圈」，而是**让空数据真的落到一张空图上**。
+- 实现（3 处）：
+  - `KlineCanvas.tsx`：`SKELETON_RANGE = {low:0,high:1}` + `drawSkeleton(ctx, p, plotW, gh, paneCount)`
+    —— 只画主图网格（`gridLines(SKELETON_RANGE)`）+ 每块副图的上边界分隔线；**不画**刻度数字 / 蜡烛 /
+    均线 / 读数带 / 最新价 / 时间刻度（读数为空时全是 `--`，比留白更吵）。`draw()` 里把 `n === 0`
+    的早返**移到 dpr 尺寸与 clearRect 之后**，改成「画骨架 + return」。
+  - `KlineCanvas.tsx` 渲染：外层多一层 `.chart-stage`（`position: relative`）—— 遮罩要盖**可视区**，
+    而 `.chart-scroll` 是滚动容器，遮罩塞进滚动内容里会跟着滚。`.chart-loading` 是它的绝对定位子元素。
+  - `ChartView.tsx`：`load = {loading, failed}` + `reloadSeq`；换目标时 `setCandles([])` 的同时立
+    `loading`，`.then` 落、`.catch` 落并置 `failed`。`loading` **初值给 `true`**（首帧还没跑取数 effect，
+    否则会先闪一下「没有取到 K 线」—— App 的 `loadingCandles = true` 是同一个理由）。
+- ⚠️ **骨架的网格色不能用 `--hairline`**：它上面还盖着一层遮罩，浅色主题实测对比度只剩 **3.5%**，
+  截图里基本看不见（观感退回「一块空白 + 转圈」）。改用 `--hairline-strong`（代码里是 `p.edge`）
+  且 `--scrim-chart` 定在 **0.5**，透过遮罩看浓淡与真实图的网格相当。
+  新增 token `--scrim-chart` 两套主题各一份（`rgba(12,13,15,.5)` / `rgba(250,250,248,.5)`）。
+- ⚠️ 遮罩**顺带挡住画布手势**（`position:absolute; inset:0`）—— 这是必需的，不是巧合：数据没到时拖拽 /
+  缩放会把没有意义的视窗写进 `mm.chartView`，下一张图就被带歪（App 的骨架图也刻意不挂手势，同一个坑）。
+- 取完了但仍没有数据（该周期真没数据 / 网络失败）**不留空白**：`ChartView` 改渲染 `.chart-empty`
+  （提示语按 `failed` 分两句）+ 一枚「重新加载」（`reloadSeq++` 重跑取数）；此时 `KlineCanvas` 整个卸载。
+  这是必要的收尾 —— 不做的话失败就是永久空白，用户没有出路（增量轮询 `prev.length === 0` 时也不落地，救不回来）。
+- 实测：`.workbuddy/tmp/verify-chart-loading.mjs`（无头 Chrome + CDP，**真页面 + 真 Gate 行情**；
+  用 `Network.emulateNetworkConditions` 的 latency 把「加载中」那一段留住再断言）。19 条全过，关键几条：
+  加载中画布**正好 5 条**横贯绘图区的线（`ink == rows × plotW`，942px 宽 —— 6 个量程点里最下面那条被
+  主图 clip 裁掉，真实图用的是同一个 clip）；骨架与真图 `cssSize`/`bitmap` 完全相同；
+  真实图 435 行墨迹 vs 骨架 5 行。深色主题同款断言另走一遍（骨架色取自主题变量）。
+- ⚠️ 无头 Chrome 里跑真页面可行（浏览器下 `lib/http.ts` 退回 `fetch`，Gate 带头 CORS）—— 周期 chip 的
+  **文案是中文**（`1分/5分/…/1时/4时/1天/1周`，`intervalLabel()`），按 `'1h'` 找 chip 必然找不到，
+  用「选中项 index ± 2」来挑下一个周期。
+
 ## 指标与副图的选择（0.1.11 起持久化）
 - `lib/indicatorPrefs.ts`：`mm.indicators` = `{ ma: number[]; boll: boolean; panes: SubPaneKind[] }`。
   `parseIndicatorPrefs` 按支持集过滤（`MA_CHOICES` / `SUB_PANE_KINDS`，去重排序）、认不出的静默丢 ——
