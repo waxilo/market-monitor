@@ -71,7 +71,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -118,6 +118,13 @@
   要比 `classes3.dex` / `AndroidManifest.xml` 的 CRC（解压后总字节 0.9.36 = 30491721、0.9.37 = 30487422）。
   ⚠️ 双端同发时两个 tag 可以指向**同一个 commit**（2026-09-29 那次都是 `8e65cb2`），互不误触发。
 
+  `0.9.39`（**只发 Android**）——「撤掉全屏划线的画布垃圾桶（原「把线拖到右上角松手删除」整条撤除，
+  删除只剩竖栏那枚点线即删 + 清空）+ 均线目录整份可编辑（出厂五档与自定义不再分家、可删 MA5；
+  `ma_catalog` 取代 `ma_custom_periods`，含老 key 迁移）」。Release run 38246389844 绿 3m27s（含 CI 内
+  pinned-key 断言）、main 的 CI run 38246373696 绿 2m38s；verify-channel.mjs **34/34**；
+  `android-latest` 的 `id`/`createdAt`（`398798258` / `2026-09-29T03:22:14Z`）发版前后不变（原地换）；
+  包内 `versionCode=51 / versionName=0.9.39` 与产物名自洽；APK 体积 11137668（0.9.38 = 11137672，仅差 4 字节）。
+
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
   `market-monitor-0.9.28.apk` 的签名证书
   **SHA-256 = `cf2e20c74d1edd4d1fb290afee3b68ed1a18e20ac70a89e4ab5c43ec2d52f034`**
@@ -152,6 +159,11 @@
     --retry-all-errors` 一次下全，没触发断流）；aapt2 读包内 `versionCode=50 / versionName=0.9.38` 与产物名自洽；
     verify-channel.mjs 34/34；Release run 38222196441 全绿。桌面端两个平台的新 `.sig` keyid
     `226b03192e5df60b` == 发版前基线（0.1.22 那两份逐字相同）。
+  - 0.9.39 复核（2026-10-12）：**本机 apksigner 直验下载产物** `cf2e20c7…` == 基线逐字一致（SHA-1
+    `b539f267…`、DN 仍 `CN=Waxilo, OU=Market Monitor, O=Waxilo, L=Beijing, ST=Beijing, C=CN`）；
+    边车 sha256 自算 == 边车文件（`6339ed18…`），体积 11137668 == 声明（`curl --max-time 300 --retry 3
+    --retry-all-errors` 一次下全）；aapt2 读包内 `versionCode=51 / versionName=0.9.39` 自洽；
+    verify-channel.mjs 34/34；Release run 38246389844 全绿。
 
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
   - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先
