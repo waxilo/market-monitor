@@ -167,6 +167,18 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 - **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
   就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
+- **换标的 / 换周期 / 换数据源的那一段是「骨架 + 遮罩」，不是空白、也不是上一张图**（0.1.16 起；
+  `ChartView` 的 `load` 状态 + `KlineCanvas` 的 `drawSkeleton` / `.chart-loading`）：`setCandles([])`
+  之后画布**先画出骨架**（只有网格与副图分隔线，不画刻度数字 / 蜡烛 / 读数带 —— 骨架与真实图共用
+  `chartHeights` 的几何，所以数据到位只有蜡烛浮现、版面不跳），上面再盖一层半透明遮罩（转圈 +
+  「加载中…」）。三条别踩：① 旧的 `if (n === 0) return` 是**提前返回、没有清画布**
+  ⇒ 换周期时屏幕上留着上一张图，这就是「看着像没反应」的来源；② 骨架的网格色要用 `--hairline-strong`，
+  用常规的 `--hairline` 再透一层遮罩（`--scrim-chart`）就洗没了（浅色主题实测对比度只剩 3.5%）；
+  ③ 遮罩顺带挡住画布手势 —— 数据没到时拖拽 / 缩放会把没有意义的视窗写进 `mm.chartView` 带到下一张图。
+  取数失败或该周期本来没数据时也不留空白：走 `.chart-empty` 的提示 +「重新加载」（`reloadSeq` 重跑取数）；
+  `loading` 初值给 `true`，否则首帧会先闪一下「没有取到 K 线」。实测脚本
+  `.workbuddy/tmp/verify-chart-loading.mjs`（无头 Chrome + CDP + 网络延迟，逐值断言骨架行数、
+  遮罩覆盖面、骨架与真图同高同宽、断网后能靠「重新加载」恢复）。
 - **图表纵向手势 = 平移价格刻度**（`PriceView` 的 `zoom`/`pan` 两个意图量），缩放只留给 Shift+滚轮；
   平移收口按**几何重叠**（可视区与数据区至少重叠 `min(可视跨度, 数据跨度) × 25%`），不按位移比例 ——
   后者在放大 12 倍时几乎拖不动，缩小时又能把 K 线整屏拖出去。
@@ -200,12 +212,40 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   结果落回行底的「上次发送」，失败标红。只发 https、只认 `POST {"message": …}`
   （notify_hub 的 hook 约定，标题由那边 key 名定），地址空着/不合规的行不参与发送。
 
+### Android 端画线交互（改之前先看这几条）
+
+- **划线落点要「down 那一刻发一帧 + 循环里每帧跟手」，两处都不能少**（`ui/chart/KlineChart.kt`
+  的 `detectChartGestures`）。`awaitFirstDown()` 已经消费掉 down，循环里首个 `awaitPointerEvent`
+  拿到的其实是**第一个 MOVE**；`pressed` 为空就 `break`（这一步排在循环体之前）——
+  只靠循环那帧实现时，轻点（down→up，中间没有 MOVE）一次都进不了循环体，
+  表象就是「单击不划线、非得拖一下」。**抓取判定（这场抓哪根线）反过来只能做一次**：
+  逐帧重判会在拖着线经过另一根时突然「换手」。所以 `grabbedId` 与首帧 `onHorizontalDrag`
+  都在 down 定性，循环里那份只是幂等复述。
+- **删除有两条路**：① 把线**拖到绘图区右上角的垃圾桶**松手；② 竖栏第 4 枚「删除」工具
+  （`DrawTool.ERASE`）**点线即删** —— 命中在 down 定性（同前一条的理由），手指滑出 slop 即作废，
+  否则一次平移会把路过的那条顺手删掉。画布上那枚垃圾桶只是拖动时的**落点**：
+  `alertDeleteRect()` 与命中判定必须同框，它挂在 Canvas 上、不挂 `clickable`
+  （指针事件得穿透到手势层）。
+- **竖栏规格 30dp / 按钮 24dp / 图形 12dp**（`DrawToolRail` 的 `RAIL_BUTTON` / `RAIL_GLYPH`，
+  图形一律手搓 Canvas，不为一枚图标拖进 `material-icons-extended`）。
+  **竖栏不铺满高度** —— 这一条比尺寸数字更重要：`.fillMaxHeight()` + `wash` 底色的写法会在
+  屏幕右缘拉出一条 102×1080px 的整条灰带，用户两轮反馈的「太大」其实指的就是它，
+  按钮本身一直很小。竖栏是**独立一栏**（不浮在图上），所以高度跟着按钮走（5 枚 ≈ 150dp）。
+- **撤线的两种粒度**：① 竖栏「删除」（`DrawTool.ERASE`）点线即删，一次一条；
+  ② 竖栏「清空」一次删光本标的全部划线，**不进 `DrawTool`**（它不是模式，按一次就完事）。
+  清空连带删掉告警线背后的**预警规则**（告警线由规则派生），所以必须先弹
+  `ClearAllLinesDialog` 把「会删几条、规则也会没」说清楚；没有可清的线时这一枚置灰。
+  清空的口径与 `alertLines` 对齐（`threshold != null` 的规则），手动在预警页建的价位预警也一并清。
+- **底部提示是 `maxLines = 1`，文案必须一行放得下**：曾经 TREND 那句 88 字在 640dp 横屏被裁掉，
+  「拖到右上角垃圾桶删除」正好落在被裁的那半，用户那边就是「划的线无法删除」。
+  删减优先级：怎么删 > 怎么画 > 题外话。
+
 ## 当前版本
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.37` |
-| versionCode | `49` |
+| versionName | `0.9.38` |
+| versionCode | `50` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
@@ -262,7 +302,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.19`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.23`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
