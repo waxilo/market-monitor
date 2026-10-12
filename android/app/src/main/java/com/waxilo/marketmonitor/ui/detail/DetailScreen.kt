@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,6 +47,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -69,6 +71,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -93,10 +96,13 @@ import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.ChartSkeleton
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
+import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
+import com.waxilo.marketmonitor.ui.chart.DrawTool
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
+import com.waxilo.marketmonitor.ui.chart.toGuideLine
 import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.BannerTone
@@ -149,6 +155,15 @@ fun DetailScreen(
     val symbolRules by viewModel.symbolRules.collectAsStateWithLifecycle()
     // 同样共用一个开关：在竖屏把线藏了，进全屏不该又冒出来
     val alertLinesVisible by viewModel.alertLinesVisible.collectAsStateWithLifecycle()
+    // 视觉画线（水平线/直线）：竖屏只显不可编，全屏可编辑 —— 两种视图同一份数据
+    val chartLines by viewModel.chartLines.collectAsStateWithLifecycle()
+    val drawDraft by viewModel.drawDraftLine.collectAsStateWithLifecycle()
+    // 每次现折：时间戳→下标依赖「这份序列的头一根」，翻页/切周期都要整体重折
+    val drawLines = remember(chartLines, drawDraft, state.candles, state.interval) {
+        val saved = chartLines.mapNotNull { it.toGuideLine(state.candles, state.interval) }
+        val draft = drawDraft?.toGuideLine(state.candles, state.interval)?.copy(dragging = true)
+        if (draft == null) saved else saved.filterNot { it.id == draft.id } + draft
+    }
     /**
      * 用 `rememberSaveable` 而不是普通 state：全屏要横屏，旋屏会让 Activity 重建，
      * 普通 state 会连同「正在全屏」一起丢掉，用户看到的是自动退出全屏。
@@ -156,6 +171,8 @@ fun DetailScreen(
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     // 周期管理对话框：竖屏与全屏共用一个开关，挂在最外层免得两条分支各存一份
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
+    // 均线周期管理对话框同理：入口在竖屏与全屏的指标条上各有一个「＋」
+    var maManagerOpen by rememberSaveable { mutableStateOf(false) }
     // 铃铛预警整页与划线编辑框：IndicatorLine 不可序列化，旋屏丢了重开即是（同周期管理草稿）
     var alertsPageOpen by rememberSaveable { mutableStateOf(false) }
     var lineDialogOpen by remember { mutableStateOf(false) }
@@ -178,9 +195,11 @@ fun DetailScreen(
                 alertLines = alertLines,
                 indicatorGuides = indicatorGuides,
                 bandGuides = bandGuides,
+                drawLines = drawLines,
                 alertLinesVisible = alertLinesVisible,
                 viewModel = viewModel,
                 onManageIntervals = { intervalManagerOpen = true },
+                onManageMa = { maManagerOpen = true },
                 onExit = { fullscreen = false },
             )
         } else {
@@ -223,6 +242,7 @@ fun DetailScreen(
                     alertLines = alertLines,
                     indicatorGuides = indicatorGuides,
                     bandGuides = bandGuides,
+                    drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = viewModel::toggleAlertLines,
                     onLoadMore = viewModel::loadMore,
@@ -244,6 +264,7 @@ fun DetailScreen(
                     subPanes = state.subPanes,
                     oiSupported = state.oiSupported,
                     onToggleMa = viewModel::toggleMaPeriod,
+                    onManageMa = { maManagerOpen = true },
                     onToggleBoll = viewModel::toggleBoll,
                     onToggleSubPane = viewModel::toggleSubPane,
                 )
@@ -279,6 +300,17 @@ fun DetailScreen(
             )
         }
 
+        if (maManagerOpen) {
+            MaManagerDialog(
+                custom = state.maChoices.filter { it !in MA_CHOICES },
+                onDismiss = { maManagerOpen = false },
+                onSave = {
+                    viewModel.saveMaCustomPeriods(it)
+                    maManagerOpen = false
+                },
+            )
+        }
+
         // 本标的预警整页：从右往左滑入、盖住详情页（不再是底部弹层）。
         // 挂在 Box 最外层作最上层子节点，返回键/左上角箭头都收在这页里。
         AnimatedVisibility(
@@ -309,6 +341,7 @@ fun DetailScreen(
         if (lineDialogOpen) {
             IndicatorLineDialog(
                 symbolId = symbolId,
+                maChoices = state.maChoices,
                 initial = lineEditing,
                 onDismiss = { lineDialogOpen = false },
                 onSave = { line ->
@@ -351,15 +384,19 @@ private fun FullscreenController(active: Boolean) {
 }
 
 /**
- * 全屏图表：整屏只有图，顶部一条窄操作栏。
+ * 全屏图表：整屏只有图，顶部一条窄操作栏 + 右侧一条划线竖栏。
  *
- * 「划线」不需要长按 —— 在这个模式下划线就是唯一目的，再要求长按只是多余一步；
- * 单指拖动直接移动告警线，松手即落一条「达到」预警（涨跌碰到都提醒），双指缩放照旧可用。
- * 划线是**一次性**的：松手落库或拖垃圾桶删除后都自动退出模式，单指拖动随即恢复平移画布，
- * 画下一根要重新点「划线」——常驻模式会让「画完线想看别的区间」做不到
- * （拖动落笔又是一根线）。
- * 已有的告警线本来就画在图上，划线模式下按到它（容差 24dp）就是**改它对应的预警**，
- * 而不是在它旁边又叠一条 —— 历史上设置的告警因此都能在这里直接调整。
+ * 划线从顶栏挪到**右侧竖栏**（2026-10-12 定版）：三个工具（告警线/水平线/直线）挤在
+ * 周期条里既放不下，也把「看哪个周期」和「要对图做什么」两件不相干的事混在一栏。
+ * 竖栏纵向排开工具按钮，单选；再点当前选中的 = 退回普通看图态。
+ *
+ * 工具激活时单指被图征用，**且不需要长按** —— 划线就是这个工具下唯一的目的：
+ * · 告警线：纵向拖出即拖一根「达到」预警（涨跌碰到都提醒）；
+ * · 水平线：拖出即一条纯视觉记号（不响）；
+ * · 直线：第一敲落起点、第二敲落终点（两下太近 = 撤销），抓到已有直线可整体平移。
+ * 双指缩放照旧可用。画线是**一次性**的：松手落库或拖垃圾桶删除后都自动退回普通态，
+ * 单指随即恢复平移画布 —— 常驻工具会让「画完线想看别的区间」做不到。
+ * 已有的告警线在工具下按到它（容差 24dp）是**改它**而不是在旁边叠一条。
  *
  * 换周期与改指标也在这里给到：全屏是横屏，竖屏那套控件（周期条、指标条）整块被图表顶掉了，
  * 只剩一个「退出全屏」的话，用户每次想换个周期都得先退出、改完、再进来。
@@ -376,17 +413,30 @@ private fun FullscreenChart(
     alertLines: List<AlertPriceLine>,
     indicatorGuides: List<IndicatorGuideLine>,
     bandGuides: List<BandGuideLine>,
+    drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
     viewModel: DetailViewModel,
     onManageIntervals: () -> Unit,
+    onManageMa: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     val notice by viewModel.notice.collectAsStateWithLifecycle()
-    // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线模式
-    var alertMode by rememberSaveable { mutableStateOf(false) }
+    // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线工具上。
+    // 存 name 而不是枚举本身：DrawTool 不在默认 Saver 的支持面里，旋屏重建不能丢工具态。
+    var toolName by rememberSaveable { mutableStateOf(DrawTool.NONE.name) }
+    val drawTool = DrawTool.entries.firstOrNull { it.name == toolName } ?: DrawTool.NONE
+    fun selectTool(next: DrawTool) { toolName = next.name }
     // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
+    // 清空划线的确认框：不进 DrawTool（它不是一种「模式」，按一次就完事），
+    // 只在弹与不弹之间切换。挂全屏内部同 toolName —— 退出再进来不该还留着这个框。
+    var clearConfirm by remember { mutableStateOf(false) }
+    // 图上有几笔可清：告警线按条数（一条规则一条线），画线只数**已落库**的
+    // （id 为 0 的是手上那笔草稿，清空本来就把它一起丢掉，但报数不能算它）
+    val clearAlertCount = alertLines.count { !it.dragging }
+    val clearLineCount = drawLines.count { it.id != 0L }
+    val clearable = clearAlertCount > 0 || clearLineCount > 0
 
     Column(modifier = Modifier.fillMaxSize().background(colors.paper)) {
         // 顶部两条常驻窄带：上面「周期 + 划线 / 退出」，下面「指标」。
@@ -399,12 +449,7 @@ private fun FullscreenChart(
             onManage = onManageIntervals,
             compact = true,
             actions = {
-                FilterChip(
-                    text = "划线",
-                    selected = alertMode,
-                    onClick = { alertMode = !alertMode },
-                    compact = true,
-                )
+                // 划线工具不在这里：它们搬到了图右侧的竖栏（DrawToolRail），顶栏只留「退出」
                 IconButton(onClick = onExit, modifier = Modifier.size(30.dp)) {
                     Icon(
                         imageVector = Icons.Default.Close,
@@ -424,13 +469,17 @@ private fun FullscreenChart(
             subPanes = state.subPanes,
             oiSupported = state.oiSupported,
             onToggleMa = viewModel::toggleMaPeriod,
+            onManageMa = onManageMa,
             onToggleBoll = viewModel::toggleBoll,
             onToggleSubPane = viewModel::toggleSubPane,
             compact = true,
             showSubPanes = false,
         )
         Rule(inset = 0.dp)
-        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+        Row(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            // 图本体吃剩余宽度，右侧竖栏是**分出来的一栏**而不是浮在图上 ——
+            // 图右沿就是价格刻度，浮层盖上去等于把刻度藏了
+            Box(modifier = Modifier.weight(1f).fillMaxSize()) {
             when {
                 // 全屏里换周期也会经历「这一段序列还没到」：与竖屏同处理（空图 + 遮罩），
                 // 否则这个空窗里会报一句「没有取到 K 线」
@@ -480,20 +529,30 @@ private fun FullscreenChart(
                         alertLines = alertLines,
                         indicatorGuides = indicatorGuides,
                         bandGuides = bandGuides,
-                        alertLineMode = alertMode,
+                        drawLines = drawLines,
+                        drawTool = drawTool,
                         alertLinesVisible = alertLinesVisible,
                         onToggleAlertLines = viewModel::toggleAlertLines,
                         onAlertLineDrag = viewModel::dragAlertLine,
                         onAlertLineCommit = {
                             viewModel.commitAlertLine()
-                            // 划线是一次性动作：落一根就退出模式，单指拖动立刻还给平移画布；
-                            // 画下一根需重新点「划线」。删除同样退出，见 onAlertLineDelete。
-                            alertMode = false
+                            // 划线是一次性动作：落一根就收起工具，单指拖动立刻还给平移画布；
+                            // 画下一根需重新点竖栏。删除同样收起，见 onAlertLineDelete。
+                            selectTool(DrawTool.NONE)
                         },
                         onAlertLineDelete = { id ->
                             viewModel.deleteAlertLine(id)
-                            // 删一条也算「用完一次划线」：留在模式里只会让人误以为还能继续拖线
-                            alertMode = false
+                            // 删一条也算「用完一次划线」：留在工具里只会让人误以为还能继续拖线
+                            selectTool(DrawTool.NONE)
+                        },
+                        onDrawLineDrag = viewModel::dragDrawLine,
+                        onDrawLineCommit = {
+                            viewModel.commitDrawLine()
+                            selectTool(DrawTool.NONE)
+                        },
+                        onDrawLineDelete = { lineId ->
+                            viewModel.deleteDrawLine(lineId)
+                            selectTool(DrawTool.NONE)
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -501,18 +560,43 @@ private fun FullscreenChart(
             }
 
             // 指标改动走顶部常驻条，图上不再有浮层——浮层无论压顶部还是底部都要吃掉一截图。
-            if (alertMode) {
+            // 底部提示按当前工具给一句：三个工具的落笔方式不一样，混在一句里等于没说。
+            //
+            // ⚠️ 文案必须**短到一行放得下**（2026-10-12 修）：这里是 maxLines=1，
+            // 而原先 TREND 那句 88 字，在 640dp 宽的横屏上被父容器裁掉了一半 ——
+            // 「拖到右上角垃圾桶删除」正好落在被裁的那半，用户于是只看到怎么画、看不到怎么删，
+            // 反馈回来就是「划的线无法删除」。删减原则：**怎么删 > 怎么画 > 题外话**，
+            // 「只是记号不会提醒」这类已由图形形态（实线 vs 虚线）与告警页表达，这里不再占字。
+            val toolHint = when (drawTool) {
+                DrawTool.NONE -> null
+                DrawTool.ALERT ->
+                    "上下拖动放告警线 · 按住可改价位 · 拖到右上角垃圾桶删除 · 涨跌都提醒"
+                DrawTool.HORIZONTAL ->
+                    "拖动放水平线 · 按住可改价位 · 拖到右上角垃圾桶删除 · 落一根即自动收起"
+                DrawTool.TREND ->
+                    "敲两下定直线（太近=撤销）· 按住可整体平移 · 拖到右上角垃圾桶删除"
+                // 垃圾桶模式与上面三枚是相反方向的动作用，这句必须**先说要做什么**：
+                // 用户点完垃圾桶图上看不出任何变化（线本来就在），不说就会以为没生效
+                DrawTool.ERASE ->
+                    "点一下要删的那条线即删除 · 告警线/水平线/直线都可以 · 删完自动收起"
+            }
+            toolHint?.let { hint ->
                 Text(
-                    text = "上下拖动放置告警线 · 按住已有的线可直接改价位 · 拖到右上角垃圾桶删除 · 涨跌碰到都提醒 · 落一根或删一条即自动退出，继续请重新点「划线」",
+                    text = hint,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .padding(bottom = Spacing.Lg)
+                        // padding 写在 clip/background 之前：它把父容器的可用宽度收窄一道，
+                        // 于是文字真的会换行，而不是撑破父容器被裁掉
+                        .padding(horizontal = Spacing.Md)
                         .clip(Radius.fullShape)
                         .background(colors.washStrong)
-                        .padding(horizontal = Spacing.Sm, vertical = Spacing.Xxs),
+                        .padding(horizontal = Spacing.Md, vertical = Spacing.Xxs),
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.muted,
-                    maxLines = 1,
+                    textAlign = TextAlign.Center,
+                    // 兜底：万一以后有人把文案写长了，宁可换两行，也不要被裁掉半句
+                    maxLines = 2,
                 )
             }
 
@@ -522,7 +606,306 @@ private fun FullscreenChart(
                 text = notice.orEmpty(),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = Spacing.Gutter),
             )
+            }
+            DrawToolRail(
+                tool = drawTool,
+                clearable = clearable,
+                onSelect = { next ->
+                    // 再点当前选中的 = 收起工具，单指还给平移画布（与落一根后自动收起同一个出口）
+                    selectTool(if (next == drawTool) DrawTool.NONE else next)
+                },
+                // 不做二次点击确认（「再点一次就清」那种）：清空连带删预警规则、不可撤销，
+                // 得让用户在看清删掉几条之后再说「是」
+                onClear = { clearConfirm = true },
+            )
         }
+    }
+
+    if (clearConfirm) {
+        ClearAllLinesDialog(
+            alertCount = clearAlertCount,
+            lineCount = clearLineCount,
+            onDismiss = { clearConfirm = false },
+            onConfirm = {
+                clearConfirm = false
+                viewModel.clearAllLines()
+                // 线都清了，手上的工具自然没有对象可抓：与「删完自动收起」同一个出口
+                selectTool(DrawTool.NONE)
+            },
+        )
+    }
+}
+
+/**
+ * 清空全部划线的二次确认：**先把会删掉什么说清楚**再让点。
+ *
+ * 这一下与「删除」那一枚不是一回事：删除是用户拿手指在图上点名，清空是闭着眼扫掉一整张图，
+ * 而且告警线背后挂着预警规则（可能带 Webhook）。所以这里报两类线的**条数**，
+ * 并单独点明「预警规则一并删除」—— 用户在预警页辛苦配过的东西就在这一下里。
+ *
+ * 一条线都没有时这一枚本来就是置灰的（见 [DrawToolRail] 的 clearable），
+ * 对话框不会以「将删除 0 条」的样子出现。
+ */
+@Composable
+private fun ClearAllLinesDialog(
+    alertCount: Int,
+    lineCount: Int,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    val parts = buildList {
+        if (alertCount > 0) add("$alertCount 条告警线（对应的预警规则一并删除）")
+        if (lineCount > 0) add("$lineCount 条水平线 / 直线")
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        title = {
+            Text(text = "清空全部划线？", style = MaterialTheme.typography.titleLarge, color = colors.ink)
+        },
+        text = {
+            Text(
+                text = "将删除本标的图上的全部划线：${parts.joinToString("、")}。删除后无法恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = colors.muted,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(text = "清空", color = colors.down, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(text = "取消", color = colors.muted) }
+        },
+    )
+}
+
+/**
+ * 竖栏的两把尺子：按钮与图形。
+ *
+ * 单独抽出来是因为它们得**一起**改 —— 图形占按钮一半（12 / 24）是这枚按钮「不显胖」的
+ * 全部秘密：把按钮改小而不动图形，图形就贴到圆边上了；反过来把图形改小而按钮不动，
+ * 圆钮里会出现一圈空。抽成常量后至少改的时候看得见另一半。
+ */
+private val RAIL_BUTTON = 24.dp
+
+/**
+ * 图形的边长：12dp，按钮的一半。
+ *
+ * 图形里的线宽一律取 `size.width * 0.11f`（各 Glyph 里那一行 `val stroke = ...`）：
+ * 12dp 画布在 3x 屏上是 36px，0.11 正好落在 4px —— 最干净的一档；沿用原先的 0.10
+ * 会落在 3.6px，描边两侧各被抗锯齿吃掉一圈，图形看着发虚发灰。
+ */
+private val RAIL_GLYPH = 12.dp
+
+/**
+ * 全屏右侧的划线竖栏：告警线 / 水平线 / 直线 · 删除 / 清空。
+ *
+ * 图标全部手搓 Canvas（同 [FullscreenGlyph] 的理由：只依赖 icons-core，
+ * 不为一个图标拖进 material-icons-extended）。前三枚刻意做成「这条线长什么样」：
+ * 虚线 = 会响的告警线，实水平线 / 斜线 = 只做记号的画线，形状自身就是说明。
+ *
+ * 后两枚（垃圾桶 / 清空）与前三枚之间用一道细线隔开：它们回答的是另一个问题 ——
+ * 「这些线怎么撤掉」。原先只有「把线拖到右上角垃圾桶」一条路，实际反馈是「划的线无法删除」
+ * （2026-10-12）：那条路要求先知道有这么回事、再拖得准，而删除本该是点一下的事。
+ * 现在选中垃圾桶，再去点图上的任意一条线即可删掉（告警线 / 水平线 / 直线通吃，见 [DrawTool.ERASE]）；
+ * 清空是一次性动作，不进任何模式，按下去先弹确认（见 [ClearAllLinesDialog]），
+ * 一条线都没有时整枚置灰 —— 空图上摆一个按了没反应的按钮只会让人怀疑它坏了。
+ *
+ * 规格按「图上配角」定：2026-10-12 用户连着两轮反馈「太大」后收成现在这个尺寸。
+ * **关键的一条是高度**：原先 `.fillMaxHeight()` + `wash` 底色会在屏幕右缘拉出一条
+ * 102px 宽 × 1080px 高的整条灰带 —— 那才是「大」的主体，按钮本身其实很小。
+ * 竖栏只该是一小块工具面板：高度跟着按钮走（5 枚 ≈ 150dp），下缘留白还给图。
+ *
+ * 其余尺寸：竖栏占位 30dp（其中右留白 4dp，不贴着屏幕边）、按钮 24dp、图形 12dp、
+ * 间距 4dp（都是设计常量阶梯里的值）。按钮小于 Material 的 48dp 触控标准是**有意的** ——
+ * 竖栏是独立一栏（不浮在图上），图表宽度不受它影响，但多吃的每一 dp 都是从 K 线上抠的。
+ */
+@Composable
+private fun DrawToolRail(
+    tool: DrawTool,
+    /** 当前标的图上有可清的线（告警线或画线）：没有就置灰这一枚。 */
+    clearable: Boolean,
+    onSelect: (DrawTool) -> Unit,
+    onClear: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Column(
+        modifier = Modifier
+            // padding 写在 width 之前：它先把可用宽度收窄，于是「竖栏占位」= 26 + 右留白 4
+            .padding(top = Spacing.Xs, end = Spacing.Xxs)
+            .width(26.dp)
+            .clip(Radius.fullShape)
+            .background(colors.wash)
+            .padding(vertical = Spacing.Xxs),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Spacing.Xxs),
+    ) {
+        DrawToolButton("预警线", tool == DrawTool.ALERT, { onSelect(DrawTool.ALERT) }) { color ->
+            DashedLineGlyph(color)
+        }
+        DrawToolButton("水平线", tool == DrawTool.HORIZONTAL, { onSelect(DrawTool.HORIZONTAL) }) { color ->
+            HorizontalLineGlyph(color)
+        }
+        DrawToolButton("直线", tool == DrawTool.TREND, { onSelect(DrawTool.TREND) }) { color ->
+            DiagonalLineGlyph(color)
+        }
+        // 画 / 撤 是两类动作：不隔开的话，五枚圆钮看着像同一个集合里的五种线型
+        Box(
+            modifier = Modifier
+                .width(12.dp)
+                .height(1.dp)
+                .background(colors.hairline),
+        )
+        DrawToolButton("删除", tool == DrawTool.ERASE, { onSelect(DrawTool.ERASE) }) { color ->
+            TrashGlyph(color)
+        }
+        DrawToolButton(
+            label = "清空全部划线",
+            selected = false,
+            enabled = clearable,
+            onClick = onClear,
+        ) { color ->
+            ClearAllGlyph(color)
+        }
+    }
+}
+
+@Composable
+private fun DrawToolButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    glyph: @Composable (Color) -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Box(
+        modifier = Modifier
+            .size(RAIL_BUTTON)
+            .clip(Radius.fullShape)
+            .background(if (selected) colors.ink else Color.Transparent)
+            .semantics { contentDescription = label }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        // 选中态整枚反色：底色换成 ink 后图形得改走 paper，否则深底压深线看不见。
+        // 未选中用 muted（与 chip 的未选中文字同档）—— 原先用 ink 时三根纯黑粗条
+        // 是全屏最重的墨迹，比图还显眼。置灰那一档只留给不可用的动作（清空）。
+        glyph(
+            when {
+                selected -> colors.paper
+                !enabled -> colors.hairlineStrong
+                else -> colors.muted
+            },
+        )
+    }
+}
+
+/** 预警线工具：一条虚线（与图上告警线同形态）。 */
+@Composable
+private fun DashedLineGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val y = size.height / 2f
+        val dash = size.width / 7f
+        var x = stroke / 2f
+        while (x < size.width - dash) {
+            drawLine(color, Offset(x, y), Offset(x + dash * 3f, y), stroke, cap = StrokeCap.Round)
+            x += dash * 4f
+        }
+    }
+}
+
+/** 水平线工具：一条实线。 */
+@Composable
+private fun HorizontalLineGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        drawLine(
+            color,
+            Offset(stroke / 2f, size.height / 2f),
+            Offset(size.width - stroke / 2f, size.height / 2f),
+            stroke,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** 直线工具：一条上扬斜线，两端点各加一个圆点（两敲落锚的示意）。 */
+@Composable
+private fun DiagonalLineGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val i = stroke
+        val from = Offset(i, size.height - i)
+        val to = Offset(size.width - i, i)
+        drawLine(color, from, to, stroke, cap = StrokeCap.Round)
+        drawCircle(color, radius = stroke * 0.9f, center = from)
+        drawCircle(color, radius = stroke * 0.9f, center = to)
+    }
+}
+
+/**
+ * 删除工具：一只垃圾桶，与图上那个「拖到这里删除」的落点同一个意象。
+ *
+ * 手搓而不是用 `Icons.Default.Delete`：material 的图形在 24dp 视图里只占中间一半，
+ * 摆进这枚 12dp 的画布会明显比旁边三根线小一圈。这里按同一套 0.11w 线宽自己画，
+ * 提到「12dp 画布铺满」的尺寸口径就与三枚线型一致了。桶身用梯形而不是矩形 ——
+ * 只差两条斜边，但矩形在这个尺寸下更像一个「方块」。
+ *
+ * 只删**一条**：点它 → 再点图上的线。全删在下一枚 [ClearAllGlyph]。
+ */
+@Composable
+private fun TrashGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val w = size.width
+        val h = size.height
+        val cap = StrokeCap.Round
+        val lidY = h * 0.30f
+        // 提手：桶盖上方那个小方口
+        drawLine(color, Offset(w * 0.40f, lidY), Offset(w * 0.40f, h * 0.12f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.40f, h * 0.12f), Offset(w * 0.60f, h * 0.12f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.60f, h * 0.12f), Offset(w * 0.60f, lidY), stroke, cap = cap)
+        // 桶盖
+        drawLine(color, Offset(w * 0.12f, lidY), Offset(w * 0.88f, lidY), stroke, cap = cap)
+        // 桶身：上宽下窄
+        val bodyTop = h * 0.42f
+        val bodyBottom = h * 0.92f
+        drawLine(color, Offset(w * 0.22f, bodyTop), Offset(w * 0.78f, bodyTop), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.22f, bodyTop), Offset(w * 0.31f, bodyBottom), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.78f, bodyTop), Offset(w * 0.69f, bodyBottom), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.31f, bodyBottom), Offset(w * 0.69f, bodyBottom), stroke, cap = cap)
+    }
+}
+
+/**
+ * 清空全部划线：三条被一道斜杠划掉的线。
+ *
+ * 为什么不用第二只垃圾桶：垃圾桶在这条竖栏里已经是「删一条」的意思（见 [TrashGlyph]），
+ * 两枚同形按钮上下挨着，用户只能靠猜哪只删得多。这里画的是**内容**而不是工具 ——
+ * 三条横线正是这家竖栏一直在画的那些线，一道斜杠划过整组，说的是「全没了」。
+ * 形状本身把「全部」表达出来了，省掉一行字（竖栏里也放不下字）。
+ *
+ * 真到按下去那一刻还有 [ClearAllLinesDialog] 兜一道：图形再准也只是「大概其」，
+ * 而这一下会连带删掉预警规则。
+ */
+@Composable
+private fun ClearAllGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val w = size.width
+        val h = size.height
+        val cap = StrokeCap.Round
+        // 三条线只到 0.86：斜杠要占右上与左下两个角，线铺满会和斜杠端点糊在一起
+        listOf(0.20f, 0.50f, 0.80f).forEach { f ->
+            drawLine(color, Offset(w * 0.08f, h * f), Offset(w * 0.86f, h * f), stroke, cap = cap)
+        }
+        // 斜杠：整枚图形里最有信息量的一笔，画得比三条线更满
+        drawLine(color, Offset(w * 0.14f, h * 0.90f), Offset(w * 0.90f, h * 0.12f), stroke, cap = cap)
     }
 }
 
@@ -882,6 +1265,7 @@ private fun ChartArea(
     alertLines: List<AlertPriceLine>,
     indicatorGuides: List<IndicatorGuideLine>,
     bandGuides: List<BandGuideLine>,
+    drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
     onToggleAlertLines: () -> Unit,
     onLoadMore: () -> Unit,
@@ -940,6 +1324,8 @@ private fun ChartArea(
                     alertLines = alertLines,
                     indicatorGuides = indicatorGuides,
                     bandGuides = bandGuides,
+                    // 视觉画线是持久化的，竖屏同样显示（改/删仍在全屏竖栏里做）
+                    drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = onToggleAlertLines,
                     cornerAction = ChartCornerAction(
@@ -1020,6 +1406,8 @@ private fun IndicatorBar(
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
     oiSupported: Boolean,
     onToggleMa: (Int) -> Unit,
+    /** 打开「均线周期」管理弹窗（增删自定义周期），与周期条的「＋」同一定位。 */
+    onManageMa: () -> Unit,
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
     compact: Boolean = false,
@@ -1048,6 +1436,7 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
+            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             if (showSubPanes) {
                 Box(
@@ -1089,6 +1478,7 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
+            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
 
@@ -1344,6 +1734,140 @@ private fun IntervalManagerDialog(
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "移除 ${option.label}",
+                                modifier = Modifier.size(16.dp),
+                                tint = colors.muted,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextAction("保存", onClick = { onSave(rows) }) },
+        dismissButton = { TextAction("取消", onDismiss, color = colors.muted) },
+    )
+}
+
+/**
+ * 均线周期管理对话框：预置五档之外，维护一份自定义目录。
+ *
+ * MA5/10/20/30/60 固定摊在指标条上、不提供删除；这里保存的自定义周期会在同一行
+ * 多出 chip，点选/取消照旧在指标条上完成，弹窗只管「有没有」。范围与条数上限
+ * 与桌面端同口径。增删先在草稿里改，点「保存」才回写 ViewModel 并持久化 ——
+ * 与 [IntervalManagerDialog] 同一套交互，删掉的目录项会连带从选中集移除（见 VM）。
+ */
+@Composable
+private fun MaManagerDialog(
+    custom: List<Int>,
+    onDismiss: () -> Unit,
+    onSave: (List<Int>) -> Unit,
+) {
+    // rows 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
+    var rows by remember { mutableStateOf(custom) }
+    var input by rememberSaveable { mutableStateOf("") }
+    var hint by rememberSaveable { mutableStateOf<String?>(null) }
+    val colors = MarketTheme.colors
+
+    fun commitAdd() {
+        val period = input.trim().toIntOrNull()
+        when {
+            period == null || period !in MA_PERIOD_MIN..MA_PERIOD_MAX ->
+                hint = "填 $MA_PERIOD_MIN～$MA_PERIOD_MAX 的整数"
+            period in MA_CHOICES -> hint = "MA$period 是预置档，指标条上直接点就行"
+            period in rows -> hint = "MA$period 已在列表上"
+            rows.size >= MA_CUSTOM_LIMIT -> hint = "自定义最多 $MA_CUSTOM_LIMIT 条"
+            else -> {
+                rows = (rows + period).sorted()
+                input = ""
+                hint = null
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        title = {
+            Text(text = "均线周期", style = MaterialTheme.typography.titleLarge, color = colors.ink)
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    // heightIn 先定视口再挂滚动（同周期条管理，反了输入框会被裁）
+                    .heightIn(max = 460.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    text = "预置 MA5/10/20/30/60 固定在指标条上；这里添加的周期摊在同一行，点选即画",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                )
+                Text(
+                    text = "添加周期",
+                    modifier = Modifier.padding(top = Spacing.Md),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(Radius.xsShape)
+                            .background(colors.wash)
+                            .padding(horizontal = Spacing.Xs, vertical = Spacing.Sm),
+                    ) {
+                        BasicTextField(
+                            value = input,
+                            onValueChange = { raw -> input = raw.filter { it.isDigit() } },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
+                            cursorBrush = SolidColor(colors.ink),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                            ),
+                            keyboardActions = KeyboardActions(onDone = { commitAdd() }),
+                        )
+                    }
+                    TextAction("添加", ::commitAdd)
+                }
+                hint?.let {
+                    Text(
+                        text = it,
+                        modifier = Modifier.padding(top = Spacing.Xs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.down,
+                    )
+                }
+                if (rows.isEmpty()) {
+                    Text(
+                        text = "还没有自定义周期",
+                        modifier = Modifier.padding(top = Spacing.Md),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.muted.copy(alpha = 0.6f),
+                    )
+                }
+                rows.forEach { period ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().height(40.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "MA$period",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = colors.ink,
+                        )
+                        IconButton(
+                            onClick = { rows = rows - period },
+                            modifier = Modifier.size(28.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "移除 MA$period",
                                 modifier = Modifier.size(16.dp),
                                 tint = colors.muted,
                             )

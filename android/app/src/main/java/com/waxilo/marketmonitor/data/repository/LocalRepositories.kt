@@ -3,6 +3,7 @@ package com.waxilo.marketmonitor.data.repository
 import androidx.room.RoomDatabase
 import androidx.room.withTransaction
 import com.waxilo.marketmonitor.data.local.room.AlertDao
+import com.waxilo.marketmonitor.data.local.room.ChartLineDao
 import com.waxilo.marketmonitor.data.local.room.WatchlistDao
 import com.waxilo.marketmonitor.data.local.room.WatchlistEntity
 import com.waxilo.marketmonitor.data.local.room.toDomain
@@ -16,6 +17,8 @@ import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.AlertMessage
 import com.waxilo.marketmonitor.domain.repository.AlertRepository
+import com.waxilo.marketmonitor.domain.repository.ChartLine
+import com.waxilo.marketmonitor.domain.repository.ChartLineRepository
 import com.waxilo.marketmonitor.domain.repository.WebhookDelivery
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import kotlinx.coroutines.flow.Flow
@@ -127,4 +130,25 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
 
     override suspend fun setIndicatorLineAlertMode(id: Long, mode: LineAlertMode) =
         dao.setIndicatorLineAlertMode(id, mode.key)
+}
+
+/** 图上视觉画线（全屏划线工具的水平线/直线）。 */
+class ChartLineRepositoryImpl(private val dao: ChartLineDao) : ChartLineRepository {
+
+    override fun lines(market: MarketType, symbol: String): Flow<List<ChartLine>> =
+        dao.observeLines(market.key, symbol).map { rows -> rows.mapNotNull { it.toDomain() } }
+
+    override suspend fun save(line: ChartLine): Long {
+        val entity = line.toEntity()
+        // id 为 0 表示新建：autoGenerate 会补真实 id，需要回传给调用方
+        return if (line.id == 0L) dao.upsert(entity.copy(id = 0L)) else {
+            dao.upsert(entity)
+            line.id
+        }
+    }
+
+    override suspend fun delete(id: Long) = dao.delete(id)
+
+    override suspend fun deleteAll(market: MarketType, symbol: String) =
+        dao.deleteAll(market.key, symbol)
 }

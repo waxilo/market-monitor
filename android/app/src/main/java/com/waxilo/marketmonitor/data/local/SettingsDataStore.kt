@@ -51,6 +51,8 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             lastIntervalKey = this[Keys.INTERVAL] ?: d.lastIntervalKey,
             intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
+            maCustomPeriods = this[Keys.MA_CUSTOM]?.split(',')?.mapNotNull { it.trim().toIntOrNull() }
+                ?: d.maCustomPeriods,
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
             crosshairEnabled = this[Keys.CROSSHAIR] ?: d.crosshairEnabled,
@@ -85,6 +87,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.INTERVAL] = lastIntervalKey
         prefs[Keys.INTERVAL_LIST] = intervalKeys
         prefs[Keys.MA] = maPeriods.joinToString(",")
+        prefs[Keys.MA_CUSTOM] = maCustomPeriods.joinToString(",")
         prefs[Keys.BOLL] = bollEnabled
         prefs[Keys.PANE] = subPaneKeys
         prefs[Keys.CROSSHAIR] = crosshairEnabled
@@ -116,6 +119,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val INTERVAL = stringPreferencesKey("last_interval")
             val INTERVAL_LIST = stringPreferencesKey("interval_list")
             val MA = stringPreferencesKey("ma_periods")
+            val MA_CUSTOM = stringPreferencesKey("ma_custom_periods")
             val BOLL = booleanPreferencesKey("boll_enabled")
             val PANE = stringPreferencesKey("sub_pane")
             val CROSSHAIR = booleanPreferencesKey("crosshair")

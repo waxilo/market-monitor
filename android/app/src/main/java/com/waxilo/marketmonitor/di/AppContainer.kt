@@ -15,12 +15,14 @@ import com.waxilo.marketmonitor.data.remote.DefaultRestHosts
 import com.waxilo.marketmonitor.data.remote.GithubReleaseApi
 import com.waxilo.marketmonitor.data.remote.WebhookSender
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
+import com.waxilo.marketmonitor.data.repository.ChartLineRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.ApkInstaller
 import com.waxilo.marketmonitor.data.repository.MarketRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.UpdateCenter
 import com.waxilo.marketmonitor.data.repository.UpdateRepositoryImpl
 import com.waxilo.marketmonitor.data.repository.WatchlistRepositoryImpl
 import com.waxilo.marketmonitor.domain.repository.AlertRepository
+import com.waxilo.marketmonitor.domain.repository.ChartLineRepository
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.UpdateRepository
@@ -139,6 +141,9 @@ class AppContainer(private val context: Context) {
     suspend fun probeFuturesEndpoint(baseUrl: String): Long = marketApi.probeFutures(baseUrl)
 
     val alertRepository: AlertRepository by lazy { AlertRepositoryImpl(database.alertDao()) }
+
+    /** 全屏划线工具的视觉画线（水平线/直线），按标的存取。 */
+    val chartLineRepository: ChartLineRepository by lazy { ChartLineRepositoryImpl(database.chartLineDao()) }
 
     /** Webhook 端点含密钥，加密存储的初始化涉及主线程禁做的磁盘 IO，首次访问时构建。 */
     val webhookRepository: WebhookRepository by lazy { EncryptedWebhookStore.create(context) }

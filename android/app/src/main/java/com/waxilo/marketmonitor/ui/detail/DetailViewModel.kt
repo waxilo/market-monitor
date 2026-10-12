@@ -20,14 +20,17 @@ import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartViewport
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
+import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.chart.mainReadoutLineCount
+import com.waxilo.marketmonitor.ui.chart.toChartLine
 import com.waxilo.marketmonitor.ui.common.displayMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -59,6 +62,17 @@ val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.
 val MA_CHOICES: List<Int> = listOf(5, 10, 20, 30, 60)
 
 val DEFAULT_MA_PERIODS: List<Int> = listOf(5, 10, 30)
+
+/** 自定义均线周期的取值范围，与桌面端（lib/maPeriods.ts）同口径。 */
+const val MA_PERIOD_MIN = 1
+const val MA_PERIOD_MAX = 1000
+
+/** 自定义条数上限（预置五档不计）。再多就只是同色线堆在读数带上，没有信息量。 */
+const val MA_CUSTOM_LIMIT = 8
+
+/** 预置档 + 自定义目录合成指标条候选：越界与重复都挡掉，升序。 */
+fun maCatalog(custom: List<Int>): List<Int> =
+    (MA_CHOICES + custom.filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX }).distinct().sorted()
 
 /**
  * 详情页的一条统计。
@@ -147,6 +161,7 @@ class DetailViewModel(
     private val settings = container.settings
     private val alerts = container.alertRepository
     private val engine = container.alertEngine
+    private val chartLinesRepo = container.chartLineRepository
 
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
@@ -422,6 +437,8 @@ class DetailViewModel(
         val loadingMore: Boolean = false,
         val error: String? = null,
         val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
+        /** 自定义均线周期目录（预置档之外、由「＋」管理弹窗维护）。 */
+        val maCustomPeriods: List<Int> = emptyList(),
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -464,6 +481,7 @@ class DetailViewModel(
             intervals = data.intervals,
             candles = displayCandles(data, selected),
             maPeriods = data.maPeriods,
+            maChoices = maCatalog(data.maCustomPeriods),
             showBoll = data.showBoll,
             subPanes = data.subPanes,
             oiSupported = oiSupported,
@@ -580,9 +598,17 @@ class DetailViewModel(
             pricePan = saved.chartPricePan,
         )
         chart.update {
+            // 目录先归一化（越界/预置重复/超限都丢弃），选中集再按目录过滤：
+            // 不在目录里的选中项没有 chip，就成了图上撤不掉的死线
+            val custom = saved.maCustomPeriods
+                .filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX && it !in MA_CHOICES }
+                .distinct()
+                .sorted()
+                .take(MA_CUSTOM_LIMIT)
             it.copy(
                 // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
-                maPeriods = saved.maPeriods.sorted(),
+                maPeriods = saved.maPeriods.filter { p -> p in MA_CHOICES || p in custom }.sorted(),
+                maCustomPeriods = custom,
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
                 // 周期条则相反：解析不出任何一项就当没设过，回落到默认集
@@ -658,6 +684,29 @@ class DetailViewModel(
     }
 
     /**
+     * 保存「＋」管理弹窗产出的自定义均线目录：先归一化（范围/去重/去预置/超限截断），
+     * 再把这些周期从选中集里一并带走 —— 目录删了选中还留着，图上就是没有 chip 可撤的死线。
+     */
+    fun saveMaCustomPeriods(next: List<Int>) {
+        val custom = next
+            .filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX && it !in MA_CHOICES }
+            .distinct()
+            .sorted()
+            .take(MA_CUSTOM_LIMIT)
+        chart.update { current ->
+            current.copy(
+                maCustomPeriods = custom,
+                maPeriods = current.maPeriods.filter { it in MA_CHOICES || it in custom }.sorted(),
+            )
+        }
+        val savedCustom = chart.value.maCustomPeriods
+        val savedActive = chart.value.maPeriods
+        viewModelScope.launch {
+            settings.edit { it.copy(maPeriods = savedActive, maCustomPeriods = savedCustom) }
+        }
+    }
+
+    /**
      * 划线过程中每帧回调：只更新要画的那条线，不落库。
      *
      * [ruleId] 由图表判定按下时抓住的是哪条既有告警线（null = 新划的线），
@@ -705,6 +754,101 @@ class DetailViewModel(
                 throw e
             } catch (e: Exception) {
                 showNotice("删除失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    // ---- 视觉画线（水平线/直线，纯记号不告警） ----
+
+    /** 本标的已落库的视觉画线。 */
+    val chartLines: StateFlow<List<ChartLine>> = chartLinesRepo.lines(id.market, id.symbol)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * 正在拖动的那一笔画线草稿（已换算成可落库形态，id 为 0 = 新建中）。
+     * 与 alertDrag 同理放 ViewModel：全屏旋屏重建组合，草稿不能丢。
+     */
+    private val drawDraft = MutableStateFlow<ChartLine?>(null)
+    val drawDraftLine: StateFlow<ChartLine?> = drawDraft.asStateFlow()
+
+    /**
+     * 画线拖动中每帧回调：把「分数下标锚点」按**当前**展示序列折算成绝对时间戳存草稿，
+     * 不落库。存时间戳而不是下标：草稿期间翻页会前插蜡烛、下标整体平移，
+     * 时间戳不受影响，绘制端每帧再按最新序列折回去，线不会跟着历史跑。
+     */
+    fun dragDrawLine(guide: DrawGuideLine) {
+        val existing = if (guide.id != 0L) chartLines.value.firstOrNull { it.id == guide.id } else null
+        drawDraft.value = guide.toChartLine(
+            market = id.market,
+            symbol = id.symbol,
+            candles = displayCandles(chart.value, interval.value),
+            interval = interval.value,
+            createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+        )
+    }
+
+    /** 松手：草稿落库（id 为 0 新建，其余原位更新）。失败保留草稿，可换个位置再试。 */
+    fun commitDrawLine() {
+        val draft = drawDraft.value ?: return
+        viewModelScope.launch {
+            try {
+                chartLinesRepo.save(draft)
+                drawDraft.value = null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("画线保存失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 拖进垃圾桶 / 直线两敲落得太近的撤销。
+     *
+     * lineId 为 0 = 只是放弃手上的草稿；其余删掉落库的那条。
+     */
+    fun deleteDrawLine(lineId: Long) {
+        drawDraft.value = null
+        if (lineId == 0L) return
+        viewModelScope.launch {
+            try {
+                chartLinesRepo.delete(lineId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("删除画线失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 清空本标的图上**全部划线**：告警线（连带其预警规则）+ 全部水平线 / 直线。
+     *
+     * 三类线在存储上是两拨，这里各走各的权威路径，不新造删法：
+     * · 告警线由预警规则派生（见 [alertLines]），删线 = 删规则，与预警列表里的删除同一个方法；
+     * · 水平线 / 直线在 chart_line 表里，走 [ChartLineRepository.deleteAll] 一次删净；
+     * · 拖动中的草稿与告警拖拽是「还没落库的那一笔」，一并清掉，否则清空后手上还留着半条。
+     *
+     * 口径与 [alertLines] 严格对齐：图上凡是**有价位**的规则都会画成一条线，所以这里就按
+     * `threshold != null` 取 —— 手动在预警页建的价位预警同样在图上有一条线，也一并清掉。
+     * 只删本标的（规则表、画线表都按 market + symbol 收窄），别的标的不受影响。
+     *
+     * 不在这里问确认：调用方负责弹确认框并把「会删掉几条」写进去 —— 数量只有在那边
+     * 同时拿得到 alertLines 与 chartLines 时才算得准。
+     */
+    fun clearAllLines() {
+        viewModelScope.launch {
+            try {
+                val rules = symbolRules.value.filter { it.threshold != null }
+                rules.forEach { alerts.deleteRule(it.id) }
+                chartLinesRepo.deleteAll(id.market, id.symbol)
+                drawDraft.value = null
+                alertDrag.value = null
+                showNotice("已清空图上的全部划线")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("清空划线失败：${e.displayMessage()}")
             }
         }
     }

@@ -255,3 +255,25 @@ interface AlertDao {
     @Query("UPDATE indicator_line SET alertMode = :mode WHERE id = :id")
     suspend fun setIndicatorLineAlertMode(id: Long, mode: String)
 }
+
+@Dao
+interface ChartLineDao {
+
+    @Query("SELECT * FROM chart_line WHERE market = :market AND symbol = :symbol ORDER BY createdAt ASC")
+    fun observeLines(market: String, symbol: String): Flow<List<ChartLineEntity>>
+
+    @Upsert
+    suspend fun upsert(line: ChartLineEntity): Long
+
+    @Query("DELETE FROM chart_line WHERE id = :id")
+    suspend fun delete(id: Long)
+
+    /**
+     * 清空指定标的的全部画线。
+     *
+     * 一次语句删完而不是让上层逐条 delete(id)：清空是「一整批消失」的语义，
+     * 逐条删在中途失败时会留下半清空的图。
+     */
+    @Query("DELETE FROM chart_line WHERE market = :market AND symbol = :symbol")
+    suspend fun deleteAll(market: String, symbol: String)
+}

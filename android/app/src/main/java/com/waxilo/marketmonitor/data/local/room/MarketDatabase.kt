@@ -21,8 +21,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AlertStateEntity::class,
         AlertLogEntity::class,
         IndicatorLineEntity::class,
+        ChartLineEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class MarketDatabase : RoomDatabase() {
@@ -32,6 +33,7 @@ abstract class MarketDatabase : RoomDatabase() {
     abstract fun klineDao(): KlineDao
     abstract fun watchlistDao(): WatchlistDao
     abstract fun alertDao(): AlertDao
+    abstract fun chartLineDao(): ChartLineDao
 
     companion object {
         const val NAME = "market-monitor.db"
@@ -223,6 +225,31 @@ abstract class MarketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v8→v9：全屏划线工具的纯视觉画线（水平线/直线）落库，竖屏也显示。
+         * 直线存两个 (时间, 价位) 锚点，与桌面端趋势线同构。
+         */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `chart_line` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `market` TEXT NOT NULL,
+                        `symbol` TEXT NOT NULL,
+                        `kind` TEXT NOT NULL,
+                        `price` TEXT,
+                        `t1` INTEGER,
+                        `p1` TEXT,
+                        `t2` INTEGER,
+                        `p2` TEXT,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """
+                )
+            }
+        }
+
         fun create(context: Context): MarketDatabase =
             Room.databaseBuilder(context.applicationContext, MarketDatabase::class.java, NAME)
                 .addMigrations(
@@ -233,6 +260,7 @@ abstract class MarketDatabase : RoomDatabase() {
                     MIGRATION_5_6,
                     MIGRATION_6_7,
                     MIGRATION_7_8,
+                    MIGRATION_8_9,
                 )
                 .build()
     }

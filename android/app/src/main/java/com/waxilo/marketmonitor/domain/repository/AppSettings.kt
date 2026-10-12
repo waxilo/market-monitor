@@ -22,8 +22,13 @@ data class AppSettings(
      * 空串 = 用 CandleInterval.quickPickPresets 默认集。格式同 [subPaneKeys]。
      */
     val intervalKeys: String = "",
-    /** 主图均线周期。 */
+    /** 主图均线周期（选中项）。 */
     val maPeriods: List<Int> = listOf(5, 10, 30),
+    /**
+     * 自定义均线周期目录（选中之外的可选项，与预置五档分开放）。
+     * 只存非预置值；预置档不可删，不必随目录冗余。
+     */
+    val maCustomPeriods: List<Int> = emptyList(),
     /** 是否叠加布林带。 */
     val bollEnabled: Boolean = false,
     /**

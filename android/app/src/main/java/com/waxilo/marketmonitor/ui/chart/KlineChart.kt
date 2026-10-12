@@ -63,10 +63,13 @@ import androidx.compose.ui.unit.sp
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.Kline
+import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.closeDouble
 import com.waxilo.marketmonitor.domain.model.highDouble
 import com.waxilo.marketmonitor.domain.model.lowDouble
 import com.waxilo.marketmonitor.domain.model.openDouble
+import com.waxilo.marketmonitor.domain.repository.ChartLine
+import com.waxilo.marketmonitor.domain.repository.ChartLineKind
 import com.waxilo.marketmonitor.ui.theme.ChartLineColors
 import com.waxilo.marketmonitor.ui.theme.DownRed
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -79,6 +82,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToLong
 
 /**
  * 图上的一条告警价线。
@@ -113,6 +117,125 @@ data class IndicatorGuideLine(val lineId: Long, val label: String, val values: D
  * [lineId] 只供调用方过滤归属，图表本身不解释。
  */
 data class BandGuideLine(val lineId: Long, val price: Double)
+
+/**
+ * 全屏右侧竖栏选中的划线工具。
+ *
+ * 一次只激活一种：单指手势在同一时刻只能有一种语义（拖价格线 / 拖水平线 / 落直线锚点），
+ * 这与当年「划线开关」一个布尔的处境相同，只是把「划什么」从隐式变成显式单选。
+ *
+ * [ERASE] 是同一组里的第四枚：它不划线，而是**点线即删**（告警线 / 水平线 / 直线通吃）。
+ * 原先删除只有「把线拖到右上角垃圾桶」一条路 —— 那要求用户先知道有这回事、还得能精准拖到
+ * 一个角落，实际反馈是「划的线无法删除」（2026-10-12）。点一枚垃圾桶再点线是所有人都会的
+ * 手势，且与另外三枚共享同一套单选/自动收起规则，不需要第二套交互模型。
+ */
+enum class DrawTool { NONE, ALERT, HORIZONTAL, TREND, ERASE }
+
+/**
+ * 直线的一个端点：**分数蜡烛下标**锚 + 价格原始值。
+ *
+ * 存下标而不是像素 —— 下标随视窗平移/缩放自然落位（换算链与蜡烛同一个 `xOf`），
+ * 时间戳→下标的折算由调用方按首根蜡烛开盘时间与周期完成（K 线是等间隔序列）。
+ */
+data class TrendAnchor(val index: Double, val price: Double)
+
+/**
+ * 图上的一条纯视觉画线（划线工具里的「水平线/直线」），由调用方折算成位置语言后喂给图表。
+ *
+ * [id] 为 0 表示**正在新建、还没落库**的那根（与 [AlertPriceLine.ruleId] 的 null 同语义，
+ * 但这里统一用 0 —— 三种线型共用一条回调链，可空 Long 反而别扭）。
+ * 图表只管画出来、把手势落点报给调用方落库，与告警线一样不承载业务。
+ */
+data class DrawGuideLine(
+    val id: Long,
+    val kind: ChartLineKind,
+    /** 水平线价位；直线为 NaN。 */
+    val price: Double = Double.NaN,
+    val anchor1: TrendAnchor? = null,
+    val anchor2: TrendAnchor? = null,
+    val dragging: Boolean = false,
+)
+
+/**
+ * 落库画线 → 图表位置语言：绝对时间戳按「首根蜡烛开盘时间 + 周期」折回分数下标。
+ *
+ * 每次现算、不缓存：序列头部一变（翻页前插历史、切周期）下标就要整体重折 ——
+ * 这正是持久化只存时间戳的原因。序列为空或数据缺项返回 null，绘制端跳过该条。
+ */
+fun ChartLine.toGuideLine(candles: List<Kline>, interval: CandleInterval): DrawGuideLine? {
+    val first = candles.firstOrNull()?.openTime ?: return null
+    val stepMs = interval.minutes * 60_000L
+    if (stepMs <= 0L) return null
+    fun indexAt(t: Long): Double = (t - first).toDouble() / stepMs
+    return when (kind) {
+        ChartLineKind.HORIZONTAL -> {
+            val p = price ?: return null
+            DrawGuideLine(id = id, kind = kind, price = p.toDouble())
+        }
+
+        ChartLineKind.TREND -> {
+            val t1 = t1 ?: return null
+            val v1 = p1 ?: return null
+            val t2 = t2 ?: return null
+            val v2 = p2 ?: return null
+            DrawGuideLine(
+                id = id,
+                kind = kind,
+                anchor1 = TrendAnchor(indexAt(t1), v1.toDouble()),
+                anchor2 = TrendAnchor(indexAt(t2), v2.toDouble()),
+            )
+        }
+    }
+}
+
+/**
+ * 拖动预览 → 可落库画线（[toGuideLine] 的逆链）。
+ *
+ * 下标当场折算成**绝对时间戳**后就与「当时那份序列」脱钩：草稿期间翻页前插历史，
+ * 也不会把线拖歪。序列未到齐（空）或落点非有限时返回 null（丢弃这一帧）。
+ */
+fun DrawGuideLine.toChartLine(
+    market: MarketType,
+    symbol: String,
+    candles: List<Kline>,
+    interval: CandleInterval,
+    createdAt: Long,
+): ChartLine? {
+    val first = candles.firstOrNull()?.openTime ?: return null
+    val stepMs = interval.minutes * 60_000L
+    if (stepMs <= 0L) return null
+    fun timeAt(index: Double): Long = first + (index * stepMs).roundToLong()
+    return when (kind) {
+        ChartLineKind.HORIZONTAL -> {
+            if (!price.isFinite()) return null
+            ChartLine(
+                id = id,
+                market = market,
+                symbol = symbol,
+                kind = kind,
+                price = price.toBigDecimal(),
+                createdAt = createdAt,
+            )
+        }
+
+        ChartLineKind.TREND -> {
+            val a1 = anchor1 ?: return null
+            val a2 = anchor2 ?: return null
+            if (!a1.price.isFinite() || !a2.price.isFinite()) return null
+            ChartLine(
+                id = id,
+                market = market,
+                symbol = symbol,
+                kind = kind,
+                t1 = timeAt(a1.index),
+                p1 = a1.price.toBigDecimal(),
+                t2 = timeAt(a2.index),
+                p2 = a2.price.toBigDecimal(),
+                createdAt = createdAt,
+            )
+        }
+    }
+}
 
 /**
  * 图表左下角的角标按钮（进/出全屏）。放在左下而不是左上：左上角是指标读数带
@@ -192,10 +315,25 @@ fun KlineChart(
      */
     bandGuides: List<BandGuideLine> = emptyList(),
     /**
-     * 划线模式下：单指纵向拖动改为移动告警线，**不再**平移价格刻度，也不会出十字光标。
+     * 当前激活的划线工具（全屏右侧竖栏单选）。非 NONE 时：单指纵向拖动改为拖水平/告警线，
+     * **不再**平移价格刻度，也不会出十字光标；直线工具下单指负责落锚与整体平移。
      * 双指缩放照旧（画线时同样需要能缩放看细节）。
      */
-    alertLineMode: Boolean = false,
+    drawTool: DrawTool = DrawTool.NONE,
+    /**
+     * 已落库（或正在新建预览）的视觉画线，由调用方按标的过滤并折算成下标/价格语言。
+     * 显隐与 [alertLinesVisible] 那只眼睛同步；NONE 工具下只显不可编（竖屏正是这种喂法）。
+     */
+    drawLines: List<DrawGuideLine> = emptyList(),
+    /**
+     * 划线工具（水平线/直线）拖动过程中每帧回调整根预览线（[DrawGuideLine.dragging] 恒为 true，
+     * 新建的 id 为 0）。调用方把它并进 [drawLines] 显示，并在提交时读出落库。
+     */
+    onDrawLineDrag: (DrawGuideLine) -> Unit = {},
+    /** 手指离开：调用方把当前预览线落库（id 为 0 则新建）。 */
+    onDrawLineCommit: (Long) -> Unit = {},
+    /** 把线拖到右上角垃圾桶上松手：调用方删除该 id（id 为 0 = 放弃手上一笔未落库的新线）。 */
+    onDrawLineDelete: (Long) -> Unit = {},
     /**
      * 划线是否画在图上（主图右下角那只眼睛控制）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
@@ -256,8 +394,8 @@ fun KlineChart(
     var crosshair by remember(symbolKey, interval.storageKey) { mutableStateOf<Crosshair?>(null) }
     // 下标变化就同步给调用方的 K 线详情小条（长按换根、被其他操作清掉都走这里）
     LaunchedEffect(crosshair?.index) { onCrosshairIndexChange(crosshair?.index) }
-    // 进划线模式清掉遗留的十字光标：那场手势已经是「拖线」，读数标留着会跟线上的价位标抢位置
-    LaunchedEffect(alertLineMode) { if (alertLineMode) crosshair = null }
+    // 进划线工具清掉遗留的十字光标：那场手势已经是「拖线/落锚」，读数标留着会跟线上的价位标抢位置
+    LaunchedEffect(drawTool) { if (drawTool != DrawTool.NONE) crosshair = null }
     var oldestRequested by remember { mutableLongStateOf(-1L) }
     // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
     val measurer = rememberTextMeasurer()
@@ -356,6 +494,18 @@ fun KlineChart(
     val alertCommit by rememberUpdatedState(onAlertLineCommit)
     val alertDelete by rememberUpdatedState(onAlertLineDelete)
     val liveAlertLines by rememberUpdatedState(alertLines)
+    val drawDrag by rememberUpdatedState(onDrawLineDrag)
+    val drawCommit by rememberUpdatedState(onDrawLineCommit)
+    val drawDelete by rememberUpdatedState(onDrawLineDelete)
+    val liveDrawLines by rememberUpdatedState(drawLines)
+    /**
+     * 直线「敲第一下」落下的锚点。**图表内部过程态**：敲完第一下先只亮一个点，
+     * 第二次按下拖动出预览、抬手才成交 —— 与 priceBase 一样靠 remember 常驻、
+     * 手势协程读写、绘制端跟读。换工具/换标的/换周期即作废（key 与 pointerInput 同步）。
+     */
+    var trendSeed by remember(drawTool, symbolKey, interval.storageKey) {
+        mutableStateOf<TrendAnchor?>(null)
+    }
     /**
      * 绘图区几何、根数、序列与自动量程同样必须读**实时**值。
      *
@@ -366,6 +516,8 @@ fun KlineChart(
      * 改走 `rememberUpdatedState` 后，key 只剩「划线模式」这个只由按钮切换的开关。
      */
     val liveGeo by rememberUpdatedState(geo)
+    /** 直线锚点的「下标↔像素」换算离不开窗口起点与槽宽，同样只能读实时值。 */
+    val livePlot by rememberUpdatedState(plot)
     val liveBarCount by rememberUpdatedState(barCount)
     val liveSeries by rememberUpdatedState(series)
     val liveAutoRange by rememberUpdatedState(autoRange)
@@ -404,6 +556,86 @@ fun KlineChart(
     }
     val alertGrabPx = with(density) { ALERT_GRAB_WIDTH.toPx() }
 
+    /** 已有水平线的纵向像素落点，供手势就近抓取（与 [alertAnchors] 同一条换算链）。 */
+    fun hAnchors(): List<AlertLineAnchor> {
+        val g = liveGeo
+        val range = alertRange
+        return liveDrawLines.filter { it.kind == ChartLineKind.HORIZONTAL }.map { line ->
+            AlertLineAnchor(line.id, g.yOf(range.toFraction(line.price), g.mainTopPx, g.mainHeightPx))
+        }
+    }
+
+    /** 落点 y 像素对应的价格原始值（告警线/水平线拖动与直线端点换算共用）。 */
+    fun pixelToPrice(yPx: Float): Double {
+        val g = liveGeo
+        val fraction = (yPx - g.mainTopPx) / g.mainHeightPx.coerceAtLeast(1f)
+        return alertRange.fromFraction(fraction)
+    }
+
+    /** 直线锚点（下标+价格）→ 像素：与蜡烛同一个 `xOf` 链，平移缩放后自然落位。 */
+    fun anchorPx(anchor: TrendAnchor): Offset {
+        val g = liveGeo
+        val p = livePlot
+        return Offset(
+            ((anchor.index - p.start).toFloat() + 0.5f) * g.slot(p.visibleBars),
+            g.yOf(alertRange.toFraction(anchor.price), g.mainTopPx, g.mainHeightPx),
+        )
+    }
+
+    /** 落点 x 像素对应的分数蜡烛下标（[anchorPx] 的逆链）。 */
+    fun indexAt(xPx: Float): Double {
+        val g = liveGeo
+        val p = livePlot
+        val slot = g.slot(p.visibleBars)
+        return if (slot > 0f) xPx / slot + p.start.toDouble() - 0.5 else Double.NaN
+    }
+
+    /** 已有直线的两端像素落点，供手势就近抓取与整体平移。 */
+    fun trendPixels(): List<TrendLinePixels> =
+        liveDrawLines.mapNotNull { line ->
+            val a1 = line.anchor1
+            val a2 = line.anchor2
+            if (line.kind != ChartLineKind.TREND || a1 == null || a2 == null) null
+            else TrendLinePixels(line.id, anchorPx(a1), anchorPx(a2))
+        }
+
+    /**
+     * 垃圾桶模式下，落点 [point] 点中的是哪条线。
+     *
+     * 三类线**放在一起比距离**，取最近的一条 —— 图上它们本来就重叠（水平线与告警线只差一个
+     * 价位、直线能从任何东西上穿过去），分类各判一次再按优先级挑，会出现「点着看得见的那条、
+     * 删掉的却是它底下那条」。距离口径随线型：水平类是纵向距离，直线是点到线段距离
+     * （与拖拽抓取同一个口径，[closestTrend] 复用）。
+     *
+     * 容差沿用拖拽的抓取半径（[ALERT_GRAB_WIDTH]，24dp）：比线本身的可视粗细宽得多，
+     * 手指按不准也能中，而互相遮挡时仍由「谁更近」决出，不至于误删。
+     */
+    fun eraseHitAt(point: Offset): EraseHit? {
+        val g = liveGeo
+        if (!g.isUsable) return null
+        val range = alertRange
+        var best: EraseHit? = null
+        fun consider(hit: EraseHit) {
+            if (hit.distance <= alertGrabPx && hit.distance < (best?.distance ?: Float.MAX_VALUE)) {
+                best = hit
+            }
+        }
+        liveAlertLines.forEach { line ->
+            val ruleId = line.ruleId ?: return@forEach
+            val y = g.yOf(range.toFraction(line.price), g.mainTopPx, g.mainHeightPx)
+            consider(EraseHit.Alert(ruleId, abs(y - point.y)))
+        }
+        liveDrawLines.forEach { line ->
+            if (line.kind != ChartLineKind.HORIZONTAL || !line.price.isFinite()) return@forEach
+            val y = g.yOf(range.toFraction(line.price), g.mainTopPx, g.mainHeightPx)
+            consider(EraseHit.Draw(line.id, abs(y - point.y)))
+        }
+        trendPixels().closestTrend(point, alertGrabPx)?.let { t ->
+            consider(EraseHit.Draw(t.id, distanceToSegment(point, t.p1, t.p2)))
+        }
+        return best
+    }
+
     /**
      * 划线模式下，手指正把线悬在右上角垃圾桶上方 —— 用来高亮垃圾桶给反馈。
      * 与 priceBase 等一样是「手势期间写、重组读」的内部态，不进气势 key，靠 remember 常驻。
@@ -422,7 +654,9 @@ fun KlineChart(
      * 读实时的 [liveGeo]（本函数被手势协程捕获，期间量程/尺寸一直在变）。
      */
     fun alertDeleteRect(): Rect? {
-        if (!alertLineMode) return null
+        // 垃圾桶模式不拖线，右上角那个落点没有存在意义（showTrash 也已排除）：
+        // 这里一并返回 null，免得命中矩形还在、拖动却已无人消费。
+        if (drawTool == DrawTool.NONE || drawTool == DrawTool.ERASE) return null
         val plot = liveGeo
         if (!plot.isUsable) return null
         val right = plot.plotWidthPx - trashInsetPx
@@ -434,9 +668,39 @@ fun KlineChart(
      * 这一帧要不要画线（连同线右侧的价位标签）。
      *
      * 划线模式下无条件为真：眼睛关的是「平时嫌线挡着看形态」，不该顺手把要拖的那根也藏掉，
-     * 拖一根看不见的线等于盲操作。
+     * 拖一根看不见的线等于盲操作。垃圾桶模式同理 —— 线不可见就无从点它。
      */
-    val alertLinesShown = alertLinesVisible || alertLineMode
+    val alertLinesShown = alertLinesVisible || drawTool == DrawTool.ALERT || drawTool == DrawTool.ERASE
+
+    /**
+     * 这一帧画哪些视觉画线：
+     * · 告警工具下全不画 —— 那时单指属于告警线，图上再叠一层拖不动的画线只会引人去拖它
+     *   （与指标参考线在告警模式下让位的道理相同）；
+     * · 水平线/直线工具下只画**同型**的线 —— 拖走的是眼前够得着的那种，另一种留着徒增歧义；
+     * · 垃圾桶模式下**全画**（不看同型、也不看那只眼睛）—— 能点的必须都看得见，
+     *   藏起来一半等于「明明有这条线却删不掉」；
+     * · 平时（NONE，含竖屏）随眼睛显隐、只显不可编。
+     */
+    val visibleDrawLines = when (drawTool) {
+        DrawTool.ALERT -> emptyList()
+        DrawTool.NONE -> if (alertLinesVisible) drawLines else emptyList()
+        DrawTool.ERASE -> drawLines
+        DrawTool.HORIZONTAL -> drawLines.filter { it.kind == ChartLineKind.HORIZONTAL }
+        DrawTool.TREND -> drawLines.filter { it.kind == ChartLineKind.TREND }
+    }
+
+    /**
+     * 这一帧要不要摆出删除垃圾桶（见下方渲染处的说明）。
+     * 工具激活 + 有同类线可删（含手上正在拖的那根）才画。
+     * 垃圾桶模式例外：它删的是「点中的那条线」，右上角那个落点与它无关。
+     */
+    val showTrash = drawTool != DrawTool.NONE && drawTool != DrawTool.ERASE &&
+        (alertLines.any { it.dragging } || visibleDrawLines.any { it.dragging } ||
+            when (drawTool) {
+                DrawTool.ALERT -> alertLines.isNotEmpty()
+                DrawTool.HORIZONTAL, DrawTool.TREND -> visibleDrawLines.isNotEmpty()
+                DrawTool.NONE, DrawTool.ERASE -> false
+            })
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
@@ -459,27 +723,81 @@ fun KlineChart(
                 // state**，渲染读的却是新 state —— 表现为「切过周期的图十字光标不出来、
                 // 捏合时价格基准冻结失效（量程逐帧抖）」。视窗与纵向刻度**不在此列**：
                 // 它们是全局视角偏好，不挂序列 key（见上），委托永远指向活的 state。
-                .pointerInput(alertLineMode, symbolKey, interval.storageKey) {
+                .pointerInput(drawTool, symbolKey, interval.storageKey) {
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
                         geo = { liveGeo },
-                        alertLineMode = alertLineMode,
-                        alertLineAnchors = ::alertAnchors,
-                        alertGrabPx = alertGrabPx,
-                        alertDeleteRect = ::alertDeleteRect,
-                        onAlertLineDrag = { id, yPx ->
-                            val plot = liveGeo
-                            val fraction =
-                                (yPx - plot.mainTopPx) / plot.mainHeightPx.coerceAtLeast(1f)
+                        drawTool = drawTool,
+                        horizontalAnchors = {
+                            when (drawTool) {
+                                DrawTool.ALERT -> alertAnchors()
+                                DrawTool.HORIZONTAL -> hAnchors()
+                                else -> emptyList()
+                            }
+                        },
+                        grabPx = alertGrabPx,
+                        deleteRect = ::alertDeleteRect,
+                        onHorizontalDrag = { id, yPx ->
                             // 量程是变动的（缩放/平移），必须走 rememberUpdatedState 读实时值，
                             // 否则这个回调会拿协程启动那一刻的旧量程换算，画出来的线跑偏
-                            val price = alertRange.fromFraction(fraction)
-                            if (price.isFinite()) alertDrag(id, price)
+                            val price = pixelToPrice(yPx)
+                            if (price.isFinite()) {
+                                when (drawTool) {
+                                    DrawTool.ALERT -> alertDrag(id, price)
+                                    DrawTool.HORIZONTAL -> drawDrag(
+                                        DrawGuideLine(
+                                            id = id ?: 0L,
+                                            kind = ChartLineKind.HORIZONTAL,
+                                            price = price,
+                                            dragging = true,
+                                        ),
+                                    )
+                                    else -> Unit
+                                }
+                            }
                         },
-                        onAlertLineCommit = { id -> alertCommit(id) },
-                        onAlertLineDelete = { id -> alertDelete(id) },
-                        onAlertLineOverTrash = { hot -> alertTrashHot = hot },
+                        onHorizontalCommit = { id ->
+                            when (drawTool) {
+                                DrawTool.ALERT -> alertCommit(id)
+                                DrawTool.HORIZONTAL -> drawCommit(id ?: 0L)
+                                else -> Unit
+                            }
+                        },
+                        onHorizontalDelete = { id ->
+                            when (drawTool) {
+                                DrawTool.ALERT -> alertDelete(id)
+                                DrawTool.HORIZONTAL -> drawDelete(id ?: 0L)
+                                else -> Unit
+                            }
+                        },
+                        onOverTrash = { hot -> alertTrashHot = hot },
+                        eraseHitAt = ::eraseHitAt,
+                        // 告警线走规则那条回调（顺带清掉它的通知配置），画线走 chart_line 那条
+                        onEraseAlertLine = { id -> alertDelete(id) },
+                        onEraseDrawLine = { id -> drawDelete(id) },
+                        trendPixels = ::trendPixels,
+                        trendAnchorAt = { xPx, yPx ->
+                            val index = indexAt(xPx)
+                            val price = pixelToPrice(yPx)
+                            if (index.isFinite() && price.isFinite()) TrendAnchor(index, price) else null
+                        },
+                        trendAnchorPx = ::anchorPx,
+                        onTrendSeed = { anchor -> trendSeed = anchor },
+                        onTrendSeedGet = { trendSeed },
+                        onTrendDrag = { id, a1, a2 ->
+                            drawDrag(
+                                DrawGuideLine(
+                                    id = id,
+                                    kind = ChartLineKind.TREND,
+                                    anchor1 = a1,
+                                    anchor2 = a2,
+                                    dragging = true,
+                                ),
+                            )
+                        },
+                        onTrendCommit = { id -> drawCommit(id) },
+                        onTrendDelete = { id -> drawDelete(id) },
                         onGestureStart = {
                             // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
                             priceBase = liveAutoRange
@@ -554,11 +872,20 @@ fun KlineChart(
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
                 // 指标参考线先画：它只是背景参照，告警线压上来时以告警线为准
-                if (alertLinesVisible && !alertLineMode) {
+                if (alertLinesVisible && drawTool == DrawTool.NONE) {
                     drawIndicatorGuides(indicatorGuides, series, plot, geo, palette, mainRange)
                     drawBandGuides(bandGuides, geo, palette, mainRange)
                 }
                 if (alertLinesShown) drawAlertLines(alertLines, geo, palette, mainRange)
+                // 视觉画线压在告警线之后、蜡烛之上同区：它是用户手写的「记号」，
+                // 被预警虚线盖住时无所谓，反过来虚线该让位给刚拖的实线
+                if (visibleDrawLines.isNotEmpty()) {
+                    drawDrawLines(visibleDrawLines, geo, palette, mainRange, ::anchorPx)
+                }
+                // 直线落第一下的种子点：第一次敲完先亮这个点，第二次按下拖出线、抬手成交
+                trendSeed
+                    ?.takeIf { drawTool == DrawTool.TREND }
+                    ?.let { drawTrendSeedDot(anchorPx(it), palette) }
             }
             series.subPanes.forEachIndexed { index, pane ->
                 clipRect(
@@ -617,6 +944,19 @@ fun KlineChart(
                         range = mainRange,
                         geo = geo,
                         density = density,
+                        modifier = Modifier.align(Alignment.TopStart),
+                    )
+                }
+            }
+            // 水平画线也要给出价位：与告警线同一只右端标，落点全凭感觉是划不准的
+            visibleDrawLines.forEach { line ->
+                if (line.kind == ChartLineKind.HORIZONTAL && line.price.isFinite()) {
+                    AlertLinePriceBadge(
+                        price = line.price,
+                        range = mainRange,
+                        geo = geo,
+                        density = density,
+                        tickSize = tickSize,
                         modifier = Modifier.align(Alignment.TopStart),
                     )
                 }
@@ -721,13 +1061,18 @@ fun KlineChart(
                 )
             }
 
-            // ---- 划线模式的删除垃圾桶（绘图区右上角，仅拖动时浮现） ----
-            // 只在「手上有正在拖的线」时出现：不拖线时它是不可用的，常驻只会白占绘图区一角。
+            // ---- 划线模式的删除垃圾桶（绘图区右上角） ----
             // 定位到**绘图区**右上角而不是整块画布（画布右上角会盖住指标读数带），
             // 且与 alertDeleteRect() 严格同框，否则会出现「看着命中、松手却没删」。
             // 它不是可点按钮而是**落点**：
             // 不挂 clickable，指针事件穿透到下层 Canvas，由手势判定「线拖进来松手 = 删除」。
-            if (alertLineMode && alertLines.any { it.dragging }) {
+            //
+            // 出现时机从「仅拖动时浮现」改成「工具激活且有同类线可删时常驻」（2026-10-12 用户反馈
+            // 「划的线无法删除」）：只在拖起来之后才出现的落点等于没有落点 —— 用户得先知道
+            // 「拖到右上角垃圾桶删除」才敢去拖，而垃圾桶本身是他唯一能看见的提示。现在选中任意
+            // 划线工具，右上角就摆着这个垃圾桶，底部提示再写着「拖到右上角垃圾桶删除」，链路才闭合。
+            // 没有同类线可删时仍不画：空图上一个删不掉的垃圾桶只会让人去点它。
+            if (showTrash) {
                 val colors = MarketTheme.colors
                 val rect = alertDeleteRect()
                 if (rect != null) {
@@ -741,7 +1086,7 @@ fun KlineChart(
                             .size(TRASH_BUTTON_SIZE)
                             .clip(Radius.fullShape)
                             .background(if (alertTrashHot) DownRed else colors.washStrong)
-                            .semantics { contentDescription = "拖动告警线到此删除" },
+                            .semantics { contentDescription = "拖线到此删除" },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -761,8 +1106,9 @@ fun KlineChart(
             // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
             // 它**要**挂 clickable（与垃圾桶相反）：点它就该切显隐，
             // 不该同时被下层画布当成一次拖动。
-            if (onToggleAlertLines != null && !alertLineMode &&
-                (alertLines.isNotEmpty() || indicatorGuides.isNotEmpty() || bandGuides.isNotEmpty())
+            if (onToggleAlertLines != null && drawTool == DrawTool.NONE &&
+                (alertLines.isNotEmpty() || indicatorGuides.isNotEmpty() ||
+                    bandGuides.isNotEmpty() || drawLines.isNotEmpty())
             ) {
                 val colors = MarketTheme.colors
                 Box(
@@ -1319,6 +1665,64 @@ private fun DrawScope.drawAlertLines(
             pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
         )
     }
+}
+
+private fun DrawScope.drawDrawLines(
+    lines: List<DrawGuideLine>,
+    geo: ChartGeo,
+    palette: ChartPalette,
+    range: ValueRange,
+    anchorPx: (TrendAnchor) -> Offset,
+) {
+    lines.forEach { line ->
+        val color = palette.crosshair.copy(alpha = if (line.dragging) 1f else DRAW_LINE_ALPHA)
+        val width = if (line.dragging) 3f else 2f
+        when (line.kind) {
+            ChartLineKind.HORIZONTAL -> {
+                if (!line.price.isFinite()) return@forEach
+                val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
+                if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+                drawLine(color, Offset(0f, y), Offset(geo.plotWidthPx, y), width)
+            }
+
+            ChartLineKind.TREND -> {
+                val a1 = line.anchor1 ?: return@forEach
+                val a2 = line.anchor2 ?: return@forEach
+                val p1 = anchorPx(a1)
+                val p2 = anchorPx(a2)
+                if (!p1.x.isFinite() || !p1.y.isFinite() || !p2.x.isFinite() || !p2.y.isFinite()) {
+                    return@forEach
+                }
+                val dx = p2.x - p1.x
+                if (abs(dx) < 0.5f) {
+                    // 近似竖直的直线：沿 x 画满绘图区高度（斜率除法在这种角度会炸）
+                    drawLine(
+                        color,
+                        Offset(p1.x, geo.plotTopPx),
+                        Offset(p1.x, geo.plotHeightPx),
+                        width,
+                    )
+                } else {
+                    // 两点定线后**向绘图区左右沿延长**：趋势线看的是走向，不该断在锚点上
+                    val m = (p2.y - p1.y) / dx
+                    val y0 = p1.y - m * p1.x
+                    val yW = y0 + m * geo.plotWidthPx
+                    if (y0.isFinite() && yW.isFinite()) {
+                        drawLine(color, Offset(0f, y0), Offset(geo.plotWidthPx, yW), width)
+                    }
+                }
+                // 锚点实心小圆：直线被延长后端点不在线段可见范围内，不点个点抓取没有着落
+                drawCircle(color, radius = TREND_ANCHOR_DOT.toPx(), center = p1)
+                drawCircle(color, radius = TREND_ANCHOR_DOT.toPx(), center = p2)
+            }
+        }
+    }
+}
+
+/** 直线工具落第一下的种子点：比锚点略大，提示「这里已经敲过一下了」。 */
+private fun DrawScope.drawTrendSeedDot(center: Offset, palette: ChartPalette) {
+    if (!center.x.isFinite() || !center.y.isFinite()) return
+    drawCircle(palette.crosshair.copy(alpha = 0.9f), radius = TREND_SEED_DOT.toPx(), center = center)
 }
 
 private fun DrawScope.drawSubPane(
@@ -1928,8 +2332,10 @@ private fun IndicatorReadout(
  * 单指的方向判定加了 [DIRECTION_LOCK_PX] 的锁定阈值：手指刚按下时是斜着动的，
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
  *
- * 划线模式（[alertLineMode]）下单指纵向改判为「拖告警线」：既不平移刻度也不出十字光标，
- * **且不需要长按**——划线是这个模式下唯一的目的，再要求长按只是多余的一步。
+ * 划线工具（[drawTool]）激活时单指被图表征用，既不平移刻度也不出十字光标，
+ * **且不需要长按**——划线就是这个工具下唯一的目的，再要求长按只是多余的一步：
+ * · ALERT/HORIZONTAL：纵向拖动改判为「拖价格线/水平线」（同一条通道，只是落库去处不同）；
+ * · TREND：单指负责敲直线锚点（第一下种子、第二下成交）与整体平移已有直线。
  * 双指缩放保持不变：画线时同样要能缩放看清细节。
  */
 private suspend fun PointerInputScope.detectChartGestures(
@@ -1938,29 +2344,54 @@ private suspend fun PointerInputScope.detectChartGestures(
     /**
      * 绘图区几何用**取值函数**而不是三个 Float 入参。
      *
-     * 入参是启动那一刻的定值：这个协程的 key 只有「划线模式」，尺寸变了不会重启，
+     * 入参是启动那一刻的定值：这个协程的 key 只有「划线工具」，尺寸变了不会重启，
      * 用定值就会拿旧尺寸换算落点（旋屏后划线直接跑偏）。取函数每次事件都读实时值。
      */
     geo: () -> ChartGeo,
-    /** 划线模式：单指拖动直接移动告警线（见上方说明）。 */
-    alertLineMode: Boolean,
-    /** 已有告警线的像素落点，按下那一刻用它就近抓取。 */
-    alertLineAnchors: () -> List<AlertLineAnchor>,
+    /** 当前划线工具：决定单指走水平拖动通道还是直线落锚通道。 */
+    drawTool: DrawTool,
+    /** 告警/水平线的纵向像素落点（按当前工具由调用方选好来源），按下那一刻就近抓取。 */
+    horizontalAnchors: () -> List<AlertLineAnchor>,
     /** 抓住已有线的容差（像素）。超出就当「在这里新建一根」。 */
-    alertGrabPx: Float,
+    grabPx: Float,
     /**
-     * 右上角删除垃圾桶的命中矩形（划线模式下非空），用**取值函数**读实时画布尺寸。
-     * 拖线松手时手指落在其中 → 改调 [onAlertLineDelete] 而不是落库。
+     * 右上角删除垃圾桶的命中矩形（工具激活时非空），用**取值函数**读实时画布尺寸。
+     * 拖线松手时手指落在其中 → 改调删除回调而不是落库。
      */
-    alertDeleteRect: () -> Rect?,
-    /** 划线过程中回调「抓到的线 id（null = 新建）」与未换算的 y 像素。 */
-    onAlertLineDrag: (Long?, Float) -> Unit,
-    /** 手指离开且本场手势划过线时回调一次，带同一 id，调用方据此落库。 */
-    onAlertLineCommit: (Long?) -> Unit,
-    /** 手指带着线悬在垃圾桶上又离开时回调一次，带同一 id，调用方据此删除规则。 */
-    onAlertLineDelete: (Long?) -> Unit,
+    deleteRect: () -> Rect?,
+    /** 水平通道拖线：回调「抓到的线 id（null = 新建）」与未换算的 y 像素。 */
+    onHorizontalDrag: (Long?, Float) -> Unit,
+    /** 手指离开且本场手势拖过线时回调一次，带同一 id，调用方据此落库。 */
+    onHorizontalCommit: (Long?) -> Unit,
+    /** 拖线悬在垃圾桶上松手：带同一 id，调用方据此删除（null/0 = 放弃未落库的新线）。 */
+    onHorizontalDelete: (Long?) -> Unit,
     /** 悬停状态变化：true = 手指正把线停在垃圾桶上方，浮层据此高亮给出反馈。 */
-    onAlertLineOverTrash: (Boolean) -> Unit,
+    onOverTrash: (Boolean) -> Unit,
+    /** 垃圾桶模式：落点 [Offset] 命中的那条线；null = 落在空处，什么也不做。 */
+    eraseHitAt: (Offset) -> EraseHit?,
+    /**
+     * 垃圾桶模式点中一条告警线：[ruleId] 是它背后的规则，由调用方销毁。
+     * 与 [onHorizontalDelete] 分开是因为后者要按当前工具猜线型，而这里线型是判定结果里带的。
+     */
+    onEraseAlertLine: (Long) -> Unit,
+    /** 垃圾桶模式点中一条视觉画线：调用方按 chart_line 主键删除。 */
+    onEraseDrawLine: (Long) -> Unit,
+    /** 已有直线的两端**像素**落点，按下那一刻用它就近抓取。 */
+    trendPixels: () -> List<TrendLinePixels>,
+    /** 落点像素 → 直线锚点（下标+价格）；换算失败（量程/尺寸异常）返回 null。 */
+    trendAnchorAt: (Float, Float) -> TrendAnchor?,
+    /** 直线锚点 → 像素：松手时判「第二下是否落得太近」用。 */
+    trendAnchorPx: (TrendAnchor) -> Offset,
+    /** 写入/清除种子锚点（null = 清除）。种子活在调用方，供绘制端亮出种子点。 */
+    onTrendSeed: (TrendAnchor?) -> Unit,
+    /** 读当前种子锚点。 */
+    onTrendSeedGet: () -> TrendAnchor?,
+    /** 直线拖动中每帧回调整根预览（id 为 0 = 新建中）。 */
+    onTrendDrag: (Long, TrendAnchor, TrendAnchor) -> Unit,
+    /** 直线成交：id 为 0 = 两敲新建成交，非 0 = 平移已有线。调用方拿最后一帧预览落库。 */
+    onTrendCommit: (Long) -> Unit,
+    /** 直线删除/放弃：拖到垃圾桶上松手，或第二下落得太近（退化，撤销种子）。 */
+    onTrendDelete: (Long) -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
     /** 每次手势结束时回调一次，用于把手势期间冻结的量交还给实时值。 */
@@ -1985,8 +2416,8 @@ private suspend fun PointerInputScope.detectChartGestures(
         // 立刻消费 down：图表落在 verticalScroll 的父容器里，
         // 不抢占的话父容器会先开一个滚动手势，纵向拖动就变成翻页而不是调刻度。
         // 副图区起笔则反着来 —— 翻页正是我们要的，down 留给父容器。
-        // 划线模式例外：那时单指只服务于告警线，在哪儿起笔都必须抢。
-        if (!onSubPane || alertLineMode) first.consume()
+        // 划线工具激活时例外：那时单指只服务于要画的那根线，在哪儿起笔都必须抢。
+        if (!onSubPane || drawTool != DrawTool.NONE) first.consume()
         // 新手势开始：把上一场遗留的「不足一根」零头清掉，
         // 否则上一场拖到一半松手，零头会算进下一场，手感上多出一小段跳动。
         onGestureStart()
@@ -2002,16 +2433,94 @@ private suspend fun PointerInputScope.detectChartGestures(
         /** 上一帧的按下指头数：指头增减时旧间距与已定性的缩放轴都作废。 */
         var pointerCount = 0
         var longPressActive = false
-        /** 本场手势是否真的划过线。没划过就不该弹确认框。 */
-        var alertLineActive = false
+        /**
+         * 本场水平通道手势有没有「落到线上」—— down 那一下发出首帧即置位（见下方），
+         * 所以单击与拖动一视同仁。没落过（副图区起笔、非划线工具）就不回调落库/删除。
+         */
+        var dragActive = false
         /** 本场手势锁定的那条线；`null` = 新建一根。判定只做一次，整场不再改。 */
-        var alertGrabbedId: Long? = null
+        var grabbedId: Long? = null
+        /**
+         * 告警线 / 水平线的抓取在 **down 这一刻** 定死，与下方直线工具同一个理由：
+         * [awaitFirstDown] 已经把 down 事件消费掉，循环里第一帧 [awaitPointerEvent]
+         * 拿到的其实是**第一个 MOVE**。手指一动就滑出抓取半径（[grabPx] 才 24dp），
+         * 于是「按住已有的线拖到垃圾桶」被判成「新建一根」：松手在垃圾桶上只是把新建的
+         * 草稿丢掉，原来那根纹丝不动 —— 用户那边的表象就是「划的线无法删除」。
+         */
+        if (drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL) {
+            val plot = geo()
+            val y = first.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
+            grabbedId = horizontalAnchors().closestAlertLine(y, grabPx)
+        }
+        /**
+         * 垃圾桶模式：按下的那一点命中了哪条线。跟 [grabbedId] 一样在 down 定性 ——
+         * 理由是同一条（循环里第一帧已经是 MOVE 了，落点会跟着手指跑）。手指一旦移开
+         * 超过 slop 就把它作废：那时这场手势是「滑一下图」而不是「点这条线」，
+         * 否则一次横向平移的起手就会顺手把碰到的线删掉。
+         */
+        var eraseHit = if (drawTool == DrawTool.ERASE) eraseHitAt(first.position) else null
         /** 松手那一刻手指是否悬在右上角垃圾桶上 —— 是则删除这条线而非落库。 */
-        var alertOverTrash = false
+        var overTrash = false
+        /** 直线工具下单指这场的用途；`null` = 还没按下定性。 */
+        var trendMode: TrendMode? = null
+        /** 正在整体平移的已有直线 id（0 只会在中途预览出现，成交必为正 id）。 */
+        var trendGrabbedId = 0L
+        /** 抓取那一刻线两端的像素与按下手指位置：平移按「端点 + 手指位移」整根走。 */
+        var trendBase: Pair<Offset, Offset>? = null
+        var trendDown = Offset.Zero
+        /** 本场手势最近一次的落点（已夹进绘图区），松手时当作第二端点收尾。 */
+        var trendLast = Offset.Zero
         // 单指方向锁：null 表示还没定，锁定后本次手势不再改
         var axis: ChartGesture.Axis? = null
         var axisAccumX = 0f
         var axisAccumY = 0f
+        // 直线工具的定性必须在 **down 这一刻**做完，不能等循环里的第一帧：
+        // 轻点太快时 awaitPointerEvent 拿到的第一帧可能已是 UP，循环体一帧 pressed 都见不到，
+        // 「敲第一下落种子」就会凭空丢一下（第二敲同样靠这份定性当场成交到 trendLast）。
+        if (drawTool == DrawTool.TREND) {
+            val plot = geo()
+            val x = first.position.x.coerceIn(0f, plot.plotWidthPx)
+            val y = first.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
+            trendLast = Offset(x, y)
+            trendMode = if (onTrendSeedGet() != null) {
+                // 第二敲当场就出一帧预览：轻点同样没有后续 pressed 帧，
+                // 而成交回调拿的是「最后一帧预览」落库 —— 一帧不发就等于白敲
+                val a1 = onTrendSeedGet()
+                val a2 = trendAnchorAt(x, y)
+                if (a1 != null && a2 != null) onTrendDrag(0L, a1, a2)
+                TrendMode.PLACE2
+            } else {
+                val grabbed = trendPixels().closestTrend(Offset(x, y), grabPx)
+                if (grabbed != null) {
+                    trendGrabbedId = grabbed.id
+                    trendBase = grabbed.p1 to grabbed.p2
+                    trendDown = Offset(x, y)
+                    TrendMode.MOVE
+                } else {
+                    trendAnchorAt(x, y)?.let(onTrendSeed)
+                    TrendMode.SEED
+                }
+            }
+        }
+        /**
+         * 单指划线（告警线 / 水平线）在 **down 这一刻**先发一帧：单击也要能落线。
+         *
+         * 只靠循环里那一帧是不够的 —— 轻点时 down 之后紧接着 up，循环首帧 `pressed`
+         * 已经空了（`break` 在循环体之前），body 一次都不进，「敲一下放一根」就永远
+         * 落不了库，用户必须先拖动一下才行。这里补的这一帧与循环里那帧同源
+         * （同样的夹取、同一个回调），于是「点一下不动」与「点一下再拖」只差后续
+         * 帧数，落点语义完全一致 —— 不会出现"单击落的位置和拖动落的位置不一样"。
+         *
+         * 不在此处判垃圾桶：拖进去松手才删，那语义本就该由拖动产生（按下不发删除意图）。
+         */
+        if (drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL) {
+            val plot = geo()
+            dragActive = true
+            onHorizontalDrag(
+                grabbedId,
+                first.position.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx),
+            )
+        }
         while (true) {
             val event = awaitPointerEvent()
             val pressed: List<PointerInputChange> = event.changes.filter { change -> change.pressed }
@@ -2023,7 +2532,7 @@ private suspend fun PointerInputScope.detectChartGestures(
             // 例外：副图区起笔的单指手势 —— 它的纵向位移本就归页面（上下滑翻整页）。
             // 一旦锁定横向（要平移时间轴）、进入划线 / 长按十字光标 / 双指缩放，
             // 说明这场的用途已经定性回图表，立刻收回消费权。
-            val handToPage = onSubPane && !alertLineMode && !longPressActive &&
+            val handToPage = onSubPane && drawTool == DrawTool.NONE && !longPressActive &&
                 pressed.size < 2 && axis != ChartGesture.Axis.HORIZONTAL
             if (!handToPage) pressed.forEach { change -> change.consume() }
 
@@ -2041,25 +2550,58 @@ private suspend fun PointerInputScope.detectChartGestures(
                 if (pressed.size >= 2 && !longPressActive) onCrosshair(null)
             }
 
-            // 划线分支必须排在十字光标判定之前：这个模式下不出十字光标
-            if (alertLineMode && pressed.size == 1) {
+            // 划线分支必须排在十字光标判定之前：工具模式下不出十字光标
+            if (drawTool != DrawTool.NONE && pressed.size == 1) {
                 val plot = geo()
                 val raw = primary.position
+                val x = raw.x.coerceIn(0f, plot.plotWidthPx)
                 val y = raw.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
-                if (!alertLineActive) {
-                    // 抓哪根只在按下时定一次。逐帧重判的话，把手里的线拖过另一根时
-                    // 会突然「换手」——手指没动，动的却是另一条预警的阈值。
-                    alertGrabbedId = alertLineAnchors().closestAlertLine(y, alertGrabPx)
-                    alertLineActive = true
+                trendLast = Offset(x, y)
+                // 命中判定用**未夹取的原始坐标**（真实手指位置），而不是跟手用的夹取值：
+                // 垃圾桶锚在绘图区右上角，按真实落点判定最直观。跟手 + 垃圾桶高亮照旧。
+                val overTrashNow = deleteRect()?.contains(raw) == true
+                if (overTrashNow != overTrash) {
+                    overTrash = overTrashNow
+                    onOverTrash(overTrashNow)
                 }
-                // 命中判定用**未夹取的原始坐标**（真实手指位置），而不是跟手用的夹取 y：
-                // 垃圾桶锚在绘图区右上角，按真实落点判定最直观。线仍照常跟手 + 垃圾桶高亮。
-                val overTrash = alertDeleteRect()?.contains(raw) == true
-                if (overTrash != alertOverTrash) {
-                    alertOverTrash = overTrash
-                    onAlertLineOverTrash(overTrash)
+                if (drawTool == DrawTool.ERASE) {
+                    // 垃圾桶模式这一场只干一件事：点中哪条删哪条（真正的删除在松手时做）。
+                    // 手指一挪出 slop 就不算「点」—— 单指在垃圾桶模式下仍是唯一通道，
+                    // 不设这道闸的话，想吃掉一次误触的滑动就会把它路过的那条线删掉。
+                    if (eraseHit != null && (raw - first.position).getDistance() > touchSlop) {
+                        eraseHit = null
+                    }
+                    continue
                 }
-                onAlertLineDrag(alertGrabbedId, y)
+                if (drawTool == DrawTool.TREND) {
+                    // 本场用途已在按下那一刻定性（见循环前的说明），这里只逐帧执行
+                    when (trendMode) {
+                        // 敲完第一下马上拖：种子点跟手挪 —— 点歪了抬手前就能调
+                        TrendMode.SEED -> trendAnchorAt(x, y)?.let(onTrendSeed)
+                        TrendMode.PLACE2 -> {
+                            val a1 = onTrendSeedGet()
+                            val a2 = trendAnchorAt(x, y)
+                            if (a1 != null && a2 != null) onTrendDrag(0L, a1, a2)
+                        }
+                        TrendMode.MOVE -> {
+                            val base = trendBase
+                            if (base != null) {
+                                val dx = x - trendDown.x
+                                val dy = y - trendDown.y
+                                val a1 = trendAnchorAt(base.first.x + dx, base.first.y + dy)
+                                val a2 = trendAnchorAt(base.second.x + dx, base.second.y + dy)
+                                if (a1 != null && a2 != null) onTrendDrag(trendGrabbedId, a1, a2)
+                            }
+                        }
+                        null -> Unit
+                    }
+                    continue
+                }
+                // 抓哪根已在**按下那一刻**定死（见循环前的说明），这里只逐帧跟手。
+                // dragActive 与首帧落点也都已在 down 时给过（单击就靠那一帧），此处重复置位
+                // 只为兜住「down 时 geo 不可用、落到第一帧才成」的边角，本身是幂等的。
+                dragActive = true
+                onHorizontalDrag(grabbedId, y)
                 continue
             }
             if (!longPressActive && pressed.size == 1) {
@@ -2149,11 +2691,43 @@ private suspend fun PointerInputScope.detectChartGestures(
                 }
             }
         }
-        if (alertLineActive) {
-            // 松手在垃圾桶上 = 删除这条线（id 为 null 时等于放弃一笔未落库的新线），
+        if (dragActive) {
+            // 松手在垃圾桶上 = 删除这条线（id 为 null/0 时等于放弃一笔未落库的新线），
             // 否则照旧落库。两种情况收尾都要清掉高亮，别让它留在下一次手势上。
-            if (alertOverTrash) onAlertLineDelete(alertGrabbedId) else onAlertLineCommit(alertGrabbedId)
-            if (alertOverTrash) onAlertLineOverTrash(false)
+            if (overTrash) onHorizontalDelete(grabbedId) else onHorizontalCommit(grabbedId)
+            if (overTrash) onOverTrash(false)
+        }
+        // 垃圾桶模式：按下那一点命中了线、且这一场没滑走 → 松手即删。
+        // 放在松手后而不是按下时删：手指还没抬起来就给结果，误按一下就没有回头路。
+        // 删掉之后由调用方把工具收回 NONE（与落一根/删一条自动收起同一条出口）。
+        eraseHit?.let { hit ->
+            when (hit) {
+                is EraseHit.Alert -> onEraseAlertLine(hit.ruleId)
+                is EraseHit.Draw -> onEraseDrawLine(hit.lineId)
+            }
+        }
+        when (trendMode) {
+            // 没定性或只敲了第一下：松手后种子点亮着，等第二敲（SEED 什么都不用做）
+            null, TrendMode.SEED -> Unit
+            TrendMode.PLACE2 -> {
+                val seed = onTrendSeedGet()
+                val seedPx = seed?.let(trendAnchorPx)
+                if (seed == null || seedPx == null) {
+                    onTrendDelete(0L) // 种子半路没了：把预览收回去，别留一根悬空的新线
+                } else if ((trendLast - seedPx).getDistance() < grabPx) {
+                    // 第二敲离第一下太近 = 两点定不出一条线：判「撤销这一笔」，
+                    // 清种子并撤回预览 —— 与拖到垃圾桶放弃同一条回调
+                    onTrendSeed(null)
+                    onTrendDelete(0L)
+                } else {
+                    onTrendCommit(0L)
+                    onTrendSeed(null)
+                }
+            }
+            TrendMode.MOVE -> {
+                if (overTrash) onTrendDelete(trendGrabbedId) else onTrendCommit(trendGrabbedId)
+                if (overTrash) onOverTrash(false)
+            }
         }
         // 松手**不清**十字光标：长按把它停在最后那根上，价格标、日期标与 K 线详情小条
         // 一并留在那里 —— 手指一抬读数就消失的话根本来不及看。它交给「画布上的其他操作」
@@ -2165,6 +2739,69 @@ private suspend fun PointerInputScope.detectChartGestures(
 
 /** 一条已有告警线在主图上的像素落点，手势按它决定抓哪根。 */
 internal data class AlertLineAnchor(val ruleId: Long?, val yPx: Float)
+
+/** 直线工具下单指这场的定性。 */
+private enum class TrendMode {
+    /** 第一敲：落种子锚点（整场拖动种子跟手）。 */
+    SEED,
+    /** 已有种子时的第二敲：拖动出预览，抬手成交（落点太近则撤销）。 */
+    PLACE2,
+    /** 就近抓到已有直线：整根随手指平移。 */
+    MOVE,
+}
+
+/** 一条已有直线当前的两端像素落点，手势按它就近抓取与平移。 */
+internal data class TrendLinePixels(val id: Long, val p1: Offset, val p2: Offset)
+
+/**
+ * 垃圾桶模式下点中的那条线。
+ *
+ * 分两型而不是只回一个 id：告警线删的是它背后的**规则**（顺带带走通知配置），
+ * 视觉画线删的是 chart_line 的一行 —— 两张表、两条回调，混成一个 id 空间迟早会删错东西。
+ * [distance] 只在同一次命中判定里用来在两类之间取最近，出了那个函数就没意义。
+ */
+private sealed interface EraseHit {
+    val distance: Float
+
+    /** 命中的是告警线（[ruleId] 为 alert_rule 的主键）。 */
+    data class Alert(val ruleId: Long, override val distance: Float) : EraseHit
+
+    /** 命中的是视觉画线（[lineId] 为 chart_line 的主键）。 */
+    data class Draw(val lineId: Long, override val distance: Float) : EraseHit
+}
+
+/**
+ * 按「点到线段的距离」就近取一条直线，超出 [slopPx] 返回 null（= 落一颗新种子）。
+ *
+ * 抓**线段**而不是无限延长线：延长部分是趋势的示意，可拖的锚段才是用户画的那一笔 ——
+ * 在延长线上按一下就抓走整根会莫名其妙。
+ */
+internal fun List<TrendLinePixels>.closestTrend(point: Offset, slopPx: Float): TrendLinePixels? {
+    var best: TrendLinePixels? = null
+    var bestDistance = Float.MAX_VALUE
+    forEach { line ->
+        val distance = distanceToSegment(point, line.p1, line.p2)
+        if (distance <= slopPx && distance < bestDistance) {
+            bestDistance = distance
+            best = line
+        }
+    }
+    return best
+}
+
+/** 点到线段 ab 的最短距离（垂足在线段外时取较近的端点）。 */
+internal fun distanceToSegment(point: Offset, a: Offset, b: Offset): Float {
+    val vx = b.x - a.x
+    val vy = b.y - a.y
+    val wx = point.x - a.x
+    val wy = point.y - a.y
+    val c1 = vx * wx + vy * wy
+    if (c1 <= 0f) return (point - a).getDistance()
+    val c2 = vx * vx + vy * vy
+    if (c2 <= c1) return (point - b).getDistance()
+    val t = c1 / c2
+    return (point - Offset(a.x + vx * t, a.y + vy * t)).getDistance()
+}
 
 /**
  * 按 y 像素就近取一条线，超出 [slopPx] 返回 null（= 在这里新建一根）。
@@ -2259,6 +2896,19 @@ private const val PRICE_BADGE_PAD_V_DP = 1f
 
 /** 已有的告警线（非正在拖的那根）的不透明度：参照线不该和 K 线争视线。 */
 private const val STATIC_ALERT_ALPHA = 0.45f
+
+/**
+ * 静态视觉画线的透明度：画线是用户自己做的记号，平时不该跟 K 线抢视线；
+ * 拖拽中回到不透明（与告警线同一手感的「手里那根最实」）。
+ * 注意画线是**实线**而告警线是虚线 —— 形态本身就把「会响的」和「只是记号」分开。
+ */
+private const val DRAW_LINE_ALPHA = 0.75f
+
+/** 直线两端锚点的圆点半径（dp）。 */
+private val TREND_ANCHOR_DOT = 3.dp
+
+/** 第一敲种子点的半径（dp）：比锚点大一档，提示「已经敲过一下了」。 */
+private val TREND_SEED_DOT = 4.5.dp
 
 /** 左下角角标按钮的边长。 */
 private val CORNER_BUTTON_SIZE = 26.dp
