@@ -6,6 +6,15 @@ import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 
 /**
+ * 主图均线的**出厂目录**：就是用户可编辑之前那固定五档（PRD FR-2.1 要求 5/10/20/30/60 可调）。
+ *
+ * 两处在用：没存过目录时当初始值（见 [AppSettings.maCatalog]），以及老装机从
+ * `ma_custom_periods` 迁上来时的底座 —— 老 key 里只有「自定义档」，预置五档并不在里面。
+ * 与桌面端 `lib/maPeriods.ts` 的 `DEFAULT_MA_CATALOG` 同口径，改名也是照它来的。
+ */
+val DEFAULT_MA_CATALOG: List<Int> = listOf(5, 10, 20, 30, 60)
+
+/**
  * 应用设置（PRD 8. 设置）。全部为可缺省值，新增字段不得要求用户先迁移。
  */
 data class AppSettings(
@@ -25,10 +34,13 @@ data class AppSettings(
     /** 主图均线周期（选中项）。 */
     val maPeriods: List<Int> = listOf(5, 10, 30),
     /**
-     * 自定义均线周期目录（选中之外的可选项，与预置五档分开放）。
-     * 只存非预置值；预置档不可删，不必随目录冗余。
+     * 主图均线的**目录**：指标条上出现哪些 MA chip（与 [maPeriods] 的「选中子集」分开存）。
+     *
+     * `null` = 没设过（首次运行，或从「目录不可编辑」的旧版本升上来），用 [DEFAULT_MA_CATALOG]；
+     * **空表是合法偏好** —— 用户把 chip 全删了就该是真的没有，重启不能自己变回来
+     * （指标条上的「＋」随时能加回来，不会把自己锁在门外）。
      */
-    val maCustomPeriods: List<Int> = emptyList(),
+    val maCatalog: List<Int>? = null,
     /** 是否叠加布林带。 */
     val bollEnabled: Boolean = false,
     /**

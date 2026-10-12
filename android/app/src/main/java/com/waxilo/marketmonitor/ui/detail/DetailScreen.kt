@@ -89,6 +89,7 @@ import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
@@ -258,7 +259,7 @@ fun DetailScreen(
                 )
 
                 IndicatorBar(
-                    maChoices = state.maChoices,
+                    maCatalog = state.maCatalog,
                     activeMa = state.maPeriods,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
@@ -302,10 +303,10 @@ fun DetailScreen(
 
         if (maManagerOpen) {
             MaManagerDialog(
-                custom = state.maChoices.filter { it !in MA_CHOICES },
+                catalog = state.maCatalog,
                 onDismiss = { maManagerOpen = false },
                 onSave = {
-                    viewModel.saveMaCustomPeriods(it)
+                    viewModel.saveMaCatalog(it)
                     maManagerOpen = false
                 },
             )
@@ -341,7 +342,7 @@ fun DetailScreen(
         if (lineDialogOpen) {
             IndicatorLineDialog(
                 symbolId = symbolId,
-                maChoices = state.maChoices,
+                maCatalog = state.maCatalog,
                 initial = lineEditing,
                 onDismiss = { lineDialogOpen = false },
                 onSave = { line ->
@@ -394,7 +395,7 @@ private fun FullscreenController(active: Boolean) {
  * · 告警线：纵向拖出即拖一根「达到」预警（涨跌碰到都提醒）；
  * · 水平线：拖出即一条纯视觉记号（不响）；
  * · 直线：第一敲落起点、第二敲落终点（两下太近 = 撤销），抓到已有直线可整体平移。
- * 双指缩放照旧可用。画线是**一次性**的：松手落库或拖垃圾桶删除后都自动退回普通态，
+ * 双指缩放照旧可用。画线是**一次性**的：松手落库后自动退回普通态，
  * 单指随即恢复平移画布 —— 常驻工具会让「画完线想看别的区间」做不到。
  * 已有的告警线在工具下按到它（容差 24dp）是**改它**而不是在旁边叠一条。
  *
@@ -463,7 +464,7 @@ private fun FullscreenChart(
         Rule(inset = 0.dp)
         // 指标常驻：与竖屏一致，改 MA / BOLL 不必先展开浮层。副图全屏不画，选项也收掉。
         IndicatorBar(
-            maChoices = state.maChoices,
+            maCatalog = state.maCatalog,
             activeMa = state.maPeriods,
             showBoll = state.showBoll,
             subPanes = state.subPanes,
@@ -560,23 +561,23 @@ private fun FullscreenChart(
             }
 
             // 指标改动走顶部常驻条，图上不再有浮层——浮层无论压顶部还是底部都要吃掉一截图。
-            // 底部提示按当前工具给一句：三个工具的落笔方式不一样，混在一句里等于没说。
+            // 底部提示按当前工具给一句：几个工具的落笔方式不一样，混在一句里等于没说。
             //
             // ⚠️ 文案必须**短到一行放得下**（2026-10-12 修）：这里是 maxLines=1，
             // 而原先 TREND 那句 88 字，在 640dp 宽的横屏上被父容器裁掉了一半 ——
-            // 「拖到右上角垃圾桶删除」正好落在被裁的那半，用户于是只看到怎么画、看不到怎么删，
-            // 反馈回来就是「划的线无法删除」。删减原则：**怎么删 > 怎么画 > 题外话**，
-            // 「只是记号不会提醒」这类已由图形形态（实线 vs 虚线）与告警页表达，这里不再占字。
+            // 被裁的正是「删除怎么用」那半句，用户于是只看到怎么画。删减原则：
+            // **怎么删 > 怎么画 > 题外话**；而「删除」现在由竖栏那枚独立按钮说清，
+            // 这三句只管怎么画（各留一句最不容易猜错的：告警线会响、水平线落一根即收、直线两敲）。
             val toolHint = when (drawTool) {
                 DrawTool.NONE -> null
                 DrawTool.ALERT ->
-                    "上下拖动放告警线 · 按住可改价位 · 拖到右上角垃圾桶删除 · 涨跌都提醒"
+                    "上下拖动放告警线 · 按住可改价位 · 涨跌都提醒"
                 DrawTool.HORIZONTAL ->
-                    "拖动放水平线 · 按住可改价位 · 拖到右上角垃圾桶删除 · 落一根即自动收起"
+                    "拖动放水平线 · 按住可改价位 · 落一根即自动收起"
                 DrawTool.TREND ->
-                    "敲两下定直线（太近=撤销）· 按住可整体平移 · 拖到右上角垃圾桶删除"
-                // 垃圾桶模式与上面三枚是相反方向的动作用，这句必须**先说要做什么**：
-                // 用户点完垃圾桶图上看不出任何变化（线本来就在），不说就会以为没生效
+                    "敲两下定直线（太近=撤销）· 按住可整体平移"
+                // 删除模式与上面三枚是相反方向的动作用，这句必须**先说要做什么**：
+                // 用户点完删除图上看不出任何变化（线本来就在），不说就会以为没生效
                 DrawTool.ERASE ->
                     "点一下要删的那条线即删除 · 告警线/水平线/直线都可以 · 删完自动收起"
             }
@@ -707,10 +708,11 @@ private val RAIL_GLYPH = 12.dp
  * 不为一个图标拖进 material-icons-extended）。前三枚刻意做成「这条线长什么样」：
  * 虚线 = 会响的告警线，实水平线 / 斜线 = 只做记号的画线，形状自身就是说明。
  *
- * 后两枚（垃圾桶 / 清空）与前三枚之间用一道细线隔开：它们回答的是另一个问题 ——
- * 「这些线怎么撤掉」。原先只有「把线拖到右上角垃圾桶」一条路，实际反馈是「划的线无法删除」
- * （2026-10-12）：那条路要求先知道有这么回事、再拖得准，而删除本该是点一下的事。
- * 现在选中垃圾桶，再去点图上的任意一条线即可删掉（告警线 / 水平线 / 直线通吃，见 [DrawTool.ERASE]）；
+ * 后两枚（删除 / 清空）与前三枚之间用一道细线隔开：它们回答的是另一个问题 ——
+ * 「这些线怎么撤掉」。这两枚是删除的**唯一**入口：选中删除，再去点图上的任意一条线即可
+ * 删掉（告警线 / 水平线 / 直线通吃，见 [DrawTool.ERASE]）。
+ * （原先还有「把线拖到画布右上角的垃圾桶落点」那条路，2026-10-12 撤掉 —— 它要求先知道
+ * 有这么回事、再拖得准，实际反馈是「划的线无法删除」，如今这枚按钮把同一件事做成点两下。）
  * 清空是一次性动作，不进任何模式，按下去先弹确认（见 [ClearAllLinesDialog]），
  * 一条线都没有时整枚置灰 —— 空图上摆一个按了没反应的按钮只会让人怀疑它坏了。
  *
@@ -849,7 +851,7 @@ private fun DiagonalLineGlyph(color: Color) {
 }
 
 /**
- * 删除工具：一只垃圾桶，与图上那个「拖到这里删除」的落点同一个意象。
+ * 删除工具：一只垃圾桶（删除的通用意象），与竖栏里那枚「点一下即删」的开关是同一个意思。
  *
  * 手搓而不是用 `Icons.Default.Delete`：material 的图形在 24dp 视图里只占中间一半，
  * 摆进这枚 12dp 的画布会明显比旁边三根线小一圈。这里按同一套 0.11w 线宽自己画，
@@ -1399,14 +1401,15 @@ private fun chartHeight(subPaneCount: Int): Dp {
  */
 @Composable
 private fun IndicatorBar(
-    maChoices: List<Int>,
+    /** 指标条上摊开的均线档位（用户可在「＋」里增删，见 [MaManagerDialog]）。 */
+    maCatalog: List<Int>,
     activeMa: List<Int>,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
     oiSupported: Boolean,
     onToggleMa: (Int) -> Unit,
-    /** 打开「均线周期」管理弹窗（增删自定义周期），与周期条的「＋」同一定位。 */
+    /** 打开「均线周期」管理弹窗（增删目录、恢复默认），与周期条的「＋」同一定位。 */
     onManageMa: () -> Unit,
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
@@ -1428,7 +1431,7 @@ private fun IndicatorBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             InlineLabel(text = "指标")
-            maChoices.forEach { period ->
+            maCatalog.forEach { period ->
                 FilterChip(
                     text = "MA$period",
                     selected = period in activeMa,
@@ -1470,7 +1473,7 @@ private fun IndicatorBar(
                 .padding(horizontal = Spacing.Gutter),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
         ) {
-            maChoices.forEach { period ->
+            maCatalog.forEach { period ->
                 FilterChip(
                     text = "MA$period",
                     selected = period in activeMa,
@@ -1748,21 +1751,26 @@ private fun IntervalManagerDialog(
 }
 
 /**
- * 均线周期管理对话框：预置五档之外，维护一份自定义目录。
+ * 均线目录管理对话框：指标条上有哪些 MA chip，整份在这里定。
  *
- * MA5/10/20/30/60 固定摊在指标条上、不提供删除；这里保存的自定义周期会在同一行
- * 多出 chip，点选/取消照旧在指标条上完成，弹窗只管「有没有」。范围与条数上限
- * 与桌面端同口径。增删先在草稿里改，点「保存」才回写 ViewModel 并持久化 ——
- * 与 [IntervalManagerDialog] 同一套交互，删掉的目录项会连带从选中集移除（见 VM）。
+ * 出厂那五档（MA5/10/20/30/60）**不是特殊档位** —— 它们只是这份目录的初始值，一样可以删。
+ * 2026-10-12 之前不是这样：五档写死在指标条上、「＋」里只能加自定义档，于是想只看 MA20
+ * 就得留着另外四条不点。现在列表就是条上的全部 chip，行尾的 × 把它从条上移除，
+ * 输入框再加回来，底部「恢复默认」一键回到出厂五档。
+ * 与桌面端 `MaPanel` 同口径：这里只管「有哪些档位」，选不选仍照旧在指标条上点。
+ *
+ * 增删先在草稿里改，点「保存」才回写 ViewModel 并持久化 —— 与 [IntervalManagerDialog]
+ * 同一套交互，删掉的目录项会连带从选中集移除（见 VM）：目录没了 chip 还画着，
+ * 那条线在图上就撤不掉了。
  */
 @Composable
 private fun MaManagerDialog(
-    custom: List<Int>,
+    catalog: List<Int>,
     onDismiss: () -> Unit,
     onSave: (List<Int>) -> Unit,
 ) {
     // rows 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
-    var rows by remember { mutableStateOf(custom) }
+    var rows by remember { mutableStateOf(catalog) }
     var input by rememberSaveable { mutableStateOf("") }
     var hint by rememberSaveable { mutableStateOf<String?>(null) }
     val colors = MarketTheme.colors
@@ -1772,9 +1780,8 @@ private fun MaManagerDialog(
         when {
             period == null || period !in MA_PERIOD_MIN..MA_PERIOD_MAX ->
                 hint = "填 $MA_PERIOD_MIN～$MA_PERIOD_MAX 的整数"
-            period in MA_CHOICES -> hint = "MA$period 是预置档，指标条上直接点就行"
-            period in rows -> hint = "MA$period 已在列表上"
-            rows.size >= MA_CUSTOM_LIMIT -> hint = "自定义最多 $MA_CUSTOM_LIMIT 条"
+            period in rows -> hint = "MA$period 已在指标条上"
+            rows.size >= MA_LIMIT -> hint = "最多 $MA_LIMIT 条均线，先删一条再加"
             else -> {
                 rows = (rows + period).sorted()
                 input = ""
@@ -1797,12 +1804,13 @@ private fun MaManagerDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    text = "预置 MA5/10/20/30/60 固定在指标条上；这里添加的周期摊在同一行，点选即画",
+                    text = "指标条上有哪几档均线都在这里定（按期数升序排）；行尾的 × 把它从条上移除，" +
+                        "点选仍照旧在条上点。",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.muted,
                 )
                 Text(
-                    text = "添加周期",
+                    text = "添加均线",
                     modifier = Modifier.padding(top = Spacing.Md),
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.muted,
@@ -1842,10 +1850,16 @@ private fun MaManagerDialog(
                         color = colors.down,
                     )
                 }
+                Text(
+                    text = "指标条上的均线",
+                    modifier = Modifier.padding(top = Spacing.Md),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                )
                 if (rows.isEmpty()) {
                     Text(
-                        text = "还没有自定义周期",
-                        modifier = Modifier.padding(top = Spacing.Md),
+                        text = "一条都没有了，指标条上只剩「＋」",
+                        modifier = Modifier.padding(top = Spacing.Sm),
                         style = MaterialTheme.typography.labelSmall,
                         color = colors.muted.copy(alpha = 0.6f),
                     )
@@ -1867,13 +1881,24 @@ private fun MaManagerDialog(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "移除 MA$period",
+                                contentDescription = "从指标条移除 MA$period",
                                 modifier = Modifier.size(16.dp),
                                 tint = colors.muted,
                             )
                         }
                     }
                 }
+                // 恢复默认摆在最下面：它是「推翻当前草稿」的兜底，不该挡在增删这条主路径上。
+                // 同样只改草稿，仍要点「保存」才作数（与增删一致，不然一半即时一半不即时）
+                TextAction(
+                    text = "恢复默认（${DEFAULT_MA_CATALOG.joinToString("/") { "MA$it" }}）",
+                    onClick = {
+                        rows = DEFAULT_MA_CATALOG
+                        hint = null
+                    },
+                    modifier = Modifier.padding(top = Spacing.Sm),
+                    color = colors.muted,
+                )
             }
         },
         confirmButton = { TextAction("保存", onClick = { onSave(rows) }) },

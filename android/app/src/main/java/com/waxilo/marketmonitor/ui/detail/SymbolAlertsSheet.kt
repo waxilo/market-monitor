@@ -186,8 +186,8 @@ private fun SheetRuleRow(
 @Composable
 fun IndicatorLineDialog(
     symbolId: SymbolId,
-    /** 指标条同款候选（预置 + 自定义目录）：划线选的周期与图上的均线一套来源。 */
-    maChoices: List<Int>,
+    /** 指标条同款目录（用户可增删的那份）：划线选的周期与图上的均线一套来源。 */
+    maCatalog: List<Int>,
     initial: IndicatorLine?,
     onDismiss: () -> Unit,
     onSave: (IndicatorLine) -> Unit,
@@ -224,7 +224,7 @@ fun IndicatorLineDialog(
         .sortedBy { CandleInterval.quickPickPresets.indexOf(it) }
     val maPeriods = maPeriodKeys.split(',')
         .mapNotNull { it.toIntOrNull() }
-        .sortedBy { maChoices.indexOf(it) }
+        .sortedBy { maCatalog.indexOf(it) }
 
     fun toggleInterval(preset: CandleInterval) {
         val next = intervals.toMutableList()
@@ -297,7 +297,7 @@ fun IndicatorLineDialog(
                         .horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
                 ) {
-                    maChoices.forEach { period ->
+                    maCatalog.forEach { period ->
                         FilterChip(
                             text = "MA$period",
                             selected = period in maPeriods,

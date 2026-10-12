@@ -21,6 +21,7 @@ import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.ChartLine
+import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
@@ -58,21 +59,42 @@ import java.math.RoundingMode
 /** 详情页默认周期：日线信息密度最低，首屏最不容易看起来空白。 */
 val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
 
-/** 均线可选项，PRD FR-2.1 要求 5/10/20/30/60 可调。 */
-val MA_CHOICES: List<Int> = listOf(5, 10, 20, 30, 60)
-
+/** 首次进入详情页默认画哪几条均线；与目录（[DEFAULT_MA_CATALOG]）分开，用户可各自改。 */
 val DEFAULT_MA_PERIODS: List<Int> = listOf(5, 10, 30)
 
-/** 自定义均线周期的取值范围，与桌面端（lib/maPeriods.ts）同口径。 */
+/** 均线期数取值范围，与桌面端（lib/maPeriods.ts）同口径。 */
 const val MA_PERIOD_MIN = 1
 const val MA_PERIOD_MAX = 1000
 
-/** 自定义条数上限（预置五档不计）。再多就只是同色线堆在读数带上，没有信息量。 */
-const val MA_CUSTOM_LIMIT = 8
+/**
+ * 均线**目录**的条数上限，与桌面端（`chartSeries.MA_LIMIT`）同口径：色板就那么几位，
+ * 再多只是同色线堆在读数带上，没有信息量。
+ *
+ * 注意这是**目录总数**（出厂五档也算在内），不是「自定义条数」—— 目录整份交给用户之后，
+ * 预置档与自定义档在数据上已经不分家（见 [normalizeMaCatalog]）。
+ */
+const val MA_LIMIT = 8
 
-/** 预置档 + 自定义目录合成指标条候选：越界与重复都挡掉，升序。 */
-fun maCatalog(custom: List<Int>): List<Int> =
-    (MA_CHOICES + custom.filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX }).distinct().sorted()
+/**
+ * 均线目录归一化：只留 `[MA_PERIOD_MIN, MA_PERIOD_MAX]` 内的值、去重、升序，
+ * 并截到 [MA_LIMIT] 条。旧版本存的、手改坏的、以后删掉的档位都在这里被丢掉。
+ *
+ * **空表不回填出厂五档**：目录清空是合法偏好（指标条上只剩「＋」，随时加得回来），
+ * 回填会让「删光了」在下次启动时自己变回来。（桌面端对空目录回退出厂五档，
+ * 这点有意不同 —— 那边目录是 localStorage 里的一个字段，判不出「没设过」与「清空了」。）
+ */
+fun normalizeMaCatalog(catalog: List<Int>): List<Int> =
+    catalog.filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX }.distinct().sorted().take(MA_LIMIT)
+
+/**
+ * 选中集按目录筛一遍：目录里没有的周期一律丢掉，其余去重升序。
+ *
+ * 这是「选中 ⊆ 目录」这条不变量的**唯一执行点**（恢复偏好与保存目录两条写入路径共用）。
+ * 漏一次就会出「图上有条线、指标条上没有对应的 chip」—— 那条线在图上撤不掉，
+ * 用户只能去清划线或重装。删 MA5 时选中集里的 5 也是靠它一起走的。
+ */
+fun maSelectionIn(catalog: List<Int>, selected: List<Int>): List<Int> =
+    selected.filter { it in catalog }.distinct().sorted()
 
 /**
  * 详情页的一条统计。
@@ -102,7 +124,11 @@ data class DetailUiState(
     val interval: CandleInterval = DEFAULT_CHART_INTERVAL,
     val candles: List<Kline> = emptyList(),
     val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
-    val maChoices: List<Int> = MA_CHOICES,
+    /**
+     * 指标条上摊开的均线档位（用户可在「＋」弹窗里增删，出厂是 [DEFAULT_MA_CATALOG]）。
+     * [maPeriods] 必须是它的子集，否则会出现「画着一条没有 chip 可撤的线」。
+     */
+    val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
     val showBoll: Boolean = false,
     /** 选中的副图。空列表 = 不显示副图；支持多选。 */
     val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -437,8 +463,11 @@ class DetailViewModel(
         val loadingMore: Boolean = false,
         val error: String? = null,
         val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
-        /** 自定义均线周期目录（预置档之外、由「＋」管理弹窗维护）。 */
-        val maCustomPeriods: List<Int> = emptyList(),
+        /**
+         * 指标条上有哪些均线档位。写入方（[restoreChartPreferences] / [saveMaCatalog]）
+         * 已经归一化过，这里不再重复处理。
+         */
+        val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -481,7 +510,7 @@ class DetailViewModel(
             intervals = data.intervals,
             candles = displayCandles(data, selected),
             maPeriods = data.maPeriods,
-            maChoices = maCatalog(data.maCustomPeriods),
+            maCatalog = data.maCatalog,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
             oiSupported = oiSupported,
@@ -598,17 +627,14 @@ class DetailViewModel(
             pricePan = saved.chartPricePan,
         )
         chart.update {
-            // 目录先归一化（越界/预置重复/超限都丢弃），选中集再按目录过滤：
-            // 不在目录里的选中项没有 chip，就成了图上撤不掉的死线
-            val custom = saved.maCustomPeriods
-                .filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX && it !in MA_CHOICES }
-                .distinct()
-                .sorted()
-                .take(MA_CUSTOM_LIMIT)
+            // 目录先归一化（越界/重复/超限都丢弃），选中集再按目录过滤：
+            // 不在目录里的选中项没有 chip，就成了图上撤不掉的死线。
+            // 没存过目录（null）才用出厂五档；存过空表就是真的空，不回填
+            val catalog = normalizeMaCatalog(saved.maCatalog ?: DEFAULT_MA_CATALOG)
             it.copy(
                 // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
-                maPeriods = saved.maPeriods.filter { p -> p in MA_CHOICES || p in custom }.sorted(),
-                maCustomPeriods = custom,
+                maPeriods = maSelectionIn(catalog, saved.maPeriods),
+                maCatalog = catalog,
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
                 // 周期条则相反：解析不出任何一项就当没设过，回落到默认集
@@ -684,25 +710,23 @@ class DetailViewModel(
     }
 
     /**
-     * 保存「＋」管理弹窗产出的自定义均线目录：先归一化（范围/去重/去预置/超限截断），
-     * 再把这些周期从选中集里一并带走 —— 目录删了选中还留着，图上就是没有 chip 可撤的死线。
+     * 保存「＋」管理弹窗产出的均线目录：先归一化（范围/去重/超限截断），
+     * 再把删掉的那些从选中集里一并带走 —— 目录删了选中还留着，图上就是没有 chip 可撤的死线。
+     *
+     * 预置五档与自定义档在这里是同一种东西：目录整份由用户定，删 MA5 就是把它从目录里去掉。
      */
-    fun saveMaCustomPeriods(next: List<Int>) {
-        val custom = next
-            .filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX && it !in MA_CHOICES }
-            .distinct()
-            .sorted()
-            .take(MA_CUSTOM_LIMIT)
+    fun saveMaCatalog(next: List<Int>) {
+        val catalog = normalizeMaCatalog(next)
         chart.update { current ->
             current.copy(
-                maCustomPeriods = custom,
-                maPeriods = current.maPeriods.filter { it in MA_CHOICES || it in custom }.sorted(),
+                maCatalog = catalog,
+                maPeriods = maSelectionIn(catalog, current.maPeriods),
             )
         }
-        val savedCustom = chart.value.maCustomPeriods
+        val savedCatalog = chart.value.maCatalog
         val savedActive = chart.value.maPeriods
         viewModelScope.launch {
-            settings.edit { it.copy(maPeriods = savedActive, maCustomPeriods = savedCustom) }
+            settings.edit { it.copy(maPeriods = savedActive, maCatalog = savedCatalog) }
         }
     }
 
@@ -735,10 +759,10 @@ class DetailViewModel(
     }
 
     /**
-     * 把一条告警线拖到右上角垃圾桶：删除它对应的规则，线随之从图上消失。
+     * 删除一条告警线（竖栏的删除工具点中它时调用）：删掉它对应的规则，线随之从图上消失。
      *
      * 线由规则派生，删除只能落到规则上 —— 这里就是预警列表那个删除按钮的同一条路径。
-     * [ruleId] 为 null 表示手上一笔还没落库的新线，拖进垃圾桶等同于放弃，无需删规则。
+     * [ruleId] 为 null 表示手上一笔还没落库的新线（点中它等同于放弃），无需删规则。
      */
     fun deleteAlertLine(ruleId: Long?) {
         if (ruleId == null) {
@@ -803,7 +827,7 @@ class DetailViewModel(
     }
 
     /**
-     * 拖进垃圾桶 / 直线两敲落得太近的撤销。
+     * 删除一条视觉画线（竖栏的删除工具点中它时调用），或撤销直线两敲落得太近的那一笔。
      *
      * lineId 为 0 = 只是放弃手上的草稿；其余删掉落库的那条。
      */

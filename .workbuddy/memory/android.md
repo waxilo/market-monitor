@@ -152,7 +152,7 @@
 重排时 `scrollToItem(0)`；但**单行「重测」别抢视口**（用户正盯着那行看结果，key 锚定恰好是他要的），用 `pinToTop`
 标志区分批量与单行。排序规则抽成纯函数 `ui/settings/ProbeOrdering.kt`（+7 单测）。
 
-## 全屏划线：竖栏五枚 + 删除走「垃圾桶 → 点线」+ 清空（2026-10-12）
+## 全屏划线：竖栏五枚 + 删除只有「点线即删」+ 清空（2026-10-12，晚定版）
 
 `DrawTool = { NONE, ALERT, HORIZONTAL, TREND, ERASE }`，单指手势一次只有一种语义。
 第五枚「清空」**不进 `DrawTool`** —— 它不是一种模式，按一次就完事。
@@ -173,10 +173,19 @@
 底部提示条会报出当前工具名，用户看得见也能改。想彻底避免就得把间距拉到 ≥8dp 或按钮回到 30dp，
 那是拿宽度换精度，别再无声地改回去。
 
-**删线的三个粒度**（`onAlertLineDelete` / `onDrawLineDelete` / `onClearAllLines`）：
-① 拖到右上角垃圾桶（工具激活且**有同类线可删时**常驻）；② 竖栏「删除」工具点线即删；
-③ **清空**一次删光本标的的全部划线。第 ③ 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
+**删线的两个粒度**：① 竖栏「删除」工具**点线即删**（`DrawTool.ERASE`）；
+② **清空**一次删光本标的的全部划线。第 ② 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
 于是手动在预警页建的价位预警也会被一起清 —— 这是有意的，否则会出现「清空了但还剩一条线」。
+
+**❗2026-10-12 晚撤掉第三条路：「把线拖到画布右上角的垃圾桶落点」**（用户口径：「拖线时那个小垃圾桶
+去掉，竖栏已经能删了」）。撤的范围是**整条**、不只那个图标：渲染层那个 `showTrash` Box、
+命中矩形 `alertDeleteRect()`、悬停高亮 `alertTrashHot`、`CORNER_BUTTON_INSET` 之外那三个
+`TRASH_*`/`SPACING_TRASH_INSET` 常量、手势里的 `overTrash` 判定与 `deleteRect()`/`onOverTrash()`/
+`onHorizontalDelete()` 三个参数、以及 `Icons.Default.Delete`/`Icon`/`Rect` 三个 import —— 全删。
+拖线松手**一律落库**。留下的 `onAlertLineDelete`/`onDrawLineDelete` 仍由 ERASE 那条路喂
+（`onEraseAlertLine`/`onEraseDrawLine`），语义收敛成「按 id 删」。
+教训：一套交互有第二实现时，删要比加想得多 —— 垃圾桶还牵着底部提示文案里的
+「拖到右上角垃圾桶删除」，文案不改就是换个说法骗人。
 
 **清空的实现分两拨**（存储上本来就不是一回事，别硬凑成一个 delete）：
 告警线由规则派生 ⇒ 逐条 `alerts.deleteRule`；水平线/直线在 `chart_line` ⇒ 新增
@@ -203,8 +212,7 @@
 **`DrawTool.ERASE` 的两条设计约束**：
 - 可点的都必须看得见 ⇒ `visibleDrawLines` 在 ERASE 下取**全部**（不看同型过滤、也不看那只眼睛），
   `alertLinesShown` 强制为真。藏起来一半等于「明明有这条线却删不掉」。
-- 它不拖线 ⇒ `alertDeleteRect()` 在 ERASE 返回 null、`showTrash` 排除 ERASE，
-  右上角那个「拖到这里删除」的落点不该出现。
+- 它不拖线 ⇒ 右上角不再有任何落点（那条路整条已撤，见上）。
 
 **命中判定 `eraseHitAt(point)`**：告警线 / 水平线 / 直线**放在一起比距离**取最近的一条。
 分类各判一次再按优先级挑会删错（水平线与告警线只差一个价位、直线能从任何东西上穿过）。
@@ -222,8 +230,7 @@
 ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命中 ——
 不设这道闸，一次想吃掉误触的横滑会把它路过的线删掉（已实测：横滑穿过直线不删）。
 
-**别的两条删除入口**（都还在）：拖线到右上角垃圾桶（工具激活且**有同类线可删时**常驻显示，
-原先只在拖动浮现 ⇒ 等于没有提示）；`删除` 工具点线。
+**别的删除入口**：没有了。删线只有上面那两条粒度（`删除` 工具点线 / `清空`）。
 
 **单击也要落线（2026-10-12 用户反馈后补）**：光有上面的 down 定性还不够 —— 轻点（down→up、
 中间没有 MOVE）时循环首帧 `pressed` 已空，而 `break` 排在**循环体之前**，循环体一次都不进，
@@ -234,6 +241,28 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 对照实测（同一个模拟器，先旧包后新包）：旧包单击 → `chart_line` 仍 0；新包单击 → 落 1 行，
 价位与 `input tap` 的 y 经刻度线性换算吻合（y=600 → 83754.20）。
 `README.md` 也补了「Android 端画线交互」一节（与桌面端交互约定同体例）。
+
+## 均线目录：整份交给用户（2026-10-12 晚）
+
+用户口径：「（管理弹窗）自定义均线现在只能新增，要能删掉原有的，比如 MA5」。⇒ 把「预置五档写死 +
+自定义档另存」重构成**一整份可编辑目录**，与桌面端 `MaPanel` / `DEFAULT_MA_CATALOG` 同口径。
+
+- 纯函数在 `ui/detail/DetailViewModel.kt`：`normalizeMaCatalog`（范围/去重/升序/截断）、
+  `maSelectionIn`、`MA_LIMIT = 8`。出厂目录搬到 `domain/repository/AppSettings.kt` 的
+  `DEFAULT_MA_CATALOG`（原 `MA_CHOICES` 删掉）—— 数据层的升级迁移也要用它，放 domain 才不跨层。
+- 持久化 `AppSettings.maCatalog: List<Int>?`：**null = 没设过（用出厂五档）、空表 = 用户真的清空了**。
+  DataStore 新 key `ma_catalog`；老 key `ma_custom_periods` 变**只读迁移**（老值里只有自定义档 ⇒
+  取 `DEFAULT_MA_CATALOG + 老值`；不补五档的话升级后指标条上五档凭空消失）。写时 null ⇒ `prefs.remove(key)`。
+  ❗**有意不采用桌面那条「空目录回退出厂五档」**：桌面从 localStorage 判不出「没设过」与「清空了」，
+  Android 用 null 判得出；回填会让「删光了」在重启后自己变回来。
+- 不变量**「选中 ⊆ 目录」只有一个执行点** `maSelectionIn`（恢复偏好 + 保存目录两条写入路径共用）。
+  漏一次就是「图上画着一条、指标条上没有 chip 可撤」的死线。删 MA5 时选中集里的 5 也靠它一起走。
+- `MaManagerDialog` 只管「有哪些档位」（选不选仍照旧在条上点），行尾 × 移除、底部「恢复默认」，
+  仍旧是草稿 + 保存（同 `IntervalManagerDialog`）；`IndicatorBar`/`IndicatorLineDialog` 的参数
+  `maChoices` 一律改名 `maCatalog`。
+- `MA_LIMIT` 从「自定义 ≤ 8」改成「**目录总数 ≤ 8**」（桌面同值）⇒ 老装机 5+8=13 条的下次保存会被截到 8。
+- 单测 `ui/detail/MaCatalogTest.kt`（8 条）：越界/去重/升序/截断/空表不回填 + 删 MA5 带走选中。
+  本机 **301 全绿**（2026-10-12，`testDebugUnitTest`，跑法同上面「环境」那节）。
 
 ## 发版
 改 `versionCode`/`versionName` → 推裸版本号 tag → 出 APK + `.sha256`。**签名固定**（`cf2e20c7…52f034`），别换。

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.waxilo.marketmonitor.domain.repository.AppSettings
+import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
@@ -51,8 +52,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             lastIntervalKey = this[Keys.INTERVAL] ?: d.lastIntervalKey,
             intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
-            maCustomPeriods = this[Keys.MA_CUSTOM]?.split(',')?.mapNotNull { it.trim().toIntOrNull() }
-                ?: d.maCustomPeriods,
+            maCatalog = readMaCatalog(this),
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
             crosshairEnabled = this[Keys.CROSSHAIR] ?: d.crosshairEnabled,
@@ -80,6 +80,25 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         )
     }
 
+    /**
+     * 均线目录（指标条上有哪些 chip）：新 key 优先；只有老 key（`ma_custom_periods`）时，
+     * 并成「出厂五档 + 老自定义」。
+     *
+     * 老版本把预置五档**写死在代码里**、只存自定义档，所以迁移必须把五档补回来 ——
+     * 直接拿老值当目录的话，升级后指标条上只剩自定义那几条，五档凭空消失。
+     * 两个 key 都没有 → null（上层用出厂目录）；空串 → 空表（用户把目录清空了）。
+     * 范围、去重、条数上限一律不在这里管，归一到 VM 的 normalizeMaCatalog。
+     */
+    private fun readMaCatalog(prefs: Preferences): List<Int>? {
+        prefs[Keys.MA_CATALOG]?.let { return it.csvToInts() }
+        val legacy = prefs[Keys.MA_CUSTOM] ?: return null
+        return DEFAULT_MA_CATALOG + legacy.csvToInts()
+    }
+
+    /** 逗号分隔的整数表；解析不出的项丢掉（旧值/手改坏的都走这里）。 */
+    private fun String.csvToInts(): List<Int> =
+        split(',').mapNotNull { it.trim().toIntOrNull() }
+
     private fun AppSettings.writeTo(prefs: MutablePreferences) {
         prefs[Keys.THEME] = themeMode.key
         prefs[Keys.QUOTE] = quoteAsset
@@ -87,7 +106,11 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.INTERVAL] = lastIntervalKey
         prefs[Keys.INTERVAL_LIST] = intervalKeys
         prefs[Keys.MA] = maPeriods.joinToString(",")
-        prefs[Keys.MA_CUSTOM] = maCustomPeriods.joinToString(",")
+        // null（没设过）就把 key 撤掉，而不是写空串 —— 空串是「用户把目录清空了」，两件事。
+        // 老 key ma_custom_periods 留着不删：读的时候已被 readMaCatalog 并进去，
+        // 之后每次写都落在新 key 上，老值成孤儿（无害，同当年撤掉的冷却配置）。
+        if (maCatalog == null) prefs.remove(Keys.MA_CATALOG)
+        else prefs[Keys.MA_CATALOG] = maCatalog.joinToString(",")
         prefs[Keys.BOLL] = bollEnabled
         prefs[Keys.PANE] = subPaneKeys
         prefs[Keys.CROSSHAIR] = crosshairEnabled
@@ -119,6 +142,9 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val INTERVAL = stringPreferencesKey("last_interval")
             val INTERVAL_LIST = stringPreferencesKey("interval_list")
             val MA = stringPreferencesKey("ma_periods")
+            val MA_CATALOG = stringPreferencesKey("ma_catalog")
+
+            /** 老 key：只存自定义档（预置五档不在里面）。留着只读，用于升级迁移。 */
             val MA_CUSTOM = stringPreferencesKey("ma_custom_periods")
             val BOLL = booleanPreferencesKey("boll_enabled")
             val PANE = stringPreferencesKey("sub_pane")

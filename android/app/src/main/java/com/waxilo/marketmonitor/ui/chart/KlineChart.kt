@@ -16,9 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,7 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -125,9 +121,11 @@ data class BandGuideLine(val lineId: Long, val price: Double)
  * 这与当年「划线开关」一个布尔的处境相同，只是把「划什么」从隐式变成显式单选。
  *
  * [ERASE] 是同一组里的第四枚：它不划线，而是**点线即删**（告警线 / 水平线 / 直线通吃）。
- * 原先删除只有「把线拖到右上角垃圾桶」一条路 —— 那要求用户先知道有这回事、还得能精准拖到
- * 一个角落，实际反馈是「划的线无法删除」（2026-10-12）。点一枚垃圾桶再点线是所有人都会的
- * 手势，且与另外三枚共享同一套单选/自动收起规则，不需要第二套交互模型。
+ *
+ * 删除**只此一条路**。2026-10-12 之前还有第二条 —— 把线拖到画布右上角的垃圾桶上松手。
+ * 那条路要求用户先知道有这回事、还得精准拖到一个角落（实际反馈就是「划的线无法删除」）；
+ * 竖栏补上「点垃圾桶、再点线」之后，右上角那个落点成了同一件事的第二套交互，
+ * 还平白压住图表右上角，于是整条撤掉：拖线松手一律落库，删除统一走 [ERASE]。
  */
 enum class DrawTool { NONE, ALERT, HORIZONTAL, TREND, ERASE }
 
@@ -304,7 +302,7 @@ fun KlineChart(
     alertLines: List<AlertPriceLine> = emptyList(),
     /**
      * 指标划线里选了「不告警」的那几条：按各自配置的 K 线周期逐根画出的细灰参考曲线
-     * （跟着指标周期走，不是定死的水平线）。不参与拖拽与垃圾桶，只随 [alertLinesVisible]
+     * （跟着指标周期走，不是定死的水平线）。不参与拖拽与删除，只随 [alertLinesVisible]
      * 那只眼睛显隐。划线模式下不画——那时单指属于告警线，图上再叠一层拖不动的灰线只会引人去拖它。
      */
     indicatorGuides: List<IndicatorGuideLine> = emptyList(),
@@ -332,7 +330,7 @@ fun KlineChart(
     onDrawLineDrag: (DrawGuideLine) -> Unit = {},
     /** 手指离开：调用方把当前预览线落库（id 为 0 则新建）。 */
     onDrawLineCommit: (Long) -> Unit = {},
-    /** 把线拖到右上角垃圾桶上松手：调用方删除该 id（id 为 0 = 放弃手上一笔未落库的新线）。 */
+    /** 删除模式（[DrawTool.ERASE]）点中一条视觉画线：调用方按 chart_line 主键删除。 */
     onDrawLineDelete: (Long) -> Unit = {},
     /**
      * 划线是否画在图上（主图右下角那只眼睛控制）。仅在非划线模式下生效 ——
@@ -351,8 +349,8 @@ fun KlineChart(
     /** 手指离开：调用方按同一 id 把新价写回那条规则（id 为 null 则新建规则）。 */
     onAlertLineCommit: (Long?) -> Unit = {},
     /**
-     * 把线拖到右上角垃圾桶上松手：调用方删除该 id 对应的规则（id 为 null = 手上一笔
-     * 还没落库的新线，等同于放弃）。划线模式下右上角才会出现垃圾桶。
+     * 删除模式（[DrawTool.ERASE]）点中一条告警线：调用方删除该 id 对应的规则
+     * （id 为 null = 手上一笔还没落库的新线，等同于放弃）。
      */
     onAlertLineDelete: (Long?) -> Unit = {},
     /** 左上角角标（进入全屏）。null 表示不画，读数带也就顶到最左。 */
@@ -600,7 +598,7 @@ fun KlineChart(
         }
 
     /**
-     * 垃圾桶模式下，落点 [point] 点中的是哪条线。
+     * 删除模式下，落点 [point] 点中的是哪条线。
      *
      * 三类线**放在一起比距离**，取最近的一条 —— 图上它们本来就重叠（水平线与告警线只差一个
      * 价位、直线能从任何东西上穿过去），分类各判一次再按优先级挑，会出现「点着看得见的那条、
@@ -637,38 +635,16 @@ fun KlineChart(
     }
 
     /**
-     * 划线模式下，手指正把线悬在右上角垃圾桶上方 —— 用来高亮垃圾桶给反馈。
-     * 与 priceBase 等一样是「手势期间写、重组读」的内部态，不进气势 key，靠 remember 常驻。
+     * 图内浮层（左下角「全屏」角标、右下的划线显隐眼睛）距绘图区边缘的内缩距离。
+     * 与那几个浮层同用 [CORNER_BUTTON_INSET] 一档值，四角才对称。
      */
-    var alertTrashHot by remember { mutableStateOf(false) }
-    val trashInsetPx = with(density) { SPACING_TRASH_INSET.toPx() }
-    val trashSizePx = with(density) { TRASH_BUTTON_SIZE.toPx() }
-    /**
-     * 右上角删除垃圾桶的命中矩形（画布像素），锚在**绘图区**（主图）的右上角。
-     * 放右上而不是右下：右下角是最新蜡烛与最新价标，正被盯着看，删除目标压在那儿代价最大
-     * （那块地方平时也归划线显隐的眼睛）；而划线时右上角一般空着（左上角是指标读数带，
-     * 最新价读数在右侧轴上）。
-     * 只在划线模式下非空；与浮层里那个垃圾桶 Box 用同一套 geo + inset + size，
-     * 两者一旦错开就会「看着命中、松手却没删」。
-     *
-     * 读实时的 [liveGeo]（本函数被手势协程捕获，期间量程/尺寸一直在变）。
-     */
-    fun alertDeleteRect(): Rect? {
-        // 垃圾桶模式不拖线，右上角那个落点没有存在意义（showTrash 也已排除）：
-        // 这里一并返回 null，免得命中矩形还在、拖动却已无人消费。
-        if (drawTool == DrawTool.NONE || drawTool == DrawTool.ERASE) return null
-        val plot = liveGeo
-        if (!plot.isUsable) return null
-        val right = plot.plotWidthPx - trashInsetPx
-        val top = plot.mainTopPx + trashInsetPx
-        return Rect(left = right - trashSizePx, top = top, right = right, bottom = top + trashSizePx)
-    }
+    val cornerInsetPx = with(density) { CORNER_BUTTON_INSET.toPx() }
 
     /**
      * 这一帧要不要画线（连同线右侧的价位标签）。
      *
      * 划线模式下无条件为真：眼睛关的是「平时嫌线挡着看形态」，不该顺手把要拖的那根也藏掉，
-     * 拖一根看不见的线等于盲操作。垃圾桶模式同理 —— 线不可见就无从点它。
+     * 拖一根看不见的线等于盲操作。删除模式同理 —— 线不可见就无从点它。
      */
     val alertLinesShown = alertLinesVisible || drawTool == DrawTool.ALERT || drawTool == DrawTool.ERASE
 
@@ -677,7 +653,7 @@ fun KlineChart(
      * · 告警工具下全不画 —— 那时单指属于告警线，图上再叠一层拖不动的画线只会引人去拖它
      *   （与指标参考线在告警模式下让位的道理相同）；
      * · 水平线/直线工具下只画**同型**的线 —— 拖走的是眼前够得着的那种，另一种留着徒增歧义；
-     * · 垃圾桶模式下**全画**（不看同型、也不看那只眼睛）—— 能点的必须都看得见，
+     * · 删除模式下**全画**（不看同型、也不看那只眼睛）—— 能点的必须都看得见，
      *   藏起来一半等于「明明有这条线却删不掉」；
      * · 平时（NONE，含竖屏）随眼睛显隐、只显不可编。
      */
@@ -688,19 +664,6 @@ fun KlineChart(
         DrawTool.HORIZONTAL -> drawLines.filter { it.kind == ChartLineKind.HORIZONTAL }
         DrawTool.TREND -> drawLines.filter { it.kind == ChartLineKind.TREND }
     }
-
-    /**
-     * 这一帧要不要摆出删除垃圾桶（见下方渲染处的说明）。
-     * 工具激活 + 有同类线可删（含手上正在拖的那根）才画。
-     * 垃圾桶模式例外：它删的是「点中的那条线」，右上角那个落点与它无关。
-     */
-    val showTrash = drawTool != DrawTool.NONE && drawTool != DrawTool.ERASE &&
-        (alertLines.any { it.dragging } || visibleDrawLines.any { it.dragging } ||
-            when (drawTool) {
-                DrawTool.ALERT -> alertLines.isNotEmpty()
-                DrawTool.HORIZONTAL, DrawTool.TREND -> visibleDrawLines.isNotEmpty()
-                DrawTool.NONE, DrawTool.ERASE -> false
-            })
 
     Box(modifier = modifier.fillMaxSize()) {
         Canvas(
@@ -737,7 +700,6 @@ fun KlineChart(
                             }
                         },
                         grabPx = alertGrabPx,
-                        deleteRect = ::alertDeleteRect,
                         onHorizontalDrag = { id, yPx ->
                             // 量程是变动的（缩放/平移），必须走 rememberUpdatedState 读实时值，
                             // 否则这个回调会拿协程启动那一刻的旧量程换算，画出来的线跑偏
@@ -764,14 +726,6 @@ fun KlineChart(
                                 else -> Unit
                             }
                         },
-                        onHorizontalDelete = { id ->
-                            when (drawTool) {
-                                DrawTool.ALERT -> alertDelete(id)
-                                DrawTool.HORIZONTAL -> drawDelete(id ?: 0L)
-                                else -> Unit
-                            }
-                        },
-                        onOverTrash = { hot -> alertTrashHot = hot },
                         eraseHitAt = ::eraseHitAt,
                         // 告警线走规则那条回调（顺带清掉它的通知配置），画线走 chart_line 那条
                         onEraseAlertLine = { id -> alertDelete(id) },
@@ -980,7 +934,7 @@ fun KlineChart(
             // ---- 角标（进入 / 退出全屏）：绘图区左下角 ----
             // **不占左上角**：左上角是指标读数带，放那儿会把整块读数往下顶
             // （当年浮在左上的十字光标弹窗被报过同样的「挤占 k 线数据弹窗」）。
-            // 左下角信息密度最低，且离右上角的删除垃圾桶最远。
+            // 左下角信息密度最低，且离右上角（最新的蜡烛与价格轴）最远。
             // 放在图表而不是顶栏：详情页要滚动才能看到图表，入口钉在顶栏等于每次先得翻页。
             cornerAction?.let { action ->
                 Box(
@@ -1061,51 +1015,12 @@ fun KlineChart(
                 )
             }
 
-            // ---- 划线模式的删除垃圾桶（绘图区右上角） ----
-            // 定位到**绘图区**右上角而不是整块画布（画布右上角会盖住指标读数带），
-            // 且与 alertDeleteRect() 严格同框，否则会出现「看着命中、松手却没删」。
-            // 它不是可点按钮而是**落点**：
-            // 不挂 clickable，指针事件穿透到下层 Canvas，由手势判定「线拖进来松手 = 删除」。
-            //
-            // 出现时机从「仅拖动时浮现」改成「工具激活且有同类线可删时常驻」（2026-10-12 用户反馈
-            // 「划的线无法删除」）：只在拖起来之后才出现的落点等于没有落点 —— 用户得先知道
-            // 「拖到右上角垃圾桶删除」才敢去拖，而垃圾桶本身是他唯一能看见的提示。现在选中任意
-            // 划线工具，右上角就摆着这个垃圾桶，底部提示再写着「拖到右上角垃圾桶删除」，链路才闭合。
-            // 没有同类线可删时仍不画：空图上一个删不掉的垃圾桶只会让人去点它。
-            if (showTrash) {
-                val colors = MarketTheme.colors
-                val rect = alertDeleteRect()
-                if (rect != null) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopStart)
-                            .offset(
-                                x = with(density) { rect.left.toDp() },
-                                y = with(density) { rect.top.toDp() },
-                            )
-                            .size(TRASH_BUTTON_SIZE)
-                            .clip(Radius.fullShape)
-                            .background(if (alertTrashHot) DownRed else colors.washStrong)
-                            .semantics { contentDescription = "拖线到此删除" },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = null,
-                            modifier = Modifier.size(TRASH_ICON_SIZE),
-                            tint = if (alertTrashHot) Color.White else colors.muted,
-                        )
-                    }
-                }
-            }
-
             // ---- 划线显隐的眼睛（主图右下角） ----
             // 贴着主图底沿：副图再怎么堆，眼睛都留在被藏的那条线所在的那块图上，
-            // 开关与被控对象同区。左下/左上分别站着全屏角标与指标读数带，右上归垃圾桶。
+            // 开关与被控对象同区。左下是进/出全屏的角标、左上是指标读数带，右下这格空着。
             // 划线模式下不画：那时线必然可见（见 alertLinesShown），眼睛是个永远无效的开关。
             // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
-            // 它**要**挂 clickable（与垃圾桶相反）：点它就该切显隐，
-            // 不该同时被下层画布当成一次拖动。
+            // 它要挂 clickable：点它就该切显隐，不该同时被下层画布当成一次拖动。
             if (onToggleAlertLines != null && drawTool == DrawTool.NONE &&
                 (alertLines.isNotEmpty() || indicatorGuides.isNotEmpty() ||
                     bandGuides.isNotEmpty() || drawLines.isNotEmpty())
@@ -1115,9 +1030,9 @@ fun KlineChart(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset(
-                            x = with(density) { (geo.plotWidthPx - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
+                            x = with(density) { (geo.plotWidthPx - cornerInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
                             y = with(density) {
-                                ((geo.mainTopPx + geo.mainHeightPx) - trashInsetPx - EYE_BUTTON_SIZE.toPx()).toDp()
+                                ((geo.mainTopPx + geo.mainHeightPx) - cornerInsetPx - EYE_BUTTON_SIZE.toPx()).toDp()
                             },
                         )
                         .size(EYE_BUTTON_SIZE)
@@ -2333,9 +2248,10 @@ private fun IndicatorReadout(
  * 若逐帧同时应用横/纵位移，图会一边平移一边乱缩放。先动够阈值再锁定一个方向。
  *
  * 划线工具（[drawTool]）激活时单指被图表征用，既不平移刻度也不出十字光标，
- * **且不需要长按**——划线就是这个工具下唯一的目的，再要求长按只是多余的一步：
+ * **且不需要长按**——那是这个工具下唯一的目的，再要求长按只是多余的一步：
  * · ALERT/HORIZONTAL：纵向拖动改判为「拖价格线/水平线」（同一条通道，只是落库去处不同）；
- * · TREND：单指负责敲直线锚点（第一下种子、第二下成交）与整体平移已有直线。
+ * · TREND：单指负责敲直线锚点（第一下种子、第二下成交）与整体平移已有直线；
+ * · ERASE：不拖线，只在松手时删掉按下的那一点命中的线（滑走即作废）。
  * 双指缩放保持不变：画线时同样要能缩放看清细节。
  */
 private suspend fun PointerInputScope.detectChartGestures(
@@ -2354,27 +2270,18 @@ private suspend fun PointerInputScope.detectChartGestures(
     horizontalAnchors: () -> List<AlertLineAnchor>,
     /** 抓住已有线的容差（像素）。超出就当「在这里新建一根」。 */
     grabPx: Float,
-    /**
-     * 右上角删除垃圾桶的命中矩形（工具激活时非空），用**取值函数**读实时画布尺寸。
-     * 拖线松手时手指落在其中 → 改调删除回调而不是落库。
-     */
-    deleteRect: () -> Rect?,
     /** 水平通道拖线：回调「抓到的线 id（null = 新建）」与未换算的 y 像素。 */
     onHorizontalDrag: (Long?, Float) -> Unit,
     /** 手指离开且本场手势拖过线时回调一次，带同一 id，调用方据此落库。 */
     onHorizontalCommit: (Long?) -> Unit,
-    /** 拖线悬在垃圾桶上松手：带同一 id，调用方据此删除（null/0 = 放弃未落库的新线）。 */
-    onHorizontalDelete: (Long?) -> Unit,
-    /** 悬停状态变化：true = 手指正把线停在垃圾桶上方，浮层据此高亮给出反馈。 */
-    onOverTrash: (Boolean) -> Unit,
-    /** 垃圾桶模式：落点 [Offset] 命中的那条线；null = 落在空处，什么也不做。 */
+    /** 删除模式（[DrawTool.ERASE]）：落点 [Offset] 命中的那条线；null = 落在空处，什么也不做。 */
     eraseHitAt: (Offset) -> EraseHit?,
     /**
-     * 垃圾桶模式点中一条告警线：[ruleId] 是它背后的规则，由调用方销毁。
-     * 与 [onHorizontalDelete] 分开是因为后者要按当前工具猜线型，而这里线型是判定结果里带的。
+     * 删除模式点中一条告警线：[ruleId] 是它背后的规则，由调用方销毁。
+     * 与 [onHorizontalCommit] 分开是因为后者要按当前工具猜线型，而这里线型是判定结果里带的。
      */
     onEraseAlertLine: (Long) -> Unit,
-    /** 垃圾桶模式点中一条视觉画线：调用方按 chart_line 主键删除。 */
+    /** 删除模式点中一条视觉画线：调用方按 chart_line 主键删除。 */
     onEraseDrawLine: (Long) -> Unit,
     /** 已有直线的两端**像素**落点，按下那一刻用它就近抓取。 */
     trendPixels: () -> List<TrendLinePixels>,
@@ -2390,7 +2297,7 @@ private suspend fun PointerInputScope.detectChartGestures(
     onTrendDrag: (Long, TrendAnchor, TrendAnchor) -> Unit,
     /** 直线成交：id 为 0 = 两敲新建成交，非 0 = 平移已有线。调用方拿最后一帧预览落库。 */
     onTrendCommit: (Long) -> Unit,
-    /** 直线删除/放弃：拖到垃圾桶上松手，或第二下落得太近（退化，撤销种子）。 */
+    /** 直线删除/放弃：撤销一笔没建成的新线（第二下落得太近 / 种子半路没了）。 */
     onTrendDelete: (Long) -> Unit,
     /** 每次新手势按下时回调一次，用于清掉上一场手势遗留的累积余量。 */
     onGestureStart: () -> Unit,
@@ -2435,7 +2342,7 @@ private suspend fun PointerInputScope.detectChartGestures(
         var longPressActive = false
         /**
          * 本场水平通道手势有没有「落到线上」—— down 那一下发出首帧即置位（见下方），
-         * 所以单击与拖动一视同仁。没落过（副图区起笔、非划线工具）就不回调落库/删除。
+         * 所以单击与拖动一视同仁。没落过（副图区起笔、非划线工具）就不回调落库。
          */
         var dragActive = false
         /** 本场手势锁定的那条线；`null` = 新建一根。判定只做一次，整场不再改。 */
@@ -2444,8 +2351,7 @@ private suspend fun PointerInputScope.detectChartGestures(
          * 告警线 / 水平线的抓取在 **down 这一刻** 定死，与下方直线工具同一个理由：
          * [awaitFirstDown] 已经把 down 事件消费掉，循环里第一帧 [awaitPointerEvent]
          * 拿到的其实是**第一个 MOVE**。手指一动就滑出抓取半径（[grabPx] 才 24dp），
-         * 于是「按住已有的线拖到垃圾桶」被判成「新建一根」：松手在垃圾桶上只是把新建的
-         * 草稿丢掉，原来那根纹丝不动 —— 用户那边的表象就是「划的线无法删除」。
+         * 于是「按住已有的线改价位」被判成「新建一根」，原来那根纹丝不动。
          */
         if (drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL) {
             val plot = geo()
@@ -2453,14 +2359,12 @@ private suspend fun PointerInputScope.detectChartGestures(
             grabbedId = horizontalAnchors().closestAlertLine(y, grabPx)
         }
         /**
-         * 垃圾桶模式：按下的那一点命中了哪条线。跟 [grabbedId] 一样在 down 定性 ——
+         * 删除模式：按下的那一点命中了哪条线。跟 [grabbedId] 一样在 down 定性 ——
          * 理由是同一条（循环里第一帧已经是 MOVE 了，落点会跟着手指跑）。手指一旦移开
          * 超过 slop 就把它作废：那时这场手势是「滑一下图」而不是「点这条线」，
          * 否则一次横向平移的起手就会顺手把碰到的线删掉。
          */
         var eraseHit = if (drawTool == DrawTool.ERASE) eraseHitAt(first.position) else null
-        /** 松手那一刻手指是否悬在右上角垃圾桶上 —— 是则删除这条线而非落库。 */
-        var overTrash = false
         /** 直线工具下单指这场的用途；`null` = 还没按下定性。 */
         var trendMode: TrendMode? = null
         /** 正在整体平移的已有直线 id（0 只会在中途预览出现，成交必为正 id）。 */
@@ -2510,8 +2414,6 @@ private suspend fun PointerInputScope.detectChartGestures(
          * 落不了库，用户必须先拖动一下才行。这里补的这一帧与循环里那帧同源
          * （同样的夹取、同一个回调），于是「点一下不动」与「点一下再拖」只差后续
          * 帧数，落点语义完全一致 —— 不会出现"单击落的位置和拖动落的位置不一样"。
-         *
-         * 不在此处判垃圾桶：拖进去松手才删，那语义本就该由拖动产生（按下不发删除意图）。
          */
         if (drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL) {
             val plot = geo()
@@ -2557,16 +2459,9 @@ private suspend fun PointerInputScope.detectChartGestures(
                 val x = raw.x.coerceIn(0f, plot.plotWidthPx)
                 val y = raw.y.coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
                 trendLast = Offset(x, y)
-                // 命中判定用**未夹取的原始坐标**（真实手指位置），而不是跟手用的夹取值：
-                // 垃圾桶锚在绘图区右上角，按真实落点判定最直观。跟手 + 垃圾桶高亮照旧。
-                val overTrashNow = deleteRect()?.contains(raw) == true
-                if (overTrashNow != overTrash) {
-                    overTrash = overTrashNow
-                    onOverTrash(overTrashNow)
-                }
                 if (drawTool == DrawTool.ERASE) {
-                    // 垃圾桶模式这一场只干一件事：点中哪条删哪条（真正的删除在松手时做）。
-                    // 手指一挪出 slop 就不算「点」—— 单指在垃圾桶模式下仍是唯一通道，
+                    // 删除模式这一场只干一件事：点中哪条删哪条（真正的删除在松手时做）。
+                    // 手指一挪出 slop 就不算「点」—— 单指在删除模式下仍是唯一通道，
                     // 不设这道闸的话，想吃掉一次误触的滑动就会把它路过的那条线删掉。
                     if (eraseHit != null && (raw - first.position).getDistance() > touchSlop) {
                         eraseHit = null
@@ -2692,14 +2587,12 @@ private suspend fun PointerInputScope.detectChartGestures(
             }
         }
         if (dragActive) {
-            // 松手在垃圾桶上 = 删除这条线（id 为 null/0 时等于放弃一笔未落库的新线），
-            // 否则照旧落库。两种情况收尾都要清掉高亮，别让它留在下一次手势上。
-            if (overTrash) onHorizontalDelete(grabbedId) else onHorizontalCommit(grabbedId)
-            if (overTrash) onOverTrash(false)
+            // 松手即落库（新线新建、已有线改价）。删除不在这里 —— 那条路只有竖栏的删除模式。
+            onHorizontalCommit(grabbedId)
         }
-        // 垃圾桶模式：按下那一点命中了线、且这一场没滑走 → 松手即删。
+        // 删除模式：按下那一点命中了线、且这一场没滑走 → 松手即删。
         // 放在松手后而不是按下时删：手指还没抬起来就给结果，误按一下就没有回头路。
-        // 删掉之后由调用方把工具收回 NONE（与落一根/删一条自动收起同一条出口）。
+        // 删掉之后由调用方把工具收回 NONE（与落一根自动收起同一条出口）。
         eraseHit?.let { hit ->
             when (hit) {
                 is EraseHit.Alert -> onEraseAlertLine(hit.ruleId)
@@ -2716,7 +2609,7 @@ private suspend fun PointerInputScope.detectChartGestures(
                     onTrendDelete(0L) // 种子半路没了：把预览收回去，别留一根悬空的新线
                 } else if ((trendLast - seedPx).getDistance() < grabPx) {
                     // 第二敲离第一下太近 = 两点定不出一条线：判「撤销这一笔」，
-                    // 清种子并撤回预览 —— 与拖到垃圾桶放弃同一条回调
+                    // 清种子并撤回预览 —— 与种子半路没了同一条回调
                     onTrendSeed(null)
                     onTrendDelete(0L)
                 } else {
@@ -2724,10 +2617,7 @@ private suspend fun PointerInputScope.detectChartGestures(
                     onTrendSeed(null)
                 }
             }
-            TrendMode.MOVE -> {
-                if (overTrash) onTrendDelete(trendGrabbedId) else onTrendCommit(trendGrabbedId)
-                if (overTrash) onOverTrash(false)
-            }
+            TrendMode.MOVE -> onTrendCommit(trendGrabbedId)
         }
         // 松手**不清**十字光标：长按把它停在最后那根上，价格标、日期标与 K 线详情小条
         // 一并留在那里 —— 手指一抬读数就消失的话根本来不及看。它交给「画布上的其他操作」
@@ -2754,7 +2644,7 @@ private enum class TrendMode {
 internal data class TrendLinePixels(val id: Long, val p1: Offset, val p2: Offset)
 
 /**
- * 垃圾桶模式下点中的那条线。
+ * 删除模式（[DrawTool.ERASE]）下点中的那条线。
  *
  * 分两型而不是只回一个 id：告警线删的是它背后的**规则**（顺带带走通知配置），
  * 视觉画线删的是 chart_line 的一行 —— 两张表、两条回调，混成一个 id 空间迟早会删错东西。
@@ -2914,8 +2804,8 @@ private val TREND_SEED_DOT = 4.5.dp
 private val CORNER_BUTTON_SIZE = 26.dp
 
 /**
- * 角标距绘图区左下角的内缩距离。取成和垃圾桶（[SPACING_TRASH_INSET]）一样的值，
- * 让「进入全屏」与「拖线删除」这两个角对称地贴在同一高度上。
+ * 图内浮层（左下角「全屏」角标、右下的划线显隐眼睛）距绘图区边缘的内缩距离。
+ * 四角共用这一档值，几个浮层才对称地贴在各自那一角上。
  */
 private val CORNER_BUTTON_INSET = 12.dp
 
@@ -2927,20 +2817,11 @@ private val CORNER_BUTTON_INSET = 12.dp
  */
 private val ALERT_GRAB_WIDTH = 24.dp
 
-/** 划线模式右上角删除垃圾桶的边长（含圆形背景）。 */
-private val TRASH_BUTTON_SIZE = 32.dp
-
-/** 垃圾桶图标本身的大小（小于外圈背景，留出内边距）。 */
-private val TRASH_ICON_SIZE = 16.dp
-
-/** 垃圾桶距绘图区右上沿的内缩距离；必须和 alertDeleteRect() 用同一值。 */
-private val SPACING_TRASH_INSET = 12.dp
-
 /**
  * 主图右下角划线显隐「眼睛」的外圈边长。
  *
- * 内缩沿用 [SPACING_TRASH_INSET]（与右上角垃圾桶同值），大小与左下角的全屏角标
- * [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，占的绘图区越少越好。
+ * 大小与左下角的全屏角标 [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，
+ * 占的绘图区越少越好。
  */
 private val EYE_BUTTON_SIZE = 26.dp
 
