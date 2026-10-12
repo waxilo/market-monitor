@@ -46,6 +46,7 @@ import {
   SUB_PANE_H,
   SUB_READOUT_H,
   TIME_AXIS_H,
+  type ChartHeights,
 } from '../lib/chartLayout';
 import { decimalsFor, formatCompact } from '../lib/format';
 import {
@@ -95,6 +96,13 @@ const RESET_BADGE_H = 16;
 const TREND_MIN_DRAW_PX = 8;
 /** 待定起点的把手半径（画出来的大小；命中不用它 —— 画布上没有抓取）。 */
 const TREND_HANDLE_R = 3.5;
+
+/**
+ * 骨架网格的量程：**任取一段等距区间**即可 —— 网格的条数与间距由 `gridLines` 的 1-2-5 阶梯
+ * 决定，取 (0,1) 恰好落成 6 条等距横线，就是一张「还没有数据的图」该有的样子。
+ * 数值本身不参与任何绘制（骨架不画刻度数字），与 App ChartSkeleton 的 SKELETON_RANGE 同值。
+ */
+const SKELETON_RANGE: Range = { low: 0, high: 1 };
 
 /** 与 App ui/theme/Color.kt 的 ChartLineColors 同源的色板，扩到十一色位。
  *  0~4 是 MA 的前五档，5~7 归 BOLL（MB/UP/DN），8~10 是 MA 第 6~8 条的补充色位。 */
@@ -249,6 +257,50 @@ function roundRect(
   }
 }
 
+/**
+ * 骨架：**还没有数据时先摆好的那张空图**，只有网格与副图分隔线。
+ *
+ * 与真实图共用 `chartHeights` 的那套几何（读数带多高、主图占多少、每块副图落在哪），
+ * 所以它是「这一张图还没填上蜡烛」，而不是另开一张图 —— 数据到位的瞬间只有蜡烛浮现，
+ * 版面本身不重排（App 的 ChartSkeleton 是同一思路）。
+ *
+ * 三条刻意的「不画」：
+ * - **不画刻度数字**：还不知道任何价位，画出来只能是编的；
+ * - **不画蜡烛 / 均线 / 读数带**：没有数据时读数带那几行全是 `--`，比留白更吵；
+ * - **不画最新价与时间刻度**：没有数据就没有「最新」。
+ *
+ * 网格量程固定用 `SKELETON_RANGE`，**不吃用户的缩放 / 平移意图** —— 那两个意图是相对量，
+ * 套在一段假的量程上只会得到一堆没有意义的线。
+ */
+function drawSkeleton(
+  ctx: CanvasRenderingContext2D,
+  p: Palette,
+  plotW: number,
+  gh: ChartHeights,
+  paneCount: number,
+) {
+  const { mainTop, mainH, mainBottom } = gh;
+  // 网格用**重一档**的发丝线（`--hairline-strong`）而不是常规的 `--hairline`：
+  // 它上面还盖着一层半透明遮罩，再淡一档就洗没了（浅色主题实测对比度只剩 3.5%，
+  // 观感退回「一块空白 + 转圈」）。加重之后透过遮罩看，浓淡正好与真实图的网格相当。
+  ctx.strokeStyle = p.edge;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, mainTop, plotW, mainH);
+  ctx.clip();
+  for (const value of gridLines(SKELETON_RANGE)) {
+    const y = mainTop + toFraction(SKELETON_RANGE, value) * mainH;
+    if (y >= mainTop - 0.5 && y <= mainBottom + 0.5) hline(ctx, 0, plotW, y);
+  }
+  ctx.restore();
+  // 副图分隔线：每块副图的上边界，与真实图同一式
+  for (let k = 0; k < paneCount; k++) {
+    hline(ctx, 0, plotW, mainBottom + k * SUB_PANE_H + SUB_READOUT_H);
+  }
+}
+
 function drawSegments(
   ctx: CanvasRenderingContext2D,
   segments: ReadoutSegment[],
@@ -353,6 +405,12 @@ interface Props {
   tickSize?: string;
   theme: string;
   /**
+   * 数据还没到（换标的 / 换周期 / 换数据源之后的那一段）。为真时在画布上盖一层遮罩
+   * （半透明 + 转圈 + 「加载中」），画布自己则在画**骨架**（见 draw 里 `n === 0` 的分支）。
+   * 两层合起来才是完整观感：骨架保证版面不变，遮罩说清楚「正在取数」。
+   */
+  loading: boolean;
+  /**
    * 换标的或换周期时作废**过程状态**（十字光标、画了一半的直线）。
    * 视窗与价格刻度不在此列 —— 它们是全局记住的偏好（mm.chartView），跨切换保留。
    */
@@ -400,6 +458,7 @@ export function KlineCanvas({
   interval,
   tickSize,
   theme,
+  loading,
   resetKey,
   priceLines,
   trendLines,
@@ -543,7 +602,9 @@ export function KlineCanvas({
     const n = list.length;
     const cssW = canvas.clientWidth;
     const cssH = canvas.clientHeight;
-    if (n === 0 || cssW <= 0 || cssH <= 0) return;
+    // 尺寸还没量到（首帧、面板收起中）就什么都不画。注意**「没有数据」不在此列** ——
+    // 那时要出骨架，见下面 n === 0 的分支（这里返早会让换周期的那段变成一块全白）。
+    if (cssW <= 0 || cssH <= 0) return;
 
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(cssW * dpr) || canvas.height !== Math.round(cssH * dpr)) {
@@ -557,6 +618,17 @@ export function KlineCanvas({
     const p = readPalette();
 
     const plotW = Math.max(1, cssW - AXIS_W);
+
+    /**
+     * 数据还没到（换标的 / 换周期 / 换数据源之后的那一段）：画**骨架**。
+     * 组件侧此时挂着一层遮罩（`.chart-loading`），两者合起来才是完整观感 ——
+     * 骨架负责「版面不变」，遮罩负责「说清楚正在取数」。
+     */
+    if (n === 0) {
+      drawSkeleton(ctx, p, plotW, gh, s.subPanes.length);
+      return;
+    }
+
     const families = overlayFamilies(s);
     // 各段的纵向落点统一取自 heights：主图与副图的边界只有一处定义
     const mainTop = gh.mainTop;
@@ -1495,8 +1567,19 @@ export function KlineCanvas({
   }, [draw, persistView, reportOlder]);
 
   return (
-    <div className="chart-scroll" ref={wrapRef}>
-      <canvas className="chart-canvas" ref={canvasRef} style={{ height: totalH }} />
+    <div className="chart-stage">
+      <div className="chart-scroll" ref={wrapRef}>
+        <canvas className="chart-canvas" ref={canvasRef} style={{ height: totalH }} />
+      </div>
+      {/* 遮罩层压在画布上（`.chart-stage` 是定位容器）：底下的骨架网格透得出来，
+          转圈与「加载中」说明这是在取数、不是没有数据。它同时也挡住画布的手势 ——
+          数据没到时的拖拽 / 缩放会算出没有意义的视窗并落进偏好（见 lib/chartViewPrefs）。 */}
+      {loading && (
+        <div className="chart-loading" role="status" aria-live="polite">
+          <span className="chart-loading-spin" aria-hidden="true" />
+          <span className="chart-loading-text">加载中…</span>
+        </div>
+      )}
     </div>
   );
 }

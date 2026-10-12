@@ -91,6 +91,17 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
   const [candles, setCandles] = useState<Bar[]>([]);
+  /**
+   * 取数状态。换标的 / 换周期 / 换数据源时先立 `loading`（画布出骨架 + 遮罩），
+   * 数据到了才落下 —— 不立的话那一段只能看到一块全白的画布，用户分不清是在取数还是坏了。
+   *
+   * 初值给真（与 App 的 `loadingCandles = true` 同）：首帧还没跑取数 effect，不能先闪一下
+   * 「没有取到 K 线」。`failed` 与「取回来是空的」分开记 —— 一个是网络/数据源不通（该重试），
+   * 一个是这个周期本来就没数据，提示语不同。
+   */
+  const [load, setLoad] = useState({ loading: true, failed: false });
+  /** 「重新加载」递一次 = 让取数 effect 重跑（与 resetPriceSignal 同套路）。 */
+  const [reloadSeq, setReloadSeq] = useState(0);
   const market = item?.market;
   const symbol = item?.symbol;
   /**
@@ -152,14 +163,17 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     setInterval_(firstSupported(intervals));
   }, [interval, intervals]);
 
-  // 切换标的/周期：全量拉 300 根
+  // 切换标的/周期：全量拉 300 根（`reloadSeq` 只为「重新加载」按钮服务）
   useEffect(() => {
     if (!market || !symbol) {
       setCandles([]);
+      setLoad({ loading: false, failed: false });
       return;
     }
     let alive = true;
     setCandles([]);
+    // 旧图立刻撤掉、遮罩立刻盖上：这一段里画布画的是骨架（见 KlineCanvas 的 draw）
+    setLoad({ loading: true, failed: false });
     // 换目标 = 上一段的历史翻页全部作废；旧页在飞也让它自生自灭（epoch 对不上不落地）
     const older = olderRef.current;
     older.inFlight = false;
@@ -169,13 +183,18 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     older.epoch += 1;
     fetchKlines(market, symbol, interval, HISTORY_BARS)
       .then((bars) => {
-        if (alive) setCandles(bars);
+        if (!alive) return;
+        setCandles(bars);
+        setLoad({ loading: false, failed: false });
       })
-      .catch(() => {});
+      .catch(() => {
+        // 失败也要把遮罩撤掉，否则一直是「加载中」，看着像卡死了（那时给的是「重新加载」）
+        if (alive) setLoad({ loading: false, failed: true });
+      });
     return () => {
       alive = false;
     };
-  }, [market, symbol, interval, source]);
+  }, [market, symbol, interval, source, reloadSeq]);
 
   /**
    * 「时间轴快够到已加载的最老一根了」→ 往前补一页（画布逐帧上报，这里同步去重）。
@@ -473,28 +492,43 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
       </div>
 
-      <KlineCanvas
-        candles={candles}
-        maPeriods={maPeriods}
-        showBoll={showBoll}
-        subPanes={subPanes}
-        openInterest={oi}
-        interval={interval}
-        tickSize={instrument?.tickSize}
-        theme={theme}
-        resetKey={`${item.market}|${item.symbol}|${interval}`}
-        priceLines={drawings.priceLines}
-        trendLines={drawings.trendLines}
-        trendSeed={trendSeed}
-        onAddTrend={drawings.addTrendLine}
-        linesLocked={drawings.linesLocked}
-        onMovePriceLine={drawings.movePriceLine}
-        onMoveTrendBy={drawings.moveTrendBy}
-        onMoveTrendAnchor={drawings.moveTrendAnchor}
-        onMenu={setMenu}
-        resetPriceSignal={resetPriceSignal}
-        onNeedOlder={loadOlder}
-      />
+      {/* 取完了但没有数据：不留一块空白，说清是「没取回来」还是「这个周期本来就没有」，
+          并给一个重来的入口。**加载中不在这里** —— 那一段由 KlineCanvas 画骨架 + 盖遮罩。 */}
+      {!load.loading && candles.length === 0 ? (
+        <div className="chart-empty">
+          <span className="overline">K 线</span>
+          <span className="chart-empty-hint">
+            {load.failed ? 'K 线没取回来 · 网络或数据源不通' : '这个周期没有取到 K 线'}
+          </span>
+          <button type="button" className="chip" onClick={() => setReloadSeq((n) => n + 1)}>
+            重新加载
+          </button>
+        </div>
+      ) : (
+        <KlineCanvas
+          candles={candles}
+          maPeriods={maPeriods}
+          showBoll={showBoll}
+          subPanes={subPanes}
+          openInterest={oi}
+          interval={interval}
+          tickSize={instrument?.tickSize}
+          theme={theme}
+          loading={load.loading}
+          resetKey={`${item.market}|${item.symbol}|${interval}`}
+          priceLines={drawings.priceLines}
+          trendLines={drawings.trendLines}
+          trendSeed={trendSeed}
+          onAddTrend={drawings.addTrendLine}
+          linesLocked={drawings.linesLocked}
+          onMovePriceLine={drawings.movePriceLine}
+          onMoveTrendBy={drawings.moveTrendBy}
+          onMoveTrendAnchor={drawings.moveTrendAnchor}
+          onMenu={setMenu}
+          resetPriceSignal={resetPriceSignal}
+          onNeedOlder={loadOlder}
+        />
+      )}
 
       {menu && (
         <ChartMenu

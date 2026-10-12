@@ -24,6 +24,9 @@
   --line-mark: #f0b90b;
   /* 自绘输入框的选中底色（.ef-sel）：保持中性 —— 饱和度只留给涨跌信号 */
   --sel: rgba(236, 237, 239, 0.22);
+  /* 图表加载遮罩（.chart-loading）：**纸色的半透明**而不是纯黑 —— 底下的骨架网格要透出来，
+     否则就退回「白底上一个转圈」了。两套主题各写各的，跟 --flash-* 同一写法。 */
+  --scrim-chart: rgba(12, 13, 15, 0.5);
 }
 
 [data-theme='light'] {
@@ -44,6 +47,7 @@
   --on-accent: #1b1200;
   --line-mark: #f0b90b;
   --sel: rgba(20, 22, 26, 0.16);
+  --scrim-chart: rgba(250, 250, 248, 0.5);
 }
 
 :root {
@@ -901,6 +905,15 @@ body {
   background: var(--hairline);
 }
 
+/* 图表区（画布 + 加载遮罩）的定位容器。
+   遮罩要盖住**可视区**，而 `.chart-scroll` 是滚动容器（副图多到放不下时内容比它高），
+   所以遮罩必须挂在这一层，塞进滚动内容里就会跟着滚、转圈跑到屏幕外。 */
+.chart-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
 /* 自绘画布：主图 + 每块副图 110px 固定叠加（与 App 同）；超出容器就整块滚动，
    主图因此永不被副图压扁。pan-y 把纵向滑动留给页面，横向拖动归图表平移。 */
 .chart-scroll {
@@ -915,6 +928,41 @@ body {
   cursor: crosshair;
   touch-action: pan-y;
   user-select: none;
+}
+
+/* 加载遮罩（换标的 / 换周期 / 换数据源时，数据回来之前一直挂着）。
+   半透明而不是实底：底下的**骨架网格**（画布画的）要透出来，用户看到的是
+   「这张图正在填数据」，而不是「这一块空着」。同时它顺手把手势挡在外面 ——
+   数据没到时的拖拽/缩放会算出没有意义的视窗并写进偏好，下张图就被带歪了。 */
+.chart-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-xs);
+  background: var(--scrim-chart);
+  cursor: default;
+}
+.chart-loading-spin {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--hairline-strong);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  animation: chart-spin 0.8s linear infinite;
+}
+@keyframes chart-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.chart-loading-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--muted);
 }
 
 /* 「已连接」+「数据源」合并按钮（.src-entry）里的状态圆点：绿 = 在线，红 = 断线。
