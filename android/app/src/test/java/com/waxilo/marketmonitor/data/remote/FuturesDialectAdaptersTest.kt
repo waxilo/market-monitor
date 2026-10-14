@@ -29,9 +29,8 @@ class FuturesDialectAdaptersTest {
     private val mexc = FuturesDialects.of(FuturesDialect.MEXC)
     private val hyper = FuturesDialects.of(FuturesDialect.HYPERLIQUID)
     private val htx = FuturesDialects.of(FuturesDialect.HTX)
-    private val bitunix = FuturesDialects.of(FuturesDialect.BITUNIX)
 
-    private val all = listOf(binance, okx, bybit, bitget, gate, mexc, hyper, htx, bitunix)
+    private val all = listOf(binance, okx, bybit, bitget, gate, mexc, hyper, htx)
 
     /* ───────────────────── 通用形状 ───────────────────── */
 
@@ -43,7 +42,8 @@ class FuturesDialectAdaptersTest {
             val minutes = adapter.intervalLadder.keys.toList()
             assertEquals("周期表必须按分钟递增", minutes.sorted(), minutes)
             assertTrue("周期码不能为空", adapter.intervalLadder.values.all { it.isNotBlank() })
-            // Bitunix 单次只给 200 根（实测服务端截断），是当前清单里最小的上限
+            // 上限各异（OKX 最小 300、Hyperliquid 500、多数 1000、Gate/MEXC/HTX 2000），
+            // 越界都必须由方言自己压回，不允许把超限的 limit 直接发给接口
             assertTrue(adapter.maxKlineLimit in 200..2000)
         }
     }
@@ -53,7 +53,7 @@ class FuturesDialectAdaptersTest {
         // HTX 的 from/to 与 start/end 四种写法都试过，一律返回「最新 size 根」⇒ 不能翻页
         assertFalse("HTX 应关闭时间窗翻页", htx.supportsTimeWindow)
         // 其余家必须保持可翻页，否则「拖到最左加载更早」会静默失效
-        listOf(binance, okx, bybit, bitget, gate, mexc, hyper, bitunix).forEach {
+        listOf(binance, okx, bybit, bitget, gate, mexc, hyper).forEach {
             assertTrue("${it::class} 不该关闭时间窗", it.supportsTimeWindow)
         }
     }
@@ -68,8 +68,6 @@ class FuturesDialectAdaptersTest {
         assertEquals(listOf("BTCUSDT", "ETHUSDT"), mexcExchangeInfo().map { it.id.symbol })
         assertEquals(listOf("BTCUSDT", "HYPEUSDT"), hyperExchangeInfo().map { it.id.symbol })
         assertEquals(listOf("BTCUSDT"), htxExchangeInfo().map { it.id.symbol })
-        // BTCUSDC 与 status=CLOSE 的那条都应被滤掉，只剩三个 USDT 且 OPEN 的
-        assertEquals(listOf("BTCUSDT", "DOGEUSDT", "PEPEUSDT"), bitunixExchangeInfo().map { it.id.symbol })
     }
 
     @Test
@@ -83,7 +81,6 @@ class FuturesDialectAdaptersTest {
             hyperKlinesText to hyper,
             binanceKlinesText to binance,
             htxKlinesText to htx,
-            bitunixKlinesText to bitunix,
         ).forEach { (text, adapter) ->
             val parsed = adapter.parseKlines(text, 60)
             assertTrue("解析不出数据：${adapter::class}", parsed.isNotEmpty())
@@ -106,7 +103,6 @@ class FuturesDialectAdaptersTest {
             hyperKlinesText to hyper,
             binanceKlinesText to binance,
             htxKlinesText to htx,
-            bitunixKlinesText to bitunix,
         ).forEach { (text, adapter) ->
             adapter.parseKlines(text, 60).forEach { k ->
                 assertBdPositive(k.high)
@@ -530,85 +526,6 @@ class FuturesDialectAdaptersTest {
         assertTrue(htx.klines("https://x", "BTCUSDT", 1, 99_999, null, null).url.contains("size=2000"))
     }
 
-    /* ───────────────────── Bitunix ───────────────────── */
-
-    @Test
-    fun `Bitunix 单标的快照走 tickers 的复数参数`() {
-        assertEquals(
-            "https://fapi.bitunix.com/api/v1/futures/market/time",
-            bitunix.probe("https://fapi.bitunix.com").url,
-        )
-        // 实测 `ticker?symbol=` 是 404，必须用 `tickers?symbols=`
-        assertEquals(
-            "https://x/api/v1/futures/market/tickers?symbols=BTCUSDT",
-            bitunix.ticker("https://x", "BTCUSDT").url,
-        )
-        assertEquals(
-            "https://x/api/v1/futures/market/trading_pairs",
-            bitunix.exchangeInfo("https://x").url,
-        )
-    }
-
-    @Test
-    fun `Bitunix 蜡烛原生降序，解析后转升序；量取 baseVol 与 quoteVol`() {
-        val klines = bitunix.parseKlines(bitunixKlinesText, 60)
-        assertEquals(3, klines.size)
-        assertEquals(
-            listOf(1_790_675_220_000L, 1_790_675_280_000L, 1_790_675_340_000L),
-            klines.map { it.openTime },
-        )
-        assertBd("83992.8", klines.first().open)
-        assertBd("84095.3", klines.first().close)
-        assertBd("64.761", klines.first().volume)          // baseVol
-        assertBd("5443056.23713", klines.first().quoteVolume) // quoteVol
-    }
-
-    @Test
-    fun `Bitunix limit 上限 200，越界会被压回`() {
-        assertEquals(200, bitunix.maxKlineLimit)
-        val url = bitunix.klines("https://x", "BTCUSDT", 60, 1000, null, null).url
-        assertTrue(url, url.contains("limit=200"))
-    }
-
-    @Test
-    fun `Bitunix 非法周期返 code 0 加空数组——解析结果是空而不是异常`() {
-        // 这是这家最容易误判的地方：接口不报错，只是给个空数组，
-        // 所以「没抛异常」不能当成「周期被支持」，白名单由 intervalLadder 负责
-        val parsed = bitunix.parseKlines(bitunixEmptyDataText, 60)
-        assertEquals(0, parsed.size)
-        assertNull(bitunix.parseTicker(bitunixEmptyDataText, "BTCUSDT", 1L))
-    }
-
-    @Test
-    fun `Bitunix 单标的 24h：lastPrice 与原生 open`() {
-        val t = bitunix.parseTicker(bitunixTickerText, "BTCUSDT", 3L)!!
-        assertBd("84221.9", t.lastPrice)
-        assertBd("82693.9", t.openPrice)
-        assertBd("84349.7", t.highPrice)
-        assertBd("82500.5", t.lowPrice)
-        assertBd("26573.4995", t.volume)
-        assertBd("2217493295.14546", t.quoteVolume)
-    }
-
-    @Test
-    fun `Bitunix 精度取 quotePrecision，非 USDT 与非 OPEN 都滤掉`() {
-        val metas = bitunixExchangeInfo()
-        assertEquals(listOf("BTCUSDT", "DOGEUSDT", "PEPEUSDT"), metas.map { it.id.symbol })
-        assertBd("0.1", metas[0].priceTickSize)        // quotePrecision=1
-        assertBd("0.00001", metas[1].priceTickSize)    // 5
-        assertBd("0.0000001", metas[2].priceTickSize)  // 7
-        assertEquals("TRADING", metas.first().status)
-    }
-
-    @Test
-    fun `Bitunix 周期表 15 个，1M 是日历月`() {
-        assertEquals(15, bitunix.intervalLadder.size)
-        assertEquals("1m", bitunix.intervalLadder[1L])
-        assertEquals("1h", bitunix.intervalLadder[60L])
-        assertEquals("8h", bitunix.intervalLadder[480L])   // 币安系也有的 8h
-        assertEquals("1M", bitunix.intervalLadder[43_200L])
-    }
-
     /* ───────────────────── 持仓量（OI 副图） ───────────────────── */
 
     @Test
@@ -617,7 +534,7 @@ class FuturesDialectAdaptersTest {
             assertTrue("${it::class} 应有持仓量规格", it.openInterest != null)
         }
         // 其余家没有 OI 历史：chip 置灰说明，不允许悄悄给个空规格
-        listOf(bitget, mexc, hyper, htx, bitunix).forEach {
+        listOf(bitget, mexc, hyper, htx).forEach {
             assertNull("${it::class} 不应有持仓量规格", it.openInterest)
         }
     }
@@ -912,39 +829,6 @@ class FuturesDialectAdaptersTest {
         """{"ts":1790677541023,"status":"error","err-code":"invalid-parameter","err-msg":"invalid size"}"""
 
     private fun htxExchangeInfo() = htx.parseExchangeInfo(htxContractText)
-
-    /* —— Bitunix：以下均为 2026-09-29 的真实响应原文 —— */
-
-    /** 原生 **降序**（newest-first），故意保持这个顺序来验证适配器会倒过来。 */
-    private val bitunixKlinesText = """
-        {"code":0,"msg":"Success","data":[
-          {"open":"84101.7","high":"84167.8","low":"84071.8","close":"84166.7","quoteVol":"3226465.06406","baseVol":"38.3557","time":"1790675340000"},
-          {"open":"84095.3","high":"84120","low":"84073.2","close":"84101.7","quoteVol":"1845214.46034","baseVol":"21.9425","time":"1790675280000"},
-          {"open":"83992.8","high":"84115.9","low":"83992.7","close":"84095.3","quoteVol":"5443056.23713","baseVol":"64.761","time":"1790675220000"}
-        ]}
-    """.trimIndent()
-
-    private val bitunixTickerText = """
-        {"code":0,"msg":"Success","data":[
-          {"symbol":"BTCUSDT","markPrice":"84222","lastPrice":"84221.9","open":"82693.9","last":"84209.9",
-           "quoteVol":"2217493295.14546","baseVol":"26573.4995","high":"84349.7","low":"82500.5"}
-        ]}
-    """.trimIndent()
-
-    private val bitunixPairsText = """
-        {"code":0,"msg":"Success","data":[
-          {"symbol":"BTCUSDT","base":"BTC","quote":"USDT","basePrecision":4,"quotePrecision":1,"symbolStatus":"OPEN","minTradeVolume":"0.0001"},
-          {"symbol":"DOGEUSDT","base":"DOGE","quote":"USDT","basePrecision":0,"quotePrecision":5,"symbolStatus":"OPEN","minTradeVolume":"53"},
-          {"symbol":"PEPEUSDT","base":"PEPE","quote":"USDT","basePrecision":0,"quotePrecision":7,"symbolStatus":"OPEN"},
-          {"symbol":"BTCUSDC","base":"BTC","quote":"USDC","basePrecision":4,"quotePrecision":1,"symbolStatus":"OPEN"},
-          {"symbol":"OLDUSDT","base":"OLD","quote":"USDT","basePrecision":2,"quotePrecision":3,"symbolStatus":"CLOSE"}
-        ]}
-    """.trimIndent()
-
-    /** 非法 interval 的真实形态：**code 仍是 0**，只是 data 为空 —— 不报错、也不回落。 */
-    private val bitunixEmptyDataText = """{"code":0,"msg":"Success","data":[]}"""
-
-    private fun bitunixExchangeInfo() = bitunix.parseExchangeInfo(bitunixPairsText)
 
     /* —— 持仓量样本：字段形状对齐各家公开接口的真实响应（时间单位、包装层、口径列） —— */
 

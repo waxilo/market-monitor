@@ -30,9 +30,12 @@ export interface FuturesEndpoint {
  * 内置候选：与 App 的 FuturesEndpoints.ALL 同一份清单（名称与说明照抄）。
  *
  * **清单长度不等于容灾能力**：币安主域的镜像 1/2/3 与老镜像曾是 4 个独立席位，但它们
- * 与主域是同一套后端、同一份可达性（实测：本机直连时 6 个币安域一起全红，而 Gate / Bitunix
+ * 与主域是同一套后端、同一份可达性（实测：本机直连时 6 个币安域一起全红，而 Gate
  * 照常）—— 一起有效一起失效的席位只是把探测弹窗填满，不提供额外逃生通道。所以这里**只留
- * 主域与 Aster 两个**，腾出的位置给真正独立的盘口（HTX / Bitunix）。
+ * 主域与 Aster 两个**，腾出的位置给真正独立的盘口（HTX）。
+ *
+ * ❌ **Bitunix 已于 2026-10-14 下线**（与 App 同步）：它的 REST K 线只返回已收盘蜡烛、
+ * 永远不含进行中那一根，表象是「价格一致但 K 线图最后一根落后一个周期」。
  */
 export const FUTURES_ENDPOINTS: FuturesEndpoint[] = [
   { label: 'Aster 官方', baseUrl: 'https://fapi.asterdex.com', note: 'Aster 盘口 · 大陆通常可直连', dialect: 'BINANCE' },
@@ -44,7 +47,6 @@ export const FUTURES_ENDPOINTS: FuturesEndpoint[] = [
   { label: 'MEXC', baseUrl: 'https://contract.mexc.com', note: '独立盘口', dialect: 'MEXC' },
   { label: 'Hyperliquid', baseUrl: 'https://api.hyperliquid.xyz', note: '独立盘口 · 链上永续', dialect: 'HYPERLIQUID' },
   { label: 'HTX 火币', baseUrl: 'https://api.hbdm.com', note: '独立盘口 · 域名偶有污染', dialect: 'HTX' },
-  { label: 'Bitunix', baseUrl: 'https://fapi.bitunix.com', note: '独立盘口 · 大陆通常可直连', dialect: 'BITUNIX' },
 ];
 
 /**

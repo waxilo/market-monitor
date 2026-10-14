@@ -8,13 +8,18 @@ package com.waxilo.marketmonitor.domain.model
  * 网络环境因地区/代理而异，开发机上的探测结果不作数——检测必须在设备上做。
  *
  * [dialect] 决定取数走哪套适配器：币安同构接口（Aster、币安主域）直接复用 /fapi/v1 路径；
- * 其余各家（OKX / Bybit / Bitget / Gate / MEXC / Hyperliquid / HTX / Bitunix）是**独立盘口**
+ * 其余各家（OKX / Bybit / Bitget / Gate / MEXC / Hyperliquid / HTX）是**独立盘口**
  * 且协议各异，由 data/remote/dialect 下的适配器负责 URL 构造与响应归一化。
  * 切换接口时上层必须清掉合约缓存，避免两套盘口的数据混进同一 (FUTURES, symbol)。
  *
  * ⚠️ **席位数量不等于容灾能力**：币安主域的镜像 1/2/3 与老镜像曾是 4 个独立席位，但它们与
- * 主域共用同一套后端与同一份可达性（实测：不连代理时 6 个币安域一起全红，Gate / Bitunix
- * 照常），所以在候选里只留主域与 Aster，把位置让给真正独立的盘口。
+ * 主域共用同一套后端与同一份可达性（实测：不连代理时 6 个币安域一起全红，Gate 照常），
+ * 所以在候选里只留主域与 Aster，把位置让给真正独立的盘口。
+ *
+ * ❌ **Bitunix 已于 2026-10-14 下线**（两端同）：它的 REST K 线**只返回已收盘蜡烛**，
+ * 永远不含进行中那一根 —— `startTime` 被服务端忽略、`type=LAST_PRICE/MARK_PRICE` 也一样、
+ * `endTime = now + 1d` 直接回空。时间戳本身没问题（逐根比对 1m…1M 与 Gate / OKX 完全对齐），
+ * 所以表象是「价格一致、K 线图最后一根永远落后一个周期」。既然客户端不合成当前蜡烛，就不留这个源。
  */
 enum class FuturesDialect {
     /** 币安 /fapi/v1 同构（Aster 官方、币安主域）。 */
@@ -27,8 +32,6 @@ enum class FuturesDialect {
     HYPERLIQUID,
     /** HTX（火币）USDT 本位永续：linear-swap-ex 与 linear-swap-api 两套路径。 */
     HTX,
-    /** Bitunix：api/v1/futures/market 一整套。 */
-    BITUNIX,
 }
 
 data class FuturesEndpoint(
@@ -59,7 +62,6 @@ object FuturesEndpoints {
         FuturesEndpoint("Hyperliquid", "https://api.hyperliquid.xyz", "独立盘口 · 链上永续", FuturesDialect.HYPERLIQUID),
         // —— 新增（2026-09-29 实测：接口完整且直连可用；HTX 的域名偶有 DNS 污染，故不宣称稳定）——
         FuturesEndpoint("HTX 火币", "https://api.hbdm.com", "独立盘口 · 域名偶有污染", FuturesDialect.HTX),
-        FuturesEndpoint("Bitunix", "https://fapi.bitunix.com", "独立盘口 · 大陆通常可直连", FuturesDialect.BITUNIX),
     )
 
     /** 规整用户存储值：去空白与尾部斜杠；不在清单里的旧值（如手填镜像）回落到默认。 */

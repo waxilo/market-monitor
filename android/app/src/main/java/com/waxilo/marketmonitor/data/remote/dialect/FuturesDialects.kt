@@ -48,7 +48,7 @@ sealed interface FuturesDialectAdapter {
 
     /**
      * 历史持仓量的方言规格（副图用）。先接了四家：币安同构 / OKX / Bybit / Gate。
-     * 其余五家为 null：Hyperliquid 只有当前快照没有历史；MEXC / Bitget / HTX / Bitunix 未核实。
+     * 其余为 null：Hyperliquid 只有当前快照没有历史；MEXC / Bitget / HTX 未核实。
      */
     val openInterest: OpenInterestSpec? get() = null
 
@@ -104,7 +104,6 @@ object FuturesDialects {
         FuturesDialect.MEXC -> MexcDialect
         FuturesDialect.HYPERLIQUID -> HyperliquidDialect
         FuturesDialect.HTX -> HtxDialect
-        FuturesDialect.BITUNIX -> BitunixDialect
     }
 }
 
@@ -154,13 +153,6 @@ private fun JsonElement.checkHtx() {
     if (status != "ok") {
         throw IOException("HTX ${obj.str("err-code").orEmpty()}: ${obj.str("err-msg") ?: status}")
     }
-}
-
-/** Bitunix 的业务码在 `code`（0 为成功）。 */
-private fun JsonElement.checkBitunix() {
-    val obj = asObject()
-    val code = obj.str("code")?.toIntOrNull() ?: return
-    if (code != 0) throw IOException("Bitunix $code: ${obj.str("msg")}")
 }
 
 /** 由开盘时间 + 周期推算收盘时间（没有原生收盘字段的都用它）。 */
@@ -1056,7 +1048,7 @@ internal object HyperliquidDialect : FuturesDialectAdapter {
  *
  * ⚠️ **可达性弱于其他家**：实测期间 `api.hbdm.com` / `api.htx.com` 的解析会落到 Meta 的 IP 段
  * （`157.240.10.32` / `108.160.170.52`，典型 DNS 污染），表现为间歇性连不上，而同网络下
- * Gate / Bitunix / Hyperliquid 解析正常。它进候选是因为「接口最完整、通的时候最好用」，
+ * Gate / Hyperliquid 解析正常。它进候选是因为「接口最完整、通的时候最好用」，
  * 不是因为它稳 —— 探测弹窗里时通时不通属于真实情况。
  *
  * K 线行 = `{id(秒), open, close, high, low, amount, vol, trade_turnover, count}`，原生**升序**；
@@ -1171,119 +1163,6 @@ internal object HtxDialect : FuturesDialectAdapter {
                 priceTick = row.str("price_tick").bd(),
                 qtyStep = row.str("contract_size").bd(),
                 trading = row.str("contract_status") == "1",
-            )
-        }
-}
-
-// —————————————————————————— Bitunix ——————————————————————————
-
-/**
- * Bitunix（fapi.bitunix.com）。全部走 `api/v1/futures/market` 这一脉，裸 JSON 带 `code`。
- *
- * 本次实测里最「干净」的一家：直连稳定（Cloudflare）、四件套齐全、响应体积小。
- *
- * 三处必须留意：
- * - **K 线是降序返回**（newest-first），时间是毫秒 —— 统一排序后再交给上层；
- * - **单标的快照走 `tickers?symbols=`（复数）**：`ticker?symbol=` 返回 `code:404`，
- *   不带参数的 `/tickers` 则是全量；
- * - ❗**非法 interval 返 `code:0` + `data:[]`** —— 不报错、也不回落，只是给个空数组。
- *   所以「请求没报错」在这里不等于「周期被支持」；适配器靠 [intervalLadder] 白名单
- *   把非法周期挡在请求之前，不能依赖接口报错。
- *
- * 价格精度取 `quotePrecision`（价格小数位）：实测 BTCUSDT(1)→0.1、DOGEUSDT(5)→0.00001、
- * 1000PEPEUSDT(7)→0.0000001 均对得上。
- */
-internal object BitunixDialect : FuturesDialectAdapter {
-
-    /** 实测 15 个周期全支持；`1M` 走**日历月**（相邻间隔实测 28~31 天）。 */
-    override val intervalLadder = mapOf(
-        1L to "1m", 3L to "3m", 5L to "5m", 15L to "15m", 30L to "30m",
-        60L to "1h", 120L to "2h", 240L to "4h", 360L to "6h", 480L to "8h", 720L to "12h",
-        1_440L to "1d", 4_320L to "3d", 10_080L to "1w", 43_200L to "1M",
-    )
-
-    /** 实测上限：请求 500 / 1000 / 1500 一律只回 200 根（服务端截断）。 */
-    override val maxKlineLimit = 200
-
-    private fun native(symbol: String) = stripUsdt(symbol) + "USDT"
-
-    private fun url(base: String, path: String) = base.trimEnd('/') + "/api/v1/futures/market" + path
-
-    private fun rows(text: String): List<JsonElement> =
-        parse(text).also { it.checkBitunix() }.asObject()["data"].asArray()
-
-    override fun probe(base: String) = FuturesDialectAdapter.Request(url(base, "/time"))
-
-    override fun klines(
-        base: String,
-        symbol: String,
-        minutes: Long,
-        limit: Int,
-        startMs: Long?,
-        endMs: Long?,
-    ): FuturesDialectAdapter.Request {
-        val query = buildList {
-            add("symbol=${native(symbol)}")
-            add("interval=${requireNotNull(intervalLadder[minutes])}")
-            add("limit=${limit.coerceIn(1, maxKlineLimit)}")
-            startMs?.let { add("startTime=$it") }
-            endMs?.let { add("endTime=$it") }
-        }
-        return FuturesDialectAdapter.Request(url(base, "/kline?" + query.joinToString("&")))
-    }
-
-    override fun ticker(base: String, symbol: String) = FuturesDialectAdapter.Request(
-        url(base, "/tickers?symbols=${native(symbol)}"),
-    )
-
-    override fun exchangeInfo(base: String) =
-        FuturesDialectAdapter.Request(url(base, "/trading_pairs"))
-
-    override fun parseKlines(text: String, minutes: Long): List<Kline> =
-        rows(text).mapNotNull { el ->
-            val row = el.asObject()
-            val ms = row.str("time")?.toLongOrNull() ?: return@mapNotNull null
-            candle(
-                openTime = ms,
-                minutes = minutes,
-                o = row.str("open").bd(),
-                h = row.str("high").bd(),
-                l = row.str("low").bd(),
-                c = row.str("close").bd(),
-                base = row.str("baseVol").bd(),
-                quote = row.str("quoteVol").bd(),
-            )
-        }.sortedBy { it.openTime }
-
-    override fun parseTicker(text: String, symbol: String, now: Long): MarketTicker? {
-        val row = rows(text).firstOrNull()?.asObject() ?: return null
-        val last = row.str("lastPrice").bd() ?: return null
-        return tickerOf(
-            symbol = symbol,
-            last = last,
-            open = row.str("open").bd(),
-            high = row.str("high").bd(),
-            low = row.str("low").bd(),
-            base = row.str("baseVol").bd(),
-            quote = row.str("quoteVol").bd(),
-            now = now,
-        )
-    }
-
-    override fun parseExchangeInfo(text: String): List<InstrumentMeta> =
-        rows(text).mapNotNull { el ->
-            val row = el.asObject()
-            if (row.str("quote") != "USDT" || row.str("symbolStatus") != "OPEN") return@mapNotNull null
-            val base = row.str("base")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-            val decimals = row.str("quotePrecision")?.toIntOrNull()
-            val tick = decimals?.takeIf { it in 0..12 }?.let { BigDecimal.ONE.movePointLeft(it) }
-            meta(
-                symbol = base + "USDT",
-                base = base,
-                quote = "USDT",
-                priceTick = tick,
-                qtyStep = row.str("basePrecision")?.toIntOrNull()?.let { BigDecimal.ONE.movePointLeft(it) },
-                trading = true,
             )
         }
 }
