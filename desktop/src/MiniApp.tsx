@@ -32,12 +32,16 @@ const SYNC_MS = 4000;
 const POLL_MS = 3000;
 
 /**
- * 迷你悬浮窗：**只看不摆** —— 没有标题栏、也没有遮罩层，整块面板都是价格。
+ * 迷你悬浮窗：**只看不摆** —— 没有常驻标题栏，常态下整块面板都是价格。
+ *
+ * 唯一的例外是断联遮罩（`.mini-offline`）：行情断了以后数字会**冻在原地**，
+ * 不说出来就是「价格没变」的错觉 —— 这一层必须把整个面板盖住。
  *
  * **左键：整块面板就是「换到主窗」的入口。** 点某一行 = 主窗起来并选中该标的；
  * 点空白（含列表为空时的提示）＝ 只切到主窗（两窗互斥，主窗起来时这块自动收起）。
  * 行仍然是 `button`，各自带更具体的语义（要带上自己的标的），所以面板级的
- * `onClick` 要按 `closest('button')` 让位。
+ * `onClick` 要按 `closest('button')` 让位。断联遮罩不吃指针（`pointer-events: none`），
+ * 所以断联期间这一套照常 —— 点一下正好去主窗看连接态 / 换数据源。
  *
  * **右键：弹原生菜单**（目前一条「隐藏悬浮窗」）。菜单只能由宿主弹 ——
  * 悬浮窗就面板那么大，画在 webview 里的 HTML 菜单会被窗口边界裁掉，
@@ -122,7 +126,9 @@ export function MiniApp() {
     for (const i of spotList) map.set(`SPOT:${i.symbol}`, i);
     return map;
   }, [futuresList, spotList]);
-  const { cells } = useTickers(rows, POLL_MS);
+  const { cells, online } = useTickers(rows, POLL_MS);
+  /** 已确认断联（`online === null` = 还没结论 / 悬浮窗列表为空，那种情况不该盖遮罩）。 */
+  const offline = online === false;
 
   return (
     // 行高与封顶行数由 lib/layout.ts 注入（`--mini-row-h` / `--mini-max-rows`）：
@@ -166,6 +172,17 @@ export function MiniApp() {
         {/* 空列表那一行也是「点面板换主窗」的入口（Rust 侧高度算法也留了这一行） */}
         {rows.length === 0 && <div className="mini-empty">悬浮窗列表为空 · 去主窗设置里搜索添加</div>}
       </div>
+
+      {/* 断联遮罩：**盖满整块面板**（`.mini` 的 `overflow: hidden` 顺手把四角裁成面板圆角）。
+          底下那几行价格是**冻住的旧值**，所以这层要近乎实底（见 --scrim-mini）——
+          半透明透出来只会让用户继续把旧价当现价读。
+          本层不吃指针：面板级的点击 / 右键 / 拖窗口都挂在 `.mini` 上，断联期间照常可用。 */}
+      {offline && (
+        <div className="mini-offline" role="status">
+          <span className="mini-offline-dot" />
+          <span className="mini-offline-text">已断联</span>
+        </div>
+      )}
     </div>
   );
 }

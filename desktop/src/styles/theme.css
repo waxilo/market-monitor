@@ -27,6 +27,11 @@
   /* 图表加载遮罩（.chart-loading）：**纸色的半透明**而不是纯黑 —— 底下的骨架网格要透出来，
      否则就退回「白底上一个转圈」了。两套主题各写各的，跟 --flash-* 同一写法。 */
   --scrim-chart: rgba(12, 13, 15, 0.5);
+  /* 悬浮窗断联遮罩（.mini-offline）：**近乎实底**，与 --scrim-chart 的半透明有意不同 ——
+     图表底下是骨架（该透出来），悬浮窗底下是**冻住的旧价格**（必须看不清，
+     否则还是会被当成现价读）。实测 0.94 时旧价仍留着可辨的鬼影（`.workbuddy/tmp/mini-offline-2-offline.png`），
+     所以抬到 0.96 并在 `.mini-offline` 上加一层 blur 把它彻底糊掉。两套主题各写各的。 */
+  --scrim-mini: rgba(20, 22, 25, 0.96);
 }
 
 [data-theme='light'] {
@@ -48,6 +53,7 @@
   --line-mark: #f0b90b;
   --sel: rgba(20, 22, 26, 0.16);
   --scrim-chart: rgba(250, 250, 248, 0.5);
+  --scrim-mini: rgba(255, 255, 255, 0.96);
 }
 
 :root {
@@ -998,6 +1004,9 @@ body {
   --mini-max-rows: 6;
   display: flex;
   flex-direction: column;
+  /* 断联遮罩（.mini-offline）的定位上下文；下面的 `overflow: hidden` 顺手把遮罩四角
+     裁成面板自己的圆角，所以遮罩不必再写 border-radius。 */
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-md);
@@ -1005,9 +1014,10 @@ body {
   cursor: default;
   user-select: none;
 }
-/* 没有常驻标题栏、也没有遮罩层：整块面板都是价格。隐藏走**右键的原生菜单**
+/* 常态没有标题栏、也没有遮罩层：整块面板都是价格。隐藏走**右键的原生菜单**
    （`lib.rs` 的 `open_mini_menu`，原生 popup 才能画到面板外面）。
-   左键保持原样：点行 = 主窗并选中该标的，点空白 = 只切到主窗。 */
+   左键保持原样：点行 = 主窗并选中该标的，点空白 = 只切到主窗。
+   唯一会盖上来的是断联遮罩（见下）。 */
 .mini-rows {
   max-height: calc(var(--mini-row-h) * var(--mini-max-rows));
   overflow-y: auto;
@@ -1069,6 +1079,52 @@ body {
   color: var(--muted);
   text-align: center;
   cursor: pointer;
+}
+
+/* 断联遮罩：行情断了以后行里的数字**冻在原地**（轮询还在跑，只是全败），
+   不说出来就是「价格没变」的错觉 —— 所以这一层盖满整块面板，两行字都不放过。
+   近乎实底而不是半透明：透出来的旧价照样会被当成现价读（见 --scrim-mini）。
+   `pointer-events: none` 是**刻意的**：面板级的点击 / 右键 / 拖窗口都挂在 `.mini` 上，
+   遮罩不吃指针 ⇒ 断联期间点一下仍然是「换到主窗」（正好去看连接态 / 换数据源），
+   右键仍然是宿主那枚「隐藏悬浮窗」菜单，还能照旧拖着走。 */
+.mini-offline {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--scrim-mini);
+  /* 把底下的旧价糊成一团：单靠 0.96 的底色还留得住可辨的数字轮廓（实测过），
+     糊掉之后剩下的只是一层「这里有东西」的痕迹，读不出价。 */
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+/* 呼吸的红点：状态本来就是活的（每拍都在重试），一个静止的遮罩容易被读成「卡死了」。
+   0% / 100% 都停在**完全可见**上 —— 万一动画停在首帧，看到的也是实心红点而不是淡影。 */
+.mini-offline-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--down);
+  animation: mini-offline-pulse 1.6s var(--ease-standard) infinite;
+}
+@keyframes mini-offline-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+/* 文案用红：与主窗顶栏「断线」那枚圆点同一套语义色（`.src-entry.bad .dot`），
+   不借涨跌色 —— 断联与价格涨跌是两回事。 */
+.mini-offline-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: var(--down);
 }
 
 /* ── 自绘窗口控件 ────────────────────────────────────────

@@ -12,11 +12,23 @@ export interface TickerCell {
 
 const POLL_MS = 1200;
 
+/**
+ * 连续这么多拍**全部失败**才算断联。
+ *
+ * 单拍失败多半是一过性抖动（丢包 / DNS / 盘口限频），一拍就翻红会「闪一下又恢复」——
+ * 主窗顶栏那枚圆点尚可忍，悬浮窗那层遮罩闪起来就是噪声。悬浮窗 3s 一拍 ⇒ 确认 ≈ 6s，
+ * 主窗 1.2s 一拍 ⇒ ≈ 2.4s。**恢复不设门槛**：哪一拍里有成功就立刻回到在线。
+ */
+const OFFLINE_MISSES = 2;
+
 /** 按标的逐个轮询 24h 行情：Gate 两个市场的 ticker 接口都支持按标的过滤，全量拉一次太重。 */
 export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
   const [cells, setCells] = useState<Record<string, TickerCell>>({});
+  /** 连接态：`null` = 还没结论（首次轮询之前 / 自选为空），`false` = 已确认断联。 */
   const [online, setOnline] = useState<boolean | null>(null);
   const prevRef = useRef<Record<string, number>>({});
+  /** 连续「全败」的拍数，攒够 OFFLINE_MISSES 才翻成断联。 */
+  const missRef = useRef(0);
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const itemsKey = items.map(watchKey).join(',');
@@ -31,10 +43,13 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
     if (sourceRef.current !== source) {
       sourceRef.current = source;
       prevRef.current = {};
+      // 换源等于换了一个「通不通」的判定对象：上一家的断联账不能记到这一家头上
+      missRef.current = 0;
       setCells({});
     }
     // 自选为空不是「断线」：没东西可轮询时保持未定状态，别把空列表说成网络故障
     if (list.length === 0) {
+      missRef.current = 0;
       setOnline(null);
       return;
     }
@@ -42,8 +57,15 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
     async function poll() {
       const results = await Promise.allSettled(list.map((it) => fetchTicker(it.market, it.symbol)));
       if (!alive) return;
+      // 一拍里**只要有一条成功**就算通（逐标的轮询，个别标的取不到不算断网）；
+      // 全败才记账，攒够 OFFLINE_MISSES 拍才真的翻成断联 —— 在此之前保持原判不动
       const okCount = results.filter((r) => r.status === 'fulfilled').length;
-      setOnline(okCount > 0);
+      if (okCount > 0) {
+        missRef.current = 0;
+        setOnline(true);
+      } else if (++missRef.current >= OFFLINE_MISSES) {
+        setOnline(false);
+      }
       setCells((prev) => {
         const next = { ...prev };
         const now = Date.now();
