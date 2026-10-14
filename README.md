@@ -18,13 +18,13 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除） | `data/remote`、`data/local` | 已实现 |
-| 合约行情多接口（Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX/Bitunix，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力 |
+| 合约行情多接口（9 个候选：Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力；Bitunix 也已下线（REST K 线只回已收盘蜡烛，图上最后一根永远落后一个周期） |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（窄侧栏导航 + 现价、搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
-| 桌面端合约多数据源（与 App 同一份 12 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
+| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置弹窗「告警通知」页管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置弹窗「悬浮窗」页：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
 
@@ -63,7 +63,7 @@ cd android
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-桌面端（Tauri v2 + Vite/React，现货走 Gate，合约在 12 个候选接口里测速点选）：
+桌面端（Tauri v2 + Vite/React，现货走 Gate，合约在 9 个候选接口里测速点选）：
 
 ```bash
 cd desktop
@@ -111,6 +111,10 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   反方向没有图标：**悬浮窗整块面板就是入口**（左键）—— 点行 = `show_main_window`（主窗起来并选中该
   标的），点空白/空状态 = `switch_to_main`（只切过去）。所以 `MiniApp` 在面板根节点上有 `onClick`，
   且必须用 `closest('button')` 给行让位：行自带更具体的语义。
+- **热键（默认 Alt+D）看的是主窗**（`global_key::toggle_view`）：主窗在眼前 → 收成悬浮窗；
+  否则（**含收进托盘的后台态**，悬浮窗开没开都算）→ 直接唤回大窗。另外，任务栏单击 / Alt-Tab
+  唤回主窗走的是系统直通（不经过应用层任何命令），由 `on_window_event` 的 `Focused(true)`
+  兜底把悬浮窗收掉 —— 双窗互斥（2026-10-14 补）靠这两条共同保证。
 - **悬浮窗没有常驻标题栏，也没有遮罩层**：整块面板都是价格。**隐藏走右键的原生菜单**
   （`lib.rs` 的 `open_mini_menu` → `hide_mini`），菜单条目 id 交回 `run()` 里的全局
   `on_menu_event` 处理。菜单只能由宿主弹：窗口就面板那么大，在 webview 里画 HTML 菜单
@@ -221,31 +225,66 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   表象就是「单击不划线、非得拖一下」。**抓取判定（这场抓哪根线）反过来只能做一次**：
   逐帧重判会在拖着线经过另一根时突然「换手」。所以 `grabbedId` 与首帧 `onHorizontalDrag`
   都在 down 定性，循环里那份只是幂等复述。
-- **删除有两条路**：① 把线**拖到绘图区右上角的垃圾桶**松手；② 竖栏第 4 枚「删除」工具
-  （`DrawTool.ERASE`）**点线即删** —— 命中在 down 定性（同前一条的理由），手指滑出 slop 即作废，
-  否则一次平移会把路过的那条顺手删掉。画布上那枚垃圾桶只是拖动时的**落点**：
-  `alertDeleteRect()` 与命中判定必须同框，它挂在 Canvas 上、不挂 `clickable`
-  （指针事件得穿透到手势层）。
-- **竖栏规格 30dp / 按钮 24dp / 图形 12dp**（`DrawToolRail` 的 `RAIL_BUTTON` / `RAIL_GLYPH`，
+- **删除有三条路**：① 竖栏第 4 枚「删除」工具（`DrawTool.ERASE`）**点线即删** ——
+  命中在 down 定性（同前一条的理由），手指滑出 slop 即作废，否则一次平移会把路过的那条顺手删掉；
+  ② **按住线直接拖到右侧竖栏**、竖栏整块变成垃圾桶时松手即删（拖线途中才出现，平时那里是按钮）；
+  ③ 竖栏「清空」（见后）。第 ② 条的落点判据用的是**原始** x（`lastRawX`，不夹进绘图区）——
+  逐帧那份 x 已被夹在 `0..plotWidthPx` 内，永远到不了竖栏所在的画布右缘之外，拿它判恒为假。
+  落点做成「拖线时才出现的整栏高亮」而不是常驻小目标：2026-10-12 曾有一条「拖到绘图区右上角
+  垃圾桶」的路被撤掉，失败原因正是那个落点**平时不存在**、要靠猜。
+- **锁定 = 整张图只读，进全屏默认锁定**（`FullscreenChart` 的 `linesLocked`，`rememberSaveable`）
+  ——已有线不能拖/不能删，**新建也一起锁**（锁定态下 `drawTool` 被强制收成 `NONE`，
+  否则单指会被划线通道吃掉却画不出东西，看着像图卡住）。锁按钮是竖栏第一枚，与下面用一道
+  `RailDivider` 隔开。**锁定态的按钮置灰但仍可点**（`DrawToolButton` 的 `dimmed`，不是 `enabled=false`）：
+  点一下把「先解锁」说出来——App 上没有 hover，真正禁用的按钮说不出话，用户只会以为图坏了。
+- **解锁态按住线即可拖动，不必先选工具**（`KlineChart` 的 `linesEditable`）。这一通道与「显式划线工具」
+  （`drawTool`）是两件事：前者是「改已有」，后者是「建新的」。抓取在 **down 那一刻**定性，
+  且水平类（告警线/水平线）与**直线放在一起比距离**取更近的那条——分两次判再定优先级，
+  会出现「按着看得见的那条、拖走的却是底下那条」。抓取统一走 `LineRef`
+  （`Alert(ruleId)` / `Guide(lineId)`），落库回调靠它分流到两张表。
+- **划线工具 = 只新建，不抓旧线（2026-10-14）**：选中工具那一刻画布切「纯净态」——
+  已划的线全部让位（`visibleAlertLines` / `visibleDrawLines` 只留 `dragging` 的那笔草稿），
+  手势侧同时撤掉抓取来源（`horizontalAnchors` 只在解锁态给线，TREND 不再 `closestTrend`）。
+  编辑旧线从此只有一条路：解锁态按住直接拖。
+- **直线（TREND）两敲带十字辅助线**：拖动中竖线+横线跟手（`trendCrosshair`，**自由像素**、
+  不吸附蜡烛），松手确认定点、只留种子点；第二敲同款、松手成交。准星与长按十字光标的
+  「松手停住」语义相反：确认完就撤。
+- **竖栏规格 26dp 占位（含右留白 4dp）/ 按钮 24dp / 图形 12dp**（`DrawToolRail` 的 `RAIL_BUTTON` / `RAIL_GLYPH`，
   图形一律手搓 Canvas，不为一枚图标拖进 `material-icons-extended`）。
   **竖栏不铺满高度** —— 这一条比尺寸数字更重要：`.fillMaxHeight()` + `wash` 底色的写法会在
   屏幕右缘拉出一条 102×1080px 的整条灰带，用户两轮反馈的「太大」其实指的就是它，
-  按钮本身一直很小。竖栏是**独立一栏**（不浮在图上），所以高度跟着按钮走（5 枚 ≈ 150dp）。
+  按钮本身一直很小。竖栏是**独立一栏**（不浮在图上），所以高度跟着按钮走（6 枚 ≈ 180dp）。
 - **撤线的两种粒度**：① 竖栏「删除」（`DrawTool.ERASE`）点线即删，一次一条；
   ② 竖栏「清空」一次删光本标的全部划线，**不进 `DrawTool`**（它不是模式，按一次就完事）。
   清空连带删掉告警线背后的**预警规则**（告警线由规则派生），所以必须先弹
   `ClearAllLinesDialog` 把「会删几条、规则也会没」说清楚；没有可清的线时这一枚置灰。
   清空的口径与 `alertLines` 对齐（`threshold != null` 的规则），手动在预警页建的价位预警也一并清。
-- **底部提示是 `maxLines = 1`，文案必须一行放得下**：曾经 TREND 那句 88 字在 640dp 横屏被裁掉，
+- **底部提示**：锁定态不摆常驻提示（默认就是锁定，一进全屏挂条横幅太吵），
+  解锁态按当前工具给一句（`toolHint` 的 `when`）。文案写到 `maxLines = 2` 兜底，
+  但**仍然要按一行放得下来写**：曾经 TREND 那句 88 字在 640dp 横屏被裁掉，
   「拖到右上角垃圾桶删除」正好落在被裁的那半，用户那边就是「划的线无法删除」。
   删减优先级：怎么删 > 怎么画 > 题外话。
+
+### Android 端翻页加载（`loadMore` 的两个坑）
+
+- **「贴到最老一根」的判据必须是 `startIndex <= 0`，不能写 `== 0`**（`ChartViewport.atOldestEdge`）。
+  `startIndex` 是 `floor(barCount + rightOffset - visibleBars)`，三个**浮点**量相减再取整：
+  `visibleBars` 只要不是整数（双指缩放后必然如此），舍入会让结果落在 0 左侧一丁点，
+  `floor` 给出 **-1** ⇒ `== 0` 永远不成立，往更早方向翻页**整段失效**。
+  默认 60f 时算式精确、恰好命中 0，旧写法看着能用纯属巧合。序列比窗口窄时（1M 只有 13 根）
+  左端停在负数，同样永远不成立。回归钉在 `ui/chart/ChartViewportTest`（含这一格 -1 的证据）。
+- **去重标记必须与序列同生共死**：`oldestRequested` 放在 `DetailViewModel.ChartData` 上、
+  由 `loadBase` 归零；挂在画布 `remember`（不带 key）时图那侧不知道序列换过没有，
+  标记「用掉」就不放行 ⇒ 症状正是「换过周期之后再也翻不动」。
+- `loadMore()` 的闸门全在**一次快照**上判，且不满足时**不写任何状态**（把「没请求成」记成
+  「请求过」会永久堵死翻页）；回写前再校验一次 `rawBase == base`，在途期间换过的周期整页丢掉。
 
 ## 当前版本
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.39` |
-| versionCode | `51` |
+| versionName | `0.9.40` |
+| versionCode | `52` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
@@ -302,7 +341,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.23`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.24`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
