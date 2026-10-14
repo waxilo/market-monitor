@@ -151,6 +151,22 @@ data class ChartViewport(
     fun endIndex(barCount: Int): Int = plotRange(barCount).last
 
     /**
+     * 窗口是否已经贴到（或越过）**最老一根** —— 「拖到最左端就该加载更早的历史」的判据。
+     *
+     * 必须是 `<= 0`，**不能写成 `startIndex(barCount) == 0`**（2026-10-14 修）：
+     * ① [startIndex] 是 `floor(barCount + rightOffset - visibleBars)`，三个浮点量相减再取整。
+     *    [clamp] 把 `rightOffset` 夹到最小值的那个瞬间本应得到 0，但 `visibleBars` 只要
+     *    是**非整数**（双指缩放后必然如此），中间的舍入会让结果落在 0 左侧一丁点，
+     *    `floor` 给出 **-1**，`== 0` 于是永远不成立 ⇒ 往更早方向翻页整段失效。
+     *    可见根数恰好是整数（默认 60f）时算式精确、恰好命中 0，那只是巧合。
+     * ② 序列比窗口还窄时（`barCount <= visibleBars`，如 1M 只有 13 根）最小偏移被夹成 0，
+     *    左端停在负数（[plotRange] 故意不夹），`== 0` 同样永远不成立。
+     *
+     * 空序列返回 false：没有序列就没有「更早」可翻。
+     */
+    fun atOldestEdge(barCount: Int): Boolean = barCount > 0 && startIndex(barCount) <= 0
+
+    /**
      * 平移：[deltaBars] > 0 表示手指往右移 = 看更早的数据（窗口左移）；
      * 负值表示手指往左移 = 把最新一根往屏幕里推，右侧露出空白。
      *

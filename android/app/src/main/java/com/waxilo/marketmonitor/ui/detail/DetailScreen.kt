@@ -101,6 +101,7 @@ import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
 import com.waxilo.marketmonitor.ui.chart.DrawTool
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
+import com.waxilo.marketmonitor.ui.chart.LineRef
 import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.chart.toGuideLine
@@ -423,11 +424,34 @@ private fun FullscreenChart(
 ) {
     val colors = MarketTheme.colors
     val notice by viewModel.notice.collectAsStateWithLifecycle()
+    /**
+     * 划线锁：**进入全屏默认锁定**（用户口径）。锁定 = 整张图只读 ——
+     * 已有的线不能拖、不能删，也不能新建；要动线先解锁。
+     *
+     * 和 [toolName] 一样用 `rememberSaveable`：全屏要横屏，旋屏重建不能把锁弄丢
+     * （否则用户解锁后一旋屏，手上那根线又变回不可动，像是操作没生效）。
+     */
+    var linesLocked by rememberSaveable { mutableStateOf(true) }
     // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线工具上。
     // 存 name 而不是枚举本身：DrawTool 不在默认 Saver 的支持面里，旋屏重建不能丢工具态。
     var toolName by rememberSaveable { mutableStateOf(DrawTool.NONE.name) }
-    val drawTool = DrawTool.entries.firstOrNull { it.name == toolName } ?: DrawTool.NONE
+    // 锁定态下把工具**一律收成 NONE**：解锁前手上还举着「水平线」的话，
+    // 单指会被划线通道吃掉却什么也画不出来（锁定 = 不许新建），看着像图卡住了。
+    // 锁定那一刻也主动把工具收掉（见锁按钮），所以这里只是兜底。
+    val drawTool = if (linesLocked) {
+        DrawTool.NONE
+    } else {
+        DrawTool.entries.firstOrNull { it.name == toolName } ?: DrawTool.NONE
+    }
     fun selectTool(next: DrawTool) { toolName = next.name }
+    /**
+     * 拖动中的线：整条竖栏变成垃圾桶落点。
+     *
+     * 由**已经落库/预览的线自己的 dragging 标记**推出来，而不是手势回调里另报一个布尔 ——
+     * 那个布尔一旦在异常路径（换周期、旋屏、组合被销毁）漏掉一次收尾，竖栏就永久变成垃圾桶。
+     * 草稿本来就是「正在拖」的唯一事实来源，用它是免费的，也不会漏收尾。
+     */
+    val draggingLine = alertLines.any { it.dragging } || drawLines.any { it.dragging }
     // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
     // 清空划线的确认框：不进 DrawTool（它不是一种「模式」，按一次就完事），
@@ -555,6 +579,25 @@ private fun FullscreenChart(
                             viewModel.deleteDrawLine(lineId)
                             selectTool(DrawTool.NONE)
                         },
+                        // 解锁态：不选工具也能按住线直接拖（水平线改价位、直线整体平移）
+                        linesEditable = !linesLocked,
+                        // 右侧竖栏就是删除落点：拖到它上面松手即删（锁定态不给这条路）
+                        lineDropToTrailingRail = !linesLocked,
+                        onLineDropDelete = { ref ->
+                            when (ref) {
+                                is LineRef.Alert -> viewModel.deleteAlertLine(ref.ruleId)
+                                is LineRef.Guide -> viewModel.deleteDrawLine(ref.lineId)
+                                // ref 为 null = 落到垃圾桶上的是「刚新建的那根」：
+                                // 按当前工具把对应的草稿清掉（拖废纸篓本来就不该留下新线）
+                                null -> when (drawTool) {
+                                    DrawTool.ALERT -> viewModel.deleteAlertLine(null)
+                                    DrawTool.HORIZONTAL -> viewModel.deleteDrawLine(0L)
+                                    else -> Unit
+                                }
+                            }
+                            // 拖到垃圾桶上删完 = 这一笔用完：与「删完自动收起」同一个出口
+                            selectTool(DrawTool.NONE)
+                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -568,17 +611,23 @@ private fun FullscreenChart(
             // 被裁的正是「删除怎么用」那半句，用户于是只看到怎么画。删减原则：
             // **怎么删 > 怎么画 > 题外话**；而「删除」现在由竖栏那枚独立按钮说清，
             // 这三句只管怎么画（各留一句最不容易猜错的：告警线会响、水平线落一根即收、直线两敲）。
-            val toolHint = when (drawTool) {
-                DrawTool.NONE -> null
-                DrawTool.ALERT ->
-                    "上下拖动放告警线 · 按住可改价位 · 涨跌都提醒"
-                DrawTool.HORIZONTAL ->
-                    "拖动放水平线 · 按住可改价位 · 落一根即自动收起"
-                DrawTool.TREND ->
-                    "敲两下定直线（太近=撤销）· 按住可整体平移"
+            val toolHint = when {
+                // 锁定态不摆常驻提示：默认就是锁定，一进全屏就挂条横幅太吵。
+                // 那条「锁了」的话由点竖栏里置灰按钮时的提示负责说（notifyLinesLocked）。
+                linesLocked -> null
+                // 解锁但没选工具：这一档新增了「按住线就能拖」，不说一句没人会去试
+                drawTool == DrawTool.NONE ->
+                    "按住线即可拖动 · 拖到右侧竖栏松手删除"
+                drawTool == DrawTool.ALERT ->
+                    "上下拖动放告警线 · 涨跌都提醒 · 落一根即收起"
+                drawTool == DrawTool.HORIZONTAL ->
+                    // 「按住可改价位」已删（2026-10-14）：工具下不再抓旧线，改价归解锁态直接拖
+                    "拖动放水平线 · 落一根即自动收起"
+                drawTool == DrawTool.TREND ->
+                    "拖动图中准星，松手定第一点 · 再拖一次松手连成线（太近=撤销）"
                 // 删除模式与上面三枚是相反方向的动作用，这句必须**先说要做什么**：
                 // 用户点完删除图上看不出任何变化（线本来就在），不说就会以为没生效
-                DrawTool.ERASE ->
+                else ->
                     "点一下要删的那条线即删除 · 告警线/水平线/直线都可以 · 删完自动收起"
             }
             toolHint?.let { hint ->
@@ -611,13 +660,30 @@ private fun FullscreenChart(
             DrawToolRail(
                 tool = drawTool,
                 clearable = clearable,
+                locked = linesLocked,
+                onToggleLock = {
+                    linesLocked = !linesLocked
+                    // 上锁顺手把工具收掉：锁定 = 单指还给平移画布，
+                    // 留着「水平线」在下一次解锁时会突然又是新建模式，很容易误画一根
+                    if (linesLocked) selectTool(DrawTool.NONE)
+                },
+                // 拖动中的线 → 整栏变成垃圾桶落点
+                dropActive = draggingLine,
                 onSelect = { next ->
-                    // 再点当前选中的 = 收起工具，单指还给平移画布（与落一根后自动收起同一个出口）
-                    selectTool(if (next == drawTool) DrawTool.NONE else next)
+                    // 锁定态：按钮置灰但**仍可点**，点一下把「为什么不能动」说出来。
+                    // 真做成禁用的话，App 上没有 hover，用户只会以为图坏了。
+                    if (linesLocked) {
+                        viewModel.notifyLinesLocked()
+                    } else {
+                        // 再点当前选中的 = 收起工具，单指还给平移画布（与落一根后自动收起同一个出口）
+                        selectTool(if (next == drawTool) DrawTool.NONE else next)
+                    }
                 },
                 // 不做二次点击确认（「再点一次就清」那种）：清空连带删预警规则、不可撤销，
                 // 得让用户在看清删掉几条之后再说「是」
-                onClear = { clearConfirm = true },
+                onClear = {
+                    if (linesLocked) viewModel.notifyLinesLocked() else clearConfirm = true
+                },
             )
         }
     }
@@ -702,24 +768,31 @@ private val RAIL_BUTTON = 24.dp
 private val RAIL_GLYPH = 12.dp
 
 /**
- * 全屏右侧的划线竖栏：告警线 / 水平线 / 直线 · 删除 / 清空。
+ * 全屏右侧的划线竖栏：锁 · 告警线 / 水平线 / 直线 · 删除 / 清空。
  *
  * 图标全部手搓 Canvas（同 [FullscreenGlyph] 的理由：只依赖 icons-core，
- * 不为一个图标拖进 material-icons-extended）。前三枚刻意做成「这条线长什么样」：
+ * 不为一个图标拖进 material-icons-extended）。三枚线型刻意做成「这条线长什么样」：
  * 虚线 = 会响的告警线，实水平线 / 斜线 = 只做记号的画线，形状自身就是说明。
  *
- * 后两枚（删除 / 清空）与前三枚之间用一道细线隔开：它们回答的是另一个问题 ——
- * 「这些线怎么撤掉」。这两枚是删除的**唯一**入口：选中删除，再去点图上的任意一条线即可
- * 删掉（告警线 / 水平线 / 直线通吃，见 [DrawTool.ERASE]）。
- * （原先还有「把线拖到画布右上角的垃圾桶落点」那条路，2026-10-12 撤掉 —— 它要求先知道
- * 有这么回事、再拖得准，实际反馈是「划的线无法删除」，如今这枚按钮把同一件事做成点两下。）
+ * **首枚是锁**，它管的是下面整栏：锁定 = 整张图只读（不能新建、不能拖、不能删），
+ * 进入全屏默认锁定。它是整栏的总开关，所以摆最上面、与下面用一道细线隔开。
+ * 锁定态下其余按钮**置灰但仍可点**：点一下弹一句「先解锁」—— App 上没有 hover，
+ * 真正禁用的按钮说不出话，用户只会以为图坏了（与 OI chip 那条口径相同）。
+ *
+ * 删除 / 清空与三枚线型之间也有一道细线：它们回答的是另一个问题 ——「这些线怎么撤掉」。
+ * 子删除有两条路：① 那枚「删除」选中后点图上的线（[DrawTool.ERASE]）；
+ * ② **按住线直接拖到这条竖栏上松手**（拖线中整栏会变成垃圾桶，见 [dropActive]）。
+ * 第 ② 条与第 ① 条互补：拖动本来就是「改线」的手势，改了不如意时手已经在半路，
+ * 顺手拖出去比先松手、再点删除、再点那条线少两步。
+ * （2026-10-12 曾有一条「拖到画布右上角垃圾桶」的路被撤掉，原因是那个落点
+ * **平时不存在**、要靠猜；这次是把落点做成**拖线时才出现**的整栏高亮，看得见才敢拖。）
  * 清空是一次性动作，不进任何模式，按下去先弹确认（见 [ClearAllLinesDialog]），
  * 一条线都没有时整枚置灰 —— 空图上摆一个按了没反应的按钮只会让人怀疑它坏了。
  *
  * 规格按「图上配角」定：2026-10-12 用户连着两轮反馈「太大」后收成现在这个尺寸。
  * **关键的一条是高度**：原先 `.fillMaxHeight()` + `wash` 底色会在屏幕右缘拉出一条
  * 102px 宽 × 1080px 高的整条灰带 —— 那才是「大」的主体，按钮本身其实很小。
- * 竖栏只该是一小块工具面板：高度跟着按钮走（5 枚 ≈ 150dp），下缘留白还给图。
+ * 竖栏只该是一小块工具面板：高度跟着按钮走（6 枚 ≈ 180dp），下缘留白还给图。
  *
  * 其余尺寸：竖栏占位 30dp（其中右留白 4dp，不贴着屏幕边）、按钮 24dp、图形 12dp、
  * 间距 4dp（都是设计常量阶梯里的值）。按钮小于 Material 的 48dp 触控标准是**有意的** ——
@@ -730,49 +803,103 @@ private fun DrawToolRail(
     tool: DrawTool,
     /** 当前标的图上有可清的线（告警线或画线）：没有就置灰这一枚。 */
     clearable: Boolean,
+    /** 锁定态：新建 / 编辑 / 删除全关。按钮照样可点，点一下由调用方把原因说出来。 */
+    locked: Boolean,
+    onToggleLock: () -> Unit,
+    /** 正在拖一根线：整栏盖成垃圾桶落点（拖到它上面松手即删）。 */
+    dropActive: Boolean,
     onSelect: (DrawTool) -> Unit,
     onClear: () -> Unit,
 ) {
     val colors = MarketTheme.colors
-    Column(
+    Box(
         modifier = Modifier
             // padding 写在 width 之前：它先把可用宽度收窄，于是「竖栏占位」= 26 + 右留白 4
             .padding(top = Spacing.Xs, end = Spacing.Xxs)
-            .width(26.dp)
-            .clip(Radius.fullShape)
-            .background(colors.wash)
-            .padding(vertical = Spacing.Xxs),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Spacing.Xxs),
+            .width(26.dp),
     ) {
-        DrawToolButton("预警线", tool == DrawTool.ALERT, { onSelect(DrawTool.ALERT) }) { color ->
-            DashedLineGlyph(color)
-        }
-        DrawToolButton("水平线", tool == DrawTool.HORIZONTAL, { onSelect(DrawTool.HORIZONTAL) }) { color ->
-            HorizontalLineGlyph(color)
-        }
-        DrawToolButton("直线", tool == DrawTool.TREND, { onSelect(DrawTool.TREND) }) { color ->
-            DiagonalLineGlyph(color)
-        }
-        // 画 / 撤 是两类动作：不隔开的话，五枚圆钮看着像同一个集合里的五种线型
-        Box(
+        Column(
             modifier = Modifier
-                .width(12.dp)
-                .height(1.dp)
-                .background(colors.hairline),
-        )
-        DrawToolButton("删除", tool == DrawTool.ERASE, { onSelect(DrawTool.ERASE) }) { color ->
-            TrashGlyph(color)
+                .clip(Radius.fullShape)
+                .background(colors.wash)
+                .padding(vertical = Spacing.Xxs),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Spacing.Xxs),
+        ) {
+            DrawToolButton("锁定/解锁划线编辑", locked, onToggleLock) { color ->
+                LockGlyph(color, locked)
+            }
+            RailDivider(colors.hairline)
+            DrawToolButton(
+                label = "预警线",
+                selected = tool == DrawTool.ALERT,
+                onClick = { onSelect(DrawTool.ALERT) },
+                dimmed = locked,
+            ) { color ->
+                DashedLineGlyph(color)
+            }
+            DrawToolButton(
+                label = "水平线",
+                selected = tool == DrawTool.HORIZONTAL,
+                onClick = { onSelect(DrawTool.HORIZONTAL) },
+                dimmed = locked,
+            ) { color ->
+                HorizontalLineGlyph(color)
+            }
+            DrawToolButton(
+                label = "直线",
+                selected = tool == DrawTool.TREND,
+                onClick = { onSelect(DrawTool.TREND) },
+                dimmed = locked,
+            ) { color ->
+                DiagonalLineGlyph(color)
+            }
+            // 画 / 撤 是两类动作：不隔开的话，六枚圆钮看着像同一个集合里的六种线型
+            RailDivider(colors.hairline)
+            DrawToolButton(
+                label = "删除",
+                selected = tool == DrawTool.ERASE,
+                onClick = { onSelect(DrawTool.ERASE) },
+                dimmed = locked,
+            ) { color ->
+                TrashGlyph(color)
+            }
+            DrawToolButton(
+                label = "清空全部划线",
+                selected = false,
+                // 空了就真禁用（按了没反应）；锁定态另说 —— 那时让它可点，
+                // 点一下由调用方解释「先解锁」，比一个哑按钮有用
+                enabled = clearable || locked,
+                dimmed = locked,
+                onClick = onClear,
+            ) { color ->
+                ClearAllGlyph(color)
+            }
         }
-        DrawToolButton(
-            label = "清空全部划线",
-            selected = false,
-            enabled = clearable,
-            onClick = onClear,
-        ) { color ->
-            ClearAllGlyph(color)
+        if (dropActive) {
+            // 拖线中：整栏盖成一只垃圾桶。
+            //
+            // 盖在**同一块几何**上而不是替换内容 —— 拖动途中目标不能自己动，
+            // 尺寸与位置必须与松手前逐像素一致，否则「看见落点、拖过去」会扑空。
+            // 这层没有 pointerInput，不吃指针事件；再说这一场手势的指针本来就是
+            // 图那边按下时认领的，事件也不经过这里。
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(Radius.fullShape)
+                    .background(colors.down),
+                contentAlignment = Alignment.Center,
+            ) {
+                TrashGlyph(colors.paper, glyphSize = RAIL_BUTTON * 0.62f)
+            }
         }
     }
+}
+
+/** 竖栏里表示「这一组是另一类动作」的细分隔线。 */
+@Composable
+private fun RailDivider(color: Color) {
+    Box(modifier = Modifier.width(12.dp).height(1.dp).background(color))
 }
 
 @Composable
@@ -781,6 +908,8 @@ private fun DrawToolButton(
     selected: Boolean,
     onClick: () -> Unit,
     enabled: Boolean = true,
+    /** 看着置灰但**仍可点**（锁定态）：点一下由调用方说出为什么不能动。 */
+    dimmed: Boolean = false,
     glyph: @Composable (Color) -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -795,11 +924,16 @@ private fun DrawToolButton(
     ) {
         // 选中态整枚反色：底色换成 ink 后图形得改走 paper，否则深底压深线看不见。
         // 未选中用 muted（与 chip 的未选中文字同档）—— 原先用 ink 时三根纯黑粗条
-        // 是全屏最重的墨迹，比图还显眼。置灰那一档只留给不可用的动作（清空）。
+        // 是全屏最重的墨迹，比图还显眼。
+        //
+        // 两档「看着不能用」是两回事：
+        // · [enabled] = false 是真禁用（按了没反应），只留给确实没有对象的动作（清空）；
+        // · [dimmed] = true 是**看着灰但仍可点** —— 用于锁定态：点一下要能说出原因，
+        //   而 App 上没有 hover，静默的禁用按钮说不出话。
         glyph(
             when {
                 selected -> colors.paper
-                !enabled -> colors.hairlineStrong
+                dimmed || !enabled -> colors.hairlineStrong
                 else -> colors.muted
             },
         )
@@ -851,6 +985,38 @@ private fun DiagonalLineGlyph(color: Color) {
 }
 
 /**
+ * 锁：竖栏最上面那枚，管的是**下面整栏**（锁定 = 整张图只读）。
+ *
+ * 状态要两处一起说：按钮底色（锁定时整枚反色，见 [DrawToolButton] 的 selected）
+ * 与**锁梁的位置** —— 12dp 的画布上塞不下第二个字，形状就是唯一的第二句话。
+ * 锁梁的两条腿插进锁体 = 已锁；整条被拔出来、腿与锁体之间留出一道空隙 = 已解锁。
+ *
+ * 只靠那 1dp 多的空隙说状态，看着悬，其实够用：这枚按钮本身就是反色的强弱对比，
+ * 空隙只是给「反色=锁」这件事一个可以指向的形状（不然反色的锁和反色的线型没区别）。
+ */
+@Composable
+private fun LockGlyph(color: Color, locked: Boolean) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val w = size.width
+        val h = size.height
+        val cap = StrokeCap.Round
+        val bodyTop = h * 0.50f
+        // 锁体：上宽下窄的小梯形，与「删除」那枚同一套轮廓语言（矩形在这个尺寸下像个方块）
+        drawLine(color, Offset(w * 0.16f, bodyTop), Offset(w * 0.84f, bodyTop), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.16f, bodyTop), Offset(w * 0.24f, h * 0.92f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.84f, bodyTop), Offset(w * 0.76f, h * 0.92f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.24f, h * 0.92f), Offset(w * 0.76f, h * 0.92f), stroke, cap = cap)
+        // 锁梁：方拱（两腿 + 顶），不用圆拱 —— 圆拱得引 drawArc/Size，
+        // 且在这个尺寸下与另外几枚的直线语言不一致
+        val legBottom = if (locked) h * 0.54f else h * 0.38f
+        drawLine(color, Offset(w * 0.32f, legBottom), Offset(w * 0.32f, h * 0.20f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.32f, h * 0.20f), Offset(w * 0.68f, h * 0.20f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.68f, h * 0.20f), Offset(w * 0.68f, legBottom), stroke, cap = cap)
+    }
+}
+
+/**
  * 删除工具：一只垃圾桶（删除的通用意象），与竖栏里那枚「点一下即删」的开关是同一个意思。
  *
  * 手搓而不是用 `Icons.Default.Delete`：material 的图形在 24dp 视图里只占中间一半，
@@ -859,10 +1025,14 @@ private fun DiagonalLineGlyph(color: Color) {
  * 只差两条斜边，但矩形在这个尺寸下更像一个「方块」。
  *
  * 只删**一条**：点它 → 再点图上的线。全删在下一枚 [ClearAllGlyph]。
+ *
+ * [glyphSize] 是给「拖线时整栏变垃圾桶」那层用的（画得比 12dp 大）。参数**不能叫 `size`**：
+ * `Canvas` 作用域里的 `size` 是画布尺寸，同名参数会把它遮住 —— 报错是
+ * `Function invocation 'width(...)' expected`，看着像少了扩展函数，其实是名字撞了。
  */
 @Composable
-private fun TrashGlyph(color: Color) {
-    Canvas(Modifier.size(RAIL_GLYPH)) {
+private fun TrashGlyph(color: Color, glyphSize: Dp = RAIL_GLYPH) {
+    Canvas(Modifier.size(glyphSize)) {
         val stroke = size.width * 0.11f
         val w = size.width
         val h = size.height

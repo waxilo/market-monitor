@@ -459,6 +459,18 @@ class DetailViewModel(
         val rawBase: CandleInterval? = null,
         val origin: DataOrigin = DataOrigin.REMOTE,
         val hasMore: Boolean = true,
+        /**
+         * 已经为**这一段序列**请过的那一页的最老时间戳（`null` = 还没请过）。
+         *
+         * 翻页去重必须跟序列放在一起：图表拖到最老一根会**逐帧**回调 `loadMore()`，
+         * 同一个最老时间戳只能真的取一次；而「这一段序列」的身份由 [rawBase] + [raw] 定义，
+         * 换周期/换标的重新取数（[loadBase]）时必须一起归零。
+         *
+         * 早先这个标记挂在画布的 `remember` 上（不带 key）：图那侧不知道序列换过没有，
+         * 标记一旦「用掉」就不再放行，于是换过周期后再也翻不动 —— 用户报的
+         * 「切换周期后就不加载了」就是它。放这里之后，它与序列同生共死，结构上不可能错配。
+         */
+        val oldestRequested: Long? = null,
         val loading: Boolean = true,
         val loadingMore: Boolean = false,
         val error: String? = null,
@@ -878,6 +890,16 @@ class DetailViewModel(
     }
 
     /**
+     * 锁定态下点了竖栏里那些被关掉的动作（新建 / 删除 / 清空）：把原因说出来。
+     *
+     * 这些按钮在锁定态是**置灰但仍可点**的 —— App 上没有 hover，置灰的死按钮说不出话，
+     * 用户只会以为图坏了。与 OI chip「置灰但仍可点、点一下弹同一句原因」是同一条口径。
+     */
+    fun notifyLinesLocked() {
+        showNotice("已锁定，图上划线全部只读 · 点竖栏顶部的锁解锁")
+    }
+
+    /**
      * 建/改这条线对应的规则，成功返回 true。
      *
      * 有 ruleId 就更新（保留 repeatMode / Webhook 等用户可能调过的字段），
@@ -962,16 +984,27 @@ class DetailViewModel(
     /** 图表拖到最左端时往更早方向翻页。 */
     fun loadMore() {
         val current = chart.value
-        if (current.loadingMore || !current.hasMore || current.raw.isEmpty()) return
         val base = baseInterval()
+        // 闸门全部在**这一次快照**上判，且任何一条不满足都**不写任何状态**。
+        // 「先写状态再返回」是旧写法的另一个坑：把「这次没请求成」记成「已经请求过」，
+        // 而那个标记又在图那侧、跨周期不放行 —— 一次误记就让整段序列再也翻不动。
+        if (current.loadingMore || current.loading) return
+        // 手上这段序列必须正是当前周期要的那一段：换周期途中来的触发一律丢掉
+        if (current.rawBase != base || current.raw.isEmpty()) return
+        if (!current.hasMore) return
         val oldest = current.raw.first().openTime
+        if (current.oldestRequested == oldest) return
+        // 先落标记再起协程：标记与 loadingMore 都是同步写的，同一帧里的重复触发当场挡掉
+        chart.update { it.copy(loadingMore = true, oldestRequested = oldest) }
         viewModelScope.launch {
-            chart.update { it.copy(loadingMore = true) }
             try {
                 val page = repository.olderKlines(id, base, oldest, BASE_PAGE)
                 val merged = (page.klines + current.raw).distinctBy { it.openTime }.sortedBy { it.openTime }
                 chart.update {
-                    it.copy(
+                    // 在途期间换过周期/换过源取来的那一页属于上一段序列，整页丢掉换新，
+                    // 不能把旧周期的基础蜡烛塞进新周期的 raw（rawBase 与 raw 必须成对）
+                    if (it.rawBase != base) it
+                    else it.copy(
                         raw = merged.takeLast(MAX_RAW),
                         hasMore = page.hasMore && page.klines.isNotEmpty(),
                         loadingMore = false,
@@ -990,6 +1023,10 @@ class DetailViewModel(
      *
      * **`rawBase` 与 `raw` 必须同时更新**：这一对就是「哪一段序列是就绪的」的答案。
      * 取失败时两者一起作废（不能只清 raw 留着 rawBase，也不能反过来）。
+     *
+     * 翻页去重标记 [ChartData.oldestRequested] 也必须在这里归零：它记的是
+     * 「为上面这一段序列请过哪一页」，序列一换它就没有意义了 —— 留着不放的后果正是
+     * 换周期之后再也翻不动（见该字段的说明）。
      */
     private suspend fun loadBase(selected: CandleInterval): ChartData {
         val base = baseOf(selected)
@@ -1003,6 +1040,7 @@ class DetailViewModel(
                 hasMore = page.hasMore,
                 loading = false,
                 loadingMore = false,
+                oldestRequested = null,
                 error = if (page.origin == DataOrigin.CACHE) CACHE_HINT else null,
             )
         } catch (e: CancellationException) {
@@ -1013,6 +1051,7 @@ class DetailViewModel(
                 rawBase = null,
                 loading = false,
                 loadingMore = false,
+                oldestRequested = null,
                 error = e.displayMessage(),
             )
         }
