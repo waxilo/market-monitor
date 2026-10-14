@@ -8,8 +8,13 @@
 //!    所以重复检查不能把已下好的包或在途进度清掉（见 `check_effect`），
 //!    换包时还得靠代次把在途结果丢掉（见 `should_write_back`）。
 //!
-//! 安装语义由插件负责：Windows 拉起 NSIS 后自行退出进程；macOS 原地替换 .app、
-//! 需要调用方重启 —— 所以 `install_update` 里 install 之后必接一次 `app.restart()`。
+//! 安装语义：Windows 侧**不走**插件的 `Update::install` —— 它拉起 NSIS 后
+//! 用 `std::process::exit(0)` 硬杀自己，2026-10-14 实测这个硬退出会挂死在
+//! 退出清理里（窗口全灭、WebView2 子进程退场、进程不死），变成杀不掉的
+//! 僵尸一直占着安装目录里的 exe，Restart Manager 对它既没法优雅通知也没法
+//! 强杀（`RmShutdown` 返回 351），安装器只好报 "Failed to kill" 中止。
+//! 改为自己落盘、起安装器，然后 `app.exit(0)` 走事件循环的常规出口 ——
+//! 与托盘退出同一条路。macOS 仍是插件原地替换 .app，装完必须重启。
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -353,8 +358,13 @@ pub fn get_update_download_state(app: AppHandle) -> DlState {
         .with(|inner| inner.download.clone())
 }
 
-/// 应用内安装并重启。Windows 侧 `install` 拉起 NSIS 后自行退出进程（走不到下一行）；
-/// macOS 侧是原地替换 .app，装完必须重启才跑得上新版本。
+/// 应用内安装并重启。
+///
+/// Windows 不用插件的 `Update::install`（理由见模块注释）：自己把已验签的
+/// 字节落盘、以 `/P /UPDATE /R` 起安装器（passive + 更新模式 + 装完自动重启），
+/// 然后 `app.exit(0)` 优雅退出 —— 事件循环正常收尾、进程干净退场，安装器的
+/// Restart Manager 检查时就不会再撞上一个杀不掉的僵尸。
+/// macOS 侧是插件原地替换 .app（不涉及 NSIS 的进程强杀），装完重启才跑得上新版本。
 #[tauri::command]
 pub async fn install_update(app: AppHandle) -> Result<(), String> {
     let (update, bytes) = {
@@ -366,11 +376,48 @@ pub async fn install_update(app: AppHandle) -> Result<(), String> {
             _ => Err("安装包尚未下载完成".to_string()),
         })?
     };
-    tauri::async_runtime::spawn_blocking(move || update.install(&bytes))
-        .await
-        .map_err(|e| format!("安装失败：{e}"))?
-        .map_err(|e| format!("安装失败：{e}"))?;
-    app.restart();
+    #[cfg(windows)]
+    {
+        install_windows(&update, &bytes)?;
+        app.exit(0);
+    }
+    #[cfg(not(windows))]
+    {
+        tauri::async_runtime::spawn_blocking(move || update.install(&bytes))
+            .await
+            .map_err(|e| format!("安装失败：{e}"))?
+            .map_err(|e| format!("安装失败：{e}"))?;
+        app.restart();
+    }
+    Ok(())
+}
+
+/// Windows 安装：落盘 → 起安装器。字节已在下载完成时验过 minisign 签名。
+///
+/// 参数对齐插件 2.13.0 会传的那套（tauri.conf `plugins.updater.windows.installMode
+/// = passive` ⇒ `/P`；`/UPDATE` 跳过卸载/WebView2/快捷方式；`/R` 让安装器在
+/// passive 下装完自动把应用拉起来）。
+#[cfg(windows)]
+fn install_windows(update: &Update, bytes: &[u8]) -> Result<(), String> {
+    use std::path::PathBuf;
+
+    let dir: PathBuf = std::env::temp_dir().join(format!(
+        "MarketMonitor-{}-updater",
+        update.version
+    ));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建安装目录失败：{e}"))?;
+    let path = dir.join(format!("MarketMonitor-{}-installer.exe", update.version));
+    std::fs::write(&path, bytes).map_err(|e| format!("写入安装包失败：{e}"))?;
+
+    std::process::Command::new(&path)
+        .args(["/P", "/UPDATE", "/R"])
+        .spawn()
+        .map_err(|e| format!("启动安装器失败：{e}"))?;
+
+    // 优雅退出由调用方 `app.exit(0)` 完成：RunEvent::Exit → 事件循环 run()
+    // 正常返回 → main 返回，CRT 走完整清理。不再让插件式的硬 exit 有机会
+    // 把进程吊死在清理里。
+    Ok(())
 }
 
 #[tauri::command]
