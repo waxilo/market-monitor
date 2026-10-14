@@ -130,18 +130,19 @@ fn publish(app: &AppHandle, store: &Store) -> Status {
     status
 }
 
-/// 快捷键那一下：悬浮窗在眼前就换回主窗，否则收成悬浮窗。
+/// 快捷键那一下：大窗在眼前就收成悬浮窗，否则直接唤回大窗。
 ///
-/// 「两个都隐藏」（从托盘全关掉）时也走悬浮窗那支 —— 已拍板：这键的用途是一眼看到行情，
-/// 要全功能还有托盘菜单。
+/// 判据看**大窗**而不是悬浮窗（2026-10-14 改）：「在后台」（大窗已收进托盘，悬浮窗开没开都算）
+/// 按热键要的是全功能大窗，不是先弹一块小面板。悬浮窗可见时大窗必然不可见（两窗互斥），
+/// 所以「大窗可见 → 收成悬浮窗」这一支与旧逻辑里「悬浮窗可见 → 换大窗」不冲突。
 fn toggle_view(app: &AppHandle) {
-    let mini_visible = app
-        .get_webview_window(crate::MINI)
+    let main_visible = app
+        .get_webview_window(crate::MAIN)
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(false);
-    if mini_visible {
-        crate::to_main(app);
-    } else {
+    if main_visible {
         crate::to_mini(app);
+    } else {
+        crate::to_main(app);
     }
 }

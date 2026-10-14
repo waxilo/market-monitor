@@ -340,7 +340,17 @@ pub fn run() {
             // 前台不息屏：**大窗**摊在前台（可见 + 有焦点）才压住显示器 idle sleep，其余一律松开
             // —— 悬浮窗不算前台（用户要求「使用悬浮窗时允许息屏」）。判据与平台差异都在 `awake` 模块。
             // 这个回调就在事件循环线程上，满足它的前提。
-            WindowEvent::Focused(_) => awake::refresh(window.app_handle()),
+            //
+            // 另外用 `Focused(true)` 兜双窗互斥（2026-10-14）：从任务栏单击 / Alt-Tab 唤回大窗
+            // 走的是系统恢复，不经过应用层任何命令（`to_main`/`show_main_window` 拦不到），
+            // 悬浮窗开着时就会「悬浮窗 + 大窗」同时存在。这里看到大窗拿到焦点就把悬浮窗收掉
+            // —— 命令链路里 `hide_mini` 本来就会做一遍，这里只是补系统直通的那条路。
+            WindowEvent::Focused(focused) => {
+                if *focused && window.label() == MAIN {
+                    hide_mini(window.app_handle());
+                }
+                awake::refresh(window.app_handle());
+            }
             // 主窗点关闭 = 收进托盘，进程继续跑，悬浮窗照常刷新
             WindowEvent::CloseRequested { api, .. } => {
                 if window.label() == MAIN {
