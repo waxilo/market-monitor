@@ -152,20 +152,48 @@
 重排时 `scrollToItem(0)`；但**单行「重测」别抢视口**（用户正盯着那行看结果，key 锚定恰好是他要的），用 `pinToTop`
 标志区分批量与单行。排序规则抽成纯函数 `ui/settings/ProbeOrdering.kt`（+7 单测）。
 
-## 全屏划线：竖栏五枚 + 删除只有「点线即删」+ 清空（2026-10-12，晚定版）
+## 全屏划线：竖栏六枚（锁 + 三种线 + 删除 + 清空）· 2026-10-14 定版
+
+> 本节在 2026-10-12 版之上改了三处，都已就地更新：**竖栏由五枚变六枚**（新增最上面的锁按钮、
+> 占位 30dp → 26dp）；**新增「解锁后按住线直接拖 + 拖到竖栏变垃圾桶即删」**；
+> **进入全屏默认锁定**。下面标 `2026-10-14` 的就是本次改的。
 
 `DrawTool = { NONE, ALERT, HORIZONTAL, TREND, ERASE }`，单指手势一次只有一种语义。
-第五枚「清空」**不进 `DrawTool`** —— 它不是一种模式，按一次就完事。
+最后一枚「清空」**不进 `DrawTool`** —— 它不是一种模式，按一次就完事。
+**2026-10-14**：锁**也不是** `DrawTool` 成员（它是「能不能动」的总开关，不是「用哪种工具」），
+它单独占最上面一枚，用 `RailDivider` 与下面隔开。
 
-**规格（第二轮收窄，2026-10-12 晚）**：竖栏占位 30dp（含右留白 4dp）/ 按钮 24dp / 图形 12dp /
+**规格（2026-10-14）**：竖栏占位 **26dp**（含右留白 4dp）/ 按钮 24dp / 图形 12dp /
 间距 4dp，常量在 `RAIL_BUTTON` / `RAIL_GLYPH`（图形一律手搓 Canvas，不拖进 `material-icons-extended`）。
 图形线宽 `size.width * 0.11f`：12dp 画布在 3x 屏上是 36px，0.11 正好落 4px；沿用 0.10 落在 3.6px，
 两侧被抗锯齿吃掉一圈会发虚。
+❗**给 Glyph 加尺寸参数时别叫 `size`**：`Canvas` 作用域里的 `size` 是画布尺寸，同名参数会把它遮住，
+里面每一行 `size.width` 都会报 `Function invocation 'width(...)' expected` ——
+看着像缺扩展函数，其实是名字撞了。`TrashGlyph` 的参数因此叫 `glyphSize`（2026-10-14 实测，第一次编译就死在这）。
+（2026-10-12 收窄时是 30dp 占位 / 五枚 ≈ 150dp；加了锁按钮后为 26dp / 六枚 ≈ 180dp。）
 
 **❗最关键的一条：竖栏不许 `fillMaxHeight()`**。原先 `.width(34.dp).fillMaxHeight().background(wash)`
 会在屏幕右缘拉出一条 **102px 宽 × 1080px 高**的整条灰带 —— 用户连着两轮说「太大」，指的就是它，
-按钮本身一直很小。改成跟着内容走（5 枚 ≈ 150dp）+ `Radius.fullShape` 胶囊底，占位面积降到 1/3。
+按钮本身一直很小。改成跟着内容走（六枚 ≈ 180dp）+ `Radius.fullShape` 胶囊底，占位面积降到 1/3。
 判定「大不大」要**按像素量**，别只看 dp 数字：实测改造前 102×1080、改造后 78×443（含 4dp 右留白共 90px 宽）。
+
+**2026-10-14：竖栏是「拖线时的垃圾桶落点」**。`FullscreenChart` 里
+`val draggingLine = alertLines.any { it.dragging } || drawLines.any { it.dragging }`，
+为真时在 `DrawToolRail` 的 Box 里叠一层 `matchParentSize()` + `colors.down` + 一只放大到
+`RAIL_BUTTON * 0.62f` 的 `TrashGlyph(colors.paper, …)`。
+- 盖在**同一块几何**上而不是替换内容：拖动途中落点不能自己动，尺寸位置必须与松手前逐像素一致，
+  否则「看见落点、拖过去」会扑空。`matchParentSize` 取的是父 Box 的**内容**区（已扣掉 padding），
+  正好等于胶囊本身。
+- 「正在拖」的唯一事实来源是线自己的 `dragging` 标记（`alertLines` 的 `alertDrag` 分支、
+  `drawLines` 的 `drawDraft` 分支各置一次），**不另报一个布尔** —— 布尔在异常路径
+  （换周期/旋屏/组合销毁）漏一次收尾，竖栏就永久变成垃圾桶。
+  ⚠️ **已知取舍**：抓取是在 down 那一刻定性的，所以在解锁态**轻点**一下某条线也会先让垃圾桶亮一下
+  （抬手即落库、草稿清空、覆盖层随之消失，约一两帧到百来毫秒）。**有意保留**：那一下既是
+  「抓到了」的即时反馈，也是落点的自我介绍。想消掉它就得再引入一个「真的移动过」的布尔 ——
+  那正是上面这条要避开的东西。真被投诉再改，改的时候记住这个取舍是写下来的。
+- 落点判据用**原始** x（`lastRawX`）：循环里逐帧那份 x 已 `coerceIn(0f, plotWidthPx)`，
+  永远到不了竖栏所在的画布右缘之外，拿它判恒为假。`atDropTarget = { x -> lineDropToTrailingRail && x >= canvasSize.width }`，
+  竖栏正好从画布右缘开始（Row 里分出来的一栏）。
 
 **⚠️ 24dp 按钮的触控区是被 Compose 撑开的，会**互相重叠**（实测）**：pitch 只有 28dp（=84px），
 在 4dp 间距正中（y=324，上一枚下沿 318、下一枚上沿 330）点一下，落到的是**下面那一枚**
@@ -173,19 +201,25 @@
 底部提示条会报出当前工具名，用户看得见也能改。想彻底避免就得把间距拉到 ≥8dp 或按钮回到 30dp，
 那是拿宽度换精度，别再无声地改回去。
 
-**删线的两个粒度**：① 竖栏「删除」工具**点线即删**（`DrawTool.ERASE`）；
-② **清空**一次删光本标的的全部划线。第 ② 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
+**删线的三个粒度**：① 竖栏「删除」工具**点线即删**（`DrawTool.ERASE`）；
+② **2026-10-14 重新加回**的「按住线拖到右侧竖栏、竖栏变垃圾桶时松手即删」（见上）；
+③ **清空**一次删光本标的的全部划线。第 ③ 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
 于是手动在预警页建的价位预警也会被一起清 —— 这是有意的，否则会出现「清空了但还剩一条线」。
 
-**❗2026-10-12 晚撤掉第三条路：「把线拖到画布右上角的垃圾桶落点」**（用户口径：「拖线时那个小垃圾桶
-去掉，竖栏已经能删了」）。撤的范围是**整条**、不只那个图标：渲染层那个 `showTrash` Box、
+**❗2026-10-12 晚曾撤掉「把线拖到画布右上角的垃圾桶落点」**（用户口径：「拖线时那个小垃圾桶
+去掉，竖栏已经能删了」）。撤的范围当时是**整条**：渲染层那个 `showTrash` Box、
 命中矩形 `alertDeleteRect()`、悬停高亮 `alertTrashHot`、`CORNER_BUTTON_INSET` 之外那三个
 `TRASH_*`/`SPACING_TRASH_INSET` 常量、手势里的 `overTrash` 判定与 `deleteRect()`/`onOverTrash()`/
 `onHorizontalDelete()` 三个参数、以及 `Icons.Default.Delete`/`Icon`/`Rect` 三个 import —— 全删。
-拖线松手**一律落库**。留下的 `onAlertLineDelete`/`onDrawLineDelete` 仍由 ERASE 那条路喂
+留下的 `onAlertLineDelete`/`onDrawLineDelete` 改由 ERASE 那条路喂
 （`onEraseAlertLine`/`onEraseDrawLine`），语义收敛成「按 id 删」。
-教训：一套交互有第二实现时，删要比加想得多 —— 垃圾桶还牵着底部提示文案里的
-「拖到右上角垃圾桶删除」，文案不改就是换个说法骗人。
+
+**2026-10-14 用户又要求加回拖线删除，但换了落点**：不再是小垃圾桶，而是**整条竖栏**，
+且只在**拖线途中**才变成垃圾桶。这是上一次失败的根因所在 —— 那个落点**平时不存在**、要靠猜；
+这次落点拖起来看得见（整栏高亮成 `down` 色），才敢拖。教训有两条：
+① 一套交互有第二实现时，删要比加想得多（当时垃圾桶还牵着底部提示文案里的「拖到右上角垃圾桶删除」）；
+② 撤掉一条路之后**手头那份 `onHorizontalDelete` 的 `LineRef` 抽象别一起丢** ——
+这次重加正是把它捡回来（`LineRef.Alert(ruleId)` / `LineRef.Guide(lineId)`，见下）。
 
 **清空的实现分两拨**（存储上本来就不是一回事，别硬凑成一个 delete）：
 告警线由规则派生 ⇒ 逐条 `alerts.deleteRule`；水平线/直线在 `chart_line` ⇒ 新增
@@ -242,6 +276,82 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 价位与 `input tap` 的 y 经刻度线性换算吻合（y=600 → 83754.20）。
 `README.md` 也补了「Android 端画线交互」一节（与桌面端交互约定同体例）。
 
+## 划线锁（`linesLocked`）：2026-10-14 新增，并在真机验收里抓到一个真 bug
+
+竖栏最上面一枚，`rememberSaveable { mutableStateOf(true) }`（**进全屏默认锁定**；旋屏重建不丢锁）。
+`linesEditable = !linesLocked`、`lineDropToTrailingRail = !linesLocked` 两个参数传给 `KlineChart`；
+锁定态 `drawTool` 一律收成 `NONE`（手上举着工具时上锁，单指会被划线通道吃掉却画不出东西，看着像图卡住）。
+口径（用户原话）：锁 = 不能拖已有线 + **新建也一起锁**；解锁后**不必先选工具**，按住线即可拖。
+图形 `LockGlyph`：锁体梯形（与垃圾桶同轮廓语言），锁梁两腿 `legBottom = if (locked) h*0.54f else h*0.38f`
+—— **插进去 = 已锁，拔出来 = 解锁**；不用 `drawArc`（要引 `Size`，且与其它 Glyph 的直线语言不一致）。
+锁定态点置灰的线型按钮 → `notifyLinesLocked()` 弹「已锁定，图上划线全部只读 · 点竖栏顶部的锁解锁」；
+锁定态不摆常驻提示条（`toolHint` 第一分支直接返回 `null`）。
+
+### ❗❗`pointerInput` 的 key 必须包含闭包捕获的普通参数（真机对照实测）
+
+- **表象**：上锁 → 竖拖 60px，`chart_line.id=21.price` 从 `83312.04` 变 `83335.64`。
+  UI 侧（提示条消失、线型按钮置灰）已经摆出「锁了」的样子，**手势侧还拿着 `linesEditable = true`**，
+  而且只在最常用的「解锁 → 看 → 上锁」路径上出事。
+- **根因**：`pointerInput(drawTool, symbolKey, interval.storageKey)` 的 key 里**没有**
+  `linesEditable` / `lineDropToTrailingRail`。上锁时 `drawTool` 本来就是 `NONE`（工具本收着）、
+  `symbolKey`/`interval` 不变 ⇒ **key 不变、协程不重启**，闭包继续用上锁前那份 `true`。
+  同根因还有第二处：`horizontalAnchors` lambda 里 `DrawTool.NONE -> if (linesEditable) alertAnchors() + hAnchors() else emptyList()`，
+  它也是每次组合新建、**按值**捕获 `linesEditable` 的普通 lambda，被同一个永不重启的协程拿着。
+- **修法**：key 补成 `.pointerInput(drawTool, linesEditable, lineDropToTrailingRail, symbolKey, interval.storageKey)`。
+- **为什么能放心重启**：这两个开关只由竖栏按钮的点击改变，点按钮时手上不可能同时按在图上，不会打断进行中的手势。
+  反过来 `liveGeo` / `liveBarCount` / `liveAutoRange` 这些**会在手势进行中被数据更新改掉**的量**绝不能**进 key
+  （进去就重启、拖动半途断掉），它们走 `rememberUpdatedState`。
+- **可推广的判据**：闭包里读的东西分两种 —— ① `by remember { mutableStateOf(...) }` 这类**委托对象**
+  （捕获的是状态对象，读的是实时值 ✓）；② 组合期算出来的**普通 `val` / 参数**（按值快照 ✗，必须进 key）。
+  已核过另两处 `pointerInput` 属于①，无需改：`DetailScreen` 的行拖拽排序（`rows` 是 `mutableStateOf` 委托）、
+  `MarketScreen` 的下拉刷新（`onGestureEnd` 只读状态持有者、`thresholdPx` 稳定）。
+
+### 该环境注入拖动的坑（下次验收直接用）
+
+- `input swipe` / `input motionevent` 都**能**注入有效手势（横向平移验过：时间轴 `03:52 → 04:06`）。
+  但**竖向往上拖会被绘图区顶边夹住**：`y` 在 down 与每帧都 `coerceIn(plotTopPx, …)`，
+  而这台机 `plotTopPx = readoutHeightPx ≈ 347px`（读数带很高）⇒ 「往上拖」看着像不跟手，**换向下拖**即可。
+- **中途截图法**：`( adb shell input swipe … ) & sleep 1.6; adb shell screencap`，
+  能拍到竖栏变红的垃圾桶覆盖层 —— 这是「确实抓到了线（草稿 `dragging`）」的直接证据，
+  比只看松手后的库更早定性。
+- **判别锁定的实验口径**（只用「按下 + 抬起」就够，不依赖位移帧）：
+  在**离线 30px** 处按下（仍在 `ALERT_GRAB_WIDTH` = 24dp = 72px 半径内），向下拖 60px。
+  解锁 → 抓住线并把价位提交到**终点**；锁定 → 线纹丝不动，手势转成**价格轴平移**。
+  实测三组：A 解锁 `83254.57 → 83241.93`；B 锁定 `83241.93 → 83241.93`（轴整体下移 47px）；
+  C 再解锁 `83241.93 → 83229.87`。
+- 竖栏各按钮的真实像素中心可以用像素聚类量（`.workbuddy/tmp/rail_probe.py`）：
+  横屏 1920×1080 下锁 y=286、告警线 380、水平线 464、直线 548、垃圾桶 648、清空 732，**x 一律 1865**。
+
+## 划线工具 = 只新建 + 纯净画布 + 直线十字辅助线（2026-10-14 下午，用户五条需求的 3/4/5）
+
+- **工具模式下不再抓旧线**：编辑已归解锁态「按住直接拖」，工具再抓线只会与预期打架。
+  实现是两处同时收：`horizontalAnchors` 只在 `NONE + linesEditable` 给线（工具下 `emptyList`，
+  天然没有抓取来源）；TREND 分支删掉 `closestTrend` 平移（`TrendMode.MOVE` 只剩解锁态一条路）。
+- **纯净画布**：选中工具那一刻已划的线全部让位 —— `visibleAlertLines` / `visibleDrawLines`
+  只留 `dragging` 的那笔草稿（草稿由 ViewModel 的 `alertDrag`/`drawDraft` 合并进列表，
+  `dragging=true` 是「手上这笔」的唯一标记）。ERASE 例外：全画，能点的必须看得见。
+  原「水平/直线工具只画同型线」的规则随抓取一起废掉。
+- **直线（TREND）两敲带十字辅助线**：竖线+横线虚线（`trendCrosshair`，与 `trendSeed` 同 key 的
+  `remember` 态）。**自由像素、不吸附蜡烛**。PLACE2 场预览线从种子连到十字交点。
+  与长按十字光标语义相反：那个「松手停住」留读数，这个随工具走。
+- ❗**准星交互二稿（同日晚用户追加）**：选中工具**准星就出现在图中央待命**（`null` =
+  画 `plotWidth/2, mainTop+mainHeight/2`；有种子时停在种子点），用户**拖准星、松手定点**，
+  再重复一次成线 ⇒ 种子**不在 down 落**、改在收尾 SEED 分支落（`trendAnchorAt(trendLast)`）；
+  准星**松手不清**，留原地等下一次拖动，随 drawTool 变化由 remember key 作废。
+  SEED 拖到垃圾桶 = 取消（种子还没落，正好不用清）。轻点仍可用：down 把准星拉到手指处 +
+  收尾按 trendLast 落种子。**坑**：种子落点在 down 改成收尾时，「轻点无 MOVE 帧」的旧注释
+  逻辑要跟着搬 —— down 就位 + 收尾定点两条腿缺一不可。
+- ❗**准星交互三稿（同日稍晚）**：「点击屏幕准心直接移到点击位置」也不对 —— **按下不传送，
+  抓着拖**：down 只记基准（`onTrendCrosshairGet()` 读当前准星，null 时实体化成待命位；
+  `trendCrosshairBase` + `trendDragFrom`），MOVE 每帧 准星 = 基准 + 手指位移（再夹进绘图区），
+  SEED/PLACE2 两分支同款。轻点 = 不拖直接松手 = 确认准星当前位置（第二敲轻点即与种子重合
+  → 走「太近=撤销」，天然自洽）。**真机数值闭环**：中央 (828,683) + 位移 (200,100)，
+  种子实测 (1028,783)，而手指终点在 (700,900) —— 传送与抓拖两种行为可精确区分。
+- **提示文案跟着改**：ALERT/HORIZONTAL 删掉「按住可改价位」（工具下已不可能）；
+  TREND 终稿「拖动图中准星，松手定第一点 · 再拖一次松手连成线（太近=撤销）」。
+- 真机冒烟（MuMu）：选中工具不碰屏截图证实准星在图中央；第一敲松手 `chart_line` 不变
+  （种子是内部态）；第二敲成交落库 `kind=trend`；清空复原。单测 301/301。
+
 ## 均线目录：整份交给用户（2026-10-12 晚）
 
 用户口径：「（管理弹窗）自定义均线现在只能新增，要能删掉原有的，比如 MA5」。⇒ 把「预置五档写死 +
@@ -263,6 +373,47 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 - `MA_LIMIT` 从「自定义 ≤ 8」改成「**目录总数 ≤ 8**」（桌面同值）⇒ 老装机 5+8=13 条的下次保存会被截到 8。
 - 单测 `ui/detail/MaCatalogTest.kt`（8 条）：越界/去重/升序/截断/空表不回填 + 删 MA5 带走选中。
   本机 **301 全绿**（2026-10-12，`testDebugUnitTest`，跑法同上面「环境」那节）。
+
+## 翻页加载（loadMore）的两个坑（2026-10-14 修，用户症状「切换周期后就不加载了」）
+
+两个**互相独立**的缺陷叠在一起，任一都足以让翻页整段失效：
+
+1. **「贴到最老一根」的判据**：原来是 `startIndex(barCount) == 0`，改成新增的
+   `ChartViewport.atOldestEdge(barCount) = barCount > 0 && startIndex(barCount) <= 0`。
+   `startIndex` 是 `floor(barCount + rightOffset - visibleBars)` —— **三个浮点量相减再取整**。
+   `clamp` 把 `rightOffset` 夹到最小值的那个瞬间本应得 0，但 `visibleBars` 只要不是整数
+   （双指缩放后必然如此），舍入会让结果落在 0 左侧一丁点（实测 `raw = -3.814697265625e-06`），
+   `floor` 给出 **-1** ⇒ `== 0` 永远不成立。默认 `60f` 时算式精确、恰好命中 0，旧写法看着能用纯属巧合。
+   序列比窗口窄时（1M 只有 13 根）`rightOffset` 夹成 0、左端停在 **-47**，同样永远不成立。
+2. **去重标记的生命周期**：`oldestRequested` 原挂在画布 `remember`（**不带 key**），
+   图那侧不知道序列换过没有，标记「用掉」就不放行 ⇒ 症状正是「换过周期之后再也翻不动」。
+   搬进 `DetailViewModel.ChartData.oldestRequested`，与序列**同生共死**（`loadBase` 两条分支都归零）。
+
+配套：`loadMore()` 的闸门全在**一次快照**上判（`loadingMore` / `rawBase == base` / `hasMore` /
+`oldestRequested`），任何一条不满足都**不写任何状态** —— 旧写法「先写状态再返回」会把
+「这次没请求成」记成「已经请求过」，一次误记就永久堵死；先落标记再起协程，同一帧的重复触发当场挡掉；
+回写前**再校验一次** `rawBase == base`，在途期间换过的周期整页丢掉（否则旧周期的基础蜡烛会混进 raw）。
+
+回归 `ui/chart/ChartViewportTest`（5 条，含 -1 / -47 这两格证据）。
+另注：`visibleBars = 57.37f` 这组输入的期望值是用 float32 复算钉住的
+（`tmp/f32check.py`）—— 手算 double 会得到 0，正是这个 bug 骗过人的地方。
+
+## 行情源：Bitunix 下线（2026-10-14，两端同）
+
+用户症状「K 线不一致但价格一致」，第一直觉是时区 —— **证伪了**：逐根比对 1m…1M 与 Gate / OKX，
+时间戳完全对齐（都是 UTC 毫秒）。真因是它的 REST K 线**只返回已收盘蜡烛**：
+`startTime` 被服务端忽略、`type=LAST_PRICE|MARK_PRICE` 也一样只回已收盘、`endTime = now + 1d` 直接回空
+⇒ 图上最后一根永远落后一个周期。客户端不合成当前蜡烛，于是**删源**（用户拍板「删除这个 api」+
+范围「两端一起删」）。
+
+- Android 候选 **10 → 9**：`FuturesEndpoint` 删枚举项与 `ALL` 条目；
+  `data/remote/dialect/FuturesDialects.kt`（1289 → 1168 行）删分派 / `checkBitunix()` /
+  文件末尾整个 `BitunixDialect`；`FuturesDialectAdaptersTest` 54 → 47 条（删 7 个用例 + 4 份夹具）。
+- 桌面端 12 → 9：`src/lib/sources.ts` 删条目、`src/lib/dialects.ts`（1343 → 1230 行）删
+  `| 'BITUNIX'` / `checkBitunix()` / `const bitunix = (() => …)()` 整块。
+- 文档同步：两份 README、`basedata/2026-09-29_行情来源独立性与可接入候选.md`（原文保留 + 加变更说明）。
+- 教训：**「K 线不一致但价格一致」这类症状先怀疑「最后一根怎么来的」**（是否含进行中蜡烛、
+  是否客户端合成），而不是先怀疑时区 —— 时间戳对齐是最容易验的一步，验完就该换方向。
 
 ## 发版
 改 `versionCode`/`versionName` → 推裸版本号 tag → 出 APK + `.sha256`。**签名固定**（`cf2e20c7…52f034`），别换。

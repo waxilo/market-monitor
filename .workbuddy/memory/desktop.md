@@ -255,6 +255,40 @@
   **文案是中文**（`1分/5分/…/1时/4时/1天/1周`，`intervalLabel()`），按 `'1h'` 找 chip 必然找不到，
   用「选中项 index ± 2」来挑下一个周期。
 
+## 悬浮窗断联遮罩（2026-10-14 新增）
+- 用户需求原文：**「当 api 断联时，桌面端的悬浮窗的数字就卡住了，用户不知道，还以为价格没变；
+  断联时遮罩层遮住整个悬浮窗，显示已断联」**。
+- 成因：`useTickers` 的 `poll()` 全败时对某一格是**什么都不做**（`r.status !== 'fulfilled'` 直接 `return`），
+  于是行里留着上一次成功的价 —— 轮询照跑、界面纹丝不动，看着就是「价格没变」。
+- 实现（3 处）：
+  - `hooks/useTickers.ts`：`online` 从「一拍定生死」（原 `setOnline(okCount > 0)`）改成
+    **连续 `OFFLINE_MISSES = 2` 拍全败才翻 false**，任一拍有成功立刻回 `true`（**恢复不设门槛**）。
+    单拍失败多半是丢包 / 限频的抖动，一拍就翻会让遮罩「闪一下又撤」。换数据源清空 miss 计数；
+    自选为空仍保持 `online = null`（「没东西可轮询」不是断线）。主窗顶栏那枚「断线」圆点共用这个值，
+    所以它也一起从「瞬时」变成了「确认后」（1.2s 一拍 ⇒ ≈2.4s，比原来更稳）。
+  - `MiniApp.tsx`：`online === false` 时渲染 `.mini-offline`（`role="status"`，红点 + 「已断联」）。
+  - `styles/theme.css`：`.mini` 加 `position: relative`（遮罩的定位上下文；它自己的 `overflow: hidden`
+    顺手把遮罩四角裁成面板圆角）；新增 token `--scrim-mini` = `rgba(20,22,25,.96)` / `rgba(255,255,255,.96)`。
+- ❗**这块遮罩必须「近乎实底 + blur」，不能沿用 `--scrim-chart` 那层 0.5 半透明**：图表底下是骨架（该透出来），
+  悬浮窗底下是**冻住的旧价** —— 透出来就会被当成现价读，那正是这次要治的病。实测 0.94 时旧价仍有可辨鬼影
+  （见 `mini-offline-2-offline.png` 那版），抬到 **0.96 + `backdrop-filter: blur(2px)`** 才彻底糊掉。
+- ❗**遮罩 `pointer-events: none` 是刻意的**：面板级的点击 / 右键 / 拖窗口都挂在 `.mini` 上，事件照旧冒泡 ⇒
+  断联期间点一下仍然是「换到主窗」（正好去看连接态 / 换数据源），右键仍是宿主那枚「隐藏悬浮窗」原生菜单，也还拖得动。
+- ⚠️「盖满整块面板」的几何口径是**面板内框**：236×54 的面板 ⇒ 遮罩 `{x:1,y:1,w:234,h:52}`。
+  绝对定位的 `inset: 0` 相对**内边距盒**解析，所以 1px 边框留在外面（面板轮廓仍看得见，这是想要的）——
+  拿外框去比会差 2px，别据此以为「没盖满」。
+- 实测：`.workbuddy/tmp/verify-mini-offline.mjs`（无头 Chrome + CDP，`#/mini` 真页面 + 真 Gate 现货价，
+  `Network.setBlockedURLs(['*gateio*'])` 断网）。**28 条全过**，关键几条：遮罩出现时行内价格与在线时**逐字相同**
+  （证明「数字确实冻住、遮罩盖的就是它」）；断网后 **5.7s** 出遮罩、放行网络 **2.8s** 撤（一拍即恢复，不要额外确认）；
+  面板中心 `elementFromPoint` 命中的仍是 `.mini-row`（点击语义没被遮罩吃掉）；空列表 + 断网 12s 不误报；
+  深浅两套主题各取各的底色。
+- ⚠️ 写这类脚本的两个坑（已写进脚本注释）：
+  - **`Page.navigate` 回同一个 URL 不会重载**（含 `#/mini` 属于同文档导航）⇒ 换场景只能 `Page.reload`。
+    第一版深色那轮因此读到上一轮的 `data-theme`，表现为「深色断言失败」，其实代码没问题。
+  - **vite 只绑 `localhost`**（本机 `localhost` 解析到 IPv6 `::1`）⇒ 探 `127.0.0.1:5198` 会 connection refused，
+    看着像「dev server 没起来」。一律用 `localhost`。另外**冷启动首帧要 30s 上下**（依赖预打包），
+    首次导航的预算给到 120s，后面的 reload 都命中缓存、几秒就绪。
+
 ## 指标与副图的选择（0.1.11 起持久化）
 - `lib/indicatorPrefs.ts`：`mm.indicators` = `{ ma: number[]; boll: boolean; panes: SubPaneKind[] }`。
   `parseIndicatorPrefs` 按支持集过滤（`MA_CHOICES` / `SUB_PANE_KINDS`，去重排序）、认不出的静默丢 ——
@@ -648,6 +682,19 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
 - ⚠️ `set_always_on_top(true)` **重复调用无效**（tao 的 `set_window_flags` 有 flags 去重，`diff == empty` 直接 return）
   ⇒ 必须自己调 Win32；对**已是 topmost** 的窗口提 `HWND_TOPMOST` 也可能 no-op ⇒ 验证脚本要先降 NOTOPMOST 再升
   （成功率约一半，得重试到成功，否则「没被压住」会被误读成「已纠正」= 假绿）。依赖 `windows = "0.62"`（与 tauri 同版本）。
+
+## 双窗互斥的两条保障（2026-10-14 补，用户报「悬浮窗+大窗同时存在」「后台热键先开悬浮窗」）
+
+- **热键判定看主窗、不看悬浮窗**（`global_key.rs::toggle_view`）：主窗可见 → `to_mini`；
+  否则（**含收进托盘的后台态**，悬浮窗开没开都算）→ `to_main`。旧逻辑「只判 mini 可见」
+  在后台时先弹悬浮窗，正是用户报的症状。悬浮窗可见时主窗必然不可见（互斥），
+  所以两支不冲突。注意 `to_mini` 的顺序是 mini.show → main.hide。
+- **任务栏单击 / Alt-Tab 唤回主窗走系统直通**：不经过应用层任何命令（`to_main`/`show_main_window`
+  都拦不到）⇒ 在 `lib.rs::on_window_event` 的 `WindowEvent::Focused(focused)` 里兜：
+  `focused && label == MAIN` → `hide_mini`。这个 arm 本来就有（喂 `awake::refresh`），
+  是在同一个 arm 里加的，不是新开一个 match 分支。
+- `cargo check` 通过；两处都没有平台 API，不涉及跨平台编译风险。真机行为验证未做
+  （不能动用户在跑的实例），改动语义靠读链路确认。
 
 ## 身份与构建
 - **两条线必须分得开**：安装版 = `com.waxilo.marketmonitor` ⇒
