@@ -72,6 +72,8 @@ import com.waxilo.marketmonitor.ui.theme.Radius
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import com.waxilo.marketmonitor.ui.theme.UpGreen
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.ceil
@@ -90,7 +92,7 @@ import kotlin.math.roundToLong
  * 图上一条**已有**的线的身份：告警线与视觉画线分属两个存储域（alert_rule / chart_line），
  * 落库与删除路径不同，所以抓到手之后必须能说清是哪一域、哪一条。
  *
- * 为什么要有这个类型：解锁态下「按住哪根就拖哪根」是**一个**手势通道，
+ * 为什么要有这个类型：解锁态下「长按哪根就拖哪根」是**一个**手势通道，
  * 而落库回调（[KlineChart.onHorizontalDrag] / [KlineChart.onLineDropDelete]）只有一条 ——
  * 靠当前工具去猜线型在这里不成立（解锁态根本没有工具）。
  *
@@ -339,7 +341,7 @@ fun KlineChart(
     /**
      * 当前激活的划线工具（全屏右侧竖栏单选）。非 NONE 时：单指只服务那一条通道，
      * **不再**平移价格刻度，也不会出十字光标；且**只新建、不抓已有线**（2026-10-14）——
-     * 编辑旧线归解锁态「按住直接拖」，工具模式下画布同时切换成纯净态（已划的线全部让位）。
+     * 编辑旧线归解锁态「长按拖动」，工具模式下画布同时切换成纯净态（已划的线全部让位）。
      * 直线工具下两敲落锚：拖动中十字准星跟手，松手确认定点。双指缩放照旧。
      *
      * [DrawTool.NONE] 下还能不能动已有的线，由 [linesEditable] 单独说了算 ——
@@ -362,11 +364,13 @@ fun KlineChart(
     /** 删除模式（[DrawTool.ERASE]）点中一条视觉画线：调用方按 chart_line 主键删除。 */
     onDrawLineDelete: (Long) -> Unit = {},
     /**
-     * **解锁态**：`drawTool == NONE` 时也能按住图上已有的线直接拖它。
+     * **解锁态**：`drawTool == NONE` 时也能**长按**图上已有的线拖动它（不必先选工具）。
      *
-     * true 时按下那一刻就近抓线：告警线 / 水平线改价位、直线整根平移；落空则照旧还给画布
-     * （平移、双指缩放、长按十字光标）。false（锁定态、竖屏）= 整张图只读，线一根都动不了 ——
-     * 竖屏正是 false：那里只显不可编，改线一律进全屏。
+     * true 时按下就近抓线但先挂起：按住不动够长按时长才开始拖（告警线 / 水平线改价位、
+     * 直线整根平移）；没按够就滑走 = 普通画布手势，线纹丝不动（2026-10-15 拍板，
+     * 防滑动误触把路过的线拖走）。落空与挂起作废都照旧还给画布
+     * （平移、双指缩放、长按十字光标）。false（锁定态、竖屏）= 整张图只读，
+     * 线一根都动不了 —— 竖屏正是 false：那里只显不可编，改线一律进全屏。
      */
     linesEditable: Boolean = false,
     /**
@@ -583,6 +587,39 @@ fun KlineChart(
     val liveRangeBase by rememberUpdatedState(rangeBase)
     val liveLoadMore by rememberUpdatedState(onLoadMore)
 
+    /**
+     * 换周期/换标的/首次进入后，新序列一就绪就把纵轴重定到最新价：最新价居中，
+     * 量程对称向两侧外扩到仍能罩住全部可见蜡烛与叠加线（宁可多一片空白，不裁蜡烛）。
+     *
+     * 纵向缩放/平移是跨周期、跨标的全局保留的看图意图，旧意图套到新序列上可能
+     * 把现价顶出量程 —— 现价虚线与现价牌会整个消失（见 [drawLastPrice]），
+     * 而切周期后第一眼要看的就是现价。因此 (标的, 周期) 每变一次重算一遍缩放/平移；
+     * 之后手势照常可再调，左下角小标仍可复位成贴合的自动量程。
+     *
+     * 量程不取 [liveAutoRange] 而是按当前序列+视口现算（与 [autoRange] 同口径）：
+     * 序列从空变满的那一刻，本协程在重算 `autoRange` 的那次重组**之前**就 resumes，
+     * 读到的「最新值」还是空序列的 (0,1) 兜底，居中会锚错。
+     */
+    val liveSeriesForRecenter by rememberUpdatedState(series)
+    val liveViewportForRecenter by rememberUpdatedState(viewport)
+    LaunchedEffect(symbolKey, interval.storageKey) {
+        val ready = snapshotFlow {
+            val current = liveSeriesForRecenter
+            val close = current.candles.lastOrNull()?.closeDouble()
+            if (close == null || !close.isFinite()) return@snapshotFlow null
+            val visible = liveViewportForRecenter.window(current.size)
+            val base = current.mainRange(visible.first, visible.last)
+            val baseSpan = base.high - base.low
+            if (baseSpan <= ValueRange.EPSILON) null else Triple(close, base, baseSpan)
+        }.filterNotNull().first()
+        val (close, base, baseSpan) = ready
+        // 居中所需的半程 = 现价到较远那侧极值的距离（上下两侧都罩住）
+        val halfSpan = max(close - base.low, base.high - close)
+        priceZoom = ((2.0 * halfSpan) / baseSpan).toFloat()
+        pricePan = ((close - base.center) / baseSpan).toFloat()
+            .coerceIn(base.panLimit(base, 2.0 * halfSpan))
+    }
+
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
     val scheme = MaterialTheme.colorScheme
     val palette = ChartPalette(
@@ -717,7 +754,7 @@ fun KlineChart(
      * 这一帧画哪些视觉画线：
      * · 告警工具下全不画 —— 那时单指属于告警线；
      * · 水平线/直线工具下**只留手上那笔草稿**（纯净画布，2026-10-14 改）——
-     *   旧规则「只画同型的线」随「工具下不再抓已有线」一起废掉：编辑已归解锁态直接拖，
+     *   旧规则「只画同型的线」随「工具下不再抓已有线」一起废掉：编辑已归解锁态长按拖，
      *   工具模式下满屏旧线只剩干扰；
      * · 删除模式下**全画**（不看那只眼睛）—— 能点的必须都看得见；
      * · 平时（NONE，含竖屏）随眼睛显隐、只显不可编。
@@ -2400,7 +2437,7 @@ private fun IndicatorReadout(
  * · ALERT/HORIZONTAL：纵向拖动直接按当前工具**新建**一根（不就近抓已有线，2026-10-14）；
  * · TREND：单指负责两敲落锚 —— 选中工具准星即在图中央待命，按下抓住（不传送）、
  *   拖动位移加到准星上、松手定点（种子此刻才落），第二敲同理出预览、抬手成交；
- *   整体平移已有直线不再是这个工具的职责（归解锁态直接拖）；
+ *   整体平移已有直线不再是这个工具的职责（归解锁态长按拖）；
  * · ERASE：不拖线，只在松手时删掉按下的那一点命中的线（滑走即作废）。
  * 双指缩放保持不变：画线时同样要能缩放看清细节。
  */
@@ -2434,14 +2471,16 @@ private suspend fun PointerInputScope.detectChartGestures(
     /** 手指离开且本场手势拖过线时回调一次，带同一个 ref，调用方据此落库。 */
     onHorizontalCommit: (LineRef?) -> Unit,
     /**
-     * **解锁态**：单指按住图上已有的线就直接拖它（不必先选工具）。
+     * **解锁态**：单指**长按**图上已有的线才能拖动它（不必先选工具）。
      *
-     * true 时 [DrawTool.NONE] 下也会在按下那一刻就近抓线：水平类（告警线 / 水平线）
-     * 改价位、直线整体平移；落空则照旧还给画布（平移、双指缩放、长按十字光标）。
+     * true 时 [DrawTool.NONE] 下也在按下那一刻就近抓线 —— 抓到先**挂起**：按住不动
+     * 够长按时长才转正开始拖（水平类改价位、直线整体平移）；没按够就滑走 = 普通
+     * 画布手势，线纹丝不动（2026-10-15 拍板，防误划把路过的线拖走）。
+     * 落空则照旧还给画布（平移、双指缩放、长按十字光标）。
      * 锁定态传 false —— 锁定 = 整张图只读，已有的线一根都动不了。
      *
-     * 「按住哪根就拖哪根」把线放在画布手势**之前**：线底下那点位移本来就该归线。
-     * 想纯粹看形态就上锁，这也是进入全屏默认锁定的原因。
+     * 「抓哪根」仍放在画布手势之前的 down 定性：拖动半径只有 [grabPx]，
+     * 拖动中再判会跟着手指跑。想纯粹看形态就上锁，这也是进入全屏默认锁定的原因。
      */
     linesEditable: Boolean = false,
     /**
@@ -2515,11 +2554,13 @@ private suspend fun PointerInputScope.detectChartGestures(
             first.position.y >= plot0.plotTopPx + plot0.mainHeightPx
         // ——— 单指这一场干什么，全部在 **down 这一刻** 定性 ———
         //
-        // 三条通道（划线工具 / 解锁态直接拖线 / 删除模式）都在这里定，理由是同一个：
+        // 三条通道（划线工具 / 解锁态拖线 / 删除模式）都在这里定，理由是同一个：
         // [awaitFirstDown] 已经把 down 事件消费掉，循环里第一帧 [awaitPointerEvent]
         // 拿到的其实是**第一个 MOVE**。手指一动就滑出抓取半径（[grabPx] 才 24dp），
-        // 于是「按住已有的线改价位」被判成「新建一根」，原来那根纹丝不动。
+        // 于是「抓哪根已有的线」就被判错了，甚至凭空新建一根。
         // 轻点更快：第一帧可能已是 UP，循环体一帧 pressed 都见不到。
+        // 区别在于**接管时机**：划线工具与删除模式当场接管；解锁态抓到线只挂起，
+        // 按满长按且没滑走才转正（见循环内）—— 误划不能拖走线。
         val downY = first.position.y.coerceIn(plot0.mainTopPx, plot0.mainTopPx + plot0.mainHeightPx)
         /** 本场单指抓到的线（解锁态与划线工具下都可能）；null = 没抓到。 */
         var horizontalGrab: LineRef? = null
@@ -2542,18 +2583,28 @@ private suspend fun PointerInputScope.detectChartGestures(
         var trendDragFrom = Offset.Zero
         /** 本场最近一帧的**原始** x（不夹进绘图区）：判「有没有拖到垃圾桶」只能用它。 */
         var lastRawX = first.position.x
+        /**
+         * 解锁态的**挂起**抓取：down 那一刻就近抓到了线但先不接管（2026-10-15），
+         * 按满长按时长且没滑出 slop 才转正（见循环内）。挂起期间不发任何拖线回调，
+         * 滑走/落下第二根手指即作废 —— 这场就是普通画布手势。
+         */
+        var pendingHorizontal: LineRef? = null
+        var pendingTrend = false
 
         when {
             // ① 划线工具：单指只服务那一条通道，落点就是「在这个价位新建一根」。
-            //    **不再就近抓已有线**（2026-10-14）：编辑旧线已由解锁态「按住直接拖」覆盖，
+            //    **不再就近抓已有线**（2026-10-14）：编辑旧线已由解锁态「长按拖动」覆盖，
             //    工具模式下再抓线只会与「纯净画布上落新线」的预期打架 ——
             //    而且纯净画布里旧线根本不可见，抓一根看不见的线等于盲操作。
             drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL -> {
                 horizontalActive = true
             }
-            // ② 解锁态：按住哪根就拖哪根（不必先选工具），按在空处照旧还给画布
-            //    （平移、双指缩放、长按十字光标）。刻度区与副图区不参与抓取 ——
-            //    那两处起笔本来就另有含义（缩放价格 / 交还页面翻页）。
+            // ② 解锁态：按下就近**抓**哪根线（不必先选工具），但先挂起不接管 ——
+            //    按住不动够长按时长才转正开始拖；没按够就滑走（或落下第二根手指）
+            //    = 这场是普通画布手势，线纹丝不动（2026-10-15 拍板，防「划到就拖走」）。
+            //    落空与挂起作废都照旧还给画布（平移、双指缩放、长按十字光标）。
+            //    刻度区与副图区不参与抓取 —— 那两处起笔本来就另有含义
+            //    （缩放价格 / 交还页面翻页）。
             //
             //    水平类（告警线、水平线）与直线**放在一起比距离**：两条在交点附近都够得着
             //    时，各判一次再按「先水平后斜线」定优先级，会出现「点着看得见的那条、
@@ -2565,15 +2616,14 @@ private suspend fun PointerInputScope.detectChartGestures(
                     trendGrabbedId = trend.first.id
                     trendBase = trend.first.p1 to trend.first.p2
                     trendDown = first.position
-                    trendMode = TrendMode.MOVE
+                    pendingTrend = true
                 } else if (flat != null) {
-                    horizontalActive = true
-                    horizontalGrab = flat.first
+                    pendingHorizontal = flat.first
                 }
             }
             // ③ 直线工具：种子在就敲第二下，否则这一场负责「拖准星定第一点」。
             //    同样**不再抓已有线平移**（2026-10-14，理由同 ①）：平移整根直线也是编辑，
-            //    归解锁态直接拖；工具下单指只管「抓住准星拖 → 松手定点」。
+            //    归解锁态长按拖；工具下单指只管「抓住准星拖 → 松手定点」。
             drawTool == DrawTool.TREND -> {
                 // ❗按下**不传送**准星（2026-10-14 用户二稿）：点哪儿准星就跳哪儿不对 ——
                 // 「点击是为了拖准星」，所以 down 只记「抓取」基准（准星原位 + 手指位置），
@@ -2600,8 +2650,8 @@ private suspend fun PointerInputScope.detectChartGestures(
                 }
             }
         }
-        /** 本场单指已经属于图表（而不是交给父级滚动容器）。 */
-        val owned = drawTool != DrawTool.NONE || horizontalActive || trendMode != null
+        /** 本场单指已经属于图表（而不是交给父级滚动容器）。解锁态的挂起抓取转正后才置 true。 */
+        var owned = drawTool != DrawTool.NONE || horizontalActive || trendMode != null
         // 立刻消费 down：图表落在 verticalScroll 的父容器里，
         // 不抢占的话父容器会先开一个滚动手势，纵向拖动就变成翻页而不是调刻度。
         // 副图区起笔则反着来 —— 翻页正是我们要的，down 留给父容器。
@@ -2684,9 +2734,32 @@ private suspend fun PointerInputScope.detectChartGestures(
                 if (pressed.size >= 2 && !longPressActive) onCrosshair(null)
             }
 
+            // 解锁态的挂起抓取在这里「转正」：单指按满长按时长、位移还在 slop 内，
+            // 这场手势才真正归线 —— 转正后落进下面的 owned 分支逐帧拖（首帧就发出，
+            // 「按住不动直接松手」也照样落库）。滑出 slop 或落下第二根手指就作废：
+            // 线留在原位，这场照旧走平移/缩放。转正与长按十字光标共用一套判定
+            // （时长 + slop），按在线上时这里先命中，十字光标那一支自然轮不到。
+            if (pendingTrend || pendingHorizontal != null) {
+                val held = primary.uptimeMillis - first.uptimeMillis
+                if (pressed.size == 1 && held >= longPressMs && travelled <= touchSlop) {
+                    if (pendingTrend) {
+                        trendMode = TrendMode.MOVE
+                    } else {
+                        horizontalActive = true
+                        horizontalGrab = pendingHorizontal
+                    }
+                    pendingTrend = false
+                    pendingHorizontal = null
+                    owned = true
+                } else if (travelled > touchSlop || pressed.size >= 2) {
+                    pendingTrend = false
+                    pendingHorizontal = null
+                }
+            }
+
             // 划线 / 拖线分支必须排在十字光标判定之前：这两类手势里都不出十字光标。
-            // `owned` 在 down 那一刻定死（见循环前的说明），解锁态没抓到线时为 false，
-            // 于是单指照旧走下面的平移 / 长按十字光标。
+            // `owned` 在 down 那一刻定性、挂起转正后置 true（见上方），解锁态没抓到线
+            // 或挂起未转正时为 false，单指照旧走下面的平移 / 长按十字光标。
             if (owned && pressed.size == 1) {
                 val plot = geo()
                 val raw = primary.position
@@ -2743,8 +2816,9 @@ private suspend fun PointerInputScope.detectChartGestures(
                     continue
                 }
                 // 抓哪根已在**按下那一刻**定死（见循环前的说明），这里只逐帧跟手。
-                // dragActive 与首帧落点也都已在 down 时给过（单击就靠那一帧），此处重复置位
-                // 只为兜住「down 时 geo 不可用、落到第一帧才成」的边角，本身是幂等的。
+                // dragActive 与首帧落点：划线工具在 down 时就给过（单击落线靠那一帧）；
+                // 解锁态的挂起抓取没有 down 帧 —— 转正后的第一帧就是这里，
+                // 「按住不动直接松手」同样靠它落库。置位是幂等的，两边都成立。
                 dragActive = true
                 onHorizontalDrag(horizontalGrab, y)
                 continue
