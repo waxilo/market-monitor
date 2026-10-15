@@ -161,6 +161,26 @@ fn to_main(app: &AppHandle) {
     show_main(app);
 }
 
+/// 程序坞图标点击（macOS 的 `applicationShouldHandleReopen`）。
+///
+/// 主窗关闭 = 收进托盘，此后再点 Dock 图标走的是**系统直通**：AppKit 调
+/// `applicationShouldHandleReopen`，tao 转发成 `RunEvent::Reopen` —— 不经过应用层任何命令
+/// （`to_main` / `show_main_window` 都拦不到），没有这个回调时就表现为「点 Dock 毫无反应」。
+/// 语义与「重复启动」（`single_instance`，同一收口）和后台上按热键一致：
+/// 唤起大窗、收起悬浮窗（两窗二选一）。
+///
+/// `RunEvent::Reopen` 变体本身带 macOS 门禁 ⇒ 其它平台没有这一路，空实现，
+/// 调用点不出现 `cfg`（同 `taskbar::claim`）。
+#[cfg(target_os = "macos")]
+fn dock_reopen(app: &AppHandle, event: &tauri::RunEvent) {
+    if let tauri::RunEvent::Reopen { .. } = event {
+        to_main(app);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn dock_reopen(_app: &AppHandle, _event: &tauri::RunEvent) {}
+
 /// 主窗图标 → 悬浮窗。
 #[tauri::command]
 fn switch_to_mini(app: AppHandle) {
@@ -360,8 +380,12 @@ pub fn run() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        // 事件循环回调只接程序坞「重新打开」一件（`dock_reopen`，平台差异收在函数里），
+        // 其余 RunEvent 照旧归 tauri 自己消化。用 `build().run(cb)` 只为拿到这个回调 ——
+        // `Builder::run(context)` 那版等价于回调空实现，正是「点 Dock 图标没反应」的原因。
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| dock_reopen(app, &event));
 }
 
 #[cfg(test)]
