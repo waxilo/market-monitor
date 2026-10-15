@@ -695,6 +695,33 @@ topmost 组最前盖住悬浮窗，而**窗口消息/Focus 事件一概收不到
   是在同一个 arm 里加的，不是新开一个 match 分支。
 - `cargo check` 通过；两处都没有平台 API，不涉及跨平台编译风险。真机行为验证未做
   （不能动用户在跑的实例），改动语义靠读链路确认。
+- ⚠️ macOS 的程序坞点击是**另一路系统直通**，上面在 `Focused` arm 里兜不到它 —— 见下一节（0.1.26 补）。
+
+## macOS 程序坞图标唤回主窗（0.1.26，2026-10-15 新增）
+
+用户报：主窗关闭（=收进托盘）后台运行后，**点 Dock 图标毫无反应**，必须点任务栏/托盘才能召出大窗。
+
+- **走的是系统直通**：AppKit 对 Dock 点击调 `applicationShouldHandleReopen`，tao 转发成
+  `RunEvent::Reopen` —— 不经过应用层任何命令（`to_main`/`show_main_window` 都拦不到；
+  `on_window_event` 的 `Focused` arm 只在窗口被**聚焦**时触发，隐藏窗不会被聚焦，所以兜不住）。
+  托盘菜单有自己的 `on_tray_icon_event`，所以托盘那条路一直是好的。
+- **根因**：`lib.rs::run()` 尾部原为 `Builder::run(context)` —— 等价于**事件回调空实现** ⇒ Reopen 到手没人接。
+  改为 `.build(ctx).expect(..).run(|app, event| dock_reopen(app, &event))`：只接 Reopen 一件，
+  其余 RunEvent 不拦（tauri 自己消化）。
+- **收口同一语义**：`dock_reopen` → `to_main`（hide_mini + show_main），与「重复启动」
+  （`single_instance` 回调）和后台热键一致：唤大窗、收悬浮窗。**不做 `has_visible_windows` 分支**
+  （无条件 `to_main`，两窗二选一恒定）。
+- `RunEvent::Reopen` 变体自带 `#[cfg(target_os = "macos")]` + `#[non_exhaustive]` ⇒ 模式匹配必须带 `..`；
+  非 mac 平台给空实现（`cfg(not(...))`），调用点不出现 `cfg`（同 `taskbar::claim` 形态）。
+- **真机验证（dev 身份 + 构建叠加层，探针已撤）**：`.workbuddy/tmp/tauri-dock-test.json` 把主窗设
+  `visible:false`（出生即后台态）→ 第 1 次 `open` 起实例（主窗隐藏）；第 2 次 `open`（=点 Dock 等价物，
+  LaunchServices 对运行中实例发 reopen）日志出 `DOCK-REOPEN-PROBE main_before=false main_after=true`；
+  第 3 次幂等 `true/true`；全程 0 条 `SINGLE-INSTANCE-PROBE`（排除走错到单实例回调）；按 pid 只杀本次
+  dev 实例（用户在跑的正式版未动）。证据存 `.workbuddy/tmp/mm-dock-verify-1015.log`。
+  随后撤两条探针（`cargo check` + `cargo test --lib` 11/11）。
+- 发版 0.1.26：只发桌面端，run 38747393056 三 job 全绿；通道验收 PASS 38/38。⚠️ 本修复**无新字符串
+  字面量** ⇒ mac 包里没有可 grep 的差异串（`dock_reopen` 符号也被 strip）；包内差分证据 = 版本资源
+  （Info.plist 0.1.26 / win exe utf-16le 0.1.26 命中 2）+ tag 指向含 fix 的 commit + 上面这段 dev 真机探针。
 
 ## 身份与构建
 - **两条线必须分得开**：安装版 = `com.waxilo.marketmonitor` ⇒

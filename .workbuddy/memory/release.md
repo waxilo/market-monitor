@@ -56,6 +56,15 @@
   REST 全文抓），run 37611178513 三 job 全绿。新知识：**mac 包前端串/版本串都不可搜**（前端压缩嵌入 +
   mac 二进制无版本资源；拿旧版就有的 `mm.chartView` 在新旧两包都对照过 0 次）—— 桌面端「包内新前端」
   证据固定为 CI vite 指纹 == 本地 build。
+  2026-10-15 发 0.1.26：同形 sed 六处（`0.1.19→0.1.26`（含 docstring）、基线文件名 `0.1.18_→0.1.25_`、
+  三处 /tmp 路径 `0119→0126`、pub_date 日期 `2026-10-07→2026-10-15`）—— 下午发版（13:59 UTC 起构建，
+  同日）⇒ 日期必须现推；PASS 38/38 一次过（基线照 0117 教训直接 REST 全文抓），run 38747393056
+  三 job 全绿（约 9 分钟）。包内证据：Info.plist 0.1.26/0.1.26 + win exe utf-16le `0.1.26` 命中 2
+  /`0.1.25` 命中 0 + CI vite 指纹 `index-Dd__qifc.js 291.08` / `index-CuOoHjgT.css 28.38` == 本地 build。
+  ⚠️ 本修复（Dock 唤回）无新字符串字面量 ⇒ mac 包内没有可 grep 的差异串、`dock_reopen` 符号也被 strip；
+  包内差分证据 = 版本资源 + tag 指向含 fix 的 commit + dev 真机三段探针（见 2026-10-15.md）。
+  ⚠️ 本次构建首跑 codesign `errSecInternalComponent`（`~/.market-monitor-signing/signing.keychain-db`
+  被锁）⇒ `security unlock-keychain -p ""` 解锁后重跑即过 —— 构建挂签名先查这把钥匙串。
   ⚠️ **`tauri-gh-release-verify` / `android-gh-release-verify` 两个 skill 本机（Mac）没装**（apksigner 核验在 Windows 机上做），
   别照第 6 行去 `~/.workbuddy/skills/` 找 —— 找不到。
   Mac 侧 `aapt2 dump badging` 用 Gradle transform 缓存里的可执行件：
@@ -71,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -124,6 +133,15 @@
   pinned-key 断言）、main 的 CI run 38246373696 绿 2m38s；verify-channel.mjs **34/34**；
   `android-latest` 的 `id`/`createdAt`（`398798258` / `2026-09-29T03:22:14Z`）发版前后不变（原地换）；
   包内 `versionCode=51 / versionName=0.9.39` 与产物名自洽；APK 体积 11137668（0.9.38 = 11137672，仅差 4 字节）。
+
+  `desktop 0.1.24`（与 `0.9.40` 双端同发，tag 同指 `cd1fe6c`——悬浮窗断联遮罩 + 任务栏唤回大窗收起悬浮窗/
+  后台热键直接开大窗；验收全程见 2026-10-14.md）→
+  `desktop 0.1.25`（应用内更新改自落盘安装器 + 优雅退出——修僵尸进程占住 exe 的「Failed to kill」；
+  只发桌面端，Desktop Release run 38554031474 绿 7m50s、verify-channel.mjs 34/34；验收见 2026-10-14.md）
+  （0.1.24/0.1.25 当时只记进了当日流水，本册未逐条留痕，补齐于此）→
+  `desktop 0.1.26`（**macOS 点程序坞图标唤回大窗**——事件循环接 `RunEvent::Reopen` 走 `to_main` 同一收口；
+  只发桌面端，fix `bcffd00` + chore(release) `f1038a1`，Desktop Release run 38747393056 三 job 全绿 ~9min、
+  verify-channel-local-0126 **PASS 38/38**；修复真机三段探针与包内证据见 2026-10-15.md）。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
   `market-monitor-0.9.28.apk` 的签名证书
