@@ -141,7 +141,16 @@
   （0.1.24/0.1.25 当时只记进了当日流水，本册未逐条留痕，补齐于此）→
   `desktop 0.1.26`（**macOS 点程序坞图标唤回大窗**——事件循环接 `RunEvent::Reopen` 走 `to_main` 同一收口；
   只发桌面端，fix `bcffd00` + chore(release) `f1038a1`，Desktop Release run 38747393056 三 job 全绿 ~9min、
-  verify-channel-local-0126 **PASS 38/38**；修复真机三段探针与包内证据见 2026-10-15.md）。
+  verify-channel-local-0126 **PASS 38/38**；修复真机三段探针与包内证据见 2026-10-15.md）→
+  `desktop 0.1.27`（**画线锁挪进指标栏 + 小眼睛显隐**——「锁定」chip 与眼睛 chip 常驻指标栏末尾
+  （副图组后、告警前），右键菜单删掉锁定条目；`mm.linesHidden` 按标的显隐、只藏不删、告警照常
+  （实现为给 KlineCanvas 喂空数组）；锁定态右键**不识别线**（压线同空白；用户两轮收窄：先禁画线、再禁清空），
+  没调刻度整个菜单不弹、调过只剩「复位纵向刻度」；浏览器像素级验证过显隐与菜单形态）。
+  只发桌面端，feat `6e6537a` + chore(release) `e8c0440`，Desktop Release run 38840224361 三 job 全绿
+  （02:24–02:33Z，约 9 分钟，一次过没重跑）；通道验收：`desktop-latest` id/createdAt **原地不变**
+  （398800166 / 2026-09-28T12:55:50Z）、latest.json = 0.1.27 两平台 URL 指向本版、8 产物全 0.1.27
+  无 0.1.26 残留、CI vite 指纹 `index-B1RP36Fd.js 292.49` / `index-CcguxJRN.css 28.48` ==
+  本地 build（mac/win 两平台一致，本轮改动含新前端串 ⇒ 指纹本身即「包内新前端」证据）。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
   `market-monitor-0.9.28.apk` 的签名证书
