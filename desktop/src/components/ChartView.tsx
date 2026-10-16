@@ -42,6 +42,26 @@ import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanva
 
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
+
+/** 指标栏那枚小眼睛的图形：睁眼 = 显示画线，闭眼（加一道斜杠）= 隐藏。 */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={13}
+      height={13}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.3}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M1.6 8C3.2 5.2 5.4 3.8 8 3.8s4.8 1.4 6.4 4.2c-1.6 2.8-3.8 4.2-6.4 4.2S3.2 10.8 1.6 8Z" />
+      {off ? <path d="M2.9 13.1 13.1 2.9" /> : <circle cx="8" cy="8" r="1.9" />}
+    </svg>
+  );
+}
 /**
  * 翻旧页失败后的退避：拖到左墙时画布**逐帧**上报「还要更早的」，不设冷却就会每秒
  * 打出一串失败请求。冷却过后由 2s 的实时轮询（数据一变就重新上报）自动重试。
@@ -387,9 +407,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
       </div>
 
-      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组。
+      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与显隐。
           「画图」那组（水平线/直线选择、手势提示、清空）已整组拿掉 —— 画线一律走右键菜单，
-          工具条上只留「告警 N」这个纯状态读数。宽度不够靠 .interval-bar 的 wrap 兜底。 */}
+          工具条上留「锁定」、小眼睛两个开关 + 「告警 N」这个纯状态读数。宽度不够靠 .interval-bar 的 wrap 兜底。 */}
       <div className="bar-stack">
         <div className="interval-bar">
           <span className="bar-label grp">周期</span>
@@ -481,6 +501,37 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             );
           })}
 
+          {/* 画线的两个总开关（0.1.27 起从右键菜单挪上来）：锁定管「能不能拖 / 能不能画新线」，
+              眼睛管「图上看不看得到」（只藏不删，告警照常，见 useDrawings/linesHidden）。
+              常驻不随 drawingCount 消失 —— 开关的位置固定，画线与否不影响它的落座。 */}
+          <div className="sep" />
+          <button
+            type="button"
+            className={`chip${drawings.linesLocked ? ' on' : ''}`}
+            aria-pressed={drawings.linesLocked}
+            title={
+              drawings.linesLocked
+                ? '画线已锁定：不能拖线，右键也不给画新线；点一下解锁'
+                : '锁定全部画线：不能拖线，右键不给画新线'
+            }
+            onClick={() => drawings.setLinesLocked(!drawings.linesLocked)}
+          >
+            锁定
+          </button>
+          <button
+            type="button"
+            className={`chip icon-only${drawings.linesHidden ? ' on' : ''}`}
+            aria-pressed={drawings.linesHidden}
+            title={
+              drawings.linesHidden
+                ? '显示全部画线（隐藏期间线没删，告警照常）'
+                : '隐藏全部画线（只藏不删，告警照常）'
+            }
+            onClick={() => drawings.setLinesHidden(!drawings.linesHidden)}
+          >
+            <EyeIcon off={drawings.linesHidden} />
+          </button>
+
           {alertCount > 0 && (
             <>
               <div className="sep" />
@@ -516,8 +567,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           theme={theme}
           loading={load.loading}
           resetKey={`${item.market}|${item.symbol}|${interval}`}
-          priceLines={drawings.priceLines}
-          trendLines={drawings.trendLines}
+          // 眼睛隐藏 = 直接喂空数组：画、价格标、命中判定（右键/拖抓）自然全关，画布不用知道「隐藏」这回事
+          priceLines={drawings.linesHidden ? [] : drawings.priceLines}
+          trendLines={drawings.linesHidden ? [] : drawings.trendLines}
           trendSeed={trendSeed}
           onAddTrend={drawings.addTrendLine}
           linesLocked={drawings.linesLocked}
@@ -538,7 +590,6 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           priceText={menuPriceText}
           drawingCount={drawingCount}
           linesLocked={drawings.linesLocked}
-          onSetLinesLocked={drawings.setLinesLocked}
           adjusted={menu.adjusted}
           onAddLine={drawings.addPriceLine}
           onRemoveLine={drawings.removePriceLine}

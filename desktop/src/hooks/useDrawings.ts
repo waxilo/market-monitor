@@ -25,6 +25,12 @@ import {
   withLinesLock,
   type LinesLockStore,
 } from '../lib/linesLock';
+import {
+  LINES_HIDDEN_KEY,
+  parseLinesHidden,
+  withLinesHidden,
+  type LinesHiddenStore,
+} from '../lib/linesHidden';
 
 /**
  * 画布上的两类用户画线：**水平线**（价格）与**两点直线**（时间+价格）。
@@ -32,8 +38,12 @@ import {
  * 换周期不该丢，换标的必须分开。
  *
  * 画线有一个按标的的**锁定开关**（`mm.linesLock`，默认解锁）：解锁时画布可直接拖已有的线
- * （水平线上下拖、直线整体拖 / 端点转角度），锁上后画布不抓任何线、也不画把手。
+ * （水平线上下拖、直线整体拖 / 端点转角度），锁上后画布不抓任何线、也不画把手；
+ * 锁定期间右键**不识别线**（压着线也按空白弹菜单），画新线 / 清空也随之收掉。
  * 新增 / 删除 / 清空仍只在右键菜单里（一次点击一次改动）。
+ *
+ * 另有一个按标的的**显隐开关**（`mm.linesHidden`，默认显示）：眼睛只藏不删，
+ * 落盘与告警判定都不受影响（见 lib/linesHidden）。
  */
 const LINES_KEY = 'mm.priceLines';
 const TRENDS_KEY = 'mm.trendLines';
@@ -53,9 +63,12 @@ function readRaw(key: string): string | null {
 export interface DrawingsApi {
   priceLines: PriceLine[];
   trendLines: TrendLine[];
-  /** 整张图的画线是否锁定（按标的存；默认解锁 = 可拖动）。 */
+  /** 整张图的画线是否锁定（按标的存；默认解锁 = 可拖动，且右键不给画新线）。 */
   linesLocked: boolean;
   setLinesLocked: (locked: boolean) => void;
+  /** 整张图的画线是否隐藏（按标的存；默认显示 = 眼睛睁着）。只藏不删，告警照常。 */
+  linesHidden: boolean;
+  setLinesHidden: (hidden: boolean) => void;
   addPriceLine: (price: number, alert?: boolean) => void;
   removePriceLine: (index: number) => void;
   /** 开关某条水平线的价格告警（穿越时弹系统通知）。 */
@@ -84,6 +97,9 @@ export function useDrawings(key: string | null): DrawingsApi {
   const [lineStore, setLineStore] = useState<LineStore>(() => parseLineStore(readRaw(LINES_KEY)));
   const [trendStore, setTrendStore] = useState<TrendStore>(() => parseTrendStore(readRaw(TRENDS_KEY)));
   const [lockStore, setLockStore] = useState<LinesLockStore>(() => parseLinesLock(readRaw(LINES_LOCK_KEY)));
+  const [hiddenStore, setHiddenStore] = useState<LinesHiddenStore>(() =>
+    parseLinesHidden(readRaw(LINES_HIDDEN_KEY)),
+  );
 
   useEffect(() => {
     localStorage.setItem(LINES_KEY, JSON.stringify(lineStore));
@@ -97,10 +113,22 @@ export function useDrawings(key: string | null): DrawingsApi {
     localStorage.setItem(LINES_LOCK_KEY, JSON.stringify(lockStore));
   }, [lockStore]);
 
+  useEffect(() => {
+    localStorage.setItem(LINES_HIDDEN_KEY, JSON.stringify(hiddenStore));
+  }, [hiddenStore]);
+
   const setLocked = useCallback(
     (locked: boolean) => {
       if (!key) return;
       setLockStore((prev) => withLinesLock(prev, key, locked));
+    },
+    [key],
+  );
+
+  const setHidden = useCallback(
+    (hidden: boolean) => {
+      if (!key) return;
+      setHiddenStore((prev) => withLinesHidden(prev, key, hidden));
     },
     [key],
   );
@@ -167,6 +195,8 @@ export function useDrawings(key: string | null): DrawingsApi {
     trendLines: (key ? trendStore[key] : undefined) ?? NO_TRENDS,
     linesLocked: key ? lockStore[key] === true : false,
     setLinesLocked: setLocked,
+    linesHidden: key ? hiddenStore[key] === true : false,
+    setLinesHidden: setHidden,
     addPriceLine: addLine,
     removePriceLine: removeLine,
     setPriceLineAlert: alertLine,

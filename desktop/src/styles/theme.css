@@ -479,6 +479,16 @@ body {
 .chip.selected:disabled {
   color: var(--muted);
 }
+/* 只有一枚图标的 chip（指标栏里画线显隐的小眼睛）：收成小方块、图标居中，
+   文字 chip 的左右内边距会把它撑成长条 */
+.chip.icon-only {
+  display: inline-grid;
+  place-items: center;
+  padding: 3px 5px;
+}
+.chip.icon-only svg {
+  display: block;
+}
 
 .icon-btn {
   border: 1px solid var(--hairline);

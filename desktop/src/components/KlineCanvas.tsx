@@ -1522,16 +1522,20 @@ export function KlineCanvas({
         ? { index, y, onBar: overDataAt(vpRef.current, fraction, n) }
         : null;
       draw();
-      const body = nearestTrendBody(trendBodies(plotW), x, y);
-      if (body >= 0) {
-        request({ kind: 'trend', index: body });
-        return;
-      }
-      const hit = hitLine(y);
-      if (hit >= 0) {
-        const line = model.priceLines[hit];
-        request({ kind: 'hline', index: hit, price: line.price, alert: line.alert });
-        return;
+      // 锁定 = 菜单**不识别线**（0.1.27 用户拍板）：压着线右键和空白右键弹同一套菜单，
+      // 线命中（直线线身 / 水平线）整段跳过，落点一律按空白报 —— 改告警 / 删线是解锁态才有的动作。
+      if (!model.linesLocked) {
+        const body = nearestTrendBody(trendBodies(plotW), x, y);
+        if (body >= 0) {
+          request({ kind: 'trend', index: body });
+          return;
+        }
+        const hit = hitLine(y);
+        if (hit >= 0) {
+          const line = model.priceLines[hit];
+          request({ kind: 'hline', index: hit, price: line.price, alert: line.alert });
+          return;
+        }
       }
       if (pendingRef.current) {
         pendingRef.current = null;

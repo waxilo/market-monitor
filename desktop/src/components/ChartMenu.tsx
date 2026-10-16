@@ -12,9 +12,8 @@ interface Props {
   priceText: string;
   /** 当前标的的画线总数：清空那条要显示条数，一条都没有时整条不出现。 */
   drawingCount: number;
-  /** 画线是否已锁定 —— 决定锁定条目写「锁定全部画线」还是「解锁全部画线」。 */
+  /** 画线是否已锁定 —— 锁定期间画布把落点一律按空白报，菜单只剩全局动作（开关在指标栏）。 */
   linesLocked: boolean;
-  onSetLinesLocked: (locked: boolean) => void;
   /** 纵向刻度已被拖离自动量程 —— 多给一条「复位」。 */
   adjusted: boolean;
   onAddLine: (price: number, alert: boolean) => void;
@@ -52,8 +51,13 @@ const MENU_H = 208;
  *
  * 每条动作做完立刻收起（`run` 之后父层就 `onClose`）：菜单是一次性的定点操作，
  * 不是常驻工具条。条目分两组、中间隔一条线：上面是**落点动作**（对光标下那条线/那个价位），
- * 下面是**全局动作**（锁定 / 清空 / 复位刻度，对整个标的生效）。「清空全部画线」是唯一的
+ * 下面是**全局动作**（清空 / 复位刻度，对整个标的生效）。「清空全部画线」是唯一的
  * 破坏性条目，排在最后并走 danger 色。
+ *
+ * 画线的开与关：锁定开关在指标栏的「锁定」chip 上（不在菜单里）。锁定期间画布**不识别线**
+ * ——压着线右键也按空白报（见 KlineCanvas 的 onContextMenu），画新线 / 清空也一并收掉，
+ * 菜单里只剩「复位纵向刻度」；解锁态才有画新线与改告警 / 删线这些落点动作。
+ * 收完一条不剩时整个菜单不渲染（右键等于无事发生）。
  */
 export function ChartMenu({
   x,
@@ -62,7 +66,6 @@ export function ChartMenu({
   priceText,
   drawingCount,
   linesLocked,
-  onSetLinesLocked,
   adjusted,
   onAddLine,
   onRemoveLine,
@@ -106,8 +109,9 @@ export function ChartMenu({
 
   // 一组是「这一下点在哪儿就只能干嘛」的落点动作，另一组是整张图通用的开关，
   // 中间隔一条线：两类都在时混排会让人误以为清空/复位也跟落点绑定。
+  // 锁定期间不给画新线的三条（见文件头）——想画先在指标栏解锁；对已有线的改告警/删线照旧。
   const actions: Item[] = [];
-  if (hit.kind === 'empty') {
+  if (hit.kind === 'empty' && !linesLocked) {
     actions.push({
       key: 'alert',
       label: '设成告警线',
@@ -144,14 +148,8 @@ export function ChartMenu({
   }
 
   const globals: Item[] = [];
-  if (drawingCount > 0) {
-    // 锁定管的是**能不能拖**（整张图一个开关，默认解锁，见 useDrawings/linesLock）。
-    // 一条线都没有时不给：没东西可锁，先画才有意义。
-    globals.push({
-      key: 'lock',
-      label: linesLocked ? '解锁全部画线' : '锁定全部画线',
-      run: () => onSetLinesLocked(!linesLocked),
-    });
+  // 清空是破坏性动作，与画新线同门：锁定期间一并收掉（锁定态的菜单只剩「复位纵向刻度」）。
+  if (drawingCount > 0 && !linesLocked) {
     globals.push({
       key: 'clear',
       label: '清空全部画线',
@@ -167,6 +165,9 @@ export function ChartMenu({
   const rows: Row[] = [...actions];
   if (actions.length > 0 && globals.length > 0) rows.push('sep');
   rows.push(...globals);
+
+  // 锁定 + 落点是空白 + 没有可清空的线、刻度也没调过：一条都不剩，弹个空壳反而像坏了。
+  if (rows.length === 0) return null;
 
   return createPortal(
     <div className="chart-menu" ref={ref} style={{ left: pos.left, top: pos.top }} role="menu">
