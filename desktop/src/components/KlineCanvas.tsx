@@ -3,6 +3,7 @@ import type { Bar, OpenInterestSeries } from '../lib/api';
 import {
   axisLock,
   clampNum,
+  clampPriceView,
   clampViewport,
   dataWindow,
   fromFraction,
@@ -412,7 +413,8 @@ interface Props {
   loading: boolean;
   /**
    * 换标的或换周期时作废**过程状态**（十字光标、画了一半的直线）。
-   * 视窗与价格刻度不在此列 —— 它们是全局记住的偏好（mm.chartView），跨切换保留。
+   * 视窗（横向）与价格刻度不在此列 —— 但纵向刻度在 key 变后会重定到最新价居中
+   * （见 `recenterPendingRef`），横向视窗才是全局记住的偏好（mm.chartView）。
    */
   resetKey: string;
   /**
@@ -481,12 +483,20 @@ export function KlineCanvas({
   /**
    * 时间轴视窗与价格量程（缩放倍数 + 平移量，1 / 0 = 自动量程）—— 两枚「用户意图」。
    *
-   * **全局记住**（mm.chartView，见 lib/chartViewPrefs）：切周期、换标的、重启都原样回来；
-   * 双击复位 = 回默认并遗忘。越界（存量视角碰上根数不够的新标的）由 chartMath 的
-   * 钳制在用时兜底，存储里保留原始意图。
+   * 视窗**全局记住**（mm.chartView，见 lib/chartViewPrefs）：切周期、换标的、重启都原样回来。
+   * 价格量程的意图在换 (标的, 周期) / 首次进入后会被**重定**成「最新价居中」
+   * （见 recenter effect）—— 旧意图套到新序列上可能把现价顶出量程，现价虚线与
+   * 价格标整个消失，而切周期后第一眼要看的就是现价；之后手势照常可再调，落盘照旧。
+   * 越界（存量视角碰上根数不够的新标的）由 chartMath 的钳制在用时兜底，存储里保留原始意图。
    */
   const vpRef = useRef<Viewport>(loadChartViewPrefs().viewport);
   const priceRef = useRef<PriceView>(loadChartViewPrefs().price);
+  /**
+   * 纵轴重定的挂起标记：resetKey（标的|周期）一变就立起，等新序列带着有限现价落地
+   * 才在 recenter effect 里清掉并重算 —— 序列空的时候现价还不存在，先算只会锚错
+   * （与 App KlineChart.kt 里 snapshotFlow 等首个非空序列同一手法）。
+   */
+  const recenterPendingRef = useRef(false);
   /**
    * 十字光标。`index` 是**夹回序列内**的下标（读数带、横线与价格标都按它走），
    * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线只看这一个开关，
@@ -1031,6 +1041,37 @@ export function KlineCanvas({
     else saveChartViewPrefs(vpRef.current, priceRef.current);
   }, []);
 
+  /**
+   * 纵轴重定（换周期 / 换标的 / 首次进入后）：resetKey 变时挂起（见 resetKey effect），
+   * 新序列一就绪就把纵向缩放/平移意图整体换成「最新价居中 + 量程对称外扩保全蜡烛」。
+   *
+   * 公式与 App KlineChart.kt 的 `LaunchedEffect(symbolKey, interval.storageKey)` 一致：
+   * 半程 = 现价到较远那侧极值的距离（上下两侧都罩住），zoom = 2·半程 / 基准跨度，
+   * pan 把现价挪到中心；平移上限由 `clampPriceView` 收口（与 App 的 panLimit 同规则）。
+   * 量程按当前序列+视口现算（`mainRange`），不读绘制帧缓存 —— 序列从空变满的那一刻
+   * 读缓存会拿到空序列的 (0,1) 兜底，居中会锚错。
+   *
+   * 不调 draw：本 effect 声明在绘制 effect 之前，同一轮渲染里紧随其后的 draw()
+   * 自然用上新量程。横向视窗不在此列，照旧跨切换全局保留。
+   */
+  useEffect(() => {
+    if (!recenterPendingRef.current) return;
+    const list = series.candles;
+    const close = list[list.length - 1]?.close;
+    if (close === undefined || !Number.isFinite(close)) return;
+    const [ws, we] = dataWindow(vpRef.current, list.length);
+    const base = mainRange(series, ws, we);
+    const baseSpan = base.high - base.low;
+    if (!(baseSpan > 0)) return;
+    recenterPendingRef.current = false;
+    const halfSpan = Math.max(close - base.low, base.high - close);
+    priceRef.current = clampPriceView(
+      { zoom: (2 * halfSpan) / baseSpan, pan: (close - (base.low + base.high) / 2) / baseSpan },
+      base,
+    );
+    persistView();
+  }, [series, persistView]);
+
   // 数据 / 尺寸 / 主题任一变化都重画；无依赖写法保证「每次渲染后」都会同步一次
   useEffect(() => {
     draw();
@@ -1043,9 +1084,11 @@ export function KlineCanvas({
   }, [theme, draw]);
 
   useEffect(() => {
-    // 视窗与价格刻度**不再**随换标的/周期复位 —— 它们是全局记住的偏好（见 lib/chartViewPrefs）。
-    // 但十字光标与画了一半的直线仍是过程状态，跨数据一律作废：下标会越界，
+    // 横向视窗仍跨标的/周期全局保留；纵向刻度改为重定 —— 这里只把挂起标记立起，
+    // 等新序列落地后由 recenter effect 把最新价摆到纵向正中（上面有公式与出处）。
+    // 十字光标与画了一半的直线仍是过程状态，跨数据一律作废：下标会越界，
     // 半截直线的锚点（虽是时间戳）也没有跨标的的意义。
+    recenterPendingRef.current = true;
     crossRef.current = null;
     pendingRef.current = null;
     draw();
