@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -150,7 +150,19 @@
   （02:24–02:33Z，约 9 分钟，一次过没重跑）；通道验收：`desktop-latest` id/createdAt **原地不变**
   （398800166 / 2026-09-28T12:55:50Z）、latest.json = 0.1.27 两平台 URL 指向本版、8 产物全 0.1.27
   无 0.1.26 残留、CI vite 指纹 `index-B1RP36Fd.js 292.49` / `index-CcguxJRN.css 28.48` ==
-  本地 build（mac/win 两平台一致，本轮改动含新前端串 ⇒ 指纹本身即「包内新前端」证据）。
+  本地 build（mac/win 两平台一致，本轮改动含新前端串 ⇒ 指纹本身即「包内新前端」证据）→
+  `desktop 0.1.28`（**切周期/换标的/首次进入后纵轴重定 = 最新价居中**——对齐 App 2026-10-15 同名决策：
+  KlineCanvas 里 resetKey（标的|周期）一变挂起 `recenterPendingRef`，新序列带着有限现价落地才重算
+  priceRef（半程=现价到较远侧极值距离，zoom=2·半程/baseSpan、pan 把现价挪到中心，clampPriceView 收口，
+  公式与 App KlineChart.kt 逐项一致）；纵向缩放/平移意图不再跨 (标的,周期) 保留、重定后照常落盘；
+  横向视窗照旧全局记住、换数据源不触发重定；浏览器像素级验证过首屏/切 1时/换 ETH 三条路径
+  最新价虚线钉在主图正中、拖偏的 pan 不残留）。
+  只发桌面端，feat `e8c668f` + chore(release) `0e844b3`，Desktop Release run 38843754311 三 job 全绿
+  （03:05–03:13Z 约 8 分钟，一次过没重跑；main CI run 38843749286 绿 59s）；通道验收：
+  `desktop-latest` id/createdAt **原地不变**（398800166 / 2026-09-28T12:55:50Z）、latest.json = 0.1.28
+  两平台 URL 指向本版、8 产物全 0.1.28 无 0.1.27 残留、两平台 .sig keyid `226b03192e5df60b` ==
+  基线逐字同、CI vite 指纹 `index-CPsJALmX.js 292.92` / `index-CcguxJRN.css 28.48` == 本地 build
+  （两平台一致；CSS 与 0.1.27 同 = 样式没动，JS 换新 = 包内新前端）。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
   `market-monitor-0.9.28.apk` 的签名证书
