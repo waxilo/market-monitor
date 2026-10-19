@@ -10,6 +10,7 @@
  */
 
 import { aggregateCandles } from './aggregate';
+import { isSourceFailureStatus, noteFuturesRequest } from './autoSource';
 import {
   DIALECTS,
   type FuturesDialect,
@@ -55,10 +56,33 @@ export interface Instrument {
   tickSize?: string;
 }
 
-/** 发一次盘口请求并取回响应体；非 2xx 一律抛（探测行不走这里，它要按状态码给结论）。 */
-async function fetchText(call: HttpCall): Promise<string> {
-  const res = await httpRequest(call.method, call.url, call.body);
-  if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+/**
+ * 发一次盘口请求并取回响应体；非 2xx 一律抛（探测行不走这里，它要按状态码给结论）。
+ *
+ * 合约请求额外上报耗时/成败，供 `autoSource` 在超时或失败时重新选源。只报「源的锅」：
+ * 业务错误（参数不对、币种不存在）不触发换源，否则一个填错的代码就能把源换掉。
+ */
+async function fetchText(call: HttpCall, market?: MarketType): Promise<string> {
+  if (market !== 'FUTURES') {
+    const res = await httpRequest(call.method, call.url, call.body);
+    if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
+    return res.body;
+  }
+  const started = performance.now();
+  let res;
+  try {
+    res = await httpRequest(call.method, call.url, call.body);
+  } catch (error) {
+    noteFuturesRequest(performance.now() - started, true);
+    throw error;
+  }
+  if (res.status < 200 || res.status >= 300) {
+    if (isSourceFailureStatus(res.status)) {
+      noteFuturesRequest(performance.now() - started, true);
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
+  noteFuturesRequest(performance.now() - started, false);
   return res.body;
 }
 
@@ -91,7 +115,7 @@ function currentFutures(): { baseUrl: string; dialect: FuturesDialect; label: st
 export async function fetchTicker(market: MarketType, symbol: string): Promise<Ticker24h> {
   if (market === 'FUTURES') {
     const { baseUrl, dialect } = currentFutures();
-    const snapshot = dialect.parseTicker(await fetchText(dialect.ticker(baseUrl, symbol)));
+    const snapshot = dialect.parseTicker(await fetchText(dialect.ticker(baseUrl, symbol), 'FUTURES'));
     if (!snapshot) throw new Error(`无此合约：${symbol}`);
     return toTicker(symbol, snapshot);
   }
@@ -105,7 +129,7 @@ export async function fetchTicker(market: MarketType, symbol: string): Promise<T
 export async function fetchAllTickers(market: MarketType): Promise<Ticker24h[]> {
   if (market === 'FUTURES') {
     const { baseUrl, dialect } = currentFutures();
-    const rows = dialect.parseAllTickers(await fetchText(dialect.allTickers(baseUrl)));
+    const rows = dialect.parseAllTickers(await fetchText(dialect.allTickers(baseUrl), 'FUTURES'));
     return rows.map(([symbol, snapshot]) => toTicker(symbol, snapshot));
   }
   const rows = await spotJson<GateSpotTicker[]>('/tickers');
@@ -219,7 +243,7 @@ async function fetchNativeKlines(
   if (market === 'FUTURES') {
     const { baseUrl, dialect } = currentFutures();
     return dialect.parseKlines(
-      await fetchText(dialect.klines(baseUrl, symbol, minutes, limit, null, endMs ?? null)),
+      await fetchText(dialect.klines(baseUrl, symbol, minutes, limit, null, endMs ?? null), 'FUTURES'),
       minutes,
     );
   }
@@ -285,7 +309,7 @@ export async function fetchOpenInterest(
   if (minutes == null) throw new Error(`未知周期 ${interval}`);
   const base = oiBaseFor(Object.keys(spec.ladder).map(Number), minutes);
   const needed = Math.max(1, Math.ceil((limit * minutes) / base));
-  const points = spec.parse(await fetchText(spec.call(baseUrl, symbol, base, needed)));
+  const points = spec.parse(await fetchText(spec.call(baseUrl, symbol, base, needed), 'FUTURES'));
   points.sort((a, b) => a.time - b.time);
   return { points, baseCoin: spec.baseCoinValue === true };
 }
@@ -328,7 +352,7 @@ export function fetchInstruments(market: MarketType): Promise<Instrument[]> {
 
 async function futuresInstruments(): Promise<Instrument[]> {
   const { baseUrl, dialect } = currentFutures();
-  return dialect.parseExchangeInfo(await fetchText(dialect.exchangeInfo(baseUrl)));
+  return dialect.parseExchangeInfo(await fetchText(dialect.exchangeInfo(baseUrl), 'FUTURES'));
 }
 
 /**

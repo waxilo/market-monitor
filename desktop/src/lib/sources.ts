@@ -117,8 +117,14 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-/** 当前数据源（baseUrl），非 React 取数用。 */
+/**
+ * 当前数据源（baseUrl），非 React 取数用。
+ *
+ * 每次先对一次 localStorage：自动换源可能发生在**另一个窗口**（主窗 ⇄ 悬浮窗），
+ * 而主窗没有定时同步。只靠 setFuturesSource 的广播在本窗口内够用，跨窗口得在读的时候追平。
+ */
 export function currentFuturesUrl(): string {
+  syncFuturesSource();
   return current;
 }
 

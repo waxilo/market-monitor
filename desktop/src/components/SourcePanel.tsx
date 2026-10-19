@@ -159,6 +159,9 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
             只影响永续合约：K 线与 24h 行情都取自选定的这一家，现货固定走 Gate。
             切换后清空合约缓存并重新同步交易对。
           </p>
+          <p className="up-hint">
+            当前源请求失败、或响应超过 500ms 时，会自动并行测速，并切到最先响应的可用源。
+          </p>
 
           <div className="src-grid">{ordered.map(renderRow)}</div>
         </div>
