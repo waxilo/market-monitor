@@ -222,6 +222,17 @@
     `versionCode=54 / versionName=0.9.42` 自洽；`classes3.dex` 命中「隐藏全部 MA 均线」；
     verify-channel.mjs 34/34；Release run 39186126354 全绿。桌面端两平台 `.sig` keyid
     `226b03192e5df60b` == 发版前基线（0.1.28 那两份逐字相同）。
+  - 0.9.43 / 0.1.30 复核（2026-10-19）：**本机 apksigner 直验下载产物** `cf2e20c7…` == 基线逐字一致；边车
+    sha256 自算 == 边车文件（`f4d001c9fd0165a604cd30a25799ecab17956b60e51e0be2dabbe1c656476052`），
+    体积 11154056 == 声明；aapt2 读包内 `versionCode=55 / versionName=0.9.43` 自洽；`classes3.dex` 命中
+    「新增会自动挑一个没用过的颜色」（包内确为新代码）；verify-channel.mjs **34/34**；
+    CI run 39188538395、Release run 39188538440、Desktop Release run 39188538738 全绿。
+    桌面通道 `createdAt` 原地不变（2026-09-28T12:55:50Z），8 个产物全 0.1.30、无旧版残留；
+    两平台 `.sig` keyid `226b03192e5df60b` == 发版前基线；exe FileVersion/ProductVersion 与 mac Info.plist
+    均 0.1.30；CI vite 指纹 `index-Ob62Glwz.js 295.24 kB` / `index-D7SlzNbX.css 29.19 kB` == 本地 build。
+    ⚠️ 工作区 `git push` 的 `not a git repository` 再次出现，仍用临时克隆绕法成功。
+  - 0.9.43 桌面依赖小改（均线线色）：桌面端前端产物名与体积均与本地一致，故用「CI vite 指纹 == 本地 build」
+    作包内新前端证据（旧结论仍成立：exe/dmg 内 grep 前端文案 0 命中）。
 
 - ⚠️ **工作区内 `git push` 报 `fatal: not a git repository`（2026-10-19 实测）**：`git fetch` / `ls-remote` /
   `rev-parse --git-dir` 都正常，甚至推本地 bare remote 也报同一句；改用 `/tmp` 临时克隆
