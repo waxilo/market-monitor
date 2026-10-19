@@ -43,7 +43,7 @@ import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanva
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
 
-/** 指标栏那枚小眼睛的图形：睁眼 = 显示画线，闭眼（加一道斜杠）= 隐藏。 */
+/** 指标栏小眼睛的图形：睁眼 = 显示（画线 / 均线），闭眼（加一道斜杠）= 隐藏。 */
 function EyeIcon({ off }: { off: boolean }) {
   return (
     <svg
@@ -107,7 +107,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const [prefs, setPrefs] = useState<IndicatorPrefs>(() =>
     parseIndicatorPrefs(localStorage.getItem(INDICATORS_KEY)),
   );
-  const { ma: maPeriods, maCatalog, boll: showBoll, panes: subPanes } = prefs;
+  const { ma: maPeriods, maCatalog, maHidden, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
   const [candles, setCandles] = useState<Bar[]>([]);
@@ -457,6 +457,20 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
               MA{p}
             </button>
           ))}
+          {/* 均线小眼睛：只藏不删 —— 选中的 MA chip 原样保留，再点一次全回来 */}
+          <button
+            type="button"
+            className={`chip icon-only${maHidden ? ' on' : ''}`}
+            aria-pressed={maHidden}
+            title={
+              maHidden
+                ? '显示全部 MA 均线（隐藏期间选择没丢，点一下全回来）'
+                : '隐藏全部 MA 均线（只藏不删，chip 的选中保留）'
+            }
+            onClick={() => setPrefs((prev) => ({ ...prev, maHidden: !prev.maHidden }))}
+          >
+            <EyeIcon off={maHidden} />
+          </button>
           {/* 末尾这一枚「＋」是均线目录自己的编辑器：增删与排序都在弹窗里（MaPanel） */}
           <button
             type="button"
@@ -558,7 +572,8 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       ) : (
         <KlineCanvas
           candles={candles}
-          maPeriods={maPeriods}
+          // 眼睛隐藏 = 直接喂空数组：叠线与读数行自然全关，画布不用知道「隐藏」这回事
+          maPeriods={maHidden ? [] : maPeriods}
           showBoll={showBoll}
           subPanes={subPanes}
           openInterest={oi}
