@@ -15,6 +15,7 @@ import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -100,6 +101,11 @@ class BinanceMarketApi(
     private val client: OkHttpClient,
     private val hosts: RestHosts = DefaultRestHosts(),
     private val json: Json = MarketJson.DEFAULT,
+    /**
+     * 每次**合约取数**的往返耗时与成败，供 [FuturesAutoSelector] 决定要不要换源。
+     * 探测（[probeFutures]）与现货请求都不上报。
+     */
+    private val onFuturesResult: ((durationMs: Long, failed: Boolean) -> Unit)? = null,
 ) {
 
     private val budgets = mapOf(
@@ -176,7 +182,7 @@ class BinanceMarketApi(
         val base = oiBaseFor(spec.ladder.keys.toList(), baseMinutes)
         val needed = maxOf(1, ceil(limit.toDouble() * baseMinutes / base).toInt())
         budgets.getValue(market).await(1)
-        val text = executeText(spec.call(endpoint.baseUrl, symbol, base, needed))
+        val text = executeFutures(spec.call(endpoint.baseUrl, symbol, base, needed))
         return OpenInterestSeries(spec.parse(text), spec.baseCoinValue)
     }
 
@@ -202,7 +208,7 @@ class BinanceMarketApi(
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
             budgets.getValue(market).await(20)
-            val text = executeText(dialect.exchangeInfo(endpoint.baseUrl))
+            val text = executeFutures(dialect.exchangeInfo(endpoint.baseUrl))
             val all = dialect.parseExchangeInfo(text)
             return symbol?.let { s -> all.filter { it.id.symbol == s } } ?: all
         }
@@ -227,7 +233,7 @@ class BinanceMarketApi(
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
             budgets.getValue(market).await(1)
-            val text = executeText(dialect.ticker(endpoint.baseUrl, symbol))
+            val text = executeFutures(dialect.ticker(endpoint.baseUrl, symbol))
             return dialect.parseTicker(text, symbol, System.currentTimeMillis())
         }
         val element = get(market, "/ticker/24hr", mapOf("symbol" to symbol), weight = 1)
@@ -253,7 +259,7 @@ class BinanceMarketApi(
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
             budgets.getValue(market).await(klineWeight(capped))
-            val text = executeText(dialect.klines(endpoint.baseUrl, symbol, minutes, capped, startTime, endTime))
+            val text = executeFutures(dialect.klines(endpoint.baseUrl, symbol, minutes, capped, startTime, endTime))
             return dialect.parseKlines(text, minutes)
         }
         val code = OfficialInterval.entries.firstOrNull { it.minutes == minutes }?.apiCode
@@ -331,6 +337,24 @@ class BinanceMarketApi(
         return client.newCall(builder.build()).awaitText()
     }
 
+    /**
+     * 合约取数的统一出口：在 [executeText] 外量一次往返耗时并上报，供自动选源。
+     * 只量 HTTP 往返 —— 不计预算排队与响应解析，否则「等额度」会被误当成源慢。
+     */
+    private suspend fun executeFutures(request: FuturesDialectAdapter.Request): String {
+        val started = System.nanoTime()
+        return try {
+            val text = executeText(request)
+            onFuturesResult?.invoke(elapsedMsSince(started), false)
+            text
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (isSourceUnavailable(e)) onFuturesResult?.invoke(elapsedMsSince(started), true)
+            throw e
+        }
+    }
+
     companion object {
         /** 币安单次请求上限。 */
         const val MAX_KLINE_LIMIT = 1000
@@ -366,6 +390,27 @@ private fun Response.toApiError(body: String?): MarketApiException {
     val reason = if (parsed != null) "${parsed.code}: ${parsed.msg}" else "HTTP $code $message"
     return MarketApiException(code, parsed?.code ?: 0, reason)
 }
+
+private fun elapsedMsSince(startNanos: Long): Long = (System.nanoTime() - startNanos) / 1_000_000
+
+/**
+ * 这个错误是不是「当前源不可用」，从而值得自动换源。
+ *
+ * 与桌面端 `autoSource.ts` 同口径：传输层失败（超时/DNS/连接被掐）与源级 HTTP 状态码算，
+ * **业务错误不算** —— 一个填错的币种或周期在各家都会报同样的错，换源只会白白丢缓存。
+ * 只看 HTTP 状态、不看响应体里的业务码：非币安系盘口的错误体形状各异，强行解析反而
+ * 会把「参数错误」误判成「源挂了」。
+ */
+internal fun isSourceUnavailable(error: Throwable): Boolean = when (error) {
+    is MarketApiException -> isSourceFailureStatus(error.httpCode)
+    is IOException -> true
+    else -> false
+}
+
+/** 这些 HTTP 状态说明「这个源现在不可用」，而不是「这次参数不对」。 */
+internal fun isSourceFailureStatus(status: Int): Boolean =
+    status >= 500 || status == 403 || status == 404 || status == 408 ||
+        status == 418 || status == 425 || status == 429 || status == 451
 
 /**
  * 这个错误该换下一个域名再试，还是所有域名都会给同样的答案。

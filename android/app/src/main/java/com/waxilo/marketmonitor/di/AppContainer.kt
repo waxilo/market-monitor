@@ -12,6 +12,7 @@ import com.waxilo.marketmonitor.data.local.EncryptedWebhookStore
 import com.waxilo.marketmonitor.data.local.SettingsDataStore
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
 import com.waxilo.marketmonitor.data.remote.DefaultRestHosts
+import com.waxilo.marketmonitor.data.remote.FuturesAutoSelector
 import com.waxilo.marketmonitor.data.remote.GithubReleaseApi
 import com.waxilo.marketmonitor.data.remote.WebhookSender
 import com.waxilo.marketmonitor.data.repository.AlertRepositoryImpl
@@ -29,11 +30,17 @@ import com.waxilo.marketmonitor.domain.repository.UpdateRepository
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import com.waxilo.marketmonitor.domain.repository.WebhookRepository
 import com.waxilo.marketmonitor.data.local.room.MarketDatabase
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
+import com.waxilo.marketmonitor.domain.model.MarketType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
 import java.io.File
@@ -112,15 +119,69 @@ class AppContainer(private val context: Context) {
         settings.settings.stateIn(appScope, SharingStarted.Eagerly, AppSettings())
     }
 
+    /**
+     * 自动换源后的内存覆盖：DataStore 写入与 [settingsSnapshot] 传播都有延迟，
+     * 换源后紧跟的请求必须立刻走新域，否则还会从旧源报失败、把轮换反复拉长。
+     */
+    @Volatile
+    private var selectedFuturesHost: String? = null
+
+    private fun currentFuturesHost(): String =
+        selectedFuturesHost ?: FuturesEndpoints.normalize(settingsSnapshot.value.futuresRestHost)
+
+    private val _futuresSourceChanges = MutableSharedFlow<String>(extraBufferCapacity = 1)
+
+    /** 合约数据源切换（手动点选或自动兜底）的广播：正在取数的页面据此重载。 */
+    val futuresSourceChanges: SharedFlow<String> = _futuresSourceChanges.asSharedFlow()
+
     private val restHosts by lazy {
         DefaultRestHosts(
             spotMirror = { settingsSnapshot.value.spotRestMirror },
-            futuresHost = { settingsSnapshot.value.futuresRestHost },
+            futuresHost = { currentFuturesHost() },
         )
     }
 
     private val marketApi: BinanceMarketApi by lazy {
-        BinanceMarketApi(restClient, restHosts)
+        BinanceMarketApi(
+            client = restClient,
+            hosts = restHosts,
+            onFuturesResult = { durationMs, failed -> autoSelector.report(durationMs, failed) },
+        )
+    }
+
+    /**
+     * 合约源自动兜底：一次请求失败或超过 500ms 时并行测速，第一个可用的源直接顶上。
+     * 只由合约取数上报驱动；探测本身不上报（否则会自我触发）。
+     */
+    private val autoSelector: FuturesAutoSelector by lazy {
+        FuturesAutoSelector(
+            scope = appScope,
+            currentUrl = ::currentFuturesHost,
+            probe = { url -> marketApi.probeFutures(url) },
+            select = { url -> selectFuturesSource(url) },
+        )
+    }
+
+    /**
+     * 切换合约数据源（设置页手动点选与自动兜底共用）。
+     *
+     * 先写内存覆盖再落盘：DataStore 的写入与快照传播都有延迟，换源后紧跟的请求
+     * 必须立刻发往新域。清缓存必须在广播之前 —— 订阅方收到事件就会重载。
+     */
+    suspend fun selectFuturesSource(url: String) {
+        val normalized = FuturesEndpoints.normalize(url)
+        if (normalized == currentFuturesHost()) return
+        selectedFuturesHost = normalized
+        marketRepository.clearMarketCache(MarketType.FUTURES)
+        _futuresSourceChanges.emit(normalized)
+        settings.edit { it.copy(futuresRestHost = normalized) }
+        try {
+            marketRepository.syncInstruments(MarketType.FUTURES)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 清单没拉下来不致命：列表页刷新时会再同步
+        }
     }
 
     val marketRepository: MarketRepositoryImpl by lazy {

@@ -188,6 +188,12 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             activeMarket.flatMapLatest { watchlist.watchlist(it) }.collect { reloadTrends() }
         }
+        // 自动兜底换了合约源：缓存已被容器清空，首页停在合约市场时立刻用新源重拉
+        viewModelScope.launch {
+            container.futuresSourceChanges.collect {
+                if (activeMarket.value == MarketType.FUTURES) refresh()
+            }
+        }
     }
 
     fun selectMarket(target: MarketType) {

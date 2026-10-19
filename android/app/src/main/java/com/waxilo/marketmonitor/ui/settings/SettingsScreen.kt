@@ -144,7 +144,8 @@ fun SettingsScreen(
                         TextAction("更换 / 检测", onClick = { sourcePickerOpen = true })
                     }
                     Text(
-                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。",
+                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。" +
+                            "当前源请求失败或响应超过 500ms 时，会自动测速并切到最先响应的可用源。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -417,7 +418,8 @@ private fun FuturesSourcePickerDialog(
                 },
             )
             Text(
-                text = "检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。",
+                text = "检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。" +
+                    "当前源请求失败或响应超过 500ms 时，会自动测速并切到最先响应的可用源。",
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
                 modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),

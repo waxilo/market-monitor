@@ -254,8 +254,11 @@ class DetailViewModel(
     private val reloadToken = MutableStateFlow(0)
     private val chart = MutableStateFlow(ChartData())
 
-    /** 当前合约接口是否提供持仓量历史（OI chip 的可用性）；现货恒 false，实例内不变。 */
-    private val oiSupported = repository.supportsOpenInterest(id.market)
+    /** 当前合约接口是否提供持仓量历史（OI chip 的可用性）；现货恒 false。换源后按新方言更新。 */
+    private val oiSupported = MutableStateFlow(repository.supportsOpenInterest(id.market))
+
+    /** 数据源代次：换源后让持仓量轮询按新方言重启。 */
+    private val sourceVersion = MutableStateFlow(0)
 
     /**
      * 全局视角偏好（横向视窗 + 纵向刻度）：跨标的、跨周期、跨会话。
@@ -592,7 +595,7 @@ class DetailViewModel(
             maHidden = data.maHidden,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
-            oiSupported = oiSupported,
+            oiSupported = oiSupported.value,
             openInterest = data.openInterest,
             watched = id in watched,
             origin = data.origin,
@@ -630,6 +633,16 @@ class DetailViewModel(
                 }
                 .collect { (base, candle) -> mergeBaseCandle(base, candle) }
         }
+        // 自动兜底换了合约源：旧盘口的缓存已由容器清空，重拉当前周期；
+        // 新源的持仓量能力可能不同，OI 副图按新方言重启。
+        viewModelScope.launch {
+            container.futuresSourceChanges.collect { _ ->
+                if (id.market != MarketType.FUTURES) return@collect
+                oiSupported.value = repository.supportsOpenInterest(id.market)
+                sourceVersion.update { it + 1 }
+                reloadToken.update { it + 1 }
+            }
+        }
         // 交易规则决定显示位数；首启可能还没落库，失败留给刷新兜底
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
         // 报价头来自 ticker 流（Room 缓存视图）；未加自选的标的没人替它刷新，
@@ -645,13 +658,17 @@ class DetailViewModel(
         // 比的是整对，只比 Boolean 会把换周期那一路吞掉。
         // 先清旧序列再取：上一段的持仓量画在新 K 线上就是一坨错线（换标的时 VM 整体重建，同样干净）。
         viewModelScope.launch {
-            combine(chart.map { SubPaneKind.OI in it.subPanes }, interval) { want, selected -> want to selected }
+            combine(
+                chart.map { SubPaneKind.OI in it.subPanes },
+                interval,
+                sourceVersion,
+            ) { want, selected, _ -> want to selected }
                 .distinctUntilChanged()
                 // collectLatest 而非「flatMapLatest + 永不出值的 flow」：上游一变就掐掉
                 // 上一轮轮询重来（那写法里 flow 的 T 推不出来，是真编译错）
                 .collectLatest { (want, _) ->
                     chart.update { it.copy(openInterest = null) }
-                    if (!want || !oiSupported) return@collectLatest
+                    if (!want || !oiSupported.value) return@collectLatest
                     while (viewModelScope.isActive) {
                         loadOpenInterest()?.let { series -> chart.update { it.copy(openInterest = series) } }
                         delay(OI_POLL_MS)
@@ -769,7 +786,7 @@ class DetailViewModel(
         // 只挡「加上」不挡「撤下」—— 副图偏好是全局一份，在合约页选过 OI 再开现货页，
         // 撤不掉就成了关不掉的死开关。
         val selectedNow = kind in chart.value.subPanes
-        if (kind == SubPaneKind.OI && !oiSupported && !selectedNow) {
+        if (kind == SubPaneKind.OI && !oiSupported.value && !selectedNow) {
             showNotice(
                 if (id.market.isFutures) "当前接口没有持仓量历史（Gate / 币安系 / OKX / Bybit 有）"
                 else "现货没有持仓量（永续专属）"

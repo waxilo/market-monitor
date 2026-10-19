@@ -8,7 +8,6 @@ import com.waxilo.marketmonitor.data.remote.MarketApiException
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
-import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
@@ -117,6 +116,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
         }
+        // 自动兜底可能在设置页开着时换源：界面跟着走，选中项必须就是正在用的
+        viewModelScope.launch {
+            container.futuresSourceChanges.collect { host ->
+                backing.update { it.copy(futuresHost = host) }
+            }
+        }
     }
 
     fun setThemeMode(v: ThemeMode) {
@@ -182,16 +187,14 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     /**
-     * 选定合约行情接口：持久化并清空合约行情缓存。
-     * Aster 与币安合约是独立盘口，旧盘口的快照/蜡烛不清掉会和新数据混进
-     * 同一 (FUTURES, symbol) 画出假 K 线；交易对清单也一并清空，搜索页会向新接口重新同步。
+     * 选定合约行情接口：交给容器统一切换（清缓存、广播重载、持久化）。
+     * 与自动兜底共用同一条路径，两边不会因为清缓存/写设置的顺序不同而打架。
      */
     fun setFuturesHost(url: String) {
         val normalized = FuturesEndpoints.normalize(url)
         if (normalized == state.value.futuresHost) return
         backing.update { it.copy(futuresHost = normalized) }
-        persist { s -> s.copy(futuresRestHost = normalized) }
-        viewModelScope.launch { container.marketRepository.clearMarketCache(MarketType.FUTURES) }
+        viewModelScope.launch { container.selectFuturesSource(normalized) }
     }
 
     /** 网络异常的长文案（堆栈味）在手机上没意义，折成一行短结论。 */
