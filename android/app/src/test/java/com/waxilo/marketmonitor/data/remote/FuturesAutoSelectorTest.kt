@@ -19,14 +19,15 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 
 /**
- * 自动换源的规则：失败或慢响应触发、并行测速、第一个成功即用、冷却与手动优先。
- * 时钟注入 testScheduler，探测用挂起/延迟精确控制先后。
+ * 自动换源的规则：失败或慢响应触发、并行测速、失败时第一个成功即用、慢响应时迟滞换源、
+ * 冷却与手动优先。时钟注入 testScheduler，探测用挂起/延迟精确控制先后。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class FuturesAutoSelectorTest {
 
     private val a = FuturesEndpoint("A", "https://a.test", "", FuturesDialect.BINANCE)
     private val b = FuturesEndpoint("B", "https://b.test", "", FuturesDialect.OKX)
+    private val c = FuturesEndpoint("C", "https://c.test", "", FuturesDialect.GATE)
 
     private fun TestScope.selector(
         candidates: List<FuturesEndpoint> = listOf(a, b),
@@ -55,19 +56,90 @@ class FuturesAutoSelectorTest {
     }
 
     @Test
-    fun `超过 500ms 的成功会并行测速并选中第一个返回的源`() = runTest {
+    fun `超过 500ms 的成功会并行测速，但当前源可达时保持不动`() = runTest {
         val probes = mutableListOf<String>()
-        val selected = CompletableDeferred<String>()
+        var selected: String? = null
         val auto = selector(
             probe = { url -> probes += url; 5L },
-            select = { selected.complete(it) },
+            select = { selected = it },
         )
 
         auto.report(FuturesAutoSelector.SLOW_RESPONSE_MS + 1, failed = false)
         runCurrent()
 
         assertEquals(listOf(a.baseUrl, b.baseUrl), probes.sorted())
-        assertEquals(a.baseUrl, selected.await())
+        assertEquals(null, selected)
+    }
+
+    @Test
+    fun `慢响应会等当前源探测完再决定，不按返回先后`() = runTest {
+        var selected: String? = null
+        val auto = selector(
+            probe = { url ->
+                if (url == a.baseUrl) {
+                    delay(300)
+                    100L
+                } else {
+                    delay(10)
+                    150L // 先返回但更慢：不能因为「先到」就切过去
+                }
+            },
+            select = { selected = it },
+        )
+
+        auto.report(5_000, failed = false)
+        advanceTimeBy(10)
+        runCurrent()
+        assertEquals(null, selected)
+
+        advanceTimeBy(300)
+        runCurrent()
+        assertEquals(null, selected)
+    }
+
+    @Test
+    fun `慢响应时只有候选明显更快才切换`() = runTest {
+        var selected: String? = null
+        val auto = selector(
+            probe = { url -> if (url == a.baseUrl) 900L else 100L },
+            select = { selected = it },
+        )
+
+        auto.report(5_000, failed = false)
+        runCurrent()
+
+        assertEquals(b.baseUrl, selected)
+    }
+
+    @Test
+    fun `慢响应且当前源探测失败时切到最快的可用候选`() = runTest {
+        var selected: String? = null
+        val auto = selector(
+            candidates = listOf(a, b, c),
+            probe = { url ->
+                when (url) {
+                    a.baseUrl -> throw IOException("boom")
+                    b.baseUrl -> 120L
+                    else -> 40L
+                }
+            },
+            select = { selected = it },
+        )
+
+        auto.report(5_000, failed = false)
+        runCurrent()
+
+        assertEquals(c.baseUrl, selected)
+    }
+
+    @Test
+    fun `慢路径换源门槛取 1_5 倍与多 300ms 中更严的一条`() {
+        // 200ms 候选：门槛 max(300, 500) = 500
+        assertFalse(FuturesAutoSelector.shouldSwitchOnSlow(500, 200))
+        assertTrue(FuturesAutoSelector.shouldSwitchOnSlow(501, 200))
+        // 800ms 候选：门槛 max(1200, 1100) = 1200（相对差更严）
+        assertFalse(FuturesAutoSelector.shouldSwitchOnSlow(1_200, 800))
+        assertTrue(FuturesAutoSelector.shouldSwitchOnSlow(1_201, 800))
     }
 
     @Test

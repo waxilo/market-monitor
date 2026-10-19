@@ -160,7 +160,8 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
             切换后清空合约缓存并重新同步交易对。
           </p>
           <p className="up-hint">
-            当前源请求失败、或响应超过 500ms 时，会自动并行测速，并切到最先响应的可用源。
+            当前源请求失败、或响应超过 500ms 时，会自动并行测速。失败时切到最先响应的可用源；
+            只是响应慢时，仅当候选明显更快才切换，避免来回跳源。
           </p>
 
           <div className="src-grid">{ordered.map(renderRow)}</div>
