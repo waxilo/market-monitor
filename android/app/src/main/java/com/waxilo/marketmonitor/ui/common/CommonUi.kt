@@ -53,6 +53,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -317,6 +319,55 @@ fun FilterChip(
      */
     greyed: Boolean = false,
 ) {
+    val textStyle = if (compact) {
+        MaterialTheme.typography.labelMedium.copy(
+            fontSize = 10.sp,
+            lineHeight = 12.sp,
+            letterSpacing = 0.sp,
+        )
+    } else {
+        MaterialTheme.typography.labelMedium
+    }
+    ChipSurface(selected = selected, onClick = onClick, modifier = modifier, compact = compact, greyed = greyed) { fg ->
+        Text(
+            text = text,
+            style = textStyle,
+            color = fg,
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * 只有图形的 chip（指标栏的小眼睛）。视觉与 [FilterChip] 同源，
+ * 图形颜色由 [content] 拿到的 `fg` 决定 —— icon-only 的那枚不会和旁边的文字 chip 分叉。
+ */
+@Composable
+fun IconChip(
+    contentDescription: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    content: @Composable (Color) -> Unit,
+) {
+    ChipSurface(
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier.semantics { this.contentDescription = contentDescription },
+        compact = compact,
+    ) { fg -> content(fg) }
+}
+
+@Composable
+private fun ChipSurface(
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+    greyed: Boolean = false,
+    content: @Composable (Color) -> Unit,
+) {
     val colors = MarketTheme.colors
     val bg by animateColorAsState(
         targetValue = if (selected) colors.ink else Color.Transparent,
@@ -341,15 +392,6 @@ fun FilterChip(
         animationSpec = tween(Motion.FastMs),
         label = "chipBorder",
     )
-    val textStyle = if (compact) {
-        MaterialTheme.typography.labelMedium.copy(
-            fontSize = 10.sp,
-            lineHeight = 12.sp,
-            letterSpacing = 0.sp,
-        )
-    } else {
-        MaterialTheme.typography.labelMedium
-    }
     Box(
         modifier = modifier
             .clip(Radius.xsShape)
@@ -363,12 +405,7 @@ fun FilterChip(
             ),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            style = textStyle,
-            color = fg,
-            maxLines = 1,
-        )
+        content(fg)
     }
 }
 

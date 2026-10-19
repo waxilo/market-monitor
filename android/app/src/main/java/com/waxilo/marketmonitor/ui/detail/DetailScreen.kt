@@ -61,8 +61,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.graphicsLayer
@@ -111,6 +113,7 @@ import com.waxilo.marketmonitor.ui.common.BannerTone
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.HintRow
+import com.waxilo.marketmonitor.ui.common.IconChip
 import com.waxilo.marketmonitor.ui.common.MetricCell
 import com.waxilo.marketmonitor.ui.common.RangeBar
 import com.waxilo.marketmonitor.ui.common.Rule
@@ -262,10 +265,12 @@ fun DetailScreen(
                 IndicatorBar(
                     maCatalog = state.maCatalog,
                     activeMa = state.maPeriods,
+                    maHidden = state.maHidden,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
                     oiSupported = state.oiSupported,
                     onToggleMa = viewModel::toggleMaPeriod,
+                    onToggleMaVisibility = viewModel::toggleMaVisibility,
                     onManageMa = { maManagerOpen = true },
                     onToggleBoll = viewModel::toggleBoll,
                     onToggleSubPane = viewModel::toggleSubPane,
@@ -490,10 +495,12 @@ private fun FullscreenChart(
         IndicatorBar(
             maCatalog = state.maCatalog,
             activeMa = state.maPeriods,
+            maHidden = state.maHidden,
             showBoll = state.showBoll,
             subPanes = state.subPanes,
             oiSupported = state.oiSupported,
             onToggleMa = viewModel::toggleMaPeriod,
+            onToggleMaVisibility = viewModel::toggleMaVisibility,
             onManageMa = onManageMa,
             onToggleBoll = viewModel::toggleBoll,
             onToggleSubPane = viewModel::toggleSubPane,
@@ -521,15 +528,17 @@ private fun FullscreenChart(
                 else -> {
                     // 全屏不画副图：显式给空列表，序列与视口都按「没开副图」算。
                     // 副图选择是全局偏好（竖屏那份），这里只影响全屏这一帧的渲染。
+                    // 小眼睛隐藏 = 等效于一条均线都没选：线、读数行一起收掉，chip 选中不受影响
+                    val visibleMa = if (state.maHidden) emptyList() else state.maPeriods
                     val series = remember(
                         state.candles,
-                        state.maPeriods,
+                        visibleMa,
                         state.showBoll,
                         state.openInterest,
                     ) {
                         ChartModel.build(
                             candles = state.candles,
-                            maPeriods = state.maPeriods,
+                            maPeriods = visibleMa,
                             showBoll = state.showBoll,
                             subPanes = emptyList(),
                             openInterest = state.openInterest,
@@ -1473,10 +1482,12 @@ private fun ChartArea(
             else -> {
                 // 自研 Compose 画布而非 WebView：不依赖系统 WebView 与 GL 合成，
                 // 模拟器/低端机上同样能画出来，也少一套 HTML/JS 资源要维护。
-                val series = remember(state.candles, state.maPeriods, state.showBoll, state.subPanes, state.openInterest) {
+                // 小眼睛隐藏 = 等效于一条均线都没选（与全屏同一口径）
+                val visibleMa = if (state.maHidden) emptyList() else state.maPeriods
+                val series = remember(state.candles, visibleMa, state.showBoll, state.subPanes, state.openInterest) {
                     ChartModel.build(
                         candles = state.candles,
-                        maPeriods = state.maPeriods,
+                        maPeriods = visibleMa,
                         showBoll = state.showBoll,
                         subPanes = state.subPanes,
                         openInterest = state.openInterest,
@@ -1574,11 +1585,14 @@ private fun IndicatorBar(
     /** 指标条上摊开的均线档位（用户可在「＋」里增删，见 [MaManagerDialog]）。 */
     maCatalog: List<Int>,
     activeMa: List<Int>,
+    /** 均线小眼睛：true = 图上一条 MA 都不画（选中集保留，点一下恢复）。 */
+    maHidden: Boolean,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
     oiSupported: Boolean,
     onToggleMa: (Int) -> Unit,
+    onToggleMaVisibility: () -> Unit,
     /** 打开「均线周期」管理弹窗（增删目录、恢复默认），与周期条的「＋」同一定位。 */
     onManageMa: () -> Unit,
     onToggleBoll: () -> Unit,
@@ -1609,6 +1623,7 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
+            MaVisibilityChip(maHidden = maHidden, onToggle = onToggleMaVisibility)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             if (showSubPanes) {
@@ -1651,6 +1666,7 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
+            MaVisibilityChip(maHidden = maHidden, onToggle = onToggleMaVisibility)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
@@ -1674,6 +1690,50 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
+        }
+    }
+}
+
+/**
+ * 均线小眼睛（指标栏 MA chip 后面那枚）：睁眼 = 均线可见（默认），斜杠眼 = 全部藏起。
+ *
+ * 点亮态 = 「隐藏」已启用，与桌面端画线眼睛同一套语义；
+ * 隐藏只作用于绘制，MA chip 的选中原样保留，再点一下恢复。
+ */
+@Composable
+private fun MaVisibilityChip(maHidden: Boolean, onToggle: () -> Unit) {
+    IconChip(
+        contentDescription = if (maHidden) "显示全部 MA 均线" else "隐藏全部 MA 均线",
+        selected = maHidden,
+        onClick = onToggle,
+        compact = true,
+    ) { tint ->
+        EyeGlyph(open = !maHidden, tint = tint)
+    }
+}
+
+/** 小眼睛图形：上下两道对称弧 + 瞳孔；隐藏时去掉瞳孔、加一道斜杠。 */
+@Composable
+private fun EyeGlyph(open: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(13.dp)) {
+        val stroke = 1.3.dp.toPx()
+        val inset = stroke / 2f
+        val eye = Path().apply {
+            moveTo(inset, size.height / 2f)
+            quadraticBezierTo(size.width / 2f, 0f, size.width - inset, size.height / 2f)
+            quadraticBezierTo(size.width / 2f, size.height, inset, size.height / 2f)
+        }
+        drawPath(eye, tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
+        if (open) {
+            drawCircle(tint, radius = size.height * 0.17f, center = center)
+        } else {
+            drawLine(
+                color = tint,
+                start = Offset(size.width * 0.16f, size.height * 0.84f),
+                end = Offset(size.width * 0.84f, size.height * 0.16f),
+                strokeWidth = stroke,
+                cap = StrokeCap.Round,
+            )
         }
     }
 }

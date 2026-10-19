@@ -53,6 +53,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
             maCatalog = readMaCatalog(this),
+            maHidden = this[Keys.MA_HIDDEN] ?: d.maHidden,
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
             crosshairEnabled = this[Keys.CROSSHAIR] ?: d.crosshairEnabled,
@@ -111,6 +112,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         // 之后每次写都落在新 key 上，老值成孤儿（无害，同当年撤掉的冷却配置）。
         if (maCatalog == null) prefs.remove(Keys.MA_CATALOG)
         else prefs[Keys.MA_CATALOG] = maCatalog.joinToString(",")
+        prefs[Keys.MA_HIDDEN] = maHidden
         prefs[Keys.BOLL] = bollEnabled
         prefs[Keys.PANE] = subPaneKeys
         prefs[Keys.CROSSHAIR] = crosshairEnabled
@@ -146,6 +148,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
 
             /** 老 key：只存自定义档（预置五档不在里面）。留着只读，用于升级迁移。 */
             val MA_CUSTOM = stringPreferencesKey("ma_custom_periods")
+            val MA_HIDDEN = booleanPreferencesKey("ma_hidden")
             val BOLL = booleanPreferencesKey("boll_enabled")
             val PANE = stringPreferencesKey("sub_pane")
             val CROSSHAIR = booleanPreferencesKey("crosshair")

@@ -129,6 +129,8 @@ data class DetailUiState(
      * [maPeriods] 必须是它的子集，否则会出现「画着一条没有 chip 可撤的线」。
      */
     val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
+    /** 均线小眼睛：true = 图上一条均线都不画（[maPeriods] 的选中保留，再点一次恢复）。 */
+    val maHidden: Boolean = false,
     val showBoll: Boolean = false,
     /** 选中的副图。空列表 = 不显示副图；支持多选。 */
     val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -166,7 +168,7 @@ data class DetailUiState(
      * 两边各算各的行数，网格就会差一行，数据到了整张图会往上/往下跳一格。
      */
     val mainReadoutLines: Int
-        get() = mainReadoutLineCount(maPeriods, showBoll)
+        get() = mainReadoutLineCount(if (maHidden) emptyList() else maPeriods, showBoll)
 }
 
 /**
@@ -480,6 +482,8 @@ class DetailViewModel(
          * 已经归一化过，这里不再重复处理。
          */
         val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
+        /** 均线小眼睛：只影响绘制，不动 [maPeriods] 的选中集。 */
+        val maHidden: Boolean = false,
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -523,6 +527,7 @@ class DetailViewModel(
             candles = displayCandles(data, selected),
             maPeriods = data.maPeriods,
             maCatalog = data.maCatalog,
+            maHidden = data.maHidden,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
             oiSupported = oiSupported,
@@ -647,6 +652,7 @@ class DetailViewModel(
                 // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
                 maPeriods = maSelectionIn(catalog, saved.maPeriods),
                 maCatalog = catalog,
+                maHidden = saved.maHidden,
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
                 // 周期条则相反：解析不出任何一项就当没设过，回落到默认集
@@ -680,6 +686,16 @@ class DetailViewModel(
         val next = !chart.value.showBoll
         chart.update { it.copy(showBoll = next) }
         viewModelScope.launch { settings.edit { it.copy(bollEnabled = next) } }
+    }
+
+    /**
+     * 均线小眼睛：只藏不删 —— chip 的选中状态原样保留，点回来即恢复原来那几条。
+     * 与桌面端 `mm.indicators.maHidden` 同一语义。
+     */
+    fun toggleMaVisibility() {
+        val next = !chart.value.maHidden
+        chart.update { it.copy(maHidden = next) }
+        viewModelScope.launch { settings.edit { it.copy(maHidden = next) } }
     }
 
     /** 副图多选：点中即切换该块的显隐，全不选 = 只留主图。 */

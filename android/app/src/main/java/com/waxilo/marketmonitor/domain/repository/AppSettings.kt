@@ -41,6 +41,11 @@ data class AppSettings(
      * （指标条上的「＋」随时能加回来，不会把自己锁在门外）。
      */
     val maCatalog: List<Int>? = null,
+    /**
+     * 均线小眼睛：true = 主图一条均线都不画。
+     * **只藏不删**——[maPeriods] 的选中原样保留，再点一次即恢复（与桌面端同一语义）。
+     */
+    val maHidden: Boolean = false,
     /** 是否叠加布林带。 */
     val bollEnabled: Boolean = false,
     /**
