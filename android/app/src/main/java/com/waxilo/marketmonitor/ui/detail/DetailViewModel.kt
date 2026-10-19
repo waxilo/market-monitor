@@ -29,6 +29,7 @@ import com.waxilo.marketmonitor.ui.chart.ChartViewport
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
+import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.chart.mainReadoutLineCount
 import com.waxilo.marketmonitor.ui.chart.toChartLine
@@ -97,6 +98,62 @@ fun maSelectionIn(catalog: List<Int>, selected: List<Int>): List<Int> =
     selected.filter { it in catalog }.distinct().sorted()
 
 /**
+ * 均线颜色归一化：目录内每条均线恰好一个合法色槽（0~[MA_COLOR_SLOT_COUNT]-1），且互不重复。
+ *
+ * 规则（也是老装机的迁移路径）：
+ * 1. 目录里已有且合法、未撞车的槽位原样保留 —— 增删别的均线不改已有线的颜色；
+ * 2. 缺失/非法/撞车的按**期数升序**补第一个空槽 —— 老存档没有颜色时，
+ *    5/10/20/30/60 依次拿到 0~4，正是旧版「按期数固定分配」的观感；
+ * 3. 目录外的期数一律丢弃（删掉的均线不占颜色）。
+ *
+ * 与桌面端 `lib/maPeriods.ts` 的 `normalizeMaColors` 同一套口径。
+ */
+fun normalizeMaColors(catalog: List<Int>, raw: Map<Int, Int>): Map<Int, Int> {
+    val periods = normalizeMaCatalog(catalog)
+    val used = mutableSetOf<Int>()
+    val out = LinkedHashMap<Int, Int>()
+    for (period in periods) {
+        val slot = raw[period]
+        if (slot != null && slot in 0 until MA_COLOR_SLOT_COUNT && used.add(slot)) {
+            out[period] = slot
+        }
+    }
+    var nextSlot = 0
+    for (period in periods) {
+        if (period in out) continue
+        while (nextSlot in used) nextSlot++
+        if (nextSlot >= MA_COLOR_SLOT_COUNT) break // 目录已被 MA_LIMIT 截断，正常走不到
+        out[period] = nextSlot
+        used.add(nextSlot)
+    }
+    return out
+}
+
+/**
+ * 给一条均线换色：目标槽位被别的均线占着就**互换**（始终一色一线）；
+ * 不在目录里的期数、非法槽位原样返回。
+ */
+fun assignMaColor(
+    colors: Map<Int, Int>,
+    catalog: List<Int>,
+    period: Int,
+    slot: Int,
+): Map<Int, Int> {
+    if (period !in catalog || slot !in 0 until MA_COLOR_SLOT_COUNT) return colors
+    val current = colors[period]
+    val owner = catalog.firstOrNull { it != period && colors[it] == slot }
+    val next = colors.toMutableMap()
+    next[period] = slot
+    if (owner != null) {
+        if (current != null) next[owner] = current else next.remove(owner)
+    }
+    return normalizeMaColors(catalog, next)
+}
+
+/** 出厂配色：出厂五档依次拿 0~4 号色槽（恢复默认与首帧初值都用它）。 */
+val DEFAULT_MA_COLORS: Map<Int, Int> = normalizeMaColors(DEFAULT_MA_CATALOG, emptyMap())
+
+/**
  * 详情页的一条统计。
  * [raw] 保留未格式化的原始数值，供进度条之类的可视化使用；
  * [value] 是给用户看的格式化结果。两者分开避免在组合里反解析字符串。
@@ -129,6 +186,8 @@ data class DetailUiState(
      * [maPeriods] 必须是它的子集，否则会出现「画着一条没有 chip 可撤的线」。
      */
     val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
+    /** 期数 → 线色槽位（0~7，见 `ui/chart/MA_LINE_ROLES`）；与目录一一对应。 */
+    val maColors: Map<Int, Int> = DEFAULT_MA_COLORS,
     /** 均线小眼睛：true = 图上一条均线都不画（[maPeriods] 的选中保留，再点一次恢复）。 */
     val maHidden: Boolean = false,
     val showBoll: Boolean = false,
@@ -482,6 +541,8 @@ class DetailViewModel(
          * 已经归一化过，这里不再重复处理。
          */
         val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
+        /** 期数 → 颜色槽位；写入方已经归一化过（与 [maCatalog] 同步）。 */
+        val maColors: Map<Int, Int> = DEFAULT_MA_COLORS,
         /** 均线小眼睛：只影响绘制，不动 [maPeriods] 的选中集。 */
         val maHidden: Boolean = false,
         val showBoll: Boolean = false,
@@ -527,6 +588,7 @@ class DetailViewModel(
             candles = displayCandles(data, selected),
             maPeriods = data.maPeriods,
             maCatalog = data.maCatalog,
+            maColors = data.maColors,
             maHidden = data.maHidden,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
@@ -652,6 +714,8 @@ class DetailViewModel(
                 // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
                 maPeriods = maSelectionIn(catalog, saved.maPeriods),
                 maCatalog = catalog,
+                // 老装机没存过颜色：按目录升序补空槽，观感与旧版一致
+                maColors = normalizeMaColors(catalog, saved.maColors),
                 maHidden = saved.maHidden,
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
@@ -738,23 +802,29 @@ class DetailViewModel(
     }
 
     /**
-     * 保存「＋」管理弹窗产出的均线目录：先归一化（范围/去重/超限截断），
+     * 保存「＋」管理弹窗产出的均线目录与线色：先归一化（范围/去重/超限截断、色槽补空/去重），
      * 再把删掉的那些从选中集里一并带走 —— 目录删了选中还留着，图上就是没有 chip 可撤的死线。
      *
      * 预置五档与自定义档在这里是同一种东西：目录整份由用户定，删 MA5 就是把它从目录里去掉。
+     * 颜色按**期数**保存，所以弹窗里增删/排序不会改已有均线的颜色。
      */
-    fun saveMaCatalog(next: List<Int>) {
+    fun saveMaCatalog(next: List<Int>, colors: Map<Int, Int>) {
         val catalog = normalizeMaCatalog(next)
+        val palette = normalizeMaColors(catalog, colors)
         chart.update { current ->
             current.copy(
                 maCatalog = catalog,
                 maPeriods = maSelectionIn(catalog, current.maPeriods),
+                maColors = palette,
             )
         }
         val savedCatalog = chart.value.maCatalog
         val savedActive = chart.value.maPeriods
+        val savedColors = chart.value.maColors
         viewModelScope.launch {
-            settings.edit { it.copy(maPeriods = savedActive, maCatalog = savedCatalog) }
+            settings.edit {
+                it.copy(maPeriods = savedActive, maCatalog = savedCatalog, maColors = savedColors)
+            }
         }
     }
 

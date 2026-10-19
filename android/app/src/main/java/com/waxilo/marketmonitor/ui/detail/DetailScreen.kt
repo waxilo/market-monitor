@@ -13,6 +13,7 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.horizontalScroll
@@ -32,6 +33,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -104,8 +106,10 @@ import com.waxilo.marketmonitor.ui.chart.DrawTool
 import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.LineRef
+import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
 import com.waxilo.marketmonitor.ui.chart.SUB_PANE_HEIGHT_DP
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
+import com.waxilo.marketmonitor.ui.chart.maRoleForSlot
 import com.waxilo.marketmonitor.ui.chart.toGuideLine
 import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
@@ -120,6 +124,7 @@ import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
+import com.waxilo.marketmonitor.ui.theme.ChartLineColors
 import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Motion
@@ -310,9 +315,10 @@ fun DetailScreen(
         if (maManagerOpen) {
             MaManagerDialog(
                 catalog = state.maCatalog,
+                colors = state.maColors,
                 onDismiss = { maManagerOpen = false },
-                onSave = {
-                    viewModel.saveMaCatalog(it)
+                onSave = { catalog, colors ->
+                    viewModel.saveMaCatalog(catalog, colors)
                     maManagerOpen = false
                 },
             )
@@ -533,6 +539,7 @@ private fun FullscreenChart(
                     val series = remember(
                         state.candles,
                         visibleMa,
+                        state.maColors,
                         state.showBoll,
                         state.openInterest,
                     ) {
@@ -542,6 +549,7 @@ private fun FullscreenChart(
                             showBoll = state.showBoll,
                             subPanes = emptyList(),
                             openInterest = state.openInterest,
+                            maColors = state.maColors,
                         )
                     }
                     KlineChart(
@@ -1484,13 +1492,21 @@ private fun ChartArea(
                 // 模拟器/低端机上同样能画出来，也少一套 HTML/JS 资源要维护。
                 // 小眼睛隐藏 = 等效于一条均线都没选（与全屏同一口径）
                 val visibleMa = if (state.maHidden) emptyList() else state.maPeriods
-                val series = remember(state.candles, visibleMa, state.showBoll, state.subPanes, state.openInterest) {
+                val series = remember(
+                    state.candles,
+                    visibleMa,
+                    state.maColors,
+                    state.showBoll,
+                    state.subPanes,
+                    state.openInterest,
+                ) {
                     ChartModel.build(
                         candles = state.candles,
                         maPeriods = visibleMa,
                         showBoll = state.showBoll,
                         subPanes = state.subPanes,
                         openInterest = state.openInterest,
+                        maColors = state.maColors,
                     )
                 }
                 KlineChart(
@@ -1996,14 +2012,18 @@ private fun IntervalManagerDialog(
 @Composable
 private fun MaManagerDialog(
     catalog: List<Int>,
+    colors: Map<Int, Int>,
     onDismiss: () -> Unit,
-    onSave: (List<Int>) -> Unit,
+    onSave: (List<Int>, Map<Int, Int>) -> Unit,
 ) {
-    // rows 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
+    // rows / palette 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
     var rows by remember { mutableStateOf(catalog) }
+    var palette by remember { mutableStateOf(normalizeMaColors(catalog, colors)) }
+    /** 正在选色的那一行（展开的八色板只出一个）。 */
+    var pickerFor by remember { mutableStateOf<Int?>(null) }
     var input by rememberSaveable { mutableStateOf("") }
     var hint by rememberSaveable { mutableStateOf<String?>(null) }
-    val colors = MarketTheme.colors
+    val theme = MarketTheme.colors
 
     fun commitAdd() {
         val period = input.trim().toIntOrNull()
@@ -2013,18 +2033,27 @@ private fun MaManagerDialog(
             period in rows -> hint = "MA$period 已在指标条上"
             rows.size >= MA_LIMIT -> hint = "最多 $MA_LIMIT 条均线，先删一条再加"
             else -> {
-                rows = (rows + period).sorted()
+                val next = (rows + period).sorted()
+                rows = next
+                // 新增的均线自动挑第一个没被占用的色槽
+                palette = normalizeMaColors(next, palette)
                 input = ""
                 hint = null
             }
         }
     }
 
+    fun removeRow(period: Int) {
+        rows = rows - period
+        palette = normalizeMaColors(rows, palette)
+        if (pickerFor == period) pickerFor = null
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = colors.surface,
+        containerColor = theme.surface,
         title = {
-            Text(text = "均线周期", style = MaterialTheme.typography.titleLarge, color = colors.ink)
+            Text(text = "均线周期", style = MaterialTheme.typography.titleLarge, color = theme.ink)
         },
         text = {
             Column(
@@ -2035,15 +2064,16 @@ private fun MaManagerDialog(
             ) {
                 Text(
                     text = "指标条上有哪几档均线都在这里定（按期数升序排）；行尾的 × 把它从条上移除，" +
-                        "点选仍照旧在条上点。",
+                        "点选仍照旧在条上点。行内色点可改线色：新增会自动挑一个没用过的颜色，" +
+                        "颜色跟着均线走。",
                     style = MaterialTheme.typography.labelSmall,
-                    color = colors.muted,
+                    color = theme.muted,
                 )
                 Text(
                     text = "添加均线",
                     modifier = Modifier.padding(top = Spacing.Md),
                     style = MaterialTheme.typography.labelSmall,
-                    color = colors.muted,
+                    color = theme.muted,
                 )
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xs),
@@ -2053,7 +2083,7 @@ private fun MaManagerDialog(
                         modifier = Modifier
                             .weight(1f)
                             .clip(Radius.xsShape)
-                            .background(colors.wash)
+                            .background(theme.wash)
                             .padding(horizontal = Spacing.Xs, vertical = Spacing.Sm),
                     ) {
                         BasicTextField(
@@ -2061,8 +2091,8 @@ private fun MaManagerDialog(
                             onValueChange = { raw -> input = raw.filter { it.isDigit() } },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
-                            cursorBrush = SolidColor(colors.ink),
+                            textStyle = MaterialTheme.typography.labelMedium.copy(color = theme.ink),
+                            cursorBrush = SolidColor(theme.ink),
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Done,
@@ -2077,21 +2107,21 @@ private fun MaManagerDialog(
                         text = it,
                         modifier = Modifier.padding(top = Spacing.Xs),
                         style = MaterialTheme.typography.labelSmall,
-                        color = colors.down,
+                        color = theme.down,
                     )
                 }
                 Text(
                     text = "指标条上的均线",
                     modifier = Modifier.padding(top = Spacing.Md),
                     style = MaterialTheme.typography.labelSmall,
-                    color = colors.muted,
+                    color = theme.muted,
                 )
                 if (rows.isEmpty()) {
                     Text(
                         text = "一条都没有了，指标条上只剩「＋」",
                         modifier = Modifier.padding(top = Spacing.Sm),
                         style = MaterialTheme.typography.labelSmall,
-                        color = colors.muted.copy(alpha = 0.6f),
+                        color = theme.muted.copy(alpha = 0.6f),
                     )
                 }
                 rows.forEach { period ->
@@ -2099,22 +2129,86 @@ private fun MaManagerDialog(
                         modifier = Modifier.fillMaxWidth().height(40.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
+                        // 色点 = 这条均线当前的线色；点开下面的八色板
+                        Box(
+                            modifier = Modifier
+                                .size(14.dp)
+                                .clip(CircleShape)
+                                .background(ChartLineColors[maRoleForSlot(palette[period] ?: 0).ordinal])
+                                .then(
+                                    if (pickerFor == period) {
+                                        Modifier.border(2.dp, theme.ink, CircleShape)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .clickable { pickerFor = if (pickerFor == period) null else period }
+                                .semantics { contentDescription = "MA$period 线色" },
+                        )
+                        Spacer(Modifier.width(Spacing.Sm))
                         Text(
                             text = "MA$period",
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.labelMedium,
-                            color = colors.ink,
+                            color = theme.ink,
                         )
                         IconButton(
-                            onClick = { rows = rows - period },
+                            onClick = { removeRow(period) },
                             modifier = Modifier.size(28.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "从指标条移除 MA$period",
                                 modifier = Modifier.size(16.dp),
-                                tint = colors.muted,
+                                tint = theme.muted,
                             )
+                        }
+                    }
+                    if (pickerFor == period) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(bottom = Spacing.Sm),
+                            horizontalArrangement = Arrangement.spacedBy(Spacing.Sm),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "线色",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = theme.muted,
+                            )
+                            repeat(MA_COLOR_SLOT_COUNT) { slotIndex ->
+                                val owner = rows.firstOrNull { it != period && palette[it] == slotIndex }
+                                val current = palette[period] == slotIndex
+                                Box(
+                                    modifier = Modifier
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        // 被别的均线占着：压淡，点击 = 两条线互换颜色。
+                                        // 用填充色的 alpha 而不是 Modifier.alpha —— 后者排在 background
+                                        // 之后只作用于内容，底色不会被压淡（实测看不出占用状态）。
+                                        .background(
+                                            ChartLineColors[maRoleForSlot(slotIndex).ordinal]
+                                                .copy(alpha = if (owner != null) 0.45f else 1f),
+                                        )
+                                        .then(
+                                            if (current) Modifier.border(2.dp, theme.ink, CircleShape)
+                                            else Modifier,
+                                        )
+                                        .clickable {
+                                            palette = assignMaColor(palette, rows, period, slotIndex)
+                                            pickerFor = null
+                                        }
+                                        .semantics {
+                                            contentDescription = when {
+                                                current -> "MA$period 当前线色"
+                                                owner != null -> "MA$period 与 MA$owner 互换线色"
+                                                else -> "MA$period 改用第 ${slotIndex + 1} 种颜色"
+                                            }
+                                        },
+                                )
+                            }
                         }
                     }
                 }
@@ -2124,15 +2218,17 @@ private fun MaManagerDialog(
                     text = "恢复默认（${DEFAULT_MA_CATALOG.joinToString("/") { "MA$it" }}）",
                     onClick = {
                         rows = DEFAULT_MA_CATALOG
+                        palette = normalizeMaColors(rows, emptyMap())
+                        pickerFor = null
                         hint = null
                     },
                     modifier = Modifier.padding(top = Spacing.Sm),
-                    color = colors.muted,
+                    color = theme.muted,
                 )
             }
         },
-        confirmButton = { TextAction("保存", onClick = { onSave(rows) }) },
-        dismissButton = { TextAction("取消", onDismiss, color = colors.muted) },
+        confirmButton = { TextAction("保存", onClick = { onSave(rows, palette) }) },
+        dismissButton = { TextAction("取消", onDismiss, color = theme.muted) },
     )
 }
 

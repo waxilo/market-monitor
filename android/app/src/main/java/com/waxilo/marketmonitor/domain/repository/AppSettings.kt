@@ -42,6 +42,13 @@ data class AppSettings(
      */
     val maCatalog: List<Int>? = null,
     /**
+     * 均线线色：**期数 → 色槽 0~7**（见 `ui/chart/ChartSeries.kt` 的 `MA_LINE_ROLES`）。
+     *
+     * 空表 = 没设过（老装机），上层会按目录升序补成 0~4…，与旧版观感一致；
+     * 颜色绑在期数上，所以指标条重排、增删别的均线都不改已有线的颜色。
+     */
+    val maColors: Map<Int, Int> = emptyMap(),
+    /**
      * 均线小眼睛：true = 主图一条均线都不画。
      * **只藏不删**——[maPeriods] 的选中原样保留，再点一次即恢复（与桌面端同一语义）。
      */

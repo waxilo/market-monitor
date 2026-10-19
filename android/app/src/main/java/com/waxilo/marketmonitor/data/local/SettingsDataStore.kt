@@ -53,6 +53,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
             maPeriods = this[Keys.MA]?.split(',')?.mapNotNull { it.trim().toIntOrNull() } ?: d.maPeriods,
             maCatalog = readMaCatalog(this),
+            maColors = this[Keys.MA_COLORS]?.csvToMaColors() ?: d.maColors,
             maHidden = this[Keys.MA_HIDDEN] ?: d.maHidden,
             bollEnabled = this[Keys.BOLL] ?: d.bollEnabled,
             subPaneKeys = this[Keys.PANE] ?: d.subPaneKeys,
@@ -100,6 +101,18 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
     private fun String.csvToInts(): List<Int> =
         split(',').mapNotNull { it.trim().toIntOrNull() }
 
+    /**
+     * `期数:色槽` 逗号分隔表（如 `5:0,10:1`）；坏项丢掉。
+     * 期数范围与槽位是否可用不在这里判 —— 归一到 VM 的 `normalizeMaColors`。
+     */
+    private fun String.csvToMaColors(): Map<Int, Int> = split(',').mapNotNull { item ->
+        val parts = item.split(':')
+        if (parts.size != 2) return@mapNotNull null
+        val period = parts[0].trim().toIntOrNull() ?: return@mapNotNull null
+        val slot = parts[1].trim().toIntOrNull() ?: return@mapNotNull null
+        period to slot
+    }.toMap()
+
     private fun AppSettings.writeTo(prefs: MutablePreferences) {
         prefs[Keys.THEME] = themeMode.key
         prefs[Keys.QUOTE] = quoteAsset
@@ -112,6 +125,8 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         // 之后每次写都落在新 key 上，老值成孤儿（无害，同当年撤掉的冷却配置）。
         if (maCatalog == null) prefs.remove(Keys.MA_CATALOG)
         else prefs[Keys.MA_CATALOG] = maCatalog.joinToString(",")
+        prefs[Keys.MA_COLORS] = maColors.entries.sortedBy { it.key }
+            .joinToString(",") { "${it.key}:${it.value}" }
         prefs[Keys.MA_HIDDEN] = maHidden
         prefs[Keys.BOLL] = bollEnabled
         prefs[Keys.PANE] = subPaneKeys
@@ -145,6 +160,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val INTERVAL_LIST = stringPreferencesKey("interval_list")
             val MA = stringPreferencesKey("ma_periods")
             val MA_CATALOG = stringPreferencesKey("ma_catalog")
+            val MA_COLORS = stringPreferencesKey("ma_colors")
 
             /** 老 key：只存自定义档（预置五档不在里面）。留着只读，用于升级迁移。 */
             val MA_CUSTOM = stringPreferencesKey("ma_custom_periods")

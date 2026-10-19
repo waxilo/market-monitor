@@ -474,6 +474,25 @@ class ChartModelTest {
     }
 
     @Test
+    fun `均线颜色按配置的槽位取角色`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5, 10),
+            showBoll = false,
+            subPanes = emptyList(),
+            // 槽位与 BOLL 的 5~7 错开：3 = ACCENT、7 = UNDENARY
+            maColors = mapOf(5 to 3, 10 to 7),
+        )
+        assertEquals(LineRole.ACCENT, series.overlay.lines.first { it.label == "MA5" }.role)
+        assertEquals(LineRole.UNDENARY, series.overlay.lines.first { it.label == "MA10" }.role)
+        // 读数行由线角色驱动：线是什么色，读数里的数字就是什么色
+        assertEquals(
+            listOf(LineRole.ACCENT, LineRole.UNDENARY),
+            series.mainReadoutAt(59, 2).map { it.role },
+        )
+    }
+
+    @Test
     fun `开启 BOLL 后给出中轨上下轨与填充带`() {
         val series = ChartModel.build(candles(60), listOf(5), showBoll = true, subPanes = emptyList())
         assertNotNull(series.overlay.bandFill)

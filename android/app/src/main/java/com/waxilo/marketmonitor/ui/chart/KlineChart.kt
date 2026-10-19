@@ -1407,6 +1407,9 @@ private data class ChartPalette(
         LineRole.QUINARY -> lines.getOrElse(5) { grid }
         LineRole.SENARY -> lines.getOrElse(6) { grid }
         LineRole.OCTONARY -> lines.getOrElse(7) { grid }
+        LineRole.NONARY -> lines.getOrElse(8) { grid }
+        LineRole.DENARY -> lines.getOrElse(9) { grid }
+        LineRole.UNDENARY -> lines.getOrElse(10) { grid }
         LineRole.UP -> up
         LineRole.DOWN -> down
         LineRole.LABEL -> label

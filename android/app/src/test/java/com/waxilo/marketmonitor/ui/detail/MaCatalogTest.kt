@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.ui.detail
 
 import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
+import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -67,5 +68,55 @@ class MaCatalogTest {
     fun `恢复默认后出厂五档都在目录里`() {
         // 「恢复默认」按钮把草稿设成出厂目录，过一遍归一化不该被削掉任何一档
         assertEquals(DEFAULT_MA_CATALOG, normalizeMaCatalog(DEFAULT_MA_CATALOG))
+    }
+
+    // ---- 线色：期数 → 色槽 ----
+
+    @Test
+    fun `老存档没有颜色时按目录升序补齐`() {
+        // 与旧版观感一致：MA5/10/20/30/60 → 0/1/2/3/4
+        assertEquals(
+            mapOf(5 to 0, 10 to 1, 20 to 2, 30 to 3, 60 to 4),
+            normalizeMaColors(DEFAULT_MA_CATALOG, emptyMap()),
+        )
+    }
+
+    @Test
+    fun `新增均线拿第一个空槽且不动已有颜色`() {
+        val before = normalizeMaColors(listOf(5, 10), emptyMap())
+        val after = normalizeMaColors(listOf(5, 10, 7), before)
+        assertEquals(mapOf(5 to 0, 10 to 1, 7 to 2), after)
+    }
+
+    @Test
+    fun `删除均线后其余颜色不重排`() {
+        val before = normalizeMaColors(listOf(5, 10, 20), emptyMap())
+        // 删掉 MA10：MA5 仍是 0，MA20 仍是 2（不会因为空出 1 号就往前挤）
+        assertEquals(mapOf(5 to 0, 20 to 2), normalizeMaColors(listOf(5, 20), before))
+    }
+
+    @Test
+    fun `撞车的颜色按升序把后来者挪到空槽`() {
+        assertEquals(
+            mapOf(5 to 2, 10 to 0),
+            normalizeMaColors(listOf(5, 10), mapOf(5 to 2, 10 to 2)),
+        )
+    }
+
+    @Test
+    fun `改色时与被占用者互换`() {
+        val before = mapOf(5 to 0, 10 to 1)
+        // 把 MA5 改成 1 号：MA10 拿到 MA5 原来的 0 号，一色一线
+        assertEquals(
+            mapOf(5 to 1, 10 to 0),
+            assignMaColor(before, listOf(5, 10), 5, 1),
+        )
+    }
+
+    @Test
+    fun `目录外的期数和非法槽位不改颜色`() {
+        val before = mapOf(5 to 0)
+        assertEquals(before, assignMaColor(before, listOf(5), 7, 1))
+        assertEquals(before, assignMaColor(before, listOf(5), 5, MA_COLOR_SLOT_COUNT))
     }
 }

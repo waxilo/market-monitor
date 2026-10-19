@@ -17,14 +17,36 @@ import java.util.Locale
 
 /**
  * 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。
- * PRIMARY~OCTONARY 是八个互不相同的指标线色位（[com.waxilo.marketmonitor.ui.theme.ChartLineColors]），
- * 刚好覆盖最满配置：MA 五期 + BOLL 三线。
+ * PRIMARY~UNDENARY 是十一个互不相同的指标线色位（[com.waxilo.marketmonitor.ui.theme.ChartLineColors]）：
+ * BOLL 固定用 QUINARY/SENARY/OCTONARY（5~7），其余八位留给 MA。
  * [LABEL] 不是一条线，只给读数行里那些中性文字（指标名、参数）用。
  */
 enum class LineRole {
     PRIMARY, SECONDARY, TERTIARY, ACCENT, QUATERNARY, QUINARY, SENARY, OCTONARY,
+    NONARY, DENARY, UNDENARY,
     UP, DOWN, LABEL,
 }
+
+/**
+ * MA 可用的八个色位（与桌面端 `chartSeries.MA_ROLES` 同序）。
+ * 用户偏好里存的是「期数 → 槽位 0~7」，换色/增删都不会让别的均线跟着变。
+ */
+val MA_LINE_ROLES: List<LineRole> = listOf(
+    LineRole.PRIMARY,
+    LineRole.SECONDARY,
+    LineRole.TERTIARY,
+    LineRole.ACCENT,
+    LineRole.QUATERNARY,
+    LineRole.NONARY,
+    LineRole.DENARY,
+    LineRole.UNDENARY,
+)
+
+/** MA 色槽数量（= 色板可用位数 = `MA_LIMIT`）。 */
+const val MA_COLOR_SLOT_COUNT = 8
+
+/** 色槽 → 线条角色；越界钳到第一色（正常值已由 ViewModel 归一化校验）。 */
+fun maRoleForSlot(slot: Int): LineRole = MA_LINE_ROLES.getOrElse(slot) { MA_LINE_ROLES[0] }
 
 /** 图上的一条折线（均线族、BOLL 上下轨、MACD 的 DIF/DEA…）。 */
 data class ChartLine(
@@ -225,11 +247,15 @@ object ChartModel {
         rsiPeriod: Int = 14,
         /** 持仓量序列（副图 OI 用）。null / 空序列时该块整块不出现，不画空板。 */
         openInterest: OpenInterestSeries? = null,
+        /** 期数 → 颜色槽位（见 [MA_LINE_ROLES]）；缺映射时按升序序号兜底。 */
+        maColors: Map<Int, Int> = emptyMap(),
     ): ChartSeries {
         val closes = DoubleArray(candles.size) { candles[it].closeDouble() }
-        val lines = Indicators.movingAverages(closes, maPeriods.sorted()).entries.sortedBy { it.key }.map { (period, values) ->
-            ChartLine("MA$period", roleFor(period), values)
-        }
+        val lines = Indicators.movingAverages(closes, maPeriods.sorted()).entries.sortedBy { it.key }
+            .mapIndexed { index, (period, values) ->
+                // 颜色跟期数走：拖动/增删别的均线不会改已有线的颜色
+                ChartLine("MA$period", maRoleForSlot(maColors[period] ?: index), values)
+            }
         val boll = if (showBoll) Indicators.boll(closes, bollPeriod) else null
         val overlayLines = if (boll == null) {
             lines
@@ -391,15 +417,6 @@ object ChartModel {
                 )
             }
         }
-    }
-
-    /** 均线颜色按周期长短稳定分配，MA5 与 MA60 永远不同色。 */
-    private fun roleFor(period: Int): LineRole = when (period) {
-        5 -> LineRole.PRIMARY
-        10 -> LineRole.SECONDARY
-        20 -> LineRole.TERTIARY
-        30 -> LineRole.ACCENT
-        else -> LineRole.QUATERNARY
     }
 
     /** 日内周期显示到时分，日线及以上显示日期，避免十字光标读出无关字段。 */
