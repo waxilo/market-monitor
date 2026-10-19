@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -162,7 +162,21 @@
   `desktop-latest` id/createdAt **原地不变**（398800166 / 2026-09-28T12:55:50Z）、latest.json = 0.1.28
   两平台 URL 指向本版、8 产物全 0.1.28 无 0.1.27 残留、两平台 .sig keyid `226b03192e5df60b` ==
   基线逐字同、CI vite 指纹 `index-CPsJALmX.js 292.92` / `index-CcguxJRN.css 28.48` == 本地 build
-  （两平台一致；CSS 与 0.1.27 同 = 样式没动，JS 换新 = 包内新前端）。
+  （两平台一致；CSS 与 0.1.27 同 = 样式没动，JS 换新 = 包内新前端）→
+  `0.9.42`/`desktop 0.1.29`（**均线小眼睛**——指标栏 MA chip 之后、「＋」之前加眼睛 chip，
+  **只藏不删**：隐藏时 MA 折线与读数行一起收掉、chip 选中保留，再点恢复；App 存 DataStore `ma_hidden`，
+  桌面存 `mm.indicators.maHidden`；App 真机竖屏+全屏验证过、force-stop 重启保持，桌面 CDP 读 fiber props +
+  localStorage 验证）。双端同发：feat `3472a1d`（Android）/`fc4b94a`（desktop）+ chore(release) `12cc9fd`；
+  Android Release run 39186126354 绿（01:36–01:39Z ≈ 3.5 分钟，一次过）；Desktop Release run 39186126432
+  三 job 全绿（01:36–01:42Z ≈ 6 分钟，一次过）；main CI run 39186126406 绿（≈2.5 分钟）。
+  Android 通道：`android-latest` createdAt **原地不变**（2026-09-29T03:22:14Z）、仅 0.9.42 APK（11,154,056）
+  + 边车、sha256 `0417a9e5…` == 边车、apksigner 指纹 `cf2e20c7…` == 基线、aapt2 `54 / 0.9.42`、
+  `classes3.dex` 命中「隐藏全部 MA 均线」、verify-channel 34/34。
+  桌面通道：`desktop-latest` createdAt **原地不变**（2026-09-28T12:55:50Z）、8 产物全 0.1.29 无 0.1.28 残留、
+  latest.json = 0.1.29（pub_date 2026-10-19T01:42:23Z）、exe 2,779,978 字节 sha256 `755b2ecb…` == 边车、
+  dmg sha256 `c881fcfd…` == 边车、两平台 `.sig` keyid `226b03192e5df60b` == 基线、
+  exe FileVersion/ProductVersion 0.1.29、CI vite 指纹 `index-CoWRGNKG.js 293.21` / `index-CcguxJRN.css 28.48`
+  == 本地 build（两平台一致）。
 
 - ❗**Android 签名基线**（通道模型下拿不到上一版 APK，所以把指纹存在这儿；每次发版后必核）：
   `market-monitor-0.9.28.apk` 的签名证书
@@ -203,7 +217,17 @@
     边车 sha256 自算 == 边车文件（`6339ed18…`），体积 11137668 == 声明（`curl --max-time 300 --retry 3
     --retry-all-errors` 一次下全）；aapt2 读包内 `versionCode=51 / versionName=0.9.39` 自洽；
     verify-channel.mjs 34/34；Release run 38246389844 全绿。
+  - 0.9.42 复核（2026-10-19）：**本机 apksigner 直验下载产物** `cf2e20c7…` == 基线逐字一致；边车 sha256 自算
+    == 边车文件（`0417a9e5…`），体积 11154056 == 声明（`gh release download` 一次下全）；aapt2 读包内
+    `versionCode=54 / versionName=0.9.42` 自洽；`classes3.dex` 命中「隐藏全部 MA 均线」；
+    verify-channel.mjs 34/34；Release run 39186126354 全绿。桌面端两平台 `.sig` keyid
+    `226b03192e5df60b` == 发版前基线（0.1.28 那两份逐字相同）。
 
+- ⚠️ **工作区内 `git push` 报 `fatal: not a git repository`（2026-10-19 实测）**：`git fetch` / `ls-remote` /
+  `rev-parse --git-dir` 都正常，甚至推本地 bare remote 也报同一句；改用 `/tmp` 临时克隆
+  （`git clone --no-checkout origin <tmp>` → `git remote add local <repo>` → fetch 本地 `main` 与 tag →
+  `git push origin refs/remotes/local/main:refs/heads/main refs/tags/<版本> ...`）一次成功。
+  先别怀疑仓库损坏，也别用 `--tags` 乱推；只写要发的 ref 名。
 - ⚠️ **`git push origin main` 报 `fetch first` 时先别急着重推**，两种情形先看一眼远端再决定：
   - **同内容、不同 SHA**（上次发版走过 Git Data API 重建，时间戳被规范成 UTC）：先
     `rev-parse <a>^{tree} <b>^{tree}` 比 tree + `git diff --stat` 确认等价，再
