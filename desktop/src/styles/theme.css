@@ -1724,6 +1724,59 @@ body {
 .iv-act.iv-add {
   padding: 0 8px;
 }
+/* ── 均线线色：行内色点 + 展开的八色板（MaPanel） ─────────────────────
+   颜色绑在期数上，色点只是当前值的显示与入口；展开的色板横跨两列
+   （`.iv-group` 是 2 列网格），8 个色点在一列行宽里摆不下。 */
+.iv-row .ma-dot {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.iv-row .ma-dot:hover {
+  transform: scale(1.12);
+}
+.iv-row .ma-dot.on {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 3px var(--ink);
+}
+.ma-picker {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 1px var(--sp-xs) 5px;
+}
+.ma-picker-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ma-swatch {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: transform var(--fast) var(--ease-standard);
+}
+.ma-swatch:hover {
+  transform: scale(1.15);
+}
+/* 当前色：内外双环，深色/浅色主题下都看得清 */
+.ma-swatch.on {
+  box-shadow:
+    0 0 0 2px var(--paper),
+    0 0 0 3px var(--ink);
+}
+/* 被别的均线占着：颜色压淡，点击 = 两条线互换颜色 */
+.ma-swatch.used {
+  opacity: 0.45;
+}
 
 /* ── 设置面板（SettingsPanel）：90% 固定画布 + 左栏分类 / 右栏内容 ──────
    2026-09-29 把顶栏的「浅色|深色」与「更新」两个按钮收进这里 —— 它们都是

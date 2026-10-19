@@ -30,7 +30,7 @@ import {
   synthesisOf,
 } from '../lib/intervals';
 import { useSourceKey, endpointOf } from '../lib/sources';
-import { DEFAULT_MA_CATALOG } from '../lib/maPeriods';
+import { assignMaColor, DEFAULT_MA_CATALOG, normalizeMaColors } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
@@ -107,7 +107,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const [prefs, setPrefs] = useState<IndicatorPrefs>(() =>
     parseIndicatorPrefs(localStorage.getItem(INDICATORS_KEY)),
   );
-  const { ma: maPeriods, maCatalog, maHidden, boll: showBoll, panes: subPanes } = prefs;
+  const { ma: maPeriods, maCatalog, maColors, maHidden, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
   const [candles, setCandles] = useState<Bar[]>([]);
@@ -314,12 +314,32 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   /**
    * 更新均线**目录**（面板里增删/排序）：同时把 `ma` 过滤成新目录的子集 ——
    * 删掉某条 chip 时，若它正画着，就该一起下线（不然会留一条没有开关能关掉的线）。
+   * 颜色表同步归一：保留已有均线的槽位，新加的挑第一个空槽，删掉的让出颜色。
    */
   function setCatalog(next: number[]) {
     setPrefs((prev) => {
       const ma = prev.ma.filter((p) => next.includes(p)).sort((a, b) => a - b);
-      return { ...prev, maCatalog: next, ma };
+      return { ...prev, maCatalog: next, ma, maColors: normalizeMaColors(next, prev.maColors) };
     });
+  }
+
+  /** 改某条均线的线色；目标色被别的均线占着就互换（一色一线）。 */
+  function setMaColor(period: number, slot: number) {
+    setPrefs((prev) => ({
+      ...prev,
+      maColors: assignMaColor(prev.maColors, prev.maCatalog, period, slot),
+    }));
+  }
+
+  /** 恢复默认：目录回到出厂五档，选中子集跟着收窄，配色也回到出厂那套（0~4 号槽）。 */
+  function resetCatalog() {
+    const next = [...DEFAULT_MA_CATALOG];
+    setPrefs((prev) => ({
+      ...prev,
+      maCatalog: next,
+      ma: prev.ma.filter((p) => next.includes(p)).sort((a, b) => a - b),
+      maColors: normalizeMaColors(next, null),
+    }));
   }
 
   function toggleMa(p: number) {
@@ -574,6 +594,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           candles={candles}
           // 眼睛隐藏 = 直接喂空数组：叠线与读数行自然全关，画布不用知道「隐藏」这回事
           maPeriods={maHidden ? [] : maPeriods}
+          maColors={maColors}
           showBoll={showBoll}
           subPanes={subPanes}
           openInterest={oi}
@@ -631,8 +652,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       {maPanelOpen && (
         <MaPanel
           list={maCatalog}
+          colors={maColors}
           onChange={setCatalog}
-          onReset={() => setCatalog([...DEFAULT_MA_CATALOG])}
+          onColorChange={setMaColor}
+          onReset={resetCatalog}
           onClose={() => setMaPanelOpen(false)}
         />
       )}

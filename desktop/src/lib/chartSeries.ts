@@ -56,7 +56,29 @@ export const MA_MIN = 1;
 export const MA_MAX = 1000;
 export const MA_LIMIT = 8;
 
-/** MA 一族占用的色位，按**升序序号**分配（第 1 条 MA 用 PRIMARY、第 2 条 SECONDARY …）。 */
+/**
+ * 十一色位对应的十六进制色值，与 App `ui/theme/Color.kt` 的 `ChartLineColors` 同源。
+ * 绘制层按角色取色，配置面板直接拿它画色点/色板。
+ */
+export const LINE_COLORS = [
+  '#5C8AC6',
+  '#F09A3E',
+  '#E8C547',
+  '#9D6FC0',
+  '#5FBDB2',
+  '#C9825E',
+  '#D98CA6',
+  '#9AA3AE',
+  '#6FBF73',
+  '#E0716B',
+  '#B487E0',
+];
+
+/**
+ * MA 一族可用的色位（8 个），与 BOLL 的 `[5,6,7]` 不重叠。
+ * 顺序即配置面板里色板的顺序，槽位号 0~7 就存在偏好里 —— 期数 → 槽位，
+ * 因此拖动排序、增删别的均线都不会改已有均线的颜色。
+ */
 export const MA_ROLES: LineRole[] = [
   'PRIMARY',
   'SECONDARY',
@@ -68,9 +90,35 @@ export const MA_ROLES: LineRole[] = [
   'UNDENARY',
 ];
 
-/** 升序后第 `index` 条均线的色位；越界钳到两端（正常不会越界，`MA_LIMIT` 与色板等长）。 */
-export function maRoleAt(index: number): LineRole {
-  const i = Math.max(0, Math.min(MA_ROLES.length - 1, index));
+/** 色位在 `LINE_COLORS` 里的下标；未列出的（UP/DOWN/LABEL）不参与色板。 */
+const LINE_ROLE_COLORS: LineRole[] = [
+  'PRIMARY',
+  'SECONDARY',
+  'TERTIARY',
+  'ACCENT',
+  'QUATERNARY',
+  'QUINARY',
+  'SENARY',
+  'OCTONARY',
+  'NONARY',
+  'DENARY',
+  'UNDENARY',
+];
+
+/** MA 色槽数量（= 色板长度 = `MA_LIMIT`）。 */
+export const MA_SLOT_COUNT = MA_ROLES.length;
+
+/** 色槽 → 实际线色（配置面板的色点与色板用）。 */
+export const MA_SLOT_COLORS: string[] = MA_ROLES.map(
+  (role) => LINE_COLORS[LINE_ROLE_COLORS.indexOf(role)] ?? LINE_COLORS[0],
+);
+
+/** 期数 → 颜色槽位。偏好里就存这个映射（`{5:0,10:1}`）。 */
+export type MaColors = Record<number, number>;
+
+/** 色槽 → 线条角色；越界钳到 0（正常值已由 `normalizeMaColors` 校验过）。 */
+export function maRoleForSlot(slot: number): LineRole {
+  const i = Number.isInteger(slot) ? Math.max(0, Math.min(MA_SLOT_COUNT - 1, slot)) : 0;
   return MA_ROLES[i] ?? 'PRIMARY';
 }
 
@@ -227,6 +275,7 @@ function buildSubPane(
 export function buildSeries(
   candles: Bar[],
   maPeriods: number[],
+  maColors: MaColors,
   showBoll: boolean,
   kinds: SubPaneKind[],
   oi: OpenInterestSeries | null = null,
@@ -234,9 +283,11 @@ export function buildSeries(
   const closes = candles.map((c) => c.close);
   const overlayLines: ChartLine[] = [...maPeriods]
     .sort((a, b) => a - b)
+    // 颜色跟**期数**走（`maColors` 里存的就是期数 → 槽位）；
+    // 缺映射时按升序序号兜底，保证直接调用 buildSeries 也不会画成同色。
     .map((period, i) => ({
       label: `MA${period}`,
-      role: maRoleAt(i),
+      role: maRoleForSlot(maColors[period] ?? i),
       values: sma(closes, period),
     }));
   const bollData = showBoll ? boll(closes, BOLL_PERIOD, BOLL_MULTIPLIER) : null;

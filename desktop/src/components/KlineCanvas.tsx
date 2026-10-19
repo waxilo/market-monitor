@@ -32,10 +32,12 @@ import {
 import {
   buildSeries,
   formatCandleTime,
+  LINE_COLORS,
   mainRange,
   overlayFamilies,
   subRange,
   type LineRole,
+  type MaColors,
   type ReadoutSegment,
   type SubPaneKind,
 } from '../lib/chartSeries';
@@ -104,22 +106,6 @@ const TREND_HANDLE_R = 3.5;
  * 数值本身不参与任何绘制（骨架不画刻度数字），与 App ChartSkeleton 的 SKELETON_RANGE 同值。
  */
 const SKELETON_RANGE: Range = { low: 0, high: 1 };
-
-/** 与 App ui/theme/Color.kt 的 ChartLineColors 同源的色板，扩到十一色位。
- *  0~4 是 MA 的前五档，5~7 归 BOLL（MB/UP/DN），8~10 是 MA 第 6~8 条的补充色位。 */
-const LINE_COLORS = [
-  '#5C8AC6',
-  '#F09A3E',
-  '#E8C547',
-  '#9D6FC0',
-  '#5FBDB2',
-  '#C9825E',
-  '#D98CA6',
-  '#9AA3AE',
-  '#6FBF73',
-  '#E0716B',
-  '#B487E0',
-];
 
 interface Palette {
   up: string;
@@ -395,6 +381,8 @@ export interface ChartMenuRequest {
 interface Props {
   candles: Bar[];
   maPeriods: number[];
+  /** 期数 → 配色槽位（颜色跟均线走，不跟绘制顺序走）。 */
+  maColors: MaColors;
   showBoll: boolean;
   subPanes: SubPaneKind[];
   /**
@@ -454,6 +442,7 @@ interface Props {
 export function KlineCanvas({
   candles,
   maPeriods,
+  maColors,
   showBoll,
   subPanes,
   openInterest,
@@ -475,8 +464,8 @@ export function KlineCanvas({
   onNeedOlder,
 }: Props) {
   const series = useMemo(
-    () => buildSeries(candles, maPeriods, showBoll, subPanes, openInterest),
-    [candles, maPeriods, showBoll, subPanes, openInterest],
+    () => buildSeries(candles, maPeriods, maColors, showBoll, subPanes, openInterest),
+    [candles, maPeriods, maColors, showBoll, subPanes, openInterest],
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
