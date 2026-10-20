@@ -749,12 +749,29 @@ class DetailViewModel(
     /**
      * 保存「＋」管理对话框产出的周期条列表：顺序即展示顺序。
      * 拒绝空列表——周期条空了就没有换周期的入口，属于把自己锁在门外。
+     *
+     * 当前选中的周期被删掉时，切到它原位置上的那一项（后一项顶上；删的是最后一项
+     * 就取新的最后一项）。不回落的后果是条上没有任何方块高亮，图上在画哪个周期
+     * 只能靠猜 —— 桌面端的 `ChartView` 同样会在此处自动换周期。
      */
     fun saveIntervals(next: List<CandleInterval>) {
         if (next.isEmpty()) return
+        // 顺序不能反：interval 一改，加载链会在 Main.immediate 上**同步**开跑并抓走
+        // chart 的当前快照（见 init 里的注释）；先切周期再落列表，等这一页取回来
+        // 整份回写时就把刚保存的列表盖回旧值 —— 表现为「删了周期，条上又冒出来」。
+        val current = interval.value
+        val previous = chart.value.intervals
         chart.update { it.copy(intervals = next) }
+        if (next.none { it.storageKey == current.storageKey }) {
+            val removedAt = previous.indexOfFirst { it.storageKey == current.storageKey }
+            interval.value = next[removedAt.coerceIn(0, next.lastIndex)]
+        }
         val saved = next.joinToString(",") { it.storageKey }
-        viewModelScope.launch { settings.edit { it.copy(intervalKeys = saved) } }
+        viewModelScope.launch {
+            settings.edit {
+                it.copy(intervalKeys = saved, lastIntervalKey = interval.value.storageKey)
+            }
+        }
     }
 
     fun toggleWatch() {

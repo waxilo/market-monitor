@@ -49,6 +49,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
@@ -389,13 +390,18 @@ fun KlineChart(
      */
     onLineDropDelete: (LineRef?) -> Unit = {},
     /**
-     * 划线是否画在图上（主图右下角那只眼睛控制）。仅在非划线模式下生效 ——
+     * 均线显隐偏好：true = 图上一条 MA 都不画（选中集保留）。
+     * 控制图表右下角的「MA」按钮；把选中集折算成空列表是调用方的事（见 `series`）。
+     */
+    maHidden: Boolean = false,
+    /** 点右下角「MA」按钮时回调；null = 不画这枚按钮。 */
+    onToggleMaVisibility: (() -> Unit)? = null,
+    /**
+     * 划线是否画在图上（由右下角的小眼睛控制，与「MA」按钮并排）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
      */
     alertLinesVisible: Boolean = true,
-    /**
-     * 点主图右下角的眼睛时回调；null = 不画那只眼睛（标的没有预警线时也就没有可隐藏的东西）。
-     */
+    /** 点右下角划线小眼睛时回调；null = 不画那只眼睛。 */
     onToggleAlertLines: (() -> Unit)? = null,
     /**
      * 划线过程中每帧回调「抓到的线 id（null = 新建）」与当前落点（价格原始值）。
@@ -732,8 +738,8 @@ fun KlineChart(
     }
 
     /**
-     * 图内浮层（左下角「全屏」角标、右下的划线显隐眼睛）距绘图区边缘的内缩距离。
-     * 与那几个浮层同用 [CORNER_BUTTON_INSET] 一档值，四角才对称。
+     * 图内浮层（左下角「全屏」角标、右下角的显隐开关组）距绘图区边缘的内缩距离。
+     * 几处浮层同用 [CORNER_BUTTON_INSET] 一档值，贴角才对称。
      */
     val cornerInsetPx = with(density) { CORNER_BUTTON_INSET.toPx() }
 
@@ -1174,42 +1180,62 @@ fun KlineChart(
                 )
             }
 
-            // ---- 划线显隐的眼睛（主图右下角） ----
-            // 贴着主图底沿：副图再怎么堆，眼睛都留在被藏的那条线所在的那块图上，
-            // 开关与被控对象同区。左下是进/出全屏的角标、左上是指标读数带，右下这格空着。
-            // 划线模式下不画：那时单指属于划线通道，眼睛是个永远无效的开关
+            // ---- 底右角的两枚显隐开关：MA（文字）与划线（眼睛） ----
+            // 两者都是「图上这一组线要不要画」的总开关，同角并排、位置固定。
+            // MA 用文字而不是第二只眼睛：两枚一模一样的眼睛并排时分不清谁管谁。
+            // 贴着主图底沿：副图再怎么堆，开关都留在被藏的那组线所在的那块图上。
+            // 划线模式下不画划线眼睛：那时单指属于划线通道，它是个永远无效的开关
             // （工具下的显隐口径见 visibleAlertLines / visibleDrawLines —— 纯净画布只留草稿）。
-            // 没有预警线时不画：藏无可藏，常驻一个不动的开关只是噪点。
-            // 它要挂 clickable：点它就该切显隐，不该同时被下层画布当成一次拖动。
-            if (onToggleAlertLines != null && drawTool == DrawTool.NONE &&
-                (alertLines.isNotEmpty() || indicatorGuides.isNotEmpty() ||
-                    bandGuides.isNotEmpty() || drawLines.isNotEmpty())
-            ) {
+            // 其余时候常驻，哪怕当前一条划线都没有：两枚开关的位置固定，才认得出是一对。
+            // 它们要挂 clickable：点它就该切显隐，不该同时被下层画布当成一次拖动。
+            val showLineToggle = onToggleAlertLines != null && drawTool == DrawTool.NONE
+            if (onToggleMaVisibility != null || showLineToggle) {
                 val colors = MarketTheme.colors
-                Box(
+                val gap = Spacing.Xxs
+                val buttonCount = (if (onToggleMaVisibility != null) 1 else 0) +
+                    (if (showLineToggle) 1 else 0)
+                val clusterWidth = OVERLAY_BUTTON_SIZE * buttonCount.toFloat() +
+                    gap * (buttonCount - 1).toFloat()
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .offset(
-                            x = with(density) { (geo.plotWidthPx - cornerInsetPx - EYE_BUTTON_SIZE.toPx()).toDp() },
+                            x = with(density) { (geo.plotWidthPx - cornerInsetPx - clusterWidth.toPx()).toDp() },
                             y = with(density) {
-                                ((geo.mainTopPx + geo.mainHeightPx) - cornerInsetPx - EYE_BUTTON_SIZE.toPx()).toDp()
+                                ((geo.mainTopPx + geo.mainHeightPx) - cornerInsetPx - OVERLAY_BUTTON_SIZE.toPx()).toDp()
                             },
-                        )
-                        .size(EYE_BUTTON_SIZE)
-                        .clip(Radius.fullShape)
-                        // 半透明底：它贴在蜡烛上，实心底等于在图里挖了一个洞；
-                        // 图标本体保持不透明，读「开/关」状态不能跟着一起淡
-                        .background(colors.washStrong.copy(alpha = 0.5f))
-                        .semantics {
-                            contentDescription = if (alertLinesVisible) "隐藏划线" else "显示划线"
-                        }
-                        .clickable(onClick = onToggleAlertLines),
-                    contentAlignment = Alignment.Center,
+                        ),
+                    horizontalArrangement = Arrangement.spacedBy(gap),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    EyeGlyph(
-                        open = alertLinesVisible,
-                        tint = if (alertLinesVisible) colors.ink else colors.muted,
-                    )
+                    if (onToggleMaVisibility != null) {
+                        ChartOverlayButton(
+                            description = if (maHidden) "显示全部 MA 均线" else "隐藏全部 MA 均线",
+                            onClick = onToggleMaVisibility,
+                        ) {
+                            Text(
+                                text = "MA",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontSize = 10.sp,
+                                lineHeight = 10.sp,
+                                letterSpacing = 0.sp,
+                                // 藏起来时划掉：与旁边眼睛的斜杠同一套「关」的视觉语言
+                                textDecoration = if (maHidden) TextDecoration.LineThrough else null,
+                                color = if (maHidden) colors.muted else colors.ink,
+                            )
+                        }
+                    }
+                    if (showLineToggle) {
+                        ChartOverlayButton(
+                            description = if (alertLinesVisible) "隐藏划线" else "显示划线",
+                            onClick = onToggleAlertLines!!,
+                        ) {
+                            EyeGlyph(
+                                open = alertLinesVisible,
+                                tint = if (alertLinesVisible) colors.ink else colors.muted,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1333,14 +1359,39 @@ private fun chartReadoutBandDp(readoutLines: Int, hasCandleReadout: Boolean): Fl
         if (hasCandleReadout) CANDLE_READOUT_BAND_DP else 0f
 
 /**
+ * 底右角显隐开关的统一外壳：半透明圆底 + 语义描述，两枚按钮同高同底。
+ */
+@Composable
+private fun ChartOverlayButton(
+    description: String,
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Box(
+        modifier = Modifier
+            .size(OVERLAY_BUTTON_SIZE)
+            .clip(Radius.fullShape)
+            // 半透明底：它贴在蜡烛上，实心底等于在图里挖了一个洞；
+            // 内容本体保持不透明，读「开/关」状态不能跟着一起淡
+            .background(colors.washStrong.copy(alpha = 0.5f))
+            .semantics { contentDescription = description }
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        content()
+    }
+}
+
+/**
  * 划线显隐的「眼睛」：开 = 眼眶 + 瞳孔，关 = 再加一道斜杠。
  *
  * 自绘而不用 `Icons.Default.Visibility` —— 眼睛那对矢量在 material-icons-extended 里，
- * 为一个图标拖进上千个不划算，本应用只依赖 icons-core（同 DetailScreen 的全屏角标）。
+ * 为一个图标拖进上千个不划算，本应用只依赖 icons-core。
  */
 @Composable
 private fun EyeGlyph(open: Boolean, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(EYE_ICON_SIZE)) {
+    Canvas(modifier.size(OVERLAY_ICON_SIZE)) {
         val stroke = size.width * 0.08f
         val centerY = size.height / 2f
         val halfWidth = size.width * 0.46f
@@ -3172,8 +3223,8 @@ private val TREND_SEED_DOT = 4.5.dp
 private val CORNER_BUTTON_SIZE = 26.dp
 
 /**
- * 图内浮层（左下角「全屏」角标、右下的划线显隐眼睛）距绘图区边缘的内缩距离。
- * 四角共用这一档值，几个浮层才对称地贴在各自那一角上。
+ * 图内浮层（左下角「全屏」角标、右下角的显隐开关组）距绘图区边缘的内缩距离。
+ * 几处浮层同用这一档值，贴角才对称。
  */
 private val CORNER_BUTTON_INSET = 12.dp
 
@@ -3185,13 +3236,8 @@ private val CORNER_BUTTON_INSET = 12.dp
  */
 private val ALERT_GRAB_WIDTH = 24.dp
 
-/**
- * 主图右下角划线显隐「眼睛」的外圈边长。
- *
- * 大小与左下角的全屏角标 [CORNER_BUTTON_SIZE] 一致：眼睛是常驻控件，
- * 占的绘图区越少越好。
- */
-private val EYE_BUTTON_SIZE = 26.dp
+/** 底右角显隐开关（「MA」按钮与划线眼睛）的外圈边长，两者同高。 */
+private val OVERLAY_BUTTON_SIZE = 26.dp
 
 /** 眼睛图标本身的大小（小于外圈背景，留出内边距）。 */
-private val EYE_ICON_SIZE = 15.dp
+private val OVERLAY_ICON_SIZE = 15.dp

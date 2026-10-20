@@ -117,7 +117,6 @@ import com.waxilo.marketmonitor.ui.common.BannerTone
 import com.waxilo.marketmonitor.ui.common.ChangeText
 import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.HintRow
-import com.waxilo.marketmonitor.ui.common.IconChip
 import com.waxilo.marketmonitor.ui.common.MetricCell
 import com.waxilo.marketmonitor.ui.common.RangeBar
 import com.waxilo.marketmonitor.ui.common.Rule
@@ -254,6 +253,7 @@ fun DetailScreen(
                     bandGuides = bandGuides,
                     drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
+                    onToggleMaVisibility = viewModel::toggleMaVisibility,
                     onToggleAlertLines = viewModel::toggleAlertLines,
                     onLoadMore = viewModel::loadMore,
                     onRetry = viewModel::refresh,
@@ -270,12 +270,10 @@ fun DetailScreen(
                 IndicatorBar(
                     maCatalog = state.maCatalog,
                     activeMa = state.maPeriods,
-                    maHidden = state.maHidden,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
                     oiSupported = state.oiSupported,
                     onToggleMa = viewModel::toggleMaPeriod,
-                    onToggleMaVisibility = viewModel::toggleMaVisibility,
                     onManageMa = { maManagerOpen = true },
                     onToggleBoll = viewModel::toggleBoll,
                     onToggleSubPane = viewModel::toggleSubPane,
@@ -501,12 +499,10 @@ private fun FullscreenChart(
         IndicatorBar(
             maCatalog = state.maCatalog,
             activeMa = state.maPeriods,
-            maHidden = state.maHidden,
             showBoll = state.showBoll,
             subPanes = state.subPanes,
             oiSupported = state.oiSupported,
             onToggleMa = viewModel::toggleMaPeriod,
-            onToggleMaVisibility = viewModel::toggleMaVisibility,
             onManageMa = onManageMa,
             onToggleBoll = viewModel::toggleBoll,
             onToggleSubPane = viewModel::toggleSubPane,
@@ -573,6 +569,8 @@ private fun FullscreenChart(
                         bandGuides = bandGuides,
                         drawLines = drawLines,
                         drawTool = drawTool,
+                        maHidden = state.maHidden,
+                        onToggleMaVisibility = viewModel::toggleMaVisibility,
                         alertLinesVisible = alertLinesVisible,
                         onToggleAlertLines = viewModel::toggleAlertLines,
                         onAlertLineDrag = viewModel::dragAlertLine,
@@ -1456,6 +1454,7 @@ private fun ChartArea(
     bandGuides: List<BandGuideLine>,
     drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
+    onToggleMaVisibility: () -> Unit,
     onToggleAlertLines: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
@@ -1525,6 +1524,8 @@ private fun ChartArea(
                     bandGuides = bandGuides,
                     // 视觉画线是持久化的，竖屏同样显示（改/删仍在全屏竖栏里做）
                     drawLines = drawLines,
+                    maHidden = state.maHidden,
+                    onToggleMaVisibility = onToggleMaVisibility,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = onToggleAlertLines,
                     cornerAction = ChartCornerAction(
@@ -1601,14 +1602,11 @@ private fun IndicatorBar(
     /** 指标条上摊开的均线档位（用户可在「＋」里增删，见 [MaManagerDialog]）。 */
     maCatalog: List<Int>,
     activeMa: List<Int>,
-    /** 均线小眼睛：true = 图上一条 MA 都不画（选中集保留，点一下恢复）。 */
-    maHidden: Boolean,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
     oiSupported: Boolean,
     onToggleMa: (Int) -> Unit,
-    onToggleMaVisibility: () -> Unit,
     /** 打开「均线周期」管理弹窗（增删目录、恢复默认），与周期条的「＋」同一定位。 */
     onManageMa: () -> Unit,
     onToggleBoll: () -> Unit,
@@ -1639,7 +1637,6 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
-            MaVisibilityChip(maHidden = maHidden, onToggle = onToggleMaVisibility)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             if (showSubPanes) {
@@ -1682,7 +1679,6 @@ private fun IndicatorBar(
                     compact = true,
                 )
             }
-            MaVisibilityChip(maHidden = maHidden, onToggle = onToggleMaVisibility)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
@@ -1710,50 +1706,6 @@ private fun IndicatorBar(
     }
 }
 
-/**
- * 均线小眼睛（指标栏 MA chip 后面那枚）：睁眼 = 均线可见（默认），斜杠眼 = 全部藏起。
- *
- * 点亮态 = 「隐藏」已启用，与桌面端画线眼睛同一套语义；
- * 隐藏只作用于绘制，MA chip 的选中原样保留，再点一下恢复。
- */
-@Composable
-private fun MaVisibilityChip(maHidden: Boolean, onToggle: () -> Unit) {
-    IconChip(
-        contentDescription = if (maHidden) "显示全部 MA 均线" else "隐藏全部 MA 均线",
-        selected = maHidden,
-        onClick = onToggle,
-        compact = true,
-    ) { tint ->
-        EyeGlyph(open = !maHidden, tint = tint)
-    }
-}
-
-/** 小眼睛图形：上下两道对称弧 + 瞳孔；隐藏时去掉瞳孔、加一道斜杠。 */
-@Composable
-private fun EyeGlyph(open: Boolean, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(13.dp)) {
-        val stroke = 1.3.dp.toPx()
-        val inset = stroke / 2f
-        val eye = Path().apply {
-            moveTo(inset, size.height / 2f)
-            quadraticBezierTo(size.width / 2f, 0f, size.width - inset, size.height / 2f)
-            quadraticBezierTo(size.width / 2f, size.height, inset, size.height / 2f)
-        }
-        drawPath(eye, tint, style = Stroke(width = stroke, cap = StrokeCap.Round))
-        if (open) {
-            drawCircle(tint, radius = size.height * 0.17f, center = center)
-        } else {
-            drawLine(
-                color = tint,
-                start = Offset(size.width * 0.16f, size.height * 0.84f),
-                end = Offset(size.width * 0.84f, size.height * 0.16f),
-                strokeWidth = stroke,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
 /** 拖拽排序的行高：位移按它换算成交换次数，行必须定高才对得上。 */
 private val DRAG_ROW_HEIGHT = 44.dp
 
@@ -1776,8 +1728,10 @@ private enum class CustomIntervalUnit(val label: String, val minutes: Long) {
  *   行的点击；拖动的 pointerInput 消费纵向事件，列表超过一屏要先滚到位再拖。
  *   被拖行悬浮跟手，被它越过的行动画平移让出空位，松手才真正换位——
  *   拖动途中就改列表会有「被吸走」的观感。
- * - **当前选中的周期不可删**：删掉它会让「正在看的周期」从周期条上消失，图上显示
- *   的周期与条上的方块对不上，比多留一个方块更迷惑。
+ * - **当前选中的周期也可删**：保存时由 ViewModel 切到它原位置上的剩余周期（与桌面端
+ *   同口径），否则条上没有任何方块高亮，图上周期与条对不上。
+ * - **至少保留一个周期**：删到只剩一行时 × 仍可点，但只给一句说明 ——
+ *   周期条空了就没有换周期的入口，而禁用态在 Android 上看不出为什么点不动。
  * - 添加区在列表上方，只有「数字 + 单位」一条路：折成官方分钟数就加回官方周期，
  *   其余由官方周期聚合而来（[CandleInterval.custom] 负责范围与整除校验）。
  */
@@ -1976,8 +1930,14 @@ private fun IntervalManagerDialog(
                             color = if (option == selected) colors.ink else colors.muted,
                         )
                         IconButton(
-                            onClick = { rows = rows - option },
-                            enabled = rows.size > 1 && option != selected,
+                            onClick = {
+                                if (rows.size <= 1) {
+                                    hint = "周期条至少要留一个周期"
+                                } else {
+                                    rows = rows - option
+                                    hint = null
+                                }
+                            },
                             modifier = Modifier.size(28.dp),
                         ) {
                             Icon(
