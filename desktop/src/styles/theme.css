@@ -489,6 +489,17 @@ body {
 .chip.icon-only svg {
   display: block;
 }
+/* 眼睛 + 字样的显隐 chip（MA）：两枚一样的眼睛并排，靠这行字样分清谁管谁。
+   横排要 flex —— icon-only 的 inline-grid 会把文字压到图标下面。 */
+.chip.eye-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+}
+.chip.eye-label svg {
+  display: block;
+}
 
 .icon-btn {
   border: 1px solid var(--hairline);

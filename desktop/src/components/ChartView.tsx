@@ -427,9 +427,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
       </div>
 
-      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与显隐。
+      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与两个显隐开关。
           「画图」那组（水平线/直线选择、手势提示、清空）已整组拿掉 —— 画线一律走右键菜单，
-          工具条上留「锁定」、小眼睛两个开关 + 「告警 N」这个纯状态读数。宽度不够靠 .interval-bar 的 wrap 兜底。 */}
+          工具条上留「锁定」、两个小眼睛（MA / 画线）+ 「告警 N」这个纯状态读数。
+          宽度不够靠 .interval-bar 的 wrap 兜底。 */}
       <div className="bar-stack">
         <div className="interval-bar">
           <span className="bar-label grp">周期</span>
@@ -477,20 +478,6 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
               MA{p}
             </button>
           ))}
-          {/* 均线小眼睛：只藏不删 —— 选中的 MA chip 原样保留，再点一次全回来 */}
-          <button
-            type="button"
-            className={`chip icon-only${maHidden ? ' on' : ''}`}
-            aria-pressed={maHidden}
-            title={
-              maHidden
-                ? '显示全部 MA 均线（隐藏期间选择没丢，点一下全回来）'
-                : '隐藏全部 MA 均线（只藏不删，chip 的选中保留）'
-            }
-            onClick={() => setPrefs((prev) => ({ ...prev, maHidden: !prev.maHidden }))}
-          >
-            <EyeIcon off={maHidden} />
-          </button>
           {/* 末尾这一枚「＋」是均线目录自己的编辑器：增删与排序都在弹窗里（MaPanel） */}
           <button
             type="button"
@@ -535,9 +522,12 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             );
           })}
 
-          {/* 画线的两个总开关（0.1.27 起从右键菜单挪上来）：锁定管「能不能拖 / 能不能画新线」，
-              眼睛管「图上看不看得到」（只藏不删，告警照常，见 useDrawings/linesHidden）。
-              常驻不随 drawingCount 消失 —— 开关的位置固定，画线与否不影响它的落座。 */}
+          {/* 工具条末尾：锁定 + 两个显隐开关（MA / 画线）。锁定管「能不能拖 / 能不能画新线」，
+              两只眼睛管「图上看不看得到」（都只藏不删；画线那只隐藏期间告警照常，
+              见 useDrawings/linesHidden）。三者常驻不随 drawingCount 消失 —— 位置固定，
+              画线与否不影响它们的落座。
+              MA 那只带「MA」字样：两枚一模一样的眼睛并排时分不清谁管谁
+              （App 端是同一个考虑，只是那边做成了纯文字按钮）。 */}
           <div className="sep" />
           <button
             type="button"
@@ -551,6 +541,20 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             onClick={() => drawings.setLinesLocked(!drawings.linesLocked)}
           >
             锁定
+          </button>
+          <button
+            type="button"
+            className={`chip eye-label${maHidden ? ' on' : ''}`}
+            aria-pressed={maHidden}
+            title={
+              maHidden
+                ? '显示全部 MA 均线（隐藏期间选择没丢，点一下全回来）'
+                : '隐藏全部 MA 均线（只藏不删，chip 的选中保留）'
+            }
+            onClick={() => setPrefs((prev) => ({ ...prev, maHidden: !prev.maHidden }))}
+          >
+            <EyeIcon off={maHidden} />
+            <span>MA</span>
           </button>
           <button
             type="button"
