@@ -6,13 +6,9 @@ import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 
 /**
- * 主图均线的**出厂目录**：就是用户可编辑之前那固定五档（PRD FR-2.1 要求 5/10/20/30/60 可调）。
- *
- * 两处在用：没存过目录时当初始值（见 [AppSettings.maCatalog]），以及老装机从
- * `ma_custom_periods` 迁上来时的底座 —— 老 key 里只有「自定义档」，预置五档并不在里面。
- * 与桌面端 `lib/maPeriods.ts` 的 `DEFAULT_MA_CATALOG` 同口径，改名也是照它来的。
+ * 主图均线的出厂目录见 `domain/indicator/MaFamily.kt`（族 → 目录），
+ * 这里只管持久化，不再持有默认值。
  */
-val DEFAULT_MA_CATALOG: List<Int> = listOf(5, 10, 20, 30, 60)
 
 /**
  * 应用设置（PRD 8. 设置）。全部为可缺省值，新增字段不得要求用户先迁移。
@@ -31,28 +27,34 @@ data class AppSettings(
      * 空串 = 用 CandleInterval.quickPickPresets 默认集。格式同 [subPaneKeys]。
      */
     val intervalKeys: String = "",
-    /** 主图均线周期（选中项）。 */
-    val maPeriods: List<Int> = listOf(5, 10, 30),
     /**
-     * 主图均线的**目录**：指标条上出现哪些 MA chip（与 [maPeriods] 的「选中子集」分开存）。
-     *
-     * `null` = 没设过（首次运行，或从「目录不可编辑」的旧版本升上来），用 [DEFAULT_MA_CATALOG]；
-     * **空表是合法偏好** —— 用户把 chip 全删了就该是真的没有，重启不能自己变回来
-     * （指标条上的「＋」随时能加回来，不会把自己锁在门外）。
+     * 主图 MA 一族画不画（指标条上那枚 MA chip 的亮灭）。
+     * **只藏不删** —— [maCatalog] 与 [maColors] 原样保留，再点一下 chip 就回来。
+     */
+    val maVisible: Boolean = true,
+    /**
+     * MA 一族的**目录**：主图上画哪几档（有序）。`null` = 没设过，用出厂五档；
+     * **空表是合法偏好** —— 用户把档位全删了就该是真的没有（chip 点亮也不画线）。
      */
     val maCatalog: List<Int>? = null,
     /**
-     * 均线线色：**期数 → 色槽 0~7**（见 `ui/chart/ChartSeries.kt` 的 `MA_LINE_ROLES`）。
-     *
-     * 空表 = 没设过（老装机），上层会按目录升序补成 0~4…，与旧版观感一致；
-     * 颜色绑在期数上，所以指标条重排、增删别的均线都不改已有线的颜色。
+     * MA 一族的线色：**期数 → 色槽 0~7**（见 `ui/chart/ChartSeries.kt` 的 `MA_LINE_ROLES`）。
+     * 空表 = 没设过（老装机），上层按目录升序补成 0~4…，与旧版观感一致。
      */
     val maColors: Map<Int, Int> = emptyMap(),
     /**
-     * 均线小眼睛：true = 主图一条均线都不画。
-     * **只藏不删**——[maPeriods] 的选中原样保留，再点一次即恢复（与桌面端同一语义）。
+     * MA 一族里**逐条小眼睛闭着**的期数（`⊆ maCatalog`）。
+     * 空表 = 全都睁眼（老装机的迁移路径也是它）；只藏不删，随时点回来。
      */
-    val maHidden: Boolean = false,
+    val maMuted: List<Int> = emptyList(),
+    /** 主图 EMA 一族画不画（出厂默认关 —— 想看指数均线得自己点亮那枚 chip）。 */
+    val emaVisible: Boolean = false,
+    /** EMA 一族的目录（与 [maCatalog] 同构，各自独立、各自 8 条上限）。 */
+    val emaCatalog: List<Int>? = null,
+    /** EMA 一族的线色：期数 → 色槽 0~7（见 `EMA_LINE_ROLES`，与 MA 的八槽不撞色）。 */
+    val emaColors: Map<Int, Int> = emptyMap(),
+    /** EMA 一族里逐条小眼睛闭着的期数（`⊆ emaCatalog`）。 */
+    val emaMuted: List<Int> = emptyList(),
     /** 是否叠加布林带。 */
     val bollEnabled: Boolean = false,
     /**

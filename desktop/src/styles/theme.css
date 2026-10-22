@@ -1735,9 +1735,112 @@ body {
 .iv-act.iv-add {
   padding: 0 8px;
 }
+/* ── 均线族分页（MA / EMA，MaPanel） ──────────────────────────────────
+   指标栏上「一族一枚 chip」，配置却在面板里分成两页：页签做成一条分段控件，
+   右侧带一句状态（几条 · 是否已隐藏），切页之前就先知道那一族里头是什么光景。 */
+.ma-tabs {
+  display: flex;
+  gap: 3px;
+  margin: var(--sp-xs) 0 var(--sp-sm);
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  background: var(--wash);
+}
+.ma-tab {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.ma-tab:hover {
+  color: var(--ink);
+}
+/* 当前页：抬成纸色 + 一道发丝边（与 .chip.on 的语义一致：亮着 = 这一页是你在看的） */
+.ma-tab.on {
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+.ma-tab-note {
+  font-family: var(--sans);
+  font-size: 11px;
+  color: var(--muted);
+}
 /* ── 均线线色：行内色点 + 展开的八色板（MaPanel） ─────────────────────
    颜色绑在期数上，色点只是当前值的显示与入口；展开的色板横跨两列
    （`.iv-group` 是 2 列网格），8 个色点在一列行宽里摆不下。 */
+/* ── 逐条小眼睛（MaPanel 每行一只，与指标栏画线那只同形同义） ────────────
+   族 chip 是总闸，这只眼睛是分闸：闭眼 = 这条不画，但仍在目录里、配色不变。
+   睁着的眼睛压低对比（它只是「可点」而不是「当前状态」），闭眼才提亮 ——
+   一页里多数线是睁着的，眼睛全都亮着反倒看不出哪条被藏了。 */
+.iv-row .ma-eye {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--muted);
+  opacity: 0.7;
+  cursor: pointer;
+  transition:
+    opacity var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.iv-row .ma-eye:hover {
+  opacity: 1;
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+.iv-row .ma-eye.off {
+  opacity: 1;
+  color: var(--ink);
+}
+/* 闭了眼的行：名字与色点一起降透明度，一眼扫出「配了但没画」的那几条 */
+.iv-row.muted .iv-name,
+.iv-row.muted .ma-dot {
+  opacity: 0.4;
+}
+.iv-row.muted .iv-note {
+  color: var(--muted);
+}
+/* 列表小标题右侧的「全部显示 / 全部隐藏」：一句弱化的小字动作，不抢列表的注意力 */
+.ma-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-xs);
+}
+.ma-batch {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ma-batch:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
 .iv-row .ma-dot {
   flex: none;
   width: 13px;

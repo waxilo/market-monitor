@@ -32,12 +32,12 @@ import {
 import {
   buildSeries,
   formatCandleTime,
-  LINE_COLORS,
   mainRange,
   overlayFamilies,
+  roleColorHex,
   subRange,
   type LineRole,
-  type MaColors,
+  type MaFamilySpec,
   type ReadoutSegment,
   type SubPaneKind,
 } from '../lib/chartSeries';
@@ -145,34 +145,15 @@ function readPalette(): Palette {
 
 function roleColor(role: LineRole, p: Palette): string {
   switch (role) {
-    case 'PRIMARY':
-      return LINE_COLORS[0];
-    case 'SECONDARY':
-      return LINE_COLORS[1];
-    case 'TERTIARY':
-      return LINE_COLORS[2];
-    case 'ACCENT':
-      return LINE_COLORS[3];
-    case 'QUATERNARY':
-      return LINE_COLORS[4];
-    case 'QUINARY':
-      return LINE_COLORS[5];
-    case 'SENARY':
-      return LINE_COLORS[6];
-    case 'OCTONARY':
-      return LINE_COLORS[7];
-    case 'NONARY':
-      return LINE_COLORS[8];
-    case 'DENARY':
-      return LINE_COLORS[9];
-    case 'UNDENARY':
-      return LINE_COLORS[10];
     case 'UP':
       return p.up;
     case 'DOWN':
       return p.down;
-    default:
+    case 'LABEL':
       return p.label;
+    default:
+      // 其余都是调色板色位（MA 八位 / EMA 八位 / BOLL 三位），由 chartSeries 统一解析
+      return roleColorHex(role) ?? p.label;
   }
 }
 
@@ -380,9 +361,11 @@ export interface ChartMenuRequest {
 
 interface Props {
   candles: Bar[];
-  maPeriods: number[];
-  /** 期数 → 配色槽位（颜色跟均线走，不跟绘制顺序走）。 */
-  maColors: MaColors;
+  /**
+   * 主图均线族（MA / EMA 各一份「画哪几档 + 各自什么线色」）。
+   * 已经「藏起来」的族由调用方折算成空 `periods` —— 画布不管显隐开关，只画给它的东西。
+   */
+  families: MaFamilySpec[];
   showBoll: boolean;
   subPanes: SubPaneKind[];
   /**
@@ -441,8 +424,7 @@ interface Props {
 
 export function KlineCanvas({
   candles,
-  maPeriods,
-  maColors,
+  families,
   showBoll,
   subPanes,
   openInterest,
@@ -464,8 +446,8 @@ export function KlineCanvas({
   onNeedOlder,
 }: Props) {
   const series = useMemo(
-    () => buildSeries(candles, maPeriods, maColors, showBoll, subPanes, openInterest),
-    [candles, maPeriods, maColors, showBoll, subPanes, openInterest],
+    () => buildSeries(candles, families, showBoll, subPanes, openInterest),
+    [candles, families, showBoll, subPanes, openInterest],
   );
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -509,7 +491,7 @@ export function KlineCanvas({
    */
   const [box, setBox] = useState({ w: 0, h: 0 });
 
-  // 读数带：K 线一条 + 每个叠加线族（MA / BOLL）各一行
+  // 读数带：K 线一条 + 每个叠加线族（MA / EMA / BOLL）各一行
   const readoutRows = 1 + overlayFamilies(series).length;
   /**
    * 纵向几何一律由 chartLayout 分配 —— 副图占的高度在那里被一起减掉了。

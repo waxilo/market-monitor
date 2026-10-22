@@ -2,6 +2,7 @@ package com.waxilo.marketmonitor.ui.chart
 
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.Indicators
+import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.OpenInterestPoint
@@ -17,13 +18,18 @@ import java.util.Locale
 
 /**
  * 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。
- * PRIMARY~UNDENARY 是十一个互不相同的指标线色位（[com.waxilo.marketmonitor.ui.theme.ChartLineColors]）：
- * BOLL 固定用 QUINARY/SENARY/OCTONARY（5~7），其余八位留给 MA。
+ * PRIMARY~UNDENARY 是十一个老色位：BOLL 固定用 QUINARY/SENARY/OCTONARY（5~7），
+ * MA 用其余八位；`EMA1~EMA8` 是 EMA 一族自己的八位（11~18，见 [EMA_LINE_ROLES]）——
+ * 两族各八条、各占各的色位，同时画满也不撞色。
  * [LABEL] 不是一条线，只给读数行里那些中性文字（指标名、参数）用。
+ *
+ * ⚠️ 枚举 ordinal 必须与 [com.waxilo.marketmonitor.ui.theme.ChartLineColors] 的下标一一对应，
+ * 新增色位时**两者一起往后加**（UP / DOWN / LABEL 排在最后，不占调色板）。
  */
 enum class LineRole {
     PRIMARY, SECONDARY, TERTIARY, ACCENT, QUATERNARY, QUINARY, SENARY, OCTONARY,
     NONARY, DENARY, UNDENARY,
+    EMA1, EMA2, EMA3, EMA4, EMA5, EMA6, EMA7, EMA8,
     UP, DOWN, LABEL,
 }
 
@@ -42,11 +48,32 @@ val MA_LINE_ROLES: List<LineRole> = listOf(
     LineRole.UNDENARY,
 )
 
-/** MA 色槽数量（= 色板可用位数 = `MA_LIMIT`）。 */
+/** EMA 一族的八个色位（`ChartLineColors` 的 11~18），与 MA / BOLL 都不撞色。 */
+val EMA_LINE_ROLES: List<LineRole> = listOf(
+    LineRole.EMA1,
+    LineRole.EMA2,
+    LineRole.EMA3,
+    LineRole.EMA4,
+    LineRole.EMA5,
+    LineRole.EMA6,
+    LineRole.EMA7,
+    LineRole.EMA8,
+)
+
+/** 每族的色槽数量（= 色板可用位数 = 该族条数上限）。 */
 const val MA_COLOR_SLOT_COUNT = 8
 
-/** 色槽 → 线条角色；越界钳到第一色（正常值已由 ViewModel 归一化校验）。 */
-fun maRoleForSlot(slot: Int): LineRole = MA_LINE_ROLES.getOrElse(slot) { MA_LINE_ROLES[0] }
+/** 族 → 该族的色位表（槽位号就是下标）。 */
+private fun rolesOf(family: MaFamily): List<LineRole> = when (family) {
+    MaFamily.MA -> MA_LINE_ROLES
+    MaFamily.EMA -> EMA_LINE_ROLES
+}
+
+/** 某族的色槽 → 线条角色；越界钳进 `0..7`（正常值已由 ViewModel 归一化校验）。 */
+fun maRoleForSlot(family: MaFamily, slot: Int): LineRole {
+    val roles = rolesOf(family)
+    return roles[slot.coerceIn(0, roles.lastIndex)]
+}
 
 /** 图上的一条折线（均线族、BOLL 上下轨、MACD 的 DIF/DEA…）。 */
 data class ChartLine(
@@ -169,23 +196,49 @@ data class ChartSeries(
 }
 
 /**
- * 主图读数带的行数（MA 一族一行、BOLL 一族一行）。
+ * 主图读数带的行数（MA 一族一行、EMA 一族一行、BOLL 一族一行）。
  *
  * 这个数决定顶部读数带占多高（见 `KlineChart` 的 `readoutBandHeight`），
  * 而**加载中的骨架图也要算它** —— 那时还没有序列，只能按「开了哪些指标」数。
  * 两个取法必须等价，否则读数带差一行，数据到位的瞬间整张图往下跳一格
  * （等价性有单测锁，见 ChartModelTest）。
  */
-fun ChartSeries.mainReadoutLineCount(): Int {
-    val labels = overlay.lines.map { it.label }
-    return (if (labels.any { it.startsWith("MA") }) 1 else 0) +
-        (if (labels.any { it.startsWith("BOLL") }) 1 else 0)
-}
+fun ChartSeries.mainReadoutLineCount(): Int =
+    overlay.lines.map { readoutFamilyOf(it.role) }.distinct().size
 
 /** 同一件事的「配置口径」：与 [mainReadoutLineCount] 等价，供还没有序列的骨架图用。 */
-fun mainReadoutLineCount(maPeriods: List<Int>, showBoll: Boolean): Int =
+fun mainReadoutLineCount(
+    maPeriods: List<Int>,
+    emaPeriods: List<Int>,
+    showBoll: Boolean,
+): Int =
     // 只认正周期：与 [Indicators.movingAverages] 的过滤一致，否则负周期上两口径会分叉
-    (if (maPeriods.any { it > 0 }) 1 else 0) + (if (showBoll) 1 else 0)
+    (if (maPeriods.any { it > 0 }) 1 else 0) +
+        (if (emaPeriods.any { it > 0 }) 1 else 0) +
+        (if (showBoll) 1 else 0)
+
+/** 读数带里的「族」：一族一行，顺序固定 MA → EMA → BOLL。 */
+private enum class ReadoutFamily { MA, EMA, BOLL }
+
+private fun readoutFamilyOf(role: LineRole): ReadoutFamily = when (role) {
+    in EMA_LINE_ROLES -> ReadoutFamily.EMA
+    LineRole.QUINARY, LineRole.SENARY, LineRole.OCTONARY -> ReadoutFamily.BOLL
+    else -> ReadoutFamily.MA
+}
+
+/**
+ * 主图读数带的分行（[index] 处的各线数值）：一族一行，空族不出行。
+ *
+ * 分组看**角色**而不是名字前缀：`EMA12` 的名字以 E 开头、`MA12` 以 M 开头，
+ * 按前缀判也不会错，但角色是「这条线属于哪一族」的唯一定义处（见 [readoutFamilyOf]），
+ * 名字只是它的显示形式 —— 判据挂在定义上，改名时才不会悄悄分错行。
+ */
+fun ChartSeries.mainReadoutGroups(index: Int, priceDecimals: Int): List<List<ReadoutSegment>> {
+    val byFamily = mainReadoutAt(index, priceDecimals).groupBy { readoutFamilyOf(it.role) }
+    return ReadoutFamily.entries.mapNotNull { family ->
+        byFamily[family]?.takeIf { it.isNotEmpty() }
+    }
+}
 
 /** 读数用的数字：千分位分组，缺值与 NaN 走统一占位而不是 0。 */
 private fun readoutNumber(value: Double?, decimals: Int): String =
@@ -237,6 +290,27 @@ data class CandleTooltip(
 
 object ChartModel {
 
+    /**
+     * 一族的均线：期数升序、颜色跟期数走（拖动/增删别的均线不会改已有线的颜色）。
+     *
+     * 放在族这一层，是为了让 MA 与 EMA **走同一条代码路径** —— 两族唯一的差别是
+     * 用哪个算法（SMA / EMA）与哪套色位，排序、标签、兜底色这些规则完全一致。
+     */
+    private fun maLines(
+        closes: DoubleArray,
+        family: MaFamily,
+        periods: List<Int>,
+        colors: Map<Int, Int>,
+    ): List<ChartLine> =
+        Indicators.movingAverages(closes, periods.sorted(), family).entries.sortedBy { it.key }
+            .mapIndexed { index, (period, values) ->
+                ChartLine(
+                    label = family.lineLabel(period),
+                    role = maRoleForSlot(family, colors[period] ?: index),
+                    values = values,
+                )
+            }
+
     fun build(
         candles: List<Kline>,
         maPeriods: List<Int>,
@@ -247,15 +321,18 @@ object ChartModel {
         rsiPeriod: Int = 14,
         /** 持仓量序列（副图 OI 用）。null / 空序列时该块整块不出现，不画空板。 */
         openInterest: OpenInterestSeries? = null,
-        /** 期数 → 颜色槽位（见 [MA_LINE_ROLES]）；缺映射时按升序序号兜底。 */
+        /** MA 一族的期数 → 颜色槽位（见 [MA_LINE_ROLES]）；缺映射时按升序序号兜底。 */
         maColors: Map<Int, Int> = emptyMap(),
+        /** EMA 一族画哪几档；空 = 不画 EMA（整族藏起来时调用方就传空）。 */
+        emaPeriods: List<Int> = emptyList(),
+        /** EMA 一族的期数 → 颜色槽位（见 [EMA_LINE_ROLES]）。 */
+        emaColors: Map<Int, Int> = emptyMap(),
     ): ChartSeries {
         val closes = DoubleArray(candles.size) { candles[it].closeDouble() }
-        val lines = Indicators.movingAverages(closes, maPeriods.sorted()).entries.sortedBy { it.key }
-            .mapIndexed { index, (period, values) ->
-                // 颜色跟期数走：拖动/增删别的均线不会改已有线的颜色
-                ChartLine("MA$period", maRoleForSlot(maColors[period] ?: index), values)
-            }
+        // 族的顺序固定 MA → EMA：与指标条上两枚 chip、读数带的分行次序一一对应，
+        // 因此「先点哪一枚」不会改变线上下的叠放与读数的先后。
+        val lines = maLines(closes, MaFamily.MA, maPeriods, maColors) +
+            maLines(closes, MaFamily.EMA, emaPeriods, emaColors)
         val boll = if (showBoll) Indicators.boll(closes, bollPeriod) else null
         val overlayLines = if (boll == null) {
             lines

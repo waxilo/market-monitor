@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.chart
 
+import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.Kline
@@ -695,16 +696,25 @@ class ChartModelTest {
      */
     @Test
     fun `读数带行数的配置口径与序列口径完全等价`() {
-        // 详情页可选的均线周期（5/10/20/30/60）全开也照样等价
+        // 两族各自可空、可多条：三族全开时读数带最多三行
         val maCombos = listOf(emptyList(), listOf(5), listOf(5, 10, 30), listOf(5, 10, 20, 30, 60))
+        val emaCombos = listOf(emptyList(), listOf(12), listOf(12, 26, 50))
         for (ma in maCombos) {
-            for (boll in listOf(false, true)) {
-                val series = ChartModel.build(candles(60), ma, showBoll = boll, subPanes = emptyList())
-                assertEquals(
-                    "MA=$ma BOLL=$boll 两个口径的行数必须一致",
-                    series.mainReadoutLineCount(),
-                    mainReadoutLineCount(maPeriods = ma, showBoll = boll),
-                )
+            for (ema in emaCombos) {
+                for (boll in listOf(false, true)) {
+                    val series = ChartModel.build(
+                        candles(60),
+                        ma,
+                        showBoll = boll,
+                        subPanes = emptyList(),
+                        emaPeriods = ema,
+                    )
+                    assertEquals(
+                        "MA=$ma EMA=$ema BOLL=$boll 两个口径的行数必须一致",
+                        series.mainReadoutLineCount(),
+                        mainReadoutLineCount(maPeriods = ma, emaPeriods = ema, showBoll = boll),
+                    )
+                }
             }
         }
     }
@@ -720,6 +730,74 @@ class ChartModelTest {
         // 一族指标一行：两条 MA 也只算一行（它们挤在同一行里）
         val series = ChartModel.build(candles(60), listOf(5, 10), showBoll = true, subPanes = emptyList())
         assertEquals(2, series.mainReadoutLineCount())
+    }
+
+    @Test
+    fun `三族全开占三行, 且 EMA 不并进 MA 那一行`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5),
+            showBoll = true,
+            subPanes = emptyList(),
+            emaPeriods = listOf(12, 26),
+        )
+        assertEquals(3, series.mainReadoutLineCount())
+        val groups = series.mainReadoutGroups(0, 2)
+        assertEquals(listOf(1, 2, 3), groups.map { it.size })
+        // 行序固定 MA → EMA → BOLL
+        assertEquals("MA5: ", groups[0].single().text.take(5))
+        assertEquals("EMA12", groups[1].first().text.take(5))
+        assertTrue(groups[2].all { it.text.startsWith("BOLL") })
+    }
+
+    @Test
+    fun `EMA 线用的是 EMA 一族自己的色位, 与 MA 不撞色`() {
+        val series = ChartModel.build(
+            candles(60),
+            listOf(5),
+            showBoll = false,
+            subPanes = emptyList(),
+            maColors = mapOf(5 to 0),
+            emaPeriods = listOf(12),
+            emaColors = mapOf(12 to 0),
+        )
+        val ma = series.overlay.lines.single { it.label == "MA5" }
+        val ema = series.overlay.lines.single { it.label == "EMA12" }
+        // 两族各自的 0 号槽指向不同色位（色槽是分族的）
+        assertEquals(maRoleForSlot(MaFamily.MA, 0), ma.role)
+        assertEquals(maRoleForSlot(MaFamily.EMA, 0), ema.role)
+        assertNotEquals(ma.role, ema.role)
+    }
+
+    @Test
+    fun `EMA 与 MA 同周期并存时标签不冲突`() {
+        // ⚠️ 不能用 candles()：它是**线性**上涨，线性序列上 EMA 与 SMA 恒等（种子取首窗均值、
+        // 之后每步增量的权重和为 1），数值断言会假阴性。这里造一段锯齿价，两者才会分开。
+        val zigzag = candles(60).mapIndexed { i, bar ->
+            val close = 100.0 + (if (i % 2 == 0) 6.0 else -3.0) + i * 0.4
+            bar.copy(
+                open = BigDecimal.valueOf(close - 0.5),
+                high = BigDecimal.valueOf(close + 1),
+                low = BigDecimal.valueOf(close - 1.5),
+                close = BigDecimal.valueOf(close),
+            )
+        }
+        val series = ChartModel.build(
+            zigzag,
+            listOf(12),
+            showBoll = false,
+            subPanes = emptyList(),
+            emaPeriods = listOf(12),
+        )
+        assertEquals(listOf("MA12", "EMA12"), series.overlay.lines.map { it.label })
+        val ma = series.overlay.lines[0].values
+        val ema = series.overlay.lines[1].values
+        // 首根有效值同源（EMA 种子 = 前 12 根均值），之后递推才分道
+        assertEquals(ma[11], ema[11], 1e-9)
+        assertTrue(
+            "锯齿价上 SMA 与 EMA 必须不相等，否则族参数没生效（差 ${ma.last() - ema.last()}）",
+            kotlin.math.abs(ma.last() - ema.last()) > 1e-6,
+        )
     }
     // endregion
 

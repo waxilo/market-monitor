@@ -66,6 +66,7 @@ import com.waxilo.marketmonitor.domain.model.lowDouble
 import com.waxilo.marketmonitor.domain.model.openDouble
 import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.repository.ChartLineKind
+import com.waxilo.marketmonitor.ui.common.EyeGlyph
 import com.waxilo.marketmonitor.ui.theme.ChartLineColors
 import com.waxilo.marketmonitor.ui.theme.DownRed
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
@@ -390,15 +391,11 @@ fun KlineChart(
      */
     onLineDropDelete: (LineRef?) -> Unit = {},
     /**
-     * 均线显隐偏好：true = 图上一条 MA 都不画（选中集保留）。
-     * 控制图表右下角的「MA」按钮；把选中集折算成空列表是调用方的事（见 `series`）。
-     */
-    maHidden: Boolean = false,
-    /** 点右下角「MA」按钮时回调；null = 不画这枚按钮。 */
-    onToggleMaVisibility: (() -> Unit)? = null,
-    /**
-     * 划线是否画在图上（由右下角的小眼睛控制，与「MA」按钮并排）。仅在非划线模式下生效 ——
+     * 划线是否画在图上（由右下角的小眼睛控制）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
+     *
+     * 均线那边**没有**对应的开关：MA / EMA 的整族显隐住在指标条的两枚 chip 上
+     * （见 `DetailScreen.IndicatorBar`），图里再放一枚「MA」只会和它们重复。
      */
     alertLinesVisible: Boolean = true,
     /** 点右下角划线小眼睛时回调；null = 不画那只眼睛。 */
@@ -1135,11 +1132,10 @@ fun KlineChart(
             // 主读数带在**顶部读数带**这一区，而右侧价格轴从绘图区（readoutHeightPx）才开始，
             // 所以这几行右上角是空的：铺满整宽，多出的那截轴宽刚好容下整族数值不截断。
             val mainReadoutWidth = with(density) { canvasSize.width.toDp() } - readoutStart
-            // 按指标族拆行：MA 一族一行、BOLL 一族一行（顺序沿用 overlay 的 MA→BOLL）。
+            // 按指标族拆行：MA 一族一行、EMA 一族一行、BOLL 一族一行
+            // （分组判据在 ChartSeries.mainReadoutGroups，按角色而不按名字前缀）
             val mainGroups = remember(series, readoutIndex, priceDecimals) {
-                series.mainReadoutAt(readoutIndex, priceDecimals)
-                    .partition { it.text.startsWith("BOLL") }
-                    .let { (boll, ma) -> listOf(ma, boll).filter { it.isNotEmpty() } }
+                series.mainReadoutGroups(readoutIndex, priceDecimals)
             }
             Column(
                 modifier = Modifier
@@ -1180,22 +1176,19 @@ fun KlineChart(
                 )
             }
 
-            // ---- 底右角的两枚显隐开关：MA（文字）与划线（眼睛） ----
-            // 两者都是「图上这一组线要不要画」的总开关，同角并排、位置固定。
-            // MA 用文字而不是第二只眼睛：两枚一模一样的眼睛并排时分不清谁管谁。
+            // ---- 底右角的划线显隐开关（眼睛） ----
+            // 「图上这一组线要不要画」的总开关。均线那两枚（MA / EMA）已经在指标条上，
+            // 图里不再重复 —— 同一个开关摆两处，用户会以为是两件事。
             // 贴着主图底沿：副图再怎么堆，开关都留在被藏的那组线所在的那块图上。
-            // 划线模式下不画划线眼睛：那时单指属于划线通道，它是个永远无效的开关
+            // 划线模式下不画：那时单指属于划线通道，它是个永远无效的开关
             // （工具下的显隐口径见 visibleAlertLines / visibleDrawLines —— 纯净画布只留草稿）。
-            // 其余时候常驻，哪怕当前一条划线都没有：两枚开关的位置固定，才认得出是一对。
-            // 它们要挂 clickable：点它就该切显隐，不该同时被下层画布当成一次拖动。
+            // 其余时候常驻，哪怕当前一条划线都没有：位置固定才认得出它管什么。
+            // 要挂 clickable：点它就该切显隐，不该同时被下层画布当成一次拖动。
             val showLineToggle = onToggleAlertLines != null && drawTool == DrawTool.NONE
-            if (onToggleMaVisibility != null || showLineToggle) {
+            if (showLineToggle) {
                 val colors = MarketTheme.colors
                 val gap = Spacing.Xxs
-                val buttonCount = (if (onToggleMaVisibility != null) 1 else 0) +
-                    (if (showLineToggle) 1 else 0)
-                val clusterWidth = OVERLAY_BUTTON_SIZE * buttonCount.toFloat() +
-                    gap * (buttonCount - 1).toFloat()
+                val clusterWidth = OVERLAY_BUTTON_SIZE
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopStart)
@@ -1208,33 +1201,14 @@ fun KlineChart(
                     horizontalArrangement = Arrangement.spacedBy(gap),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    if (onToggleMaVisibility != null) {
-                        ChartOverlayButton(
-                            description = if (maHidden) "显示全部 MA 均线" else "隐藏全部 MA 均线",
-                            onClick = onToggleMaVisibility,
-                        ) {
-                            Text(
-                                text = "MA",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 10.sp,
-                                lineHeight = 10.sp,
-                                letterSpacing = 0.sp,
-                                // 藏起来时划掉：与旁边眼睛的斜杠同一套「关」的视觉语言
-                                textDecoration = if (maHidden) TextDecoration.LineThrough else null,
-                                color = if (maHidden) colors.muted else colors.ink,
-                            )
-                        }
-                    }
-                    if (showLineToggle) {
-                        ChartOverlayButton(
-                            description = if (alertLinesVisible) "隐藏划线" else "显示划线",
-                            onClick = onToggleAlertLines!!,
-                        ) {
-                            EyeGlyph(
-                                open = alertLinesVisible,
-                                tint = if (alertLinesVisible) colors.ink else colors.muted,
-                            )
-                        }
+                    ChartOverlayButton(
+                        description = if (alertLinesVisible) "隐藏划线" else "显示划线",
+                        onClick = onToggleAlertLines,
+                    ) {
+                        EyeGlyph(
+                            open = alertLinesVisible,
+                            tint = if (alertLinesVisible) colors.ink else colors.muted,
+                        )
                     }
                 }
             }
@@ -1384,38 +1358,8 @@ private fun ChartOverlayButton(
 }
 
 /**
- * 划线显隐的「眼睛」：开 = 眼眶 + 瞳孔，关 = 再加一道斜杠。
- *
- * 自绘而不用 `Icons.Default.Visibility` —— 眼睛那对矢量在 material-icons-extended 里，
- * 为一个图标拖进上千个不划算，本应用只依赖 icons-core。
+ * 划线显隐的「眼睛」见 `ui/common/EyeGlyph.kt`（均线面板每行的小眼睛与它同一套图形）。
  */
-@Composable
-private fun EyeGlyph(open: Boolean, tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(OVERLAY_ICON_SIZE)) {
-        val stroke = size.width * 0.08f
-        val centerY = size.height / 2f
-        val halfWidth = size.width * 0.46f
-        val arch = size.height * 0.6f
-        // 上下两条对称的二次曲线拼出眼眶：二次曲线只走到控制点的一半高度，
-        // 所以 arch 要放大到 0.6 倍画高，眼睛才有 0.3 倍画高的实际半高
-        val outline = Path().apply {
-            moveTo(size.width / 2f - halfWidth, centerY)
-            quadraticBezierTo(size.width / 2f, centerY - arch, size.width / 2f + halfWidth, centerY)
-            quadraticBezierTo(size.width / 2f, centerY + arch, size.width / 2f - halfWidth, centerY)
-            close()
-        }
-        drawPath(outline, tint, style = Stroke(width = stroke))
-        drawCircle(tint, radius = size.width * 0.14f, center = Offset(size.width / 2f, centerY))
-        if (!open) {
-            drawLine(
-                color = tint,
-                start = Offset(size.width * 0.14f, size.height * 0.12f),
-                end = Offset(size.width * 0.86f, size.height * 0.88f),
-                strokeWidth = stroke,
-            )
-        }
-    }
-}
 
 /** 「价格刻度已缩放 · 复位」小标。 */
 @Composable
@@ -1449,21 +1393,18 @@ private data class ChartPalette(
     val band: Color,
     val crosshair: Color,
 ) {
+    /**
+     * 角色 → 颜色。调色板色位（MA 八位 / EMA 八位 / BOLL 三位）直接按 ordinal 取
+     * [lines]（= `ChartLineColors`，两者下标一一对应，见 `LineRole` 的注释）；
+     * UP / DOWN / LABEL 是语义色，走主题。
+     *
+     * 这里刻意**不逐个列出色位** —— 列一遍等于给每加一个色位都留一处会漏改的地方。
+     */
     fun roleColor(role: LineRole): Color = when (role) {
-        LineRole.PRIMARY -> lines.getOrElse(0) { grid }
-        LineRole.SECONDARY -> lines.getOrElse(1) { grid }
-        LineRole.TERTIARY -> lines.getOrElse(2) { grid }
-        LineRole.ACCENT -> lines.getOrElse(3) { grid }
-        LineRole.QUATERNARY -> lines.getOrElse(4) { grid }
-        LineRole.QUINARY -> lines.getOrElse(5) { grid }
-        LineRole.SENARY -> lines.getOrElse(6) { grid }
-        LineRole.OCTONARY -> lines.getOrElse(7) { grid }
-        LineRole.NONARY -> lines.getOrElse(8) { grid }
-        LineRole.DENARY -> lines.getOrElse(9) { grid }
-        LineRole.UNDENARY -> lines.getOrElse(10) { grid }
         LineRole.UP -> up
         LineRole.DOWN -> down
         LineRole.LABEL -> label
+        else -> lines.getOrElse(role.ordinal) { grid }
     }
 }
 
@@ -3239,5 +3180,4 @@ private val ALERT_GRAB_WIDTH = 24.dp
 /** 底右角显隐开关（「MA」按钮与划线眼睛）的外圈边长，两者同高。 */
 private val OVERLAY_BUTTON_SIZE = 26.dp
 
-/** 眼睛图标本身的大小（小于外圈背景，留出内边距）。 */
-private val OVERLAY_ICON_SIZE = 15.dp
+/** 眼睛图标本身的大小（小于外圈背景，留出内边距）由 `EyeGlyph` 的默认值给出。 */

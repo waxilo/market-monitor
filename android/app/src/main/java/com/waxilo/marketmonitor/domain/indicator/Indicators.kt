@@ -168,9 +168,22 @@ object Indicators {
         return Kdj(k, d, j)
     }
 
-    /** 主图均线族：返回 period → 序列，供图例逐项绘制。 */
-    fun movingAverages(close: DoubleArray, periods: List<Int>): Map<Int, DoubleArray> =
-        periods.filter { it > 0 }.associateWith { sma(close, it) }
+    /**
+     * 主图均线族：返回 period → 序列，供图例逐项绘制。
+     *
+     * 两族只差算法：MA 走 SMA、EMA 走指数平滑（种子取首个 period 根的均值，
+     * 与 [ema] 同一实现），所以调用方不必为族写两套循环。
+     */
+    fun movingAverages(
+        close: DoubleArray,
+        periods: List<Int>,
+        family: MaFamily = MaFamily.MA,
+    ): Map<Int, DoubleArray> = periods.filter { it > 0 }.associateWith { period ->
+        when (family) {
+            MaFamily.MA -> sma(close, period)
+            MaFamily.EMA -> ema(close, period)
+        }
+    }
 
     /** BOLL 告警线的默认参数，与图上叠加指标保持同一套（N=20, K=2）。 */
     const val BOLL_PERIOD = 20

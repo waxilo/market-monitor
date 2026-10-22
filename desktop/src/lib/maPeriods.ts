@@ -1,28 +1,68 @@
 /**
- * 主图均线（MA）：**目录**（指标栏上有哪些档位）+ 用户的增删与排序 + 期数到线色的绑定。
+ * 主图均线（MA / EMA 两族）：**目录**（每族各有哪些档位）+ 用户的增删与排序 + 期数到线色的绑定。
  *
- * 与 `lib/intervals.ts` 同职责、同口径的纯函数集合：
- *   1. 内置目录 `DEFAULT_MA_CATALOG` —— 就是用户可编辑之前的那固定五档 `5/10/20/30/60`；
- *   2. 校验：期数必须是 `[MA_MIN, MA_MAX]` 内的正整数，目录最多 `MA_LIMIT` 条（色槽也是 8 个）；
+ * 两族结构完全对称，所以这一层的函数一律**与族无关**（只吃一个 `number[]` 目录与一份配色表），
+ * 由调用方带上 `MaKind` 去取该族的出厂值、色板与标签：
+ *   1. 出厂目录 `DEFAULT_CATALOGS` —— MA 是老的五档 `5/10/20/30/60`，EMA 是 `12/26/50`；
+ *   2. 校验：期数必须是 `[MA_MIN, MA_MAX]` 内的正整数，**每族**最多 `MA_LIMIT` 条
+ *      （每族各有 8 个色槽，两族互不占位）；
  *   3. 增删与排序一律返回新数组，方便沿用 `useDragSort`（它只认 id 的顺序数组）。
  *
- * 配色**跟着期数走**（`MaColors`：期数 → 色槽 0~7），所以拖动排序只改 chip 的先后、
+ * 配色**跟着期数走**（`MaColors`：期数 → 该族色槽 0~7），所以拖动排序只改 chip 的先后、
  * 不改线色；新增一条时归一会自动挑一个还没被占用的色槽。
  */
 
-import { MA_CHOICES, MA_LIMIT, MA_MAX, MA_MIN, MA_SLOT_COUNT, type MaColors } from './chartSeries';
+import {
+  DEFAULT_CATALOGS,
+  MA_LIMIT,
+  MA_MAX,
+  MA_MIN,
+  MA_SLOT_COUNT,
+  type MaColors,
+  type MaKind,
+} from './chartSeries';
 
-/** 出厂目录：就是用户可编辑之前的那固定五档（面板「恢复默认」也用它）。 */
-export const DEFAULT_MA_CATALOG: number[] = [...MA_CHOICES];
+/** 某族的出厂目录（拷贝一份，别让调用方改到常量本身）。 */
+export function defaultCatalog(kind: MaKind): number[] {
+  return [...DEFAULT_CATALOGS[kind]];
+}
+
+/**
+ * 一族均线的配置：目录（有序）+ 期数 → 色槽 + 整族显隐 + 逐条小眼睛。
+ *
+ * 放在这里而不是 `indicatorPrefs`：面板、绘图与持久化都要用它，
+ * 而「一族均线由哪几样东西描述」是均线自身的事。
+ *
+ * 显隐分**两级**，互不覆盖：
+ *   1. 整族（`hidden`）—— 指标栏那枚 chip，管「这一族参不参与绘图」；
+ *   2. 逐条（`muted`）—— 面板里每条行尾的小眼睛，管「族开着的时候这一条画不画」。
+ * 关掉族再打开，逐条的状态原样保留（总闸不动分闸），不需要重新点一遍。
+ */
+export interface MaFamilyPrefs {
+  /** 这一族配置了哪几档（顺序即面板里的顺序；空 = 一档都没配）。 */
+  catalog: number[];
+  /** 期数 → 该族色槽（0~7，见 `chartSeries.MA_ROLES` / `EMA_ROLES`）。 */
+  colors: MaColors;
+  /** 整族显隐：true = 这一族一条都不画（**只藏不删**，目录与配色原样保留）。 */
+  hidden: boolean;
+  /**
+   * 逐条隐藏：眼睛闭着的那几档（**只藏不删**，必须 ⊆ `catalog`）。
+   * 与 `hidden` 正交 —— 族开着，这几条不画；族关着，这个状态也留着重开时用。
+   */
+  muted: number[];
+}
+
+/** 两族的配置（族 → 配置）。 */
+export type MaFamilies = Record<MaKind, MaFamilyPrefs>;
 
 /** 期数是否合法：`[MA_MIN, MA_MAX]` 内的正整数。 */
 export function isMaPeriodLegal(period: number): boolean {
   return Number.isInteger(period) && period >= MA_MIN && period <= MA_MAX;
 }
 
-/** 界面短名：`7 → MA7`。 */
-export function maLabel(period: number): string {
-  return `MA${period}`;
+/** 界面短名：`MA, 7 → MA7` / `EMA, 12 → EMA12`。 */
+export function lineLabel(kind: MaKind, period: number): string {
+  return `${kind}${period}`;
 }
 
 export type MaInput = { ok: true; period: number } | { ok: false; reason: string };
@@ -39,7 +79,7 @@ export function parseMaPeriod(raw: string): MaInput {
   return { ok: true, period };
 }
 
-/** 追加到末尾；已存在 / 越界 / 已满 `MA_LIMIT` 条都原样返回。 */
+/** 追加到末尾；已存在 / 越界 / 该族已满 `MA_LIMIT` 条都原样返回。 */
 export function addMaPeriod(list: number[], period: number): number[] {
   if (!isMaPeriodLegal(period) || list.includes(period) || list.length >= MA_LIMIT) return list;
   return [...list, period];
@@ -125,4 +165,41 @@ export function assignMaColor(
     else delete next[owner];
   }
   return normalizeMaColors(catalog, next);
+}
+
+/**
+ * 「逐条隐藏」的归一：只留**目录里真有的**期数、去重、按目录顺序。
+ *
+ * 目录里删掉的均线必须一并从 `muted` 消失（否则删了又加回来会莫名其妙地不显示 ——
+ * 用户以为「加了一条新线」，图上却没有）。老存档没有这个字段 ⇒ 空数组 = 全都睁眼。
+ */
+export function normalizeMuted(catalog: readonly number[], raw: unknown): number[] {
+  const wanted = new Set<number>();
+  if (Array.isArray(raw)) {
+    for (const v of raw) {
+      if (typeof v === 'number' && Number.isInteger(v)) wanted.add(v);
+    }
+  }
+  return catalog.filter((p) => wanted.has(p));
+}
+
+/** 这一族此刻**图上真会画**的期数：目录 − 眼睛闭上的（整族的 `hidden` 由调用方折算成空表）。 */
+export function drawnPeriods(family: MaFamilyPrefs): number[] {
+  if (family.muted.length === 0) return family.catalog;
+  const muted = new Set(family.muted);
+  return family.catalog.filter((p) => !muted.has(p));
+}
+
+/** 翻一条均线的眼睛。不在目录里的期数原样返回（面板只可能点到目录里的行）。 */
+export function toggleMuted(family: MaFamilyPrefs, period: number): number[] {
+  if (!family.catalog.includes(period)) return family.muted;
+  const next = new Set(family.muted);
+  if (next.has(period)) next.delete(period);
+  else next.add(period);
+  return normalizeMuted(family.catalog, [...next]);
+}
+
+/** 全睁（`hide = false`）/ 全闭（`hide = true`）：面板标题行那个「全部显示 / 全部隐藏」。 */
+export function setAllMuted(catalog: readonly number[], hide: boolean): number[] {
+  return hide ? [...catalog] : [];
 }

@@ -90,10 +90,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
+import com.waxilo.marketmonitor.domain.indicator.MaFamily
+import com.waxilo.marketmonitor.domain.indicator.defaultCatalog
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
-import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
@@ -115,6 +116,7 @@ import com.waxilo.marketmonitor.ui.common.AnimatedBanner
 import com.waxilo.marketmonitor.ui.common.AppBar
 import com.waxilo.marketmonitor.ui.common.BannerTone
 import com.waxilo.marketmonitor.ui.common.ChangeText
+import com.waxilo.marketmonitor.ui.common.EyeGlyph
 import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.HintRow
 import com.waxilo.marketmonitor.ui.common.MetricCell
@@ -253,7 +255,6 @@ fun DetailScreen(
                     bandGuides = bandGuides,
                     drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
-                    onToggleMaVisibility = viewModel::toggleMaVisibility,
                     onToggleAlertLines = viewModel::toggleAlertLines,
                     onLoadMore = viewModel::loadMore,
                     onRetry = viewModel::refresh,
@@ -268,12 +269,14 @@ fun DetailScreen(
                 )
 
                 IndicatorBar(
-                    maCatalog = state.maCatalog,
-                    activeMa = state.maPeriods,
+                    maVisible = state.isVisible(MaFamily.MA),
+                    maCount = state.visiblePeriods(MaFamily.MA).size,
+                    emaVisible = state.isVisible(MaFamily.EMA),
+                    emaCount = state.visiblePeriods(MaFamily.EMA).size,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
                     oiSupported = state.oiSupported,
-                    onToggleMa = viewModel::toggleMaPeriod,
+                    onToggleFamily = viewModel::toggleFamily,
                     onManageMa = { maManagerOpen = true },
                     onToggleBoll = viewModel::toggleBoll,
                     onToggleSubPane = viewModel::toggleSubPane,
@@ -312,11 +315,16 @@ fun DetailScreen(
 
         if (maManagerOpen) {
             MaManagerDialog(
-                catalog = state.maCatalog,
-                colors = state.maColors,
+                initial = mapOf(
+                    MaFamily.MA to MaDraft(state.maCatalog, state.maColors, state.mutedOf(MaFamily.MA)),
+                    MaFamily.EMA to MaDraft(state.emaCatalog, state.emaColors, state.mutedOf(MaFamily.EMA)),
+                ),
                 onDismiss = { maManagerOpen = false },
-                onSave = { catalog, colors ->
-                    viewModel.saveMaCatalog(catalog, colors)
+                onSave = { drafts ->
+                    // 两页都提交（用户可能只改了其中一页，另一页原样交回去等价于没动）
+                    drafts.forEach { (kind, draft) ->
+                        viewModel.saveCatalog(kind, draft.catalog, draft.colors, draft.muted)
+                    }
                     maManagerOpen = false
                 },
             )
@@ -497,12 +505,14 @@ private fun FullscreenChart(
         Rule(inset = 0.dp)
         // 指标常驻：与竖屏一致，改 MA / BOLL 不必先展开浮层。副图全屏不画，选项也收掉。
         IndicatorBar(
-            maCatalog = state.maCatalog,
-            activeMa = state.maPeriods,
+            maVisible = state.isVisible(MaFamily.MA),
+            maCount = state.visiblePeriods(MaFamily.MA).size,
+            emaVisible = state.isVisible(MaFamily.EMA),
+            emaCount = state.visiblePeriods(MaFamily.EMA).size,
             showBoll = state.showBoll,
             subPanes = state.subPanes,
             oiSupported = state.oiSupported,
-            onToggleMa = viewModel::toggleMaPeriod,
+            onToggleFamily = viewModel::toggleFamily,
             onManageMa = onManageMa,
             onToggleBoll = viewModel::toggleBoll,
             onToggleSubPane = viewModel::toggleSubPane,
@@ -530,12 +540,15 @@ private fun FullscreenChart(
                 else -> {
                     // 全屏不画副图：显式给空列表，序列与视口都按「没开副图」算。
                     // 副图选择是全局偏好（竖屏那份），这里只影响全屏这一帧的渲染。
-                    // 小眼睛隐藏 = 等效于一条均线都没选：线、读数行一起收掉，chip 选中不受影响
-                    val visibleMa = if (state.maHidden) emptyList() else state.maPeriods
+                    // 某一族「藏着」= 等效于这一族一条都没配：线、读数行一起收掉，chip 状态不受影响
+                    val visibleMa = state.visiblePeriods(MaFamily.MA)
+                    val visibleEma = state.visiblePeriods(MaFamily.EMA)
                     val series = remember(
                         state.candles,
                         visibleMa,
                         state.maColors,
+                        visibleEma,
+                        state.emaColors,
                         state.showBoll,
                         state.openInterest,
                     ) {
@@ -546,6 +559,8 @@ private fun FullscreenChart(
                             subPanes = emptyList(),
                             openInterest = state.openInterest,
                             maColors = state.maColors,
+                            emaPeriods = visibleEma,
+                            emaColors = state.emaColors,
                         )
                     }
                     KlineChart(
@@ -569,8 +584,6 @@ private fun FullscreenChart(
                         bandGuides = bandGuides,
                         drawLines = drawLines,
                         drawTool = drawTool,
-                        maHidden = state.maHidden,
-                        onToggleMaVisibility = viewModel::toggleMaVisibility,
                         alertLinesVisible = alertLinesVisible,
                         onToggleAlertLines = viewModel::toggleAlertLines,
                         onAlertLineDrag = viewModel::dragAlertLine,
@@ -1454,7 +1467,6 @@ private fun ChartArea(
     bandGuides: List<BandGuideLine>,
     drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
-    onToggleMaVisibility: () -> Unit,
     onToggleAlertLines: () -> Unit,
     onLoadMore: () -> Unit,
     onRetry: () -> Unit,
@@ -1489,12 +1501,15 @@ private fun ChartArea(
             else -> {
                 // 自研 Compose 画布而非 WebView：不依赖系统 WebView 与 GL 合成，
                 // 模拟器/低端机上同样能画出来，也少一套 HTML/JS 资源要维护。
-                // 小眼睛隐藏 = 等效于一条均线都没选（与全屏同一口径）
-                val visibleMa = if (state.maHidden) emptyList() else state.maPeriods
+                // 「本族藏着」= 等效于这一族一条都没配（与全屏同一口径）
+                val visibleMa = state.visiblePeriods(MaFamily.MA)
+                val visibleEma = state.visiblePeriods(MaFamily.EMA)
                 val series = remember(
                     state.candles,
                     visibleMa,
                     state.maColors,
+                    visibleEma,
+                    state.emaColors,
                     state.showBoll,
                     state.subPanes,
                     state.openInterest,
@@ -1506,6 +1521,8 @@ private fun ChartArea(
                         subPanes = state.subPanes,
                         openInterest = state.openInterest,
                         maColors = state.maColors,
+                        emaPeriods = visibleEma,
+                        emaColors = state.emaColors,
                     )
                 }
                 KlineChart(
@@ -1524,8 +1541,6 @@ private fun ChartArea(
                     bandGuides = bandGuides,
                     // 视觉画线是持久化的，竖屏同样显示（改/删仍在全屏竖栏里做）
                     drawLines = drawLines,
-                    maHidden = state.maHidden,
-                    onToggleMaVisibility = onToggleMaVisibility,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = onToggleAlertLines,
                     cornerAction = ChartCornerAction(
@@ -1588,9 +1603,13 @@ private fun chartHeight(subPaneCount: Int): Dp {
 }
 
 /**
- * 指标开关条：主图叠图（MA / BOLL）与副图选择各占一行。
+ * 指标开关条：主图叠图（MA / EMA / BOLL）与副图选择各占一行。
  *
- * MA 与副图**都允许全不选**：MA 全关 = 裸 K 图，副图全关 = 只留主图。
+ * 均线**收敛成两枚 chip**：MA 一枚、EMA 一枚，点了就是整族显隐（只藏不删，目录与配色
+ * 都在「＋」的弹窗里定）。不再按档位铺开 —— 档位一多，光 MA5/MA10/… 就能把这条挤成
+ * 一条长龙，而「今天想看哪几条」本来就是配置问题，不该天天在条上点。
+ *
+ * MA / EMA 与副图**都允许全不选**：均线全关 = 裸 K 图，副图全关 = 只留主图。
  * 这是看图的基本需求，不做「至少留一个」的兜底。
  *
  * [compact] 给全屏横屏用：两行式（两条小标题 + 两行方块）在竖屏里很舒展，
@@ -1599,15 +1618,24 @@ private fun chartHeight(subPaneCount: Int): Dp {
  */
 @Composable
 private fun IndicatorBar(
-    /** 指标条上摊开的均线档位（用户可在「＋」里增删，见 [MaManagerDialog]）。 */
-    maCatalog: List<Int>,
-    activeMa: List<Int>,
+    /** MA 一族此刻画不画（chip 的亮灭）。 */
+    maVisible: Boolean,
+    /**
+     * MA 一族此刻**真正画出来的条数**（目录 − 小眼睛闭上的）。
+     * 为 0 时 chip 置灰：点亮也不会画出任何东西。
+     */
+    maCount: Int,
+    /** EMA 一族此刻画不画。 */
+    emaVisible: Boolean,
+    /** EMA 一族此刻真正画出来的条数。 */
+    emaCount: Int,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
     oiSupported: Boolean,
-    onToggleMa: (Int) -> Unit,
-    /** 打开「均线周期」管理弹窗（增删目录、恢复默认），与周期条的「＋」同一定位。 */
+    /** 点某一族的 chip：整族显隐。 */
+    onToggleFamily: (MaFamily) -> Unit,
+    /** 打开均线配置弹窗（MA / EMA 各一页：增删目录、改线色、恢复默认）。 */
     onManageMa: () -> Unit,
     onToggleBoll: () -> Unit,
     onToggleSubPane: (SubPaneKind) -> Unit,
@@ -1618,6 +1646,22 @@ private fun IndicatorBar(
      */
     showSubPanes: Boolean = true,
 ) {
+    /**
+     * 一枚 chip 一族。置灰只说明「这一族此刻一条都画不出来」（没配，或全被小眼睛藏了），
+     * **仍可点** —— Android 上看不出禁用原因，点一下至少能看到 chip 的状态变化，
+     * 与 OI chip 的处理是同一套（见 [IndicatorBar] 的调用处）。
+     */
+    @Composable
+    fun FamilyChip(family: MaFamily, visible: Boolean, count: Int, isCompact: Boolean) {
+        FilterChip(
+            text = family.label,
+            selected = visible,
+            greyed = count == 0,
+            onClick = { onToggleFamily(family) },
+            compact = isCompact,
+        )
+    }
+
     if (compact) {
         Row(
             modifier = Modifier
@@ -1629,14 +1673,8 @@ private fun IndicatorBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             InlineLabel(text = "指标")
-            maCatalog.forEach { period ->
-                FilterChip(
-                    text = "MA$period",
-                    selected = period in activeMa,
-                    onClick = { onToggleMa(period) },
-                    compact = true,
-                )
-            }
+            FamilyChip(MaFamily.MA, maVisible, maCount, isCompact = true)
+            FamilyChip(MaFamily.EMA, emaVisible, emaCount, isCompact = true)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             if (showSubPanes) {
@@ -1671,14 +1709,8 @@ private fun IndicatorBar(
                 .padding(horizontal = Spacing.Gutter),
             horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
         ) {
-            maCatalog.forEach { period ->
-                FilterChip(
-                    text = "MA$period",
-                    selected = period in activeMa,
-                    onClick = { onToggleMa(period) },
-                    compact = true,
-                )
-            }
+            FamilyChip(MaFamily.MA, maVisible, maCount, isCompact = true)
+            FamilyChip(MaFamily.EMA, emaVisible, emaCount, isCompact = true)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
@@ -1957,46 +1989,67 @@ private fun IntervalManagerDialog(
 }
 
 /**
- * 均线目录管理对话框：指标条上有哪些 MA chip，整份在这里定。
+ * 一族均线在配置对话框里的草稿：目录 + 配色 + 逐条小眼睛（点「保存」才回写）。
  *
- * 出厂那五档（MA5/10/20/30/60）**不是特殊档位** —— 它们只是这份目录的初始值，一样可以删。
- * 2026-10-12 之前不是这样：五档写死在指标条上、「＋」里只能加自定义档，于是想只看 MA20
- * 就得留着另外四条不点。现在列表就是条上的全部 chip，行尾的 × 把它从条上移除，
- * 输入框再加回来，底部「恢复默认」一键回到出厂五档。
- * 与桌面端 `MaPanel` 同口径：这里只管「有哪些档位」，选不选仍照旧在指标条上点。
+ * [muted] 与目录同源：只藏不删，`⊆ catalog`（删行时由 [normalizeMuted] 一并收敛）。
+ */
+private data class MaDraft(
+    val catalog: List<Int>,
+    val colors: Map<Int, Int>,
+    val muted: List<Int> = emptyList(),
+)
+
+/**
+ * 均线配置对话框：**MA / EMA 两族各一页**，页内定这一族「画哪几档、什么线色」。
  *
- * 增删先在草稿里改，点「保存」才回写 ViewModel 并持久化 —— 与 [IntervalManagerDialog]
- * 同一套交互，删掉的目录项会连带从选中集移除（见 VM）：目录没了 chip 还画着，
- * 那条线在图上就撤不掉了。
+ * 指标条上每族只有一枚 chip（点了整族显隐），所以「有没有这条线」完全由这里决定：
+ * 出厂那几档（MA 5/10/20/30/60、EMA 12/26/50）**不是特殊档位**，只是目录的初始值，一样可以删。
+ * 行尾的 × 把它从目录里去掉（图上立刻不再画这一条），输入框再加回来，
+ * 底部「恢复默认」一键回到这一族的出厂档位。与桌面端 `MaPanel` 同口径。
+ *
+ * 增删改色都先在草稿里改，点「保存」才回写 ViewModel 并持久化 —— 与 [IntervalManagerDialog]
+ * 同一套交互；两页的草稿各自留着，来回切页不会丢掉另一页改了一半的东西。
  */
 @Composable
 private fun MaManagerDialog(
-    catalog: List<Int>,
-    colors: Map<Int, Int>,
+    /** 两族各自的目录 + 配色（都是草稿，保存时整份交回去）。 */
+    initial: Map<MaFamily, MaDraft>,
     onDismiss: () -> Unit,
-    onSave: (List<Int>, Map<Int, Int>) -> Unit,
+    onSave: (Map<MaFamily, MaDraft>) -> Unit,
 ) {
-    // rows / palette 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
-    var rows by remember { mutableStateOf(catalog) }
-    var palette by remember { mutableStateOf(normalizeMaColors(catalog, colors)) }
+    // drafts 用 remember 而不是 saveable：草稿丢了重开即是（同周期条管理）
+    var drafts by remember { mutableStateOf(initial) }
+    /** 当前页；切页保留另一页的草稿。 */
+    var family by remember { mutableStateOf(MaFamily.MA) }
+    val draft = drafts.getValue(family)
+    val rows = draft.catalog
+    val palette = draft.colors
     /** 正在选色的那一行（展开的八色板只出一个）。 */
     var pickerFor by remember { mutableStateOf<Int?>(null) }
     var input by rememberSaveable { mutableStateOf("") }
     var hint by rememberSaveable { mutableStateOf<String?>(null) }
     val theme = MarketTheme.colors
 
+    /**
+     * 改当前页的草稿（目录、配色、小眼睛一起换 —— 分三次写 remember 会出现中间态，
+     * 例如目录已删掉那条、muted 里还留着它）。
+     */
+    fun commit(nextCatalog: List<Int>, nextColors: Map<Int, Int>, nextMuted: List<Int>) {
+        val catalog = normalizeMaCatalog(nextCatalog)
+        drafts = drafts + (family to MaDraft(catalog, nextColors, normalizeMuted(catalog, nextMuted)))
+    }
+
     fun commitAdd() {
         val period = input.trim().toIntOrNull()
         when {
             period == null || period !in MA_PERIOD_MIN..MA_PERIOD_MAX ->
                 hint = "填 $MA_PERIOD_MIN～$MA_PERIOD_MAX 的整数"
-            period in rows -> hint = "MA$period 已在指标条上"
-            rows.size >= MA_LIMIT -> hint = "最多 $MA_LIMIT 条均线，先删一条再加"
+            period in rows -> hint = "${family.lineLabel(period)} 已在目录里"
+            rows.size >= MA_LIMIT -> hint = "每族最多 $MA_LIMIT 条均线，先删一条再加"
             else -> {
                 val next = (rows + period).sorted()
-                rows = next
-                // 新增的均线自动挑第一个没被占用的色槽
-                palette = normalizeMaColors(next, palette)
+                // 新增的均线自动挑第一个没被占用的色槽，并且是**睁着眼**出现的
+                commit(next, normalizeMaColors(next, palette), draft.muted)
                 input = ""
                 hint = null
             }
@@ -2004,8 +2057,7 @@ private fun MaManagerDialog(
     }
 
     fun removeRow(period: Int) {
-        rows = rows - period
-        palette = normalizeMaColors(rows, palette)
+        commit(rows - period, normalizeMaColors(rows - period, palette), draft.muted)
         if (pickerFor == period) pickerFor = null
     }
 
@@ -2013,7 +2065,7 @@ private fun MaManagerDialog(
         onDismissRequest = onDismiss,
         containerColor = theme.surface,
         title = {
-            Text(text = "均线周期", style = MaterialTheme.typography.titleLarge, color = theme.ink)
+            Text(text = "均线 · MA / EMA", style = MaterialTheme.typography.titleLarge, color = theme.ink)
         },
         text = {
             Column(
@@ -2023,14 +2075,63 @@ private fun MaManagerDialog(
                     .verticalScroll(rememberScrollState()),
             ) {
                 Text(
-                    text = "指标条上有哪几档均线都在这里定（按期数升序排）；行尾的 × 把它从条上移除，" +
-                        "点选仍照旧在条上点。行内色点可改线色：新增会自动挑一个没用过的颜色，" +
-                        "颜色跟着均线走。",
+                    text = "指标条上 MA / EMA 各只有一枚 chip，点了就是整族显隐；这里定两族各自画哪几档。" +
+                        "每行右边那只眼睛管「这条自己画不画」—— 藏起来的条目仍在目录里，随时点回来。" +
+                        "行尾 × 把它从目录里去掉；行内色点可改线色（新增会自动挑一个没用过的颜色）。",
                     style = MaterialTheme.typography.labelSmall,
                     color = theme.muted,
                 )
+                // 两族各一页：同一套列表骨架，只换草稿数据 —— 与桌面端 MaPanel 的分页一致
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Sm),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    MaFamily.entries.forEach { item ->
+                        FilterChip(
+                            text = item.label,
+                            selected = family == item,
+                            onClick = {
+                                family = item
+                                pickerFor = null
+                                input = ""
+                                hint = null
+                            },
+                            compact = true,
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    val pageDraft = drafts.getValue(family)
+                    val pageDrawn = drawnPeriods(pageDraft.catalog, pageDraft.muted).size
+                    val pageHidden = pageDraft.catalog.size - pageDrawn
+                    // 有人闭着眼时才给「全部显示」，否则给「全部隐藏」——
+                    // 两个都摆出来会让人以为它们是两件不同的事
+                    if (pageDraft.catalog.isNotEmpty()) {
+                        TextAction(
+                            text = if (pageHidden > 0) "全部显示" else "全部隐藏",
+                            onClick = {
+                                commit(
+                                    rows,
+                                    palette,
+                                    setAllMuted(rows, hide = pageHidden == 0),
+                                )
+                            },
+                            color = theme.muted,
+                        )
+                        Spacer(Modifier.width(Spacing.Sm))
+                    }
+                    Text(
+                        text = if (pageDraft.catalog.isEmpty()) {
+                            "一条都没配"
+                        } else {
+                            "$pageDrawn / ${pageDraft.catalog.size} 条"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = theme.muted,
+                    )
+                }
                 Text(
-                    text = "添加均线",
+                    text = "添加 ${family.label} 均线",
                     modifier = Modifier.padding(top = Spacing.Md),
                     style = MaterialTheme.typography.labelSmall,
                     color = theme.muted,
@@ -2071,30 +2172,35 @@ private fun MaManagerDialog(
                     )
                 }
                 Text(
-                    text = "指标条上的均线",
+                    text = "${family.label} 目录（按期数升序画）",
                     modifier = Modifier.padding(top = Spacing.Md),
                     style = MaterialTheme.typography.labelSmall,
                     color = theme.muted,
                 )
                 if (rows.isEmpty()) {
                     Text(
-                        text = "一条都没有了，指标条上只剩「＋」",
+                        text = "这一族还没配任何档位 —— chip 点亮了也不会画线",
                         modifier = Modifier.padding(top = Spacing.Sm),
                         style = MaterialTheme.typography.labelSmall,
                         color = theme.muted.copy(alpha = 0.6f),
                     )
                 }
                 rows.forEach { period ->
+                    val muted = period in draft.muted
                     Row(
                         modifier = Modifier.fillMaxWidth().height(40.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        // 色点 = 这条均线当前的线色；点开下面的八色板
+                        // 色点 = 这条均线当前的线色；点开下面的八色板。
+                        // 闭了眼的行整行压淡，一眼扫出「配了但没画」的那几条
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
                                 .clip(CircleShape)
-                                .background(ChartLineColors[maRoleForSlot(palette[period] ?: 0).ordinal])
+                                .background(
+                                    ChartLineColors[maRoleForSlot(family, palette[period] ?: 0).ordinal]
+                                        .copy(alpha = if (muted) 0.35f else 1f),
+                                )
                                 .then(
                                     if (pickerFor == period) {
                                         Modifier.border(2.dp, theme.ink, CircleShape)
@@ -2103,22 +2209,47 @@ private fun MaManagerDialog(
                                     },
                                 )
                                 .clickable { pickerFor = if (pickerFor == period) null else period }
-                                .semantics { contentDescription = "MA$period 线色" },
+                                .semantics { contentDescription = "${family.lineLabel(period)} 线色" },
                         )
                         Spacer(Modifier.width(Spacing.Sm))
                         Text(
-                            text = "MA$period",
+                            text = family.lineLabel(period),
                             modifier = Modifier.weight(1f),
                             style = MaterialTheme.typography.labelMedium,
-                            color = theme.ink,
+                            color = if (muted) theme.muted else theme.ink,
                         )
+                        // 小眼睛：只藏这一条（与指标条上族 chip 的总闸正交，藏了仍留在目录里）
+                        IconButton(
+                            onClick = {
+                                commit(
+                                    rows,
+                                    palette,
+                                    toggleMuted(rows, draft.muted, period),
+                                )
+                            },
+                            modifier = Modifier
+                                .size(28.dp)
+                                .semantics {
+                                    contentDescription = if (muted) {
+                                        "显示 ${family.lineLabel(period)}"
+                                    } else {
+                                        "隐藏 ${family.lineLabel(period)}"
+                                    }
+                                },
+                        ) {
+                            EyeGlyph(
+                                open = !muted,
+                                tint = if (muted) theme.ink else theme.muted,
+                                glyphSize = 14.dp,
+                            )
+                        }
                         IconButton(
                             onClick = { removeRow(period) },
                             modifier = Modifier.size(28.dp),
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "从指标条移除 MA$period",
+                                contentDescription = "从目录移除 ${family.lineLabel(period)}",
                                 modifier = Modifier.size(16.dp),
                                 tint = theme.muted,
                             )
@@ -2149,7 +2280,7 @@ private fun MaManagerDialog(
                                         // 用填充色的 alpha 而不是 Modifier.alpha —— 后者排在 background
                                         // 之后只作用于内容，底色不会被压淡（实测看不出占用状态）。
                                         .background(
-                                            ChartLineColors[maRoleForSlot(slotIndex).ordinal]
+                                            ChartLineColors[maRoleForSlot(family, slotIndex).ordinal]
                                                 .copy(alpha = if (owner != null) 0.45f else 1f),
                                         )
                                         .then(
@@ -2157,14 +2288,19 @@ private fun MaManagerDialog(
                                             else Modifier,
                                         )
                                         .clickable {
-                                            palette = assignMaColor(palette, rows, period, slotIndex)
+                                            commit(
+                                                rows,
+                                                assignMaColor(palette, rows, period, slotIndex),
+                                                draft.muted,
+                                            )
                                             pickerFor = null
                                         }
                                         .semantics {
                                             contentDescription = when {
-                                                current -> "MA$period 当前线色"
-                                                owner != null -> "MA$period 与 MA$owner 互换线色"
-                                                else -> "MA$period 改用第 ${slotIndex + 1} 种颜色"
+                                                current -> "${family.lineLabel(period)} 当前线色"
+                                                owner != null ->
+                                                    "${family.lineLabel(period)} 与 ${family.lineLabel(owner)} 互换线色"
+                                                else -> "${family.lineLabel(period)} 改用第 ${slotIndex + 1} 种颜色"
                                             }
                                         },
                                 )
@@ -2173,12 +2309,13 @@ private fun MaManagerDialog(
                     }
                 }
                 // 恢复默认摆在最下面：它是「推翻当前草稿」的兜底，不该挡在增删这条主路径上。
-                // 同样只改草稿，仍要点「保存」才作数（与增删一致，不然一半即时一半不即时）
+                // 只恢复当前这一页（另一页的草稿不动），同样只改草稿，仍要点「保存」才作数。
                 TextAction(
-                    text = "恢复默认（${DEFAULT_MA_CATALOG.joinToString("/") { "MA$it" }}）",
+                    text = "恢复默认（${defaultCatalog(family).joinToString("/") { family.lineLabel(it) }}）",
                     onClick = {
-                        rows = DEFAULT_MA_CATALOG
-                        palette = normalizeMaColors(rows, emptyMap())
+                        val next = defaultCatalog(family)
+                        // 恢复默认 = 目录与配色回出厂，小眼睛**全部睁开**
+                        commit(next, normalizeMaColors(next, emptyMap()), emptyList())
                         pickerFor = null
                         hint = null
                     },
@@ -2187,7 +2324,7 @@ private fun MaManagerDialog(
                 )
             }
         },
-        confirmButton = { TextAction("保存", onClick = { onSave(rows, palette) }) },
+        confirmButton = { TextAction("保存", onClick = { onSave(drafts) }) },
         dismissButton = { TextAction("取消", onDismiss, color = theme.muted) },
     )
 }

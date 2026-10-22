@@ -12,7 +12,10 @@ import com.waxilo.marketmonitor.domain.alert.IndicatorKind
 import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
+import com.waxilo.marketmonitor.domain.indicator.DEFAULT_EMA_CATALOG
+import com.waxilo.marketmonitor.domain.indicator.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.Indicators
+import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
@@ -21,7 +24,6 @@ import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.ChartLine
-import com.waxilo.marketmonitor.domain.repository.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.BandGuideLine
@@ -60,42 +62,29 @@ import java.math.RoundingMode
 /** 详情页默认周期：日线信息密度最低，首屏最不容易看起来空白。 */
 val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
 
-/** 首次进入详情页默认画哪几条均线；与目录（[DEFAULT_MA_CATALOG]）分开，用户可各自改。 */
-val DEFAULT_MA_PERIODS: List<Int> = listOf(5, 10, 30)
-
 /** 均线期数取值范围，与桌面端（lib/maPeriods.ts）同口径。 */
 const val MA_PERIOD_MIN = 1
 const val MA_PERIOD_MAX = 1000
 
 /**
- * 均线**目录**的条数上限，与桌面端（`chartSeries.MA_LIMIT`）同口径：色板就那么几位，
- * 再多只是同色线堆在读数带上，没有信息量。
+ * 均线**目录**的条数上限（**每族各自**），与桌面端（`chartSeries.MA_LIMIT`）同口径：
+ * 色板给每族八个色位，再多只是同色线堆在读数带上，没有信息量。
  *
- * 注意这是**目录总数**（出厂五档也算在内），不是「自定义条数」—— 目录整份交给用户之后，
+ * 注意这是**一族的总数**（出厂档位也算在内），不是「自定义条数」—— 目录整份交给用户之后，
  * 预置档与自定义档在数据上已经不分家（见 [normalizeMaCatalog]）。
  */
 const val MA_LIMIT = 8
 
 /**
- * 均线目录归一化：只留 `[MA_PERIOD_MIN, MA_PERIOD_MAX]` 内的值、去重、升序，
+ * 一族均线的目录归一化：只留 `[MA_PERIOD_MIN, MA_PERIOD_MAX]` 内的值、去重、升序，
  * 并截到 [MA_LIMIT] 条。旧版本存的、手改坏的、以后删掉的档位都在这里被丢掉。
  *
- * **空表不回填出厂五档**：目录清空是合法偏好（指标条上只剩「＋」，随时加得回来），
- * 回填会让「删光了」在下次启动时自己变回来。（桌面端对空目录回退出厂五档，
+ * **空表不回填出厂目录**：目录清空是合法偏好（chip 点亮也不画线，随时加得回来），
+ * 回填会让「删光了」在下次启动时自己变回来。（桌面端对空目录回退出厂档位，
  * 这点有意不同 —— 那边目录是 localStorage 里的一个字段，判不出「没设过」与「清空了」。）
  */
 fun normalizeMaCatalog(catalog: List<Int>): List<Int> =
     catalog.filter { it in MA_PERIOD_MIN..MA_PERIOD_MAX }.distinct().sorted().take(MA_LIMIT)
-
-/**
- * 选中集按目录筛一遍：目录里没有的周期一律丢掉，其余去重升序。
- *
- * 这是「选中 ⊆ 目录」这条不变量的**唯一执行点**（恢复偏好与保存目录两条写入路径共用）。
- * 漏一次就会出「图上有条线、指标条上没有对应的 chip」—— 那条线在图上撤不掉，
- * 用户只能去清划线或重装。删 MA5 时选中集里的 5 也是靠它一起走的。
- */
-fun maSelectionIn(catalog: List<Int>, selected: List<Int>): List<Int> =
-    selected.filter { it in catalog }.distinct().sorted()
 
 /**
  * 均线颜色归一化：目录内每条均线恰好一个合法色槽（0~[MA_COLOR_SLOT_COUNT]-1），且互不重复。
@@ -106,6 +95,7 @@ fun maSelectionIn(catalog: List<Int>, selected: List<Int>): List<Int> =
  *    5/10/20/30/60 依次拿到 0~4，正是旧版「按期数固定分配」的观感；
  * 3. 目录外的期数一律丢弃（删掉的均线不占颜色）。
  *
+ * 两族**各调一次**（色槽是各族自己的八位，互不占位）。
  * 与桌面端 `lib/maPeriods.ts` 的 `normalizeMaColors` 同一套口径。
  */
 fun normalizeMaColors(catalog: List<Int>, raw: Map<Int, Int>): Map<Int, Int> {
@@ -150,8 +140,38 @@ fun assignMaColor(
     return normalizeMaColors(catalog, next)
 }
 
-/** 出厂配色：出厂五档依次拿 0~4 号色槽（恢复默认与首帧初值都用它）。 */
+/** MA 一族的出厂配色：出厂五档依次拿 0~4 号色槽（恢复默认与首帧初值都用它）。 */
 val DEFAULT_MA_COLORS: Map<Int, Int> = normalizeMaColors(DEFAULT_MA_CATALOG, emptyMap())
+
+/** EMA 一族的出厂配色：出厂三档依次拿 0~2 号色槽。 */
+val DEFAULT_EMA_COLORS: Map<Int, Int> = normalizeMaColors(DEFAULT_EMA_CATALOG, emptyMap())
+
+/**
+ * 「逐条隐藏」的归一：只留**目录里真有的**期数、去重、按目录顺序。
+ *
+ * 目录里删掉的均线必须一并从 [muted] 里消失 —— 否则删了又加回来会莫名其妙地不显示，
+ * 用户以为「加了一条新线」，图上却没有。老装机没有这个字段 ⇒ 空表 = 全都睁眼。
+ *
+ * 显隐因此分**两级**（与桌面端 `MaFamilyPrefs` 同口径）：族 chip 管总闸（`maVisible` /
+ * `emaVisible`），每条行尾的小眼睛管分闸（这里）。总闸关掉再打开，分闸状态原样保留。
+ */
+fun normalizeMuted(catalog: List<Int>, muted: Collection<Int>): List<Int> =
+    if (muted.isEmpty()) emptyList() else catalog.filter { it in muted }
+
+/** 这一族此刻**图上真会画**的期数：目录 − 眼睛闭上的（整族隐藏由调用方折算成空表）。 */
+fun drawnPeriods(catalog: List<Int>, muted: Collection<Int>): List<Int> =
+    if (muted.isEmpty()) catalog else catalog.filter { it !in muted }
+
+/** 翻一条均线的眼睛。不在目录里的期数原样返回（面板只可能点到目录里的行）。 */
+fun toggleMuted(catalog: List<Int>, muted: Collection<Int>, period: Int): List<Int> {
+    if (period !in catalog) return muted.toList()
+    val next = muted.toMutableSet()
+    if (!next.add(period)) next.remove(period)
+    return normalizeMuted(catalog, next)
+}
+
+/** 全睁（`hide = false`）/ 全闭（`hide = true`）：面板标题行那个「全部显示 / 全部隐藏」。 */
+fun setAllMuted(catalog: List<Int>, hide: Boolean): List<Int> = if (hide) catalog else emptyList()
 
 /**
  * 详情页的一条统计。
@@ -180,16 +200,26 @@ data class DetailUiState(
     val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
     val interval: CandleInterval = DEFAULT_CHART_INTERVAL,
     val candles: List<Kline> = emptyList(),
-    val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
     /**
-     * 指标条上摊开的均线档位（用户可在「＋」弹窗里增删，出厂是 [DEFAULT_MA_CATALOG]）。
-     * [maPeriods] 必须是它的子集，否则会出现「画着一条没有 chip 可撤的线」。
+     * 主图均线（两族各有目录、配色与显隐，指标条上各一枚 chip）：
+     * [maVisible] / [emaVisible] 是**整族**显隐，[maCatalog] / [emaCatalog] 是「配了哪几档」，
+     * [maMuted] / [emaMuted] 是**逐条**小眼睛闭着的档位（只藏不删）。
+     *
+     * 两级互不覆盖：chip 关掉再打开，谁睁眼谁闭眼原样保留；配了但闭着眼的那几条仍在目录里，
+     * 随时点回来 —— 图上画的 = 目录 − 闭眼。
      */
+    val maVisible: Boolean = true,
     val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
-    /** 期数 → 线色槽位（0~7，见 `ui/chart/MA_LINE_ROLES`）；与目录一一对应。 */
+    /** MA 期数 → 线色槽位（0~7，见 `ui/chart/MA_LINE_ROLES`）；与目录一一对应。 */
     val maColors: Map<Int, Int> = DEFAULT_MA_COLORS,
-    /** 均线小眼睛：true = 图上一条均线都不画（[maPeriods] 的选中保留，再点一次恢复）。 */
-    val maHidden: Boolean = false,
+    /** MA 一族里眼睛闭着的期数（`⊆ maCatalog`，见 [normalizeMuted]）。 */
+    val maMuted: List<Int> = emptyList(),
+    val emaVisible: Boolean = false,
+    val emaCatalog: List<Int> = DEFAULT_EMA_CATALOG,
+    /** EMA 期数 → 线色槽位（见 `EMA_LINE_ROLES`，与 MA 的八槽互不占位）。 */
+    val emaColors: Map<Int, Int> = DEFAULT_EMA_COLORS,
+    /** EMA 一族里眼睛闭着的期数（`⊆ emaCatalog`）。 */
+    val emaMuted: List<Int> = emptyList(),
     val showBoll: Boolean = false,
     /** 选中的副图。空列表 = 不显示副图；支持多选。 */
     val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -221,13 +251,37 @@ data class DetailUiState(
         get() = subPanes.count { it != SubPaneKind.OI || openInterest?.points?.isNotEmpty() == true }
 
     /**
-     * 主图读数带的行数：MA 一族一行、BOLL 一族一行（均线全关的裸 K 图没有主图读数行）。
+     * 主图读数带的行数：一族一行（MA / EMA / BOLL），空族不出行。
      *
      * 顶部读数带高度由它决定，而**加载中的骨架图与真实图必须同高** ——
      * 两边各算各的行数，网格就会差一行，数据到了整张图会往上/往下跳一格。
      */
     val mainReadoutLines: Int
-        get() = mainReadoutLineCount(if (maHidden) emptyList() else maPeriods, showBoll)
+        get() = mainReadoutLineCount(visiblePeriods(MaFamily.MA), visiblePeriods(MaFamily.EMA), showBoll)
+
+    /** 一族这一刻画不画（指标条上那枚 chip 的亮灭）。 */
+    fun isVisible(family: MaFamily): Boolean = when (family) {
+        MaFamily.MA -> maVisible
+        MaFamily.EMA -> emaVisible
+    }
+
+    /** 一族里眼睛闭着的期数（面板里每行那只小眼睛的状态）。 */
+    fun mutedOf(family: MaFamily): List<Int> = when (family) {
+        MaFamily.MA -> maMuted
+        MaFamily.EMA -> emaMuted
+    }
+
+    /**
+     * 一族这一刻**实际画出来**的期数：整族藏起来 = 空表（目录原样保留，再点亮就回来），
+     * 族开着则再减去闭着眼的那几条。
+     */
+    fun visiblePeriods(family: MaFamily): List<Int> {
+        if (!isVisible(family)) return emptyList()
+        return when (family) {
+            MaFamily.MA -> drawnPeriods(maCatalog, maMuted)
+            MaFamily.EMA -> drawnPeriods(emaCatalog, emaMuted)
+        }
+    }
 }
 
 /**
@@ -538,16 +592,21 @@ class DetailViewModel(
         val loading: Boolean = true,
         val loadingMore: Boolean = false,
         val error: String? = null,
-        val maPeriods: List<Int> = DEFAULT_MA_PERIODS,
+        val maVisible: Boolean = true,
         /**
-         * 指标条上有哪些均线档位。写入方（[restoreChartPreferences] / [saveMaCatalog]）
+         * 这一族画哪几档。写入方（[restoreChartPreferences] / [saveCatalog]）
          * 已经归一化过，这里不再重复处理。
          */
         val maCatalog: List<Int> = DEFAULT_MA_CATALOG,
         /** 期数 → 颜色槽位；写入方已经归一化过（与 [maCatalog] 同步）。 */
         val maColors: Map<Int, Int> = DEFAULT_MA_COLORS,
-        /** 均线小眼睛：只影响绘制，不动 [maPeriods] 的选中集。 */
-        val maHidden: Boolean = false,
+        /** 这一族里眼睛闭着的期数（`⊆ maCatalog`，写入方已归一）。 */
+        val maMuted: List<Int> = emptyList(),
+        val emaVisible: Boolean = false,
+        val emaCatalog: List<Int> = DEFAULT_EMA_CATALOG,
+        val emaColors: Map<Int, Int> = DEFAULT_EMA_COLORS,
+        /** EMA 一族里眼睛闭着的期数（`⊆ emaCatalog`）。 */
+        val emaMuted: List<Int> = emptyList(),
         val showBoll: Boolean = false,
         /** 选中的副图集合（按枚举声明顺序归一化）。 */
         val subPanes: List<SubPaneKind> = listOf(SubPaneKind.VOLUME),
@@ -555,7 +614,28 @@ class DetailViewModel(
         val openInterest: OpenInterestSeries? = null,
         /** 周期条上摊开的方块，顺序即展示顺序（用户可通过「＋」管理）。 */
         val intervals: List<CandleInterval> = CandleInterval.quickPickPresets,
-    )
+    ) {
+        /** 一族这一刻画不画。 */
+        fun isVisible(family: MaFamily): Boolean = when (family) {
+            MaFamily.MA -> maVisible
+            MaFamily.EMA -> emaVisible
+        }
+
+        /** 一族里眼睛闭着的期数（面板里每行那只小眼睛）。 */
+        fun mutedOf(family: MaFamily): List<Int> = when (family) {
+            MaFamily.MA -> maMuted
+            MaFamily.EMA -> emaMuted
+        }
+
+        /** 一族这一刻实际画出来的期数：族藏起来 = 空表，否则再减去闭着眼的那几条。 */
+        fun visiblePeriods(family: MaFamily): List<Int> {
+            if (!isVisible(family)) return emptyList()
+            return when (family) {
+                MaFamily.MA -> drawnPeriods(maCatalog, maMuted)
+                MaFamily.EMA -> drawnPeriods(emaCatalog, emaMuted)
+            }
+        }
+    }
 
     val state: StateFlow<DetailUiState> = combine(
         repository.ticker(id),
@@ -589,10 +669,14 @@ class DetailViewModel(
             interval = selected,
             intervals = data.intervals,
             candles = displayCandles(data, selected),
-            maPeriods = data.maPeriods,
+            maVisible = data.maVisible,
             maCatalog = data.maCatalog,
             maColors = data.maColors,
-            maHidden = data.maHidden,
+            maMuted = data.maMuted,
+            emaVisible = data.emaVisible,
+            emaCatalog = data.emaCatalog,
+            emaColors = data.emaColors,
+            emaMuted = data.emaMuted,
             showBoll = data.showBoll,
             subPanes = data.subPanes,
             oiSupported = oiSupported.value,
@@ -723,17 +807,21 @@ class DetailViewModel(
             pricePan = saved.chartPricePan,
         )
         chart.update {
-            // 目录先归一化（越界/重复/超限都丢弃），选中集再按目录过滤：
-            // 不在目录里的选中项没有 chip，就成了图上撤不掉的死线。
-            // 没存过目录（null）才用出厂五档；存过空表就是真的空，不回填
-            val catalog = normalizeMaCatalog(saved.maCatalog ?: DEFAULT_MA_CATALOG)
+            // 两族的目录各自归一化（越界/重复/超限都丢弃）。没存过（null）才用出厂目录；
+            // 存过空表就是真的空，不回填 —— 那是用户自己删光的，重启不该自己变回来。
+            val maCatalog = normalizeMaCatalog(saved.maCatalog ?: DEFAULT_MA_CATALOG)
+            val emaCatalog = normalizeMaCatalog(saved.emaCatalog ?: DEFAULT_EMA_CATALOG)
             it.copy(
-                // 空集是合法偏好（裸 K 图），所以这里不做 ifEmpty 回填默认值
-                maPeriods = maSelectionIn(catalog, saved.maPeriods),
-                maCatalog = catalog,
+                maVisible = saved.maVisible,
+                maCatalog = maCatalog,
                 // 老装机没存过颜色：按目录升序补空槽，观感与旧版一致
-                maColors = normalizeMaColors(catalog, saved.maColors),
-                maHidden = saved.maHidden,
+                maColors = normalizeMaColors(maCatalog, saved.maColors),
+                // 老装机没存过小眼睛：空表 = 全都睁眼（屏幕上与升级前完全一样）
+                maMuted = normalizeMuted(maCatalog, saved.maMuted),
+                emaVisible = saved.emaVisible,
+                emaCatalog = emaCatalog,
+                emaColors = normalizeMaColors(emaCatalog, saved.emaColors),
+                emaMuted = normalizeMuted(emaCatalog, saved.emaMuted),
                 showBoll = saved.bollEnabled,
                 subPanes = saved.subPaneKeys.toSubPaneKinds(),
                 // 周期条则相反：解析不出任何一项就当没设过，回落到默认集
@@ -787,13 +875,74 @@ class DetailViewModel(
     }
 
     /**
-     * 均线小眼睛：只藏不删 —— chip 的选中状态原样保留，点回来即恢复原来那几条。
-     * 与桌面端 `mm.indicators.maHidden` 同一语义。
+     * 指标条上那枚 chip：**整族显隐**。
+     *
+     * 只藏不删 —— 目录、配色与**逐条小眼睛**原样保留，再点一下就把配置好的那几条放回来。
+     * 这是「总闸」，与面板里每条行尾的小眼睛（分闸）正交：关掉再打开，谁睁眼谁闭眼不动。
+     * 均线全关是合法偏好（裸 K 图：判断形态时叠着均线反而看不清），
+     * 因此不做「至少留一条」的兜底。与桌面端 chip 的语义一致。
      */
-    fun toggleMaVisibility() {
-        val next = !chart.value.maHidden
-        chart.update { it.copy(maHidden = next) }
-        viewModelScope.launch { settings.edit { it.copy(maHidden = next) } }
+    fun toggleFamily(family: MaFamily) {
+        val next = !chart.value.isVisible(family)
+        chart.update {
+            when (family) {
+                MaFamily.MA -> it.copy(maVisible = next)
+                MaFamily.EMA -> it.copy(emaVisible = next)
+            }
+        }
+        viewModelScope.launch {
+            settings.edit {
+                when (family) {
+                    MaFamily.MA -> it.copy(maVisible = next)
+                    MaFamily.EMA -> it.copy(emaVisible = next)
+                }
+            }
+        }
+    }
+
+    /**
+     * 保存「＋」管理弹窗产出的某一族配置：目录 + 线色 + **逐条小眼睛**，
+     * 先归一化（范围/去重/超限截断、色槽补空/去重、小眼睛只留目录内的）。
+     *
+     * 目录是「配了哪几档」，画不画由两级开关决定（族 chip + 每条的小眼睛）；
+     * 颜色按**期数**保存，所以弹窗里增删/排序不会改已有均线的颜色。
+     * 新加的档位不该继承隐藏态 —— 由 [normalizeMuted] 保证（它只认目录内的期数，
+     * 但这里还要先剔掉被删掉的那些，所以传的是归一后的目录）。
+     */
+    fun saveCatalog(
+        family: MaFamily,
+        next: List<Int>,
+        colors: Map<Int, Int>,
+        muted: Collection<Int> = emptyList(),
+    ) {
+        val catalog = normalizeMaCatalog(next)
+        val palette = normalizeMaColors(catalog, colors)
+        val hidden = normalizeMuted(catalog, muted)
+        chart.update { current ->
+            when (family) {
+                MaFamily.MA ->
+                    current.copy(maCatalog = catalog, maColors = palette, maMuted = hidden)
+                MaFamily.EMA ->
+                    current.copy(emaCatalog = catalog, emaColors = palette, emaMuted = hidden)
+            }
+        }
+        val saved = chart.value
+        viewModelScope.launch {
+            settings.edit {
+                when (family) {
+                    MaFamily.MA -> it.copy(
+                        maCatalog = saved.maCatalog,
+                        maColors = saved.maColors,
+                        maMuted = saved.maMuted,
+                    )
+                    MaFamily.EMA -> it.copy(
+                        emaCatalog = saved.emaCatalog,
+                        emaColors = saved.emaColors,
+                        emaMuted = saved.emaMuted,
+                    )
+                }
+            }
+        }
     }
 
     /** 副图多选：点中即切换该块的显隐，全不选 = 只留主图。 */
@@ -816,50 +965,6 @@ class DetailViewModel(
         }
         val saved = chart.value.subPanes.toSubPaneKeys()
         viewModelScope.launch { settings.edit { it.copy(subPaneKeys = saved) } }
-    }
-
-    /**
-     * 主图均线：允许全关。关光后就是**裸 K 图**——
-     * 这是看图的基本需求（判断形态时叠着均线反而看不清），因此不做「至少留一条」的兜底。
-     */
-    fun toggleMaPeriod(period: Int) {
-        chart.update { current ->
-            val periods = if (period in current.maPeriods) {
-                current.maPeriods - period
-            } else {
-                current.maPeriods + period
-            }
-            current.copy(maPeriods = periods.sorted())
-        }
-        val saved = chart.value.maPeriods
-        viewModelScope.launch { settings.edit { it.copy(maPeriods = saved) } }
-    }
-
-    /**
-     * 保存「＋」管理弹窗产出的均线目录与线色：先归一化（范围/去重/超限截断、色槽补空/去重），
-     * 再把删掉的那些从选中集里一并带走 —— 目录删了选中还留着，图上就是没有 chip 可撤的死线。
-     *
-     * 预置五档与自定义档在这里是同一种东西：目录整份由用户定，删 MA5 就是把它从目录里去掉。
-     * 颜色按**期数**保存，所以弹窗里增删/排序不会改已有均线的颜色。
-     */
-    fun saveMaCatalog(next: List<Int>, colors: Map<Int, Int>) {
-        val catalog = normalizeMaCatalog(next)
-        val palette = normalizeMaColors(catalog, colors)
-        chart.update { current ->
-            current.copy(
-                maCatalog = catalog,
-                maPeriods = maSelectionIn(catalog, current.maPeriods),
-                maColors = palette,
-            )
-        }
-        val savedCatalog = chart.value.maCatalog
-        val savedActive = chart.value.maPeriods
-        val savedColors = chart.value.maColors
-        viewModelScope.launch {
-            settings.edit {
-                it.copy(maPeriods = savedActive, maCatalog = savedCatalog, maColors = savedColors)
-            }
-        }
     }
 
     /**

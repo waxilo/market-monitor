@@ -66,8 +66,9 @@ val OnAccentDark = Color(0xFF1B1200)
  *
  * 取经典统计图表色板的中间调：饱和度统一压在中低档，与涨跌红绿拉开——
  * 高饱和线压在 K 线上既抢蜡烛的注意力又显廉价，这套灰调彩在墨黑/纸白
- * 两个主题下都耐看。十一个色位里 MA 用 0~4、8~10（八条均线，每条一色），
- * BOLL 用 5~7（中/上/下轨），两族不撞色；与桌面端 `chartSeries.LINE_COLORS` 同源。
+ * 两个主题下都耐看。十九个色位里 MA 用 0~4、8~10（八条均线，每条一色），
+ * BOLL 用 5~7（中/上/下轨），EMA 用 11~18（另一族八条）——三族互不撞色；
+ * 与桌面端 `chartSeries.LINE_COLORS` 同源（顺序也一致）。
  */
 val ChartLineColors = listOf(
     Color(0xFF5C8AC6), // PRIMARY    钢蓝
@@ -81,6 +82,14 @@ val ChartLineColors = listOf(
     Color(0xFF6FBF73), // NONARY     草绿
     Color(0xFFE0716B), // DENARY     珊瑚
     Color(0xFFB487E0), // UNDENARY   浅紫
+    Color(0xFF2E9FC4), // EMA1       湖蓝
+    Color(0xFFE6B84C), // EMA2       芥黄
+    Color(0xFF7FC77A), // EMA3       嫩绿
+    Color(0xFFC0669B), // EMA4       玫紫
+    Color(0xFF59B7C9), // EMA5       松石
+    Color(0xFFA55F5F), // EMA6       赭红
+    Color(0xFF8C8FD6), // EMA7       靛蓝
+    Color(0xFFD3A17A), // EMA8       沙褐
 )
 
 /**

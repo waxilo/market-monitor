@@ -11,7 +11,16 @@ import {
   type OpenInterestSeries,
   type Ticker24h,
 } from '../lib/api';
-import { SUB_PANE_KINDS, SUB_PANE_LABEL, type SubPaneKind } from '../lib/chartSeries';
+import {
+  MA_KINDS,
+  MA_KIND_LABEL,
+  MA_KIND_NAME,
+  SUB_PANE_KINDS,
+  SUB_PANE_LABEL,
+  type MaFamilySpec,
+  type MaKind,
+  type SubPaneKind,
+} from '../lib/chartSeries';
 import {
   INDICATORS_KEY,
   parseIndicatorPrefs,
@@ -30,38 +39,29 @@ import {
   synthesisOf,
 } from '../lib/intervals';
 import { useSourceKey, endpointOf } from '../lib/sources';
-import { assignMaColor, DEFAULT_MA_CATALOG, normalizeMaColors } from '../lib/maPeriods';
+import {
+  assignMaColor,
+  defaultCatalog,
+  drawnPeriods,
+  lineLabel,
+  normalizeMaColors,
+  normalizeMuted,
+  setAllMuted,
+} from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
 import { MaPanel } from './MaPanel';
+import { EyeIcon } from './EyeIcon';
 import { ChartMenu } from './ChartMenu';
 import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanvas';
 
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
 
-/** 指标栏小眼睛的图形：睁眼 = 显示（画线 / 均线），闭眼（加一道斜杠）= 隐藏。 */
-function EyeIcon({ off }: { off: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width={13}
-      height={13}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.3}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M1.6 8C3.2 5.2 5.4 3.8 8 3.8s4.8 1.4 6.4 4.2c-1.6 2.8-3.8 4.2-6.4 4.2S3.2 10.8 1.6 8Z" />
-      {off ? <path d="M2.9 13.1 13.1 2.9" /> : <circle cx="8" cy="8" r="1.9" />}
-    </svg>
-  );
-}
+/** 指标栏小眼睛的图形见 `./EyeIcon`（均线面板里每条均线也用它，两处必须一致）。 */
 /**
  * 翻旧页失败后的退避：拖到左墙时画布**逐帧**上报「还要更早的」，不设冷却就会每秒
  * 打出一串失败请求。冷却过后由 2s 的实时轮询（数据一变就重新上报）自动重试。
@@ -124,9 +124,22 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const [prefs, setPrefs] = useState<IndicatorPrefs>(() =>
     parseIndicatorPrefs(localStorage.getItem(INDICATORS_KEY)),
   );
-  const { ma: maPeriods, maCatalog, maColors, maHidden, boll: showBoll, panes: subPanes } = prefs;
+  const { families, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
+  /**
+   * 交给画布的均线族：把「藏起来」的族折算成空目录，**族内再减去眼睛闭上的那几条** ——
+   * 画布只画给它的东西，不知道显隐开关这回事（与画线小眼睛同口径）。
+   */
+  const visibleFamilies = useMemo<MaFamilySpec[]>(
+    () =>
+      MA_KINDS.map((kind) => ({
+        kind,
+        periods: families[kind].hidden ? [] : drawnPeriods(families[kind]),
+        colors: families[kind].colors,
+      })),
+    [families],
+  );
   const [candles, setCandles] = useState<Bar[]>([]);
   /**
    * 取数状态。换标的 / 换周期 / 换数据源时先立 `loading`（画布出骨架 + 遮罩），
@@ -331,40 +344,103 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   }, [oiSelected, oiSupported, market, symbol, interval, source]);
 
   /**
-   * 更新均线**目录**（面板里增删/排序）：同时把 `ma` 过滤成新目录的子集 ——
-   * 删掉某条 chip 时，若它正画着，就该一起下线（不然会留一条没有开关能关掉的线）。
-   * 颜色表同步归一：保留已有均线的槽位，新加的挑第一个空槽，删掉的让出颜色。
+   * 更新某一族的**目录**（面板里增删/排序）：同一族的配色跟着归一 ——
+   * 保留已有均线的槽位，新加的挑第一个空槽，删掉的让出颜色。
+   *
+   * 目录只是「配了哪些」，画不画由两级开关决定（族 chip + 每条的小眼睛）；
+   * 删掉一条就从图上消失、加一条就先睁着眼出现 —— 新加的均线不该继承任何隐藏态。
    */
-  function setCatalog(next: number[]) {
+  function setCatalog(kind: MaKind, next: number[]) {
     setPrefs((prev) => {
-      const ma = prev.ma.filter((p) => next.includes(p)).sort((a, b) => a - b);
-      return { ...prev, maCatalog: next, ma, maColors: normalizeMaColors(next, prev.maColors) };
+      const family = prev.families[kind];
+      return {
+        ...prev,
+        families: {
+          ...prev.families,
+          [kind]: {
+            ...family,
+            catalog: next,
+            colors: normalizeMaColors(next, family.colors),
+            // 删掉的档位必须一并从「眼睛闭着」里消失：否则删了再加回来会莫名不显示
+            muted: normalizeMuted(next, family.muted),
+          },
+        },
+      };
     });
   }
 
-  /** 改某条均线的线色；目标色被别的均线占着就互换（一色一线）。 */
-  function setMaColor(period: number, slot: number) {
+  /**
+   * 改某一族的**逐条小眼睛**（面板里每条行尾那只）。
+   *
+   * 与 `toggleFamily` 正交：那只总闸只改 `hidden`，这里只改 `muted` ——
+   * 族关掉再打开，谁睁眼谁闭眼一动不动（用户不必重新点一遍）。
+   */
+  function setMuted(kind: MaKind, next: number[]) {
+    setPrefs((prev) => {
+      const family = prev.families[kind];
+      return {
+        ...prev,
+        families: {
+          ...prev.families,
+          [kind]: { ...family, muted: normalizeMuted(family.catalog, next) },
+        },
+      };
+    });
+  }
+
+  /** 「全部显示 / 全部隐藏」：一次改完这一族的所有小眼睛（面板标题行那个小按钮）。 */
+  function setAllPeriodHidden(kind: MaKind, hide: boolean) {
+    setPrefs((prev) => {
+      const family = prev.families[kind];
+      return {
+        ...prev,
+        families: {
+          ...prev.families,
+          [kind]: { ...family, muted: setAllMuted(family.catalog, hide) },
+        },
+      };
+    });
+  }
+
+  /** 改某条均线的线色；目标色被同族别的均线占着就互换（一色一线）。 */
+  function setMaColor(kind: MaKind, period: number, slot: number) {
+    setPrefs((prev) => {
+      const family = prev.families[kind];
+      return {
+        ...prev,
+        families: {
+          ...prev.families,
+          [kind]: { ...family, colors: assignMaColor(family.colors, family.catalog, period, slot) },
+        },
+      };
+    });
+  }
+
+  /** 某一族恢复默认：目录回到该族出厂档位，配色也回到出厂那套（0 号槽起步），小眼睛全部睁开。 */
+  function resetCatalog(kind: MaKind) {
+    const next = defaultCatalog(kind);
     setPrefs((prev) => ({
       ...prev,
-      maColors: assignMaColor(prev.maColors, prev.maCatalog, period, slot),
+      families: {
+        ...prev.families,
+        [kind]: {
+          ...prev.families[kind],
+          catalog: next,
+          colors: normalizeMaColors(next, null),
+          muted: [],
+        },
+      },
     }));
   }
 
-  /** 恢复默认：目录回到出厂五档，选中子集跟着收窄，配色也回到出厂那套（0~4 号槽）。 */
-  function resetCatalog() {
-    const next = [...DEFAULT_MA_CATALOG];
+  /** 指标栏上那枚 chip：整族显隐（目录与配色原样保留，再点一下回来）。 */
+  function toggleFamily(kind: MaKind) {
     setPrefs((prev) => ({
       ...prev,
-      maCatalog: next,
-      ma: prev.ma.filter((p) => next.includes(p)).sort((a, b) => a - b),
-      maColors: normalizeMaColors(next, null),
-    }));
-  }
-
-  function toggleMa(p: number) {
-    setPrefs((prev) => ({
-      ...prev,
-      ma: prev.ma.includes(p) ? prev.ma.filter((x) => x !== p) : [...prev.ma, p].sort((a, b) => a - b),
+      families: {
+        ...prev.families,
+        [kind]: { ...prev.families[kind], hidden: !prev.families[kind].hidden },
+      },
     }));
   }
 
@@ -446,9 +522,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
       </div>
 
-      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与两个显隐开关。
+      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与小眼睛。
           「画图」那组（水平线/直线选择、手势提示、清空）已整组拿掉 —— 画线一律走右键菜单，
-          工具条上留「锁定」、两个小眼睛（MA / 画线）+ 「告警 N」这个纯状态读数。
+          工具条上留「锁定」、画线小眼睛 + 「告警 N」这个纯状态读数。
+          均线不占额外的眼睛：MA / EMA 两枚 chip 自己就是整族显隐开关。
           宽度不够靠 .interval-bar 的 wrap 兜底。 */}
       <div className="bar-stack">
         <div className="interval-bar">
@@ -486,22 +563,40 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
 
         <div className="interval-bar">
           <span className="bar-label grp">指标</span>
-          {maCatalog.map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={`chip${maPeriods.includes(p) ? ' on' : ''}`}
-              title={`叠加 MA${p}（可多选）`}
-              onClick={() => toggleMa(p)}
-            >
-              MA{p}
-            </button>
-          ))}
-          {/* 末尾这一枚「＋」是均线目录自己的编辑器：增删与排序都在弹窗里（MaPanel） */}
+          {/* 均线**收敛成两枚 chip**：MA 一枚、EMA 一枚，点了就是整族显隐。
+              具体画哪几档、各是什么线色，全在末尾「＋」的配置面板里定 ——
+              指标栏不再按档位铺开（MA5/MA10/… 一排下去，档位一多就挤成一条长龙）。 */}
+          {MA_KINDS.map((kind) => {
+            const family = families[kind];
+            // 族开着也只是「参与绘图」：真正落笔的是没被小眼睛藏起来的那几条
+            const drawn = drawnPeriods(family).map((period) => lineLabel(kind, period));
+            const mutedCount = family.catalog.length - drawn.length;
+            return (
+              <button
+                key={kind}
+                type="button"
+                className={`chip${family.hidden ? '' : ' on'}`}
+                aria-pressed={!family.hidden}
+                title={
+                  family.catalog.length === 0
+                    ? `${MA_KIND_NAME[kind]}：还没配置档位，点「＋」去加`
+                    : drawn.length === 0
+                      ? `${MA_KIND_NAME[kind]}：${family.catalog.length} 条都被小眼睛藏起来了（点「＋」去开）`
+                      : `${MA_KIND_NAME[kind]}：${drawn.join(' / ')}` +
+                        `${mutedCount > 0 ? ` · 另 ${mutedCount} 条被小眼睛藏起` : ''}` +
+                        '（点一下整族显示 / 隐藏）'
+                }
+                onClick={() => toggleFamily(kind)}
+              >
+                {MA_KIND_LABEL[kind]}
+              </button>
+            );
+          })}
+          {/* 末尾这一枚「＋」是均线配置面板：MA / EMA 各一页，增删、排序、线色都在里面 */}
           <button
             type="button"
             className="chip"
-            title="自定义 MA 均线（添加 / 移除 / 排序）"
+            title="自定义 MA / EMA 均线（每族有哪些档位、什么线色）"
             onClick={() => setMaPanelOpen(true)}
           >
             ＋
@@ -541,12 +636,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             );
           })}
 
-          {/* 工具条末尾：锁定 + 两个显隐开关（MA / 画线）。锁定管「能不能拖 / 能不能画新线」，
-              两只眼睛管「图上看不看得到」（都只藏不删；画线那只隐藏期间告警照常，
-              见 useDrawings/linesHidden）。三者常驻不随 drawingCount 消失 —— 位置固定，
-              画线与否不影响它们的落座。
-              MA 那只带「MA」字样：两枚一模一样的眼睛并排时分不清谁管谁
-              （App 端是同一个考虑，只是那边做成了纯文字按钮）。 */}
+          {/* 工具条末尾：锁定 + 画线小眼睛。锁定管「能不能拖 / 能不能画新线」，
+              小眼睛管「图上看不看得到画线」（只藏不删，隐藏期间告警照常，见 useDrawings/linesHidden）。
+              均线那只眼睛已经收进指标栏：MA / EMA 两枚 chip 本身就是整族显隐开关，
+              这里再放一只眼睛会与它们重复。 */}
           <div className="sep" />
           <button
             type="button"
@@ -560,20 +653,6 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             onClick={() => drawings.setLinesLocked(!drawings.linesLocked)}
           >
             锁定
-          </button>
-          <button
-            type="button"
-            className={`chip eye-label${maHidden ? ' on' : ''}`}
-            aria-pressed={maHidden}
-            title={
-              maHidden
-                ? '显示全部 MA 均线（隐藏期间选择没丢，点一下全回来）'
-                : '隐藏全部 MA 均线（只藏不删，chip 的选中保留）'
-            }
-            onClick={() => setPrefs((prev) => ({ ...prev, maHidden: !prev.maHidden }))}
-          >
-            <EyeIcon off={maHidden} />
-            <span>MA</span>
           </button>
           <button
             type="button"
@@ -617,9 +696,8 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       ) : (
         <KlineCanvas
           candles={candles}
-          // 眼睛隐藏 = 直接喂空数组：叠线与读数行自然全关，画布不用知道「隐藏」这回事
-          maPeriods={maHidden ? [] : maPeriods}
-          maColors={maColors}
+          // 各族「藏着」时折算成空目录：叠线与读数行自然全关，画布不用知道显隐这回事
+          families={visibleFamilies}
           showBoll={showBoll}
           subPanes={subPanes}
           openInterest={oi}
@@ -676,10 +754,11 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
 
       {maPanelOpen && (
         <MaPanel
-          list={maCatalog}
-          colors={maColors}
-          onChange={setCatalog}
+          families={families}
+          onCatalogChange={setCatalog}
           onColorChange={setMaColor}
+          onMutedChange={setMuted}
+          onAllMutedChange={setAllPeriodHidden}
           onReset={resetCatalog}
           onClose={() => setMaPanelOpen(false)}
         />

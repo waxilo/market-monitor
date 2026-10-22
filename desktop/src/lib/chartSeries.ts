@@ -3,12 +3,14 @@
 import type { Bar, OpenInterestSeries } from './api';
 import type { OpenInterestPoint } from './dialects';
 import { formatCompact, NO_DATA } from './format';
-import { boll, kdj, macd, rsi, sma } from './indicators';
+import { boll, ema, kdj, macd, rsi, sma } from './indicators';
 import { padded, rangeOf, type Range } from './chartMath';
 
 /** 线条配色只给语义角色，具体颜色由绘制层解析。
- *  PRIMARY~UNDENARY 是十一个互不相同的色位：MA 取 `[0,1,2,3,4,8,9,10]`（8 色，见 `MA_ROLES`），
- *  BOLL 继续用 `[5,6,7]`（QUINARY/SENARY/OCTONARY），两族不撞色。 */
+ *  PRIMARY~UNDENARY 是十一个老色位：MA 取 `[0,1,2,3,4,8,9,10]`（8 色，见 `MA_ROLES`），
+ *  BOLL 继续用 `[5,6,7]`（QUINARY/SENARY/OCTONARY）；
+ *  `EMA1~EMA8` 是 EMA 一族自己的八个色位（`[11..18]`，见 `EMA_ROLES`）——
+ *  MA 与 EMA 各自八条、各占各的色位，同时画满也不会撞色。 */
 export type LineRole =
   | 'PRIMARY'
   | 'SECONDARY'
@@ -21,6 +23,14 @@ export type LineRole =
   | 'NONARY'
   | 'DENARY'
   | 'UNDENARY'
+  | 'EMA1'
+  | 'EMA2'
+  | 'EMA3'
+  | 'EMA4'
+  | 'EMA5'
+  | 'EMA6'
+  | 'EMA7'
+  | 'EMA8'
   | 'UP'
   | 'DOWN'
   | 'LABEL';
@@ -48,19 +58,42 @@ export const SUB_PANE_LABEL: Record<SubPaneKind, string> = {
   OI: '持仓量',
 };
 
-/** 内置的均线档位 —— 面板「恢复默认」与坏值回落的目录（即用户可编辑前的那五档）。 */
-export const MA_CHOICES: number[] = [5, 10, 20, 30, 60];
+/**
+ * 均线族：MA（简单均线）与 EMA（指数均线）。
+ *
+ * 两族**结构完全对称** —— 各有自己的目录（取哪几档）、色板（八槽）与显隐开关，
+ * 指标栏上各只占一枚 chip。所以凡是「一族」的代码都按 [MaKind] 泛化，不写两遍。
+ */
+export const MA_KINDS = ['MA', 'EMA'] as const;
+export type MaKind = (typeof MA_KINDS)[number];
 
-/** 均线期数的合法区间与条数上限（上限 = 色板给 MA 的 8 个色位）。 */
+/** 界面短名：指标栏 chip 与读数带都拿它当前缀。 */
+export const MA_KIND_LABEL: Record<MaKind, string> = { MA: 'MA', EMA: 'EMA' };
+
+/** 面板里的全称（说明这两枚 chip 分别是什么）。 */
+export const MA_KIND_NAME: Record<MaKind, string> = { MA: '简单均线', EMA: '指数均线' };
+
+/** 内置档位 —— MA 是老的五档，EMA 取最常用的三条（面板「恢复默认」与坏值回落的目录）。 */
+export const MA_CHOICES: number[] = [5, 10, 20, 30, 60];
+export const EMA_CHOICES: number[] = [12, 26, 50];
+
+/** 每族的出厂目录（「恢复默认」一键回到这里）。 */
+export const DEFAULT_CATALOGS: Record<MaKind, number[]> = {
+  MA: MA_CHOICES,
+  EMA: EMA_CHOICES,
+};
+
+/** 均线期数的合法区间与**每族**条数上限（上限 = 该族色板给它的 8 个色位）。 */
 export const MA_MIN = 1;
 export const MA_MAX = 1000;
 export const MA_LIMIT = 8;
 
 /**
- * 十一色位对应的十六进制色值，与 App `ui/theme/Color.kt` 的 `ChartLineColors` 同源。
+ * 十九色位对应的十六进制色值，与 App `ui/theme/Color.kt` 的 `ChartLineColors` 同源。
  * 绘制层按角色取色，配置面板直接拿它画色点/色板。
  */
 export const LINE_COLORS = [
+  // 0~10：老色位（MA 八位 + BOLL 三位）
   '#5C8AC6',
   '#F09A3E',
   '#E8C547',
@@ -72,6 +105,15 @@ export const LINE_COLORS = [
   '#6FBF73',
   '#E0716B',
   '#B487E0',
+  // 11~18：EMA 一族自己的八位（与上面十个刻意拉开色相，两族同屏也能一眼分开）
+  '#2E9FC4',
+  '#E6B84C',
+  '#7FC77A',
+  '#C0669B',
+  '#59B7C9',
+  '#A55F5F',
+  '#8C8FD6',
+  '#D3A17A',
 ];
 
 /**
@@ -90,8 +132,26 @@ export const MA_ROLES: LineRole[] = [
   'UNDENARY',
 ];
 
-/** 色位在 `LINE_COLORS` 里的下标；未列出的（UP/DOWN/LABEL）不参与色板。 */
-const LINE_ROLE_COLORS: LineRole[] = [
+/** EMA 一族的八色位（`LINE_COLORS` 的 11~18），与 MA / BOLL 都不撞色。 */
+export const EMA_ROLES: LineRole[] = [
+  'EMA1',
+  'EMA2',
+  'EMA3',
+  'EMA4',
+  'EMA5',
+  'EMA6',
+  'EMA7',
+  'EMA8',
+];
+
+/** 族 → 该族的色位表（槽位号就是数组下标）。 */
+const FAMILY_ROLES: Record<MaKind, LineRole[]> = { MA: MA_ROLES, EMA: EMA_ROLES };
+
+/** 每族的色槽数量（= 色板长度 = `MA_LIMIT`）。 */
+export const MA_SLOT_COUNT = MA_ROLES.length;
+
+/** 调色板顺序：下标与 `LINE_COLORS` 一一对应（UP / DOWN / LABEL 不在其中）。 */
+const PALETTE_ROLES: LineRole[] = [
   'PRIMARY',
   'SECONDARY',
   'TERTIARY',
@@ -103,23 +163,31 @@ const LINE_ROLE_COLORS: LineRole[] = [
   'NONARY',
   'DENARY',
   'UNDENARY',
+  ...EMA_ROLES,
 ];
 
-/** MA 色槽数量（= 色板长度 = `MA_LIMIT`）。 */
-export const MA_SLOT_COUNT = MA_ROLES.length;
+/** 角色 → 调色板下标。 */
+const ROLE_COLOR_INDEX = new Map<LineRole, number>(PALETTE_ROLES.map((role, i) => [role, i]));
 
-/** 色槽 → 实际线色（配置面板的色点与色板用）。 */
-export const MA_SLOT_COLORS: string[] = MA_ROLES.map(
-  (role) => LINE_COLORS[LINE_ROLE_COLORS.indexOf(role)] ?? LINE_COLORS[0],
-);
+/** 角色 → 十六进制色值；UP / DOWN / LABEL 这类语义色给 null（由绘制层按主题解析）。 */
+export function roleColorHex(role: LineRole): string | null {
+  const index = ROLE_COLOR_INDEX.get(role);
+  return index == null ? null : (LINE_COLORS[index] ?? null);
+}
+
+/** 某族色槽 → 实际线色（配置面板的色点与色板用）。 */
+export function maSlotColors(kind: MaKind): string[] {
+  return FAMILY_ROLES[kind].map((role) => roleColorHex(role) ?? LINE_COLORS[0]);
+}
 
 /** 期数 → 颜色槽位。偏好里就存这个映射（`{5:0,10:1}`）。 */
 export type MaColors = Record<number, number>;
 
-/** 色槽 → 线条角色；越界钳到 0（正常值已由 `normalizeMaColors` 校验过）。 */
-export function maRoleForSlot(slot: number): LineRole {
-  const i = Number.isInteger(slot) ? Math.max(0, Math.min(MA_SLOT_COUNT - 1, slot)) : 0;
-  return MA_ROLES[i] ?? 'PRIMARY';
+/** 某族的色槽 → 线条角色；越界钳到 0（正常值已由 `normalizeMaColors` 校验过）。 */
+export function maRoleForSlot(kind: MaKind, slot: number): LineRole {
+  const roles = FAMILY_ROLES[kind];
+  const i = Number.isInteger(slot) ? Math.max(0, Math.min(roles.length - 1, slot)) : 0;
+  return roles[i] ?? roles[0];
 }
 
 export interface SubPaneData {
@@ -272,24 +340,39 @@ function buildSubPane(
   }
 }
 
+/** 一族均线这一刻画什么：哪些期数、各自什么线色（「藏起来」已由调用方折算成空目录）。 */
+export interface MaFamilySpec {
+  kind: MaKind;
+  periods: number[];
+  colors: MaColors;
+}
+
 export function buildSeries(
   candles: Bar[],
-  maPeriods: number[],
-  maColors: MaColors,
+  families: MaFamilySpec[],
   showBoll: boolean,
   kinds: SubPaneKind[],
   oi: OpenInterestSeries | null = null,
 ): ChartSeries {
   const closes = candles.map((c) => c.close);
-  const overlayLines: ChartLine[] = [...maPeriods]
-    .sort((a, b) => a - b)
-    // 颜色跟**期数**走（`maColors` 里存的就是期数 → 槽位）；
-    // 缺映射时按升序序号兜底，保证直接调用 buildSeries 也不会画成同色。
-    .map((period, i) => ({
-      label: `MA${period}`,
-      role: maRoleForSlot(maColors[period] ?? i),
-      values: sma(closes, period),
-    }));
+  const overlayLines: ChartLine[] = [];
+  // 族的顺序固定按 MA_KINDS（MA 在前、EMA 在后）：读数带的分行次序因此与「点了哪个 chip」无关
+  for (const kind of MA_KINDS) {
+    const family = families.find((f) => f.kind === kind);
+    if (!family) continue;
+    const compute = kind === 'EMA' ? ema : sma;
+    [...family.periods]
+      .sort((a, b) => a - b)
+      // 颜色跟**期数**走（`colors` 里存的就是期数 → 槽位）；
+      // 缺映射时按升序序号兜底，保证直接调用 buildSeries 也不会画成同色。
+      .forEach((period, i) => {
+        overlayLines.push({
+          label: `${MA_KIND_LABEL[kind]}${period}`,
+          role: maRoleForSlot(kind, family.colors[period] ?? i),
+          values: compute(closes, period),
+        });
+      });
+  }
   const bollData = showBoll ? boll(closes, BOLL_PERIOD, BOLL_MULTIPLIER) : null;
   if (bollData) {
     // 三条都要画：只加上下轨的话中轨（SMA）就没了；三线各占一个色位，与均线族不同色
@@ -312,15 +395,16 @@ export function buildSeries(
 }
 
 /**
- * 主图叠加线按「指标族」拆行：MA 一族一行、BOLL 一族一行。
+ * 主图叠加线按「指标族」拆行：MA 一族一行、EMA 一族一行、BOLL 一族一行。
  *
- * 八个数值挤一行会右端溢出（画布不换行，超出的直接看不见），
+ * 八条数值挤一行会右端溢出（画布不换行，超出的直接看不见），
  * 族内仍然一行到底 —— 与 App 读数带的 partition 规则同一套。
  */
 export function overlayFamilies(series: ChartSeries): ChartLine[][] {
-  const ma = series.overlayLines.filter((line) => !line.label.startsWith('BOLL'));
+  const ma = series.overlayLines.filter((line) => !line.label.startsWith('BOLL') && !line.label.startsWith('EMA'));
+  const ema = series.overlayLines.filter((line) => line.label.startsWith('EMA'));
   const bollLines = series.overlayLines.filter((line) => line.label.startsWith('BOLL'));
-  return [ma, bollLines].filter((family) => family.length > 0);
+  return [ma, ema, bollLines].filter((family) => family.length > 0);
 }
 
 /** 主图纵向范围：影线 + 可见的叠加线，否则均线会顶穿画布。 */
