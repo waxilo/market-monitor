@@ -1,5 +1,6 @@
 package com.waxilo.marketmonitor.ui.chart
 
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -347,6 +348,37 @@ data class ValueRange(val low: Double, val high: Double) {
         //   => s >= -(baseSpan - minOverlap)
         val limit = ((baseSpan - minOverlap) / baseSpan).toFloat()
         return -limit..limit
+    }
+
+    /**
+     * 重定视角时「把纵向中心对到 [value]（换周期后的现价居中）」所需的平移比例。
+     *
+     * 与 [panLimit] 的分工：那个是**手势**能拖多远，这个是**重定**时该停在哪。
+     * 口径（2026-10-22 用户拍板：记住缩放、位置仍居中最新价）：
+     * - 缩放倍数 [zoom] 是用户意图，**原样保留**（越界仍按 [MIN_SPAN_RATIO] / [MAX_SPAN_RATIO]
+     *   收口，与 [scaled] 同一条边界）—— 换周期不再重算倍数，否则「记住缩放」等于没记；
+     * - 中心尽量落在 [value] 上，但**不许把整段数据裁出画面**：量程不比数据窄时
+     *   （`span >= baseSpan`）可挪余量只有 `(span - baseSpan) / 2`；量程比数据窄时
+     *   退回 [panLimit]（保留 [MIN_VISIBLE_SHARE] 的重叠）。
+     *
+     * 两条合起来自然满足一个不变量：`zoom = 1f`（自动量程、用户没缩放过）**必然返回 0**。
+     * 自动量程本来就把现价裹在里面，这时候再居中只会裁掉半屏蜡烛 —— 那是换周期后
+     * 「看着像少了半张图」的来源。
+     */
+    fun panCenteringOn(value: Double, zoom: Float): Float {
+        val baseSpan = high - low
+        if (baseSpan <= EPSILON || !value.isFinite() || !zoom.isFinite() || zoom <= 0f) return 0f
+        val span = baseSpan * zoom.coerceIn(MIN_SPAN_RATIO.toFloat(), MAX_SPAN_RATIO.toFloat())
+        val wanted = ((value - center) / baseSpan).toFloat()
+        if (!wanted.isFinite()) return 0f
+        val limit = if (span >= baseSpan) {
+            // 整段数据仍在画面里，可挪余量 = 两侧各自多出来的那半个跨度
+            ((span - baseSpan) / 2.0 / baseSpan).toFloat()
+        } else {
+            val range = panLimit(this, span)
+            max(abs(range.start), abs(range.endInclusive))
+        }
+        return wanted.coerceIn(-limit, limit)
     }
 
     /** 归一化纵向位置：0 为顶部、1 为底部（像素轴向下），未定义值原样返回 NaN。 */

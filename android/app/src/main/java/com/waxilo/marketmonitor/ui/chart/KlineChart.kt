@@ -460,8 +460,9 @@ fun KlineChart(
      * 手指在**价格轴一侧**上下拖会改它 —— 这是「拉伸/压缩金额刻度」的手势。
      *
      * 与 [viewport] 同为全局看图习惯（同样**不挂**序列 key）：换标的/换周期保持，
-     * 初值来自 [initialView]，变化经 [onViewChange] 落盘。平移量按原始量程的比例
-     * 折算，放到别的标的上本不是同一回事 —— 但用户选的就是全局口径，
+     * 初值来自 [initialView]，变化经 [onViewChange] 落盘。**切周期时只重定位置
+     * （[pricePan]），不重算这个倍数** —— 重算等于把缩放手感抹掉（见下面 recenter 注释）。
+     * 平移量按原始量程的比例折算，放到别的标的上本不是同一回事 —— 但用户选的就是全局口径，
      * 真不合适时图上常驻的「刻度已缩放 · 复位」小标一键清掉。
      */
     var priceZoom by remember { mutableFloatStateOf(initialView.priceZoom) }
@@ -591,12 +592,16 @@ fun KlineChart(
     val liveLoadMore by rememberUpdatedState(onLoadMore)
 
     /**
-     * 换周期/换标的/首次进入后，新序列一就绪就把纵轴重定到最新价：最新价居中，
-     * 量程对称向两侧外扩到仍能罩住全部可见蜡烛与叠加线（宁可多一片空白，不裁蜡烛）。
+     * 换周期/换标的/首次进入后，新序列一就绪就把纵轴**位置**重定到最新价（现价居中）。
      *
-     * 纵向缩放/平移是跨周期、跨标的全局保留的看图意图，旧意图套到新序列上可能
-     * 把现价顶出量程 —— 现价虚线与现价牌会整个消失（见 [drawLastPrice]），
-     * 而切周期后第一眼要看的就是现价。因此 (标的, 周期) 每变一次重算一遍缩放/平移；
+     * 只动位置，**不动缩放倍数**：纵向缩放是跨周期、跨标的全局保留的看图意图
+     * （见 [priceZoom] 的注释），过去这里把倍数也一起重算成「罩住全部可见蜡烛」的值，
+     * 于是用户捏出来的缩放手感每次切周期都被抹掉 —— 用户报的就是这个
+     * （「横坐标记住了，纵坐标失效了」，2026-10-22）。现在倍数原样留着，
+     * 只把中心对到现价上（钳制口径见 [ValueRange.panCenteringOn]）。
+     *
+     * 仍然保留重定的理由：旧意图里的**位置**套到新序列上会把现价顶出量程，
+     * 现价虚线与现价牌会整个消失（见 [drawLastPrice]），而切周期后第一眼要看的就是现价。
      * 之后手势照常可再调，左下角小标仍可复位成贴合的自动量程。
      *
      * 量程不取 [liveAutoRange] 而是按当前序列+视口现算（与 [autoRange] 同口径）：
@@ -612,15 +617,10 @@ fun KlineChart(
             if (close == null || !close.isFinite()) return@snapshotFlow null
             val visible = liveViewportForRecenter.window(current.size)
             val base = current.mainRange(visible.first, visible.last)
-            val baseSpan = base.high - base.low
-            if (baseSpan <= ValueRange.EPSILON) null else Triple(close, base, baseSpan)
+            if (base.high - base.low <= ValueRange.EPSILON) null else close to base
         }.filterNotNull().first()
-        val (close, base, baseSpan) = ready
-        // 居中所需的半程 = 现价到较远那侧极值的距离（上下两侧都罩住）
-        val halfSpan = max(close - base.low, base.high - close)
-        priceZoom = ((2.0 * halfSpan) / baseSpan).toFloat()
-        pricePan = ((close - base.center) / baseSpan).toFloat()
-            .coerceIn(base.panLimit(base, 2.0 * halfSpan))
+        val (close, base) = ready
+        pricePan = base.panCenteringOn(close, priceZoom)
     }
 
     // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用

@@ -447,6 +447,59 @@ class ChartModelTest {
     }
     // endregion
 
+    // region 换周期后的纵向重定（记住缩放、位置居中现价）
+
+    @Test
+    fun `重定视角保留缩放倍数只挪位置`() {
+        // 回归（2026-10-22 用户报「横坐标记住了，纵坐标失效了」）：
+        // 旧实现把倍数也重算成「罩住全部可见蜡烛」的值 ⇒ 用户捏出来的缩放手感每次切周期被抹掉。
+        val base = ValueRange(100.0, 200.0)
+        val zoom = 0.5f
+        val pan = base.panCenteringOn(160.0, zoom)
+        val range = base.scaled(zoom, base).panned(pan, base)
+        assertEquals("缩放倍数必须原样保留", (base.high - base.low) * zoom, range.high - range.low, 1e-6)
+        assertEquals("中心应落在现价上", 160.0, range.center, 1e-6)
+    }
+
+    @Test
+    fun `重定视角在自动量程下不挪位置`() {
+        // zoom = 1 是自动量程：现价本来就在量程内，再「居中」必然裁掉半屏蜡烛
+        val base = ValueRange(100.0, 200.0)
+        assertEquals(0f, base.panCenteringOn(195.0, 1f), 1e-6f)
+        assertEquals(0f, base.panCenteringOn(105.0, 1f), 1e-6f)
+    }
+
+    @Test
+    fun `重定视角缩小时仍罩住全部数据`() {
+        // 量程比数据宽时，只允许在「整段数据不被裁掉」的余量内挪：
+        // 极端现价也只挪到边界，量程依旧覆盖 [100, 200]
+        val base = ValueRange(100.0, 200.0)
+        val zoom = 2f
+        val pan = base.panCenteringOn(10_000.0, zoom)
+        val range = base.scaled(zoom, base).panned(pan, base)
+        assertTrue("可视区 $range 应仍覆盖数据区", range.low <= base.low + 1e-6 && range.high >= base.high - 1e-6)
+    }
+
+    @Test
+    fun `重定视角放大量程时现价仍能摆到正中`() {
+        val base = ValueRange(100.0, 200.0)
+        val zoom = 0.2f
+        val pan = base.panCenteringOn(120.0, zoom)
+        val range = base.scaled(zoom, base).panned(pan, base)
+        // pan 是 Float、位移按 Double 折算，1e-4 是这条链路的实际精度（不是放宽断言）
+        assertEquals(120.0, range.center, 1e-4)
+        assertEquals((base.high - base.low) * zoom, range.high - range.low, 1e-4)
+    }
+
+    @Test
+    fun `重定视角的非法入参一律不挪位置`() {
+        assertEquals(0f, ValueRange(5.0, 5.0).panCenteringOn(5.0, 0.5f), 1e-6f)
+        assertEquals(0f, ValueRange(100.0, 200.0).panCenteringOn(150.0, Float.NaN), 1e-6f)
+        assertEquals(0f, ValueRange(100.0, 200.0).panCenteringOn(150.0, 0f), 1e-6f)
+        assertEquals(0f, ValueRange(100.0, 200.0).panCenteringOn(Double.NaN, 0.5f), 1e-6f)
+    }
+    // endregion
+
     @Test
     fun `NaN 不参与取值`() {
         val range = ValueRange.of(doubleArrayOf(3.0, Double.NaN, 1.0, 9.0, Double.NaN))!!
