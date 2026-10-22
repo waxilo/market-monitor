@@ -253,12 +253,17 @@ class FuturesDialectAdaptersTest {
     /* ───────────────────── Bitget ───────────────────── */
 
     @Test
-    fun `Bitget 用 productType 与 1h 小写周期码`() {
-        val url = bitget.klines("https://x", "BTCUSDT", 60, 500, null, null).url
-        assertTrue(url, url.startsWith("https://x/api/v2/mix/market/candles?symbol=BTCUSDT"))
-        assertTrue(url, url.contains("productType=usdt-futures"))
-        assertTrue(url, url.contains("granularity=1h"))
-        assertTrue(url, !url.contains("startTime"))
+    fun `Bitget 用 productType 与大写的周期码`() {
+        // 服务端白名单是 [1m,3m,5m,15m,30m,1H,4H,6H,12H,1D,1W,1M,...] —— 小时档必须大写，
+        // 小写会回 400171（见 BitgetDialect 的注释）
+        val hourly = bitget.klines("https://x", "BTCUSDT", 60, 500, null, null).url
+        assertTrue(hourly, hourly.startsWith("https://x/api/v2/mix/market/candles?symbol=BTCUSDT"))
+        assertTrue(hourly, hourly.contains("productType=usdt-futures"))
+        assertTrue(hourly, hourly.contains("granularity=1H"))
+        assertTrue(hourly, !hourly.contains("startTime"))
+        // 日线走 utc 对齐变体（聚合分桶要靠 UTC 边界）
+        val daily = bitget.klines("https://x", "BTCUSDT", 1_440, 500, null, null).url
+        assertTrue(daily, daily.contains("granularity=1Dutc"))
     }
 
     @Test

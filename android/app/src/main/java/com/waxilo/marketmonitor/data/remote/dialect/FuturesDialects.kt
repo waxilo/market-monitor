@@ -593,10 +593,20 @@ internal object BybitDialect : FuturesDialectAdapter {
 /** Bitget（api.bitget.com）USDT-FUTURES。K 线行内第 6/7 列即基础/计价币量，升序返回。 */
 internal object BitgetDialect : FuturesDialectAdapter {
 
+    /**
+     * 实测（2026-10-22）：**周期码大小写敏感**，服务端白名单原文是
+     * `[1m,3m,5m,15m,30m,1H,4H,6H,12H,1D,1W,1M,6Hutc,12Hutc,1Dutc,3Dutc,1Wutc,1Mutc]`。
+     * 小时及以上必须大写 —— 写 `1h`/`4h`/`1d` 会回 `code=400171 Parameter verification failed`，
+     * 表现就是「K 线取不回来」（之前 16 时这类聚合周期全线失败，打底的 4H 就是被拒的）。
+     *
+     * 粗档取 **utc 变体**：非 utc 档按 UTC+8 对齐（`1D` 起点实测 `16:00Z`），而聚合按
+     * `floor(ts / 目标周期)` 分桶，只有 UTC 边界才是 epoch 整数倍，混用会让聚合错位。
+     * 表外周期（`2h` / `8h` …）由更细的档聚合出来，与桌面端同一策略。
+     */
     override val intervalLadder = mapOf(
         1L to "1m", 3L to "3m", 5L to "5m", 15L to "15m", 30L to "30m",
-        60L to "1h", 120L to "2h", 240L to "4h", 360L to "6h", 720L to "12h",
-        1_440L to "1d", 4_320L to "3d", 10_080L to "1w", 43_200L to "1M",
+        60L to "1H", 240L to "4H", 360L to "6Hutc", 720L to "12Hutc",
+        1_440L to "1Dutc", 4_320L to "3Dutc", 10_080L to "1Wutc", 43_200L to "1Mutc",
     )
     override val maxKlineLimit = 1000
 

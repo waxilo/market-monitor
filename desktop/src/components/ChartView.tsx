@@ -73,6 +73,23 @@ const OLDER_RETRY_MS = 5_000;
  */
 const OI_POLL_MS = 10_000;
 
+/**
+ * 取数失败时的**可读原因**（压成一行，全文挂在提示的 `title` 上）。
+ *
+ * 为什么值得占这一行：方言层抛出来的原文常常直接点名病灶（`Bitget 400171：Parameter
+ * verification failed k-line time range should be [...]`），而笼统的「网络或数据源不通」
+ * 会把这层线索吞掉 —— 2026-10-22 的 Bitget 周期码大小写问题就因此只能靠抓包才看得出来。
+ */
+function errorText(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error ?? '');
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/** 一行放得下的长度；短消息原样返回。 */
+function clipReason(text: string): string {
+  return text.length > 64 ? `${text.slice(0, 64)}…` : text;
+}
+
 interface Props {
   item: WatchItem | null;
   ticker: Ticker24h | null;
@@ -119,7 +136,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
    * 「没有取到 K 线」。`failed` 与「取回来是空的」分开记 —— 一个是网络/数据源不通（该重试），
    * 一个是这个周期本来就没数据，提示语不同。
    */
-  const [load, setLoad] = useState({ loading: true, failed: false });
+  const [load, setLoad] = useState({ loading: true, failed: false, reason: '' });
   /** 「重新加载」递一次 = 让取数 effect 重跑（与 resetPriceSignal 同套路）。 */
   const [reloadSeq, setReloadSeq] = useState(0);
   const market = item?.market;
@@ -187,13 +204,13 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   useEffect(() => {
     if (!market || !symbol) {
       setCandles([]);
-      setLoad({ loading: false, failed: false });
+      setLoad({ loading: false, failed: false, reason: '' });
       return;
     }
     let alive = true;
     setCandles([]);
     // 旧图立刻撤掉、遮罩立刻盖上：这一段里画布画的是骨架（见 KlineCanvas 的 draw）
-    setLoad({ loading: true, failed: false });
+    setLoad({ loading: true, failed: false, reason: '' });
     // 换目标 = 上一段的历史翻页全部作废；旧页在飞也让它自生自灭（epoch 对不上不落地）
     const older = olderRef.current;
     older.inFlight = false;
@@ -205,11 +222,13 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       .then((bars) => {
         if (!alive) return;
         setCandles(bars);
-        setLoad({ loading: false, failed: false });
+        setLoad({ loading: false, failed: false, reason: '' });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         // 失败也要把遮罩撤掉，否则一直是「加载中」，看着像卡死了（那时给的是「重新加载」）
-        if (alive) setLoad({ loading: false, failed: true });
+        // reason 一路带出来：各家业务码（如 Bitget 400171 参数非法）与「网络不通」是两种病，
+        // 提示里只说「网络或数据源不通」会把能自查的线索吞掉（2026-10-22 的 Bitget 周期码 bug 即如此）
+        if (alive) setLoad({ loading: false, failed: true, reason: errorText(error) });
       });
     return () => {
       alive = false;
@@ -586,8 +605,10 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       {!load.loading && candles.length === 0 ? (
         <div className="chart-empty">
           <span className="overline">K 线</span>
-          <span className="chart-empty-hint">
-            {load.failed ? 'K 线没取回来 · 网络或数据源不通' : '这个周期没有取到 K 线'}
+          <span className="chart-empty-hint" title={load.reason || undefined}>
+            {load.failed
+              ? `K 线没取回来 · ${clipReason(load.reason) || '网络或数据源不通'}`
+              : '这个周期没有取到 K 线'}
           </span>
           <button type="button" className="chip" onClick={() => setReloadSeq((n) => n + 1)}>
             重新加载

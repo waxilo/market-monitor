@@ -636,11 +636,28 @@ const bybit: FuturesDialect = (() => {
 
 /** Bitget（api.bitget.com）USDT-FUTURES。K 线行内第 6/7 列即基础/计价币量，升序返回。 */
 const bitget: FuturesDialect = (() => {
-  /** ⚠️ **本轮没能联网复测**（`api.bitget.com` 从本机 `fetch failed`，需代理）—— 沿用之前对过的值。 */
+  /**
+   * 实测（2026-10-22，经代理直打 `api.bitget.com`）：**周期码大小写敏感**，服务端自己列的
+   * 白名单原文是 `[1m,3m,5m,15m,30m,1H,4H,6H,12H,1D,1W,1M,6Hutc,12Hutc,1Dutc,3Dutc,1Wutc,1Mutc]`。
+   * 所以「小时及以上」必须大写 —— 写 `1h`/`4h`/`1d` 会回
+   * `HTTP 200 + {"code":"400171","msg":"Parameter verification failed k-line time range should be [...]"}`，
+   * 表现就是「K 线取不到」（曾因此在 16 时等聚合周期上全线失败）。
+   *
+   * 没有 `2h`、`8h`、`1m` 之外的零碎档：表外的周期一律交给 `aggregate.ts` 用更细的档拼
+   * （`2h` = 1H×2、`8h` = 4H×2、`3d` 用原生 `3Dutc`）。
+   *
+   * 粗档一律取 **utc 变体**，理由是可聚合：Bitget 的非 utc 档按 UTC+8 对齐（实测 `1D` 的起点是
+   * `16:00Z`、`6H` 是 `10:00Z`），而聚合按 `floor(ts / 目标周期)` 分桶 —— 只有 UTC 对齐的
+   * 边界才是 epoch 的整数倍，混用会让「16 时由 4H 拼」这类聚合整段错位。`1H`/`4H` 不用 utc 变体
+   * 是因为 +8 小时本身就是它们的整数倍，两种口径边界重合。
+   *
+   * ⚠️ 历史深度另有上限（与 limit 无关）：实测 4H 最多 540 根、1D 90 根、1W 13 根 ——
+   * 大约只有最近 90 天，所以粗周期上「翻更早的页」会提前耗尽（上层按空页停翻，正常）。
+   */
   const ladder: Record<number, string> = {
     1: '1m', 3: '3m', 5: '5m', 15: '15m', 30: '30m',
-    60: '1h', 120: '2h', 240: '4h', 360: '6h', 720: '12h',
-    1_440: '1d', 4_320: '3d', 10_080: '1w', 43_200: '1M',
+    60: '1H', 240: '4H', 360: '6Hutc', 720: '12Hutc',
+    1_440: '1Dutc', 4_320: '3Dutc', 10_080: '1Wutc', 43_200: '1Mutc',
   };
   const max = 1000;
   const url = (base: string, path: string) => `${trimBase(base)}/api/v2${path}`;
