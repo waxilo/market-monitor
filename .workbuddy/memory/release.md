@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -284,3 +284,23 @@
     会直接看到，`git rebase origin/main` 换基即可；两边都改过 memory 文件时会撞**追加型冲突**（两个 `## 段` 都要留），
     按「旧的在前、新的在后」拼回去，别丢掉任一边。
   - 0.9.34 复核（2026-10-08）：本机 apksigner 直验下载产物 `cf2e20c7…` == 基线逐字一致；边车 sha256 一致（f3765f05…）。
+
+## 0.9.49（只发 Android，2026-10-22 晚）
+
+「切周期保留纵向缩放倍数（只重定位置、不动倍数）」。Release run **39781857987** 绿 2m27s
+（12:51:44Z → 12:54:11Z，含 CI 内 pinned-key 断言）、main 的 CI run **39781805357** 绿。
+`verify-channel.mjs 0.9.49` → **34/34 PASS**。
+
+- `android-latest` 的 `id` / `created_at`（`398798258` / `2026-09-29T03:22:14Z`）发版前后逐字不变（原地换）；
+  通道里只有 `market-monitor-0.9.49.apk`（11170440）+ `.sha256`（65），无 0.9.48 残留。
+- 包内证据：`aapt2 dump badging` → `versionCode=61 / versionName=0.9.49`；
+  自算 sha256 `1aea51cb…` == 边车；apksigner `cf2e20c7…` == 基线（签名跨版本稳定）；
+  **`classes3.dex` 命中新方法名 `panCenteringOn` 1 次**（0.9.48 里根本没有这个方法）⇒ 包内确为新代码。
+  ⚠️ 体积 11170440 与 0.9.47 / 0.9.48 **完全相同**，第三次印证「别拿体积当证据」。
+- ⚠️ 本次改动**不含任何新增字符串字面量**（只删了一段算式、加了注释），所以 dex 里没有文案可搜 ——
+  「包内是新代码」的硬证据要靠**方法名/字段名**（R8 未开混淆，`isMinifyEnabled = false`）。
+- push 仍只能走 Git Data API：`api-push.py HEAD`（parent 就是远端 main，单 commit 不用 `--parent`）
+  → 远端 `258863ea`（本地 `91e99f7`，tree `c9aab15` 相同）→ `tag-0949.py` 打附注 tag
+  （`POST /git/tags` + `/git/refs`，先断言远端 tree == 本地 tree）。
+- ⚠️ `gh run watch` 的 `--exit-status` 能直接给结论；`gh release download` 下这个 11MB APK 花了 **7 分钟**
+  （会一直感觉像卡住），别当失败重试。
