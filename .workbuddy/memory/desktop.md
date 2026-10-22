@@ -931,3 +931,31 @@ contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数�
   `target/debug/market-monitor.exe`（cargo 包名），**不是 `app-*`** —— 找 build script 产物目录要按 crate 名找
   `target/debug/build/market-monitor-*/out/output`，`app-*` 是另一个包的。
 
+
+## 均线：MA / EMA 两族 + 两级显隐（0.1.35，2026-10-22）
+
+用户口径：「收敛所有 ma、ema，主页只展示 MA、EMA，每次点 MA 展示配置的所有均线」+「设置均线时可以单独设置小眼睛」。
+与 Android 0.9.48 同一套模型（见 `android.md` 同名节），桌面侧落点：
+
+- `lib/chartSeries.ts`：`MA_KINDS = ['MA','EMA']`、`MaKind`、`EMA_CHOICES = [12,26,50]`、`DEFAULT_CATALOGS`、
+  `EMA_ROLES`、`PALETTE_ROLES` / `ROLE_COLOR_INDEX` / `roleColorHex()` / `maSlotColors(kind)` /
+  `maRoleForSlot(kind, slot)`、`MaFamilySpec`。`LINE_COLORS` 扩到 19 个（11~18 给 EMA，5~7 仍归 BOLL）。
+  `buildSeries(candles, families, showBoll, kinds, oi)` 按 `MA_KINDS` 顺序遍历，`kind==='EMA'` 走 `ema()`。
+- `lib/maPeriods.ts`：`MaFamilyPrefs { catalog, colors, hidden, muted }`；新增 `normalizeMuted / drawnPeriods /
+  toggleMuted / setAllMuted`。**目录即「画什么」**，`drawnPeriods = catalog − muted`。
+- `lib/indicatorPrefs.ts`：形状 `{ families: { MA, EMA }, boll, panes }`；老存档
+  `{maCatalog, ma, maColors, maHidden}` 一次性迁移（当时画着的那几条升成目录、`hidden: o.maHidden === true ||
+  当时一条都没画`），**升级后屏幕观感不变**。`none()` 出厂两族都 `hidden: true`（裸 K，点 chip 才上图）。
+- `components/MaPanel.tsx`：`MA / EMA` 两页签（`.ma-tabs / .ma-tab`，页签上写「画几条 / 配几条」如 `4 / 5 条`）、
+  页内拖动排序 / 色点改色 / 添加 / 按族恢复默认；**每行行尾一只小眼睛**（闭眼行整行压淡）、
+  列表头「全部显示 / 全部隐藏」。Props 全带 `kind`：`onCatalogChange(kind,next)` / `onColorChange(kind,period,slot)` /
+  `onReset(kind)`。
+- `components/EyeIcon.tsx`：从 `ChartView` 里抽出来的共用眼形（指标栏 chip 与面板行两处同一视觉语言）。
+- `components/ChartView.tsx`：指标栏只有 `MA / EMA` 两枚族 chip（**逐档 chip 与图内均线小眼睛全删**）；
+  `visibleFamilies` 用 `drawnPeriods`（族藏 = 空 periods，画布不知道显隐这回事）；chip 置灰看**能画的条数**；
+  title 里点名被藏起的那几条（`… · 另 1 条被小眼睛藏起`）。
+- ❗**两级正交**：点族 chip 只改 `hidden`，**绝不重置 `muted`**；反过来翻眼睛也不改 `hidden`。
+- ❗不变量 `muted ⊆ catalog`：删行时归一剔除，否则「删了再加回来」会加了却不显示。
+- 验收：`verify-ma-ema-family.mjs`（纯函数 11 项）+ `verify-ma-eye.mjs`（CDP 端到端 6 组：点眼睛 ink 变小 →
+  关族再开 muted 不变 → 全部显示回基线 → 全部隐藏 → 刷新仍在）。截图 `maema-*.png` / `maeye-*.png`。
+  ⚠️ 端到端脚本要先把 `mm.futuresSource` 钉到 Aster，否则默认选源会在 Gate 上 5.4s 超时反复换源、等不到 K 线。

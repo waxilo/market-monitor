@@ -376,6 +376,35 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 - 单测 `ui/detail/MaCatalogTest.kt`（8 条）：越界/去重/升序/截断/空表不回填 + 删 MA5 带走选中。
   本机 **301 全绿**（2026-10-12，`testDebugUnitTest`，跑法同上面「环境」那节）。
 
+## MA / EMA 两族 + 两级显隐（0.9.48，2026-10-22）
+
+用户口径：「支持 ema 均线配置查看 / 自定义级别 / 收敛所有 ma、ema / 主页只展示 MA、EMA / 每次点 MA 展示配置的所有均线」
+→ 再补一句「设置均线时可以单独设置小眼睛」。落地成**两层模型 + 两级显隐**。
+
+- **族模型** `domain/indicator/MaFamily.kt`：`MaFamily { MA(“简单均线”), EMA(“指数均线”) }`、
+  `defaultCatalog(family)`（MA 5/10/20/30/60、EMA 12/26/50）。`DEFAULT_MA_CATALOG` 从 `AppSettings` **搬到这里**
+  （与 10-12 那次同理：数据层迁移也要用，放 domain 不跨层）。
+- **目录就是「画什么」**：原先「目录 + 选中子集」两层并成一层，`maSelectionIn` / `toggleMaPeriod` /
+  `saveMaCatalog` 全删。增删一条即图上的增减，不存在「配了但没画」。
+- **两级显隐（正交，互不覆盖）**：`maVisible/emaVisible` = 指标条族 chip（总闸）；`maMuted/emaMuted` = 面板里
+  每行行尾的小眼睛（分闸）。`visiblePeriods(family)` = 族藏 ? 空表 : `catalog − muted`。
+  ❗**关族再开不能重置 muted** —— 总闸只读不改分闸，这是用户最在意的语义。
+  ❗不变量 `muted ⊆ catalog`：删行时 `normalizeMuted` 一并剔除，否则「删了再加回来」会加了却不显示。
+- **色槽分族**：MA 用 0~4/8~10、BOLL 用 5~7、EMA 新增 11~18。`LineRole` 里 `EMA1..EMA8` 必须插在
+  `UP/DOWN/LABEL` **之前**（颜色按下标取，`ChartLineColors` 同序加了 8 个）。
+  `maRoleForSlot(family, slot)` 越界 `coerceIn(0, roles.lastIndex)`（钳到最后一色，不是回第 0 色）。
+- **读数带按族分行**：`mainReadoutGroups(index, decimals)`，分组用 `readoutFamilyOf(role)` 按**角色**判，
+  不靠标签前缀（`EMA12` 与 `MA12` 前缀能骗人）。
+- **持久化**：新 key `ma_visible/ma_catalog/ma_colors/ma_muted`（EMA 同构四枚）；老 key `ma_periods`/`ma_hidden`/
+  `ma_custom_periods` **只读用于迁移**（当时画着的那几条升为新目录，观感不变）。写侧不再写 `ma_periods`。
+- `saveCatalog(family, next, colors, muted)` 多一个参数；`IndicatorBar` 两枚族 chip 的**置灰判据 = 能画的条数
+  （catalog − muted）**，不是目录条数（5 条全闭眼时点亮也画不出线）。
+- `EyeGlyph` 从 `KlineChart.kt` 的私有函数抽到 `ui/common/EyeGlyph.kt`；参数叫 `glyphSize` 不叫 `size`
+  —— `DrawScope.size` 同名会让 Canvas lambda 里的解析含糊。
+- 测试：`MaCatalogTest`（归一 / 画=目录−闭眼 / 翻眼睛可逆 / 全隐全显）、`ChartModelTest`（三族行数、
+  `mainReadoutGroups` 顺序、EMA 色位不撞、**SMA≠EMA 必须用锯齿价**——线性序列上两者恒等，断言会假绿）。
+
+
 ## 翻页加载（loadMore）的两个坑（2026-10-14 修，用户症状「切换周期后就不加载了」）
 
 两个**互相独立**的缺陷叠在一起，任一都足以让翻页整段失效：

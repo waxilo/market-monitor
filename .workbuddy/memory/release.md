@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -248,6 +248,27 @@
     ⚠️ **push 的新绕法**（工作区 `git push` 仍报 not a git repository）：临时目录 `git init` →
     加 `gh` + `local` 两个 remote → `fetch local main:refs/remotes/local/main refs/tags/<tag>` →
     `push gh refs/remotes/local/main:refs/heads/main refs/tags/...`；**不用 clone 远端全历史**，一次成功。
+  - `0.9.48`/`desktop 0.1.35` 复核（2026-10-22，**双端同发**，改动是 MA/EMA 双族收敛 + 每条均线小眼睛）：
+    Release run `39770679710` 绿 3m18s、Desktop Release run `39770687418` 三 job 全绿
+    （win 11:27:16–11:35:01 / mac 11:27:16–11:32:16 / 发布 24s）、CI run `39770635317` 绿 3m15s；
+    **`verify-channel.mjs 0.1.35` → 34/34 PASS**。
+    桌面：id/created 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.35 无残留、
+    latest.json 0.1.35（pub_date `2026-10-22T11:35:11Z`）、两平台 URL 指向本版、内联签名 == `.sig`、
+    两平台 keyid `226b03192e5df60b` == 基线、exe 2783995 字节 sha256 `3980fb64…` == 边车、
+    内嵌 `0.1.35` utf-16le 命中 2 / `0.1.34` 命中 0、dmg 4434236、
+    CI vite 指纹 `index-Bx3b3Emo.js 300.35` / `index-DYvJ27ed.css 30.78` == 本地 build。
+    Android：id/created 原地不变（398798258 / 2026-09-29T03:22:14Z）、APK 11170440 与边车
+    sha256 `435abc8a…` 自算一致、apksigner `cf2e20c7…` == 基线、aapt2 `60 / 0.9.48`、
+    **`classes3.dex` 命中「全部隐藏」「全部显示」** ⇒ 包内确为新代码。
+    ⚠️ **APK 体积与上一版完全相同（都 11170440）**——再次印证「别拿体积当证据」。
+    ❗**push 这条路这轮彻底不通**：工作区 `git push`、临时目录 `git init` + `-C` + `cd` 进去、
+    沙箱内外（`dangerouslyDisableSandbox`）**四种姿势全是 `not a git repository`**，只有 push 子命令这样
+    ⇒ 改用 skill `github-api-push-fallback` 的 `api-push.py`；**多 commit 必须分次推**，第二个的 parent
+    要换成远端重建后的 SHA（副本 `.workbuddy/tmp/api-push-0948.py` 加了 `--parent`）；
+    annotated tag 走 `POST /git/tags` + `POST /git/refs`（`.workbuddy/tmp/tag-0948.py`）。
+    推完本地 `reset --hard origin/main` + `tag -f -a` 重指（本地原 SHA `0fbe40b`，远端 `b003ba9`，tree 相同）。
+    ⚠️ `gh release download -D <相对路径>` 是相对 **cwd** 的：已经 `cd` 进 `.workbuddy/tmp` 还写
+    `.workbuddy/tmp/xxx` ⇒ 落到嵌套目录里，`ls` 找不着别怀疑下载失败。
 
 - ⚠️ **工作区内 `git push` 报 `fatal: not a git repository`（2026-10-19 实测）**：`git fetch` / `ls-remote` /
   `rev-parse --git-dir` 都正常，甚至推本地 bare remote 也报同一句；改用 `/tmp` 临时克隆
