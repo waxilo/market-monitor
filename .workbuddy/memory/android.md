@@ -417,6 +417,28 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 - 教训：**「K 线不一致但价格一致」这类症状先怀疑「最后一根怎么来的」**（是否含进行中蜡烛、
   是否客户端合成），而不是先怀疑时区 —— 时间戳对齐是最容易验的一步，验完就该换方向。
 
+## 方言层：周期码是**大小写敏感的白名单**（2026-10-22，与桌面同）
+
+`data/remote/dialect/FuturesDialects.kt` 的 `BitgetDialect` 原先把 `granularity` 写成小写
+`1h/4h/6h/12h/1d/3d/1w` ⇒ **小时及以上全被拒**，服务端回
+`HTTP 200 + {"code":"400171","msg":"Parameter verification failed k-line time range should be [...]"}`
+（白名单原文：`[1m,3m,5m,15m,30m,1H,4H,6H,12H,1D,1W,1M,6Hutc,12Hutc,1Dutc,3Dutc,1Wutc,1Mutc]`）。
+⇒ 症状极具欺骗性：分钟档一直好、小时档从来没成功过，自定义 16 时（4H 打底聚合）必然空图。
+
+- ❗**周期码是枚举字面量，不是参数**：写错大小写不报参数错，而是 200 + 业务码，客户端只看到「没数据」。
+  ⚠️ 口诀：**同一家源「分钟档正常、小时档全空」= 先查周期码大小写**，别先查网络/代理/CORS。
+- ✅ 现 ladder（**与桌面 `src/lib/dialects.ts` 的 bitget 逐项一致，改一边必须改另一边**）：
+  `1m/3m/5m/15m/30m` + `60:'1H' 240:'4H' 360:'6Hutc' 720:'12Hutc' 1440:'1Dutc' 4320:'3Dutc'
+  10080:'1Wutc' 43200:'1Mutc'`。`120` 无原生码已删（走 1H 聚合），`4320` 用原生 `3Dutc`。
+- ❗**粗档取 `utc` 变体**：Bitget 非 utc 档按 UTC+8 对齐（`1D` 起点 `16:00Z`），而分桶是 `floor(ts/周期)`
+  ⇒ 只有 UTC 边界才是整数倍；`1H`/`4H` 例外（+8h 是整数倍）。
+- ⚠️ **历史深度服务端上限（与 `limit` 无关）**：4H 540 根 / 1D 90 根 / 1W 13 根 / 1M 4 根 ⇒ 约 90 天；
+  1H 可 1000 根。粗周期翻页提前到空页就停（`loadMore` 的正常路径，别当 bug）。
+- 回归：`FuturesDialectAdaptersTest` 的断言已从 `granularity=1h` 改为 `granularity=1H` 并新增 `1Dutc`；
+  跑法 `JAVA_HOME=~/.jdks/ms-17.0.19 ./gradlew -I ../.workbuddy/tmp/init-builddir.gradle
+  --project-cache-dir ../.workbuddy/tmp/agcache :app:testDebugUnitTest --tests "*FuturesDialectAdaptersTest*"`
+  （`init-builddir` 是为了绕开用户开 IDEA 时的 `app/build` 文件锁，见 MEMORY.md）。
+
 ## 发版
 改 `versionCode`/`versionName` → 推裸版本号 tag → 出 APK + `.sha256`。**签名固定**（`cf2e20c7…52f034`），别换。
 步骤与验收见 skill `android-gh-release-verify`；通道模型见 `MEMORY.md` 的「通道与发版」。

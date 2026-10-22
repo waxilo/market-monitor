@@ -254,6 +254,10 @@
 - ⚠️ 无头 Chrome 里跑真页面可行（浏览器下 `lib/http.ts` 退回 `fetch`，Gate 带头 CORS）—— 周期 chip 的
   **文案是中文**（`1分/5分/…/1时/4时/1天/1周`，`intervalLabel()`），按 `'1h'` 找 chip 必然找不到，
   用「选中项 index ± 2」来挑下一个周期。
+- ❗**失败提示必须带真实原因（2026-10-22）**：原失败态只写「网络或数据源不通」，而 Bitget 那次其实是
+  `HTTP 200 + code 400171`（周期码大小写被拒）⇒ 病灶完全不可见，只能靠抓包定位。
+  `ChartView` 改成把方言层抛出的 message 显示出来（**截断 64 字 + `title` 放全文**）。
+  ⇒ 以后给方言抛错**写清参数与期望值**，别只抛 `Error('request failed')`，它会直接出现在用户眼前。
 
 ## 悬浮窗断联遮罩（2026-10-14 新增）
 - 用户需求原文：**「当 api 断联时，桌面端的悬浮窗的数字就卡住了，用户不知道，还以为价格没变；
@@ -394,6 +398,37 @@
 - 验收：`verify-intervals.mts`（18 条纯函数：目录/坏存储值/增删排序/按 ladder 翻译/回落）、
   `verify-intervals-ui.mjs`（36 条真实渲染：默认 8 个 → 添加 2h → 上移 → 关弹窗周期条跟着变 → 刷新仍在 →
   点了 2h 后**拦 fetch 断言真的请求了 `interval=2h`** → 预置 MEXC 源断言 12h 置灰 + 当前周期回落 → 恢复默认）。
+
+### ❗各家周期码是**大小写敏感的白名单**（2026-10-22 Bitget 实测）
+
+**判据：周期码不是「参数」而是「枚举字面量」** —— 写成小写不会报参数错误，而是 **199/200 + 业务错误码**，
+前端只看到「没数据」。Bitget v2 `/api/v2/mix/market/candles` 的 `granularity` 白名单原文：
+
+```
+[1m,3m,5m,15m,30m,1H,4H,6H,12H,1D,1W,1M,6Hutc,12Hutc,1Dutc,3Dutc,1Wutc,1Mutc]
+```
+
+原 ladder 写的小写 `1h/4h/6h/12h/1d/3d/1w` ⇒ 小时及以上**全被拒**
+（`HTTP 200 + {"code":"400171","msg":"Parameter verification failed k-line time range should be [...]"}`）。
+⇒ 症状极具欺骗性：`1m/3m/5m/15m/30m` 一直好、**小时档从来没成功过**，16 时这类聚合周期（4H 打底）必然失败。
+⚠️ 排查口诀：**同一家源「分钟档正常、小时档全空」= 先怀疑周期码大小写**，不要去查网络 / 代理 / CORS。
+
+- ✅ 修好后的 ladder（与 Android `FuturesDialects.kt::BitgetDialect` **两边必须同步**）：
+  `1m/3m/5m/15m/30m` + `60:'1H' 240:'4H' 360:'6Hutc' 720:'12Hutc' 1440:'1Dutc' 4320:'3Dutc'
+  10080:'1Wutc' 43200:'1Mutc'`。
+- ⚠️ **`2h` / `3d` 在 Bitget 没有原生码**（白名单无 `2H`，3 天只有 `3Dutc`）⇒ 120 从 ladder 删掉
+  （由 1H 聚合），4320 改指原生 `3Dutc`。别按「看起来该有」补码。
+- ❗**粗档一律取 `utc` 变体**：Bitget 非 utc 档按 **UTC+8** 对齐（实测 `1D` 起点 `16:00Z`、`6H` 起点 `10:00Z`），
+  而聚合是 `floor(ts/周期)` 分桶 ⇒ **只有 UTC 边界才是 epoch 整数倍**，用非 utc 档拼出来的桶会整体偏移 8h。
+  `1H`/`4H` 例外（+8h 是它们的整数倍，边界重合），不必换 utc 变体。
+- ⚠️ **Bitget 历史深度另有服务端上限（与 `limit` 无关）**：4H 最多 **540 根**、1D **90 根**、1W **13 根**、
+  1M **4 根** ⇒ 约等于只有**最近 90 天**；1H 可 1000 根。粗周期「往更早翻页」会提前耗尽，
+  上层按**空页停翻**是正常行为，别当 bug 修。`endTime` 实测有效（能翻旧页）。
+- 回归：`desktop/.workbuddy/tmp/probe-dialects-live.mjs`（Node 22 strip-types 直接 import `dialects.ts`，
+  **真接口**逐周期断言 URL/解析）。跑法
+  `NODE_USE_ENV_PROXY=1 HTTPS_PROXY=http://127.0.0.1:7897 node --experimental-strip-types
+  .workbuddy/tmp/probe-dialects-live.mjs`，`ONLY=BITGET,BYBIT` 可过滤；**POST 必须带 `content-type`**
+  （否则 Hyperliquid 回 415）。⚠️ 本机 `api.bitget.com` 直连不通（curl exit 35），**必须走 7897 代理**。
 
 ## 价格告警（`src-tauri/src/alert.rs` + `hooks/usePriceAlerts.ts`，2026-09-30 新增）
 宿主只出**节拍**与**通知通道**两样，其余（告警线、取价、穿越判定、文案）全在前端 —— 线存在 localStorage、
