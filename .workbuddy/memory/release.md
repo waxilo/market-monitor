@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -233,6 +233,21 @@
     ⚠️ 工作区 `git push` 的 `not a git repository` 再次出现，仍用临时克隆绕法成功。
   - 0.9.43 桌面依赖小改（均线线色）：桌面端前端产物名与体积均与本地一致，故用「CI vite 指纹 == 本地 build」
     作包内新前端证据（旧结论仍成立：exe/dmg 内 grep 前端文案 0 命中）。
+  - `0.9.47`/`desktop 0.1.34` 复核（2026-10-22，**双端同发、tag 同指 `728894d`**，改动是 Bitget 周期码大小写 +
+    取数失败提示带真实原因）：Release run `39745640145` 绿 3m20s（含 CI 内 pinned-key 断言）、Desktop Release
+    run `39745639153` 三 job 全绿（win 08:09:20–08:17:26 / mac 08:09:25–08:15:27 / 发布 24s）、main CI
+    `39745639079` 绿；**`verify-channel.mjs 0.1.34` → 34/34 PASS**（本机 Windows 装了：`~/.workbuddy/skills/
+    tauri-gh-release-verify/scripts/verify-channel.mjs`，不必再按「Mac 没装」那条绕）。
+    桌面：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.34 无残留、
+    latest.json version 0.1.34（pub_date `2026-10-22T08:17:36Z`）两平台 URL 指向本版、内联签名 == `.sig`、
+    两平台 keyid `226b03192e5df60b` == 基线、exe 2783825 字节 FileVersion/ProductVersion 0.1.34、dmg 4433195、
+    两份边车 sha256 自算一致、CI vite 指纹 `index-zI63eDIU.js 297.20` / `index-ByGwHDWe.css 29.30` == 本地 build。
+    Android：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、APK 11170440 与边车
+    sha256 `95bd0c50…` 自算一致、apksigner `cf2e20c7…` == 基线、aapt2 `59 / 0.9.47`、
+    **`classes3.dex` 命中 `1Dutc`/`6Hutc`/`1Mutc`** ⇒ 包内确为新周期码（比体积/CRC 更直接）。
+    ⚠️ **push 的新绕法**（工作区 `git push` 仍报 not a git repository）：临时目录 `git init` →
+    加 `gh` + `local` 两个 remote → `fetch local main:refs/remotes/local/main refs/tags/<tag>` →
+    `push gh refs/remotes/local/main:refs/heads/main refs/tags/...`；**不用 clone 远端全历史**，一次成功。
 
 - ⚠️ **工作区内 `git push` 报 `fatal: not a git repository`（2026-10-19 实测）**：`git fetch` / `ls-remote` /
   `rev-parse --git-dir` 都正常，甚至推本地 bare remote 也报同一句；改用 `/tmp` 临时克隆
