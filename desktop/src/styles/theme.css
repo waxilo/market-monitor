@@ -953,9 +953,32 @@ body {
 .chart-canvas {
   display: block;
   width: 100%;
-  cursor: crosshair;
+  /* 指针 = **空心圆环**，不是系统那个实心十字（2026-10-23 用户）：十字的两根短线正好压在
+     鼠标下的蜡烛上，看 K 线时最想看清的那 10px 被它挡着。圆环中间是空的，环心那根蜡烛
+     一根线都不遮，而环心就是热点（`10 10`）⇒ 瞄准精度不变。
+     ❗环用**两枚同心环**，不是一枚描边套双色：光标位图吃不到 CSS 变量（url() 里没有 var()），
+     而项目有明暗两套主题 —— 里枚浅色环在墨黑底上显影（外枚深色环与纸同色，看不见），
+     外枚深色环在纸白上显影（里枚浅色环与底同色，看不见）。所以任何主题下看见的**始终是一枚圆环**，
+     不会变成双圈。两枚不重叠（留 0.3 空隙）是为了 1x 栅格下边界干净，叠着画会有半透明糊边。
+     环心空腔直径 9.2px：蜡烛实体（默认 4~8px）能整个露出来。
+     `crosshair` 是**兜底**：位图（SVG data URI）解码失败时退回系统十字，而不是掉成箭头。 */
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Ccircle cx='10' cy='10' r='7.9' fill='none' stroke='rgba(12,13,15,0.62)' stroke-width='2'/%3E%3Ccircle cx='10' cy='10' r='5.6' fill='none' stroke='rgba(238,240,243,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, crosshair;
   touch-action: pan-y;
   user-select: none;
+}
+
+/* 压在一条**画线**上（直线线身 / 端点把手 / 水平线）时的指针 = **四角向内的直角**
+   （2026-10-23 用户）。语义与系统那几个 grab / move / ns-resize 不同：那三个在说「抓着之后会
+   怎么动」，这个在说「**这条线被选中了**」—— 四个角标框住的那块就是可操作对象，中心留空
+   所以线本身照样看得见。拖动过程中仍回到系统的 grabbing / move / ns-resize（那时要传达的是动作）。
+   ❗与圆环同一套双色思路：位图吃不到 CSS 变量，而项目有明暗两套主题 ⇒ 画两枚同心的角标，
+   外枚深色（纸白底显影）、里枚浅色（墨黑底显影），互不重叠 ⇒ 任何主题下看见的都是**一重四角**。
+   两枚的**边线都落在整数格**上（深 2px 边在 y/x=2，浅 2px 边在 4）—— 1x 下才是实心的两条，
+   落在半格上会被抗锯齿摊成三层淡边，「选中」那种利落感就没了。
+   热点在正中（`10 10`）：角标是「以指针为中心框住对象」，偏一点就不是框选的意思了。
+   类由 `KlineCanvas` 的 `applyCursor` 切；`move` 只是位图解码失败时的兜底。 */
+.chart-canvas.is-on-line {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Cpath d='M2 7V2H7M13 2H18V7M18 13V18H13M7 18H2V13' fill='none' stroke='rgba(12,13,15,0.72)' stroke-width='2'/%3E%3Cpath d='M4 8V4H8M12 4H16V8M16 12V16H12M8 16H4V12' fill='none' stroke='rgba(238,240,243,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, move;
 }
 
 /* 加载遮罩（换标的 / 换周期 / 换数据源时，数据回来之前一直挂着）。

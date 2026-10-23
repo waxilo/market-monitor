@@ -231,6 +231,25 @@ function roundRect(
 }
 
 /**
+ * 画布指针的取值。`''` = 不设内联样式，回落到 CSS 里 `.chart-canvas` 的那枚空心圆环；
+ * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）。
+ */
+type CursorKind = '' | 'pointer' | 'on-line' | 'grabbing' | 'move' | 'ns-resize';
+
+/**
+ * 画布指针的**唯一出口**：`on-line` 靠 CSS 类，其余走内联 `style.cursor`。
+ *
+ * 位图 cursor 的 data URI 只待在 theme.css 里（TS 里再抄一份就会两份真相）；而 CSS 类有个
+ * 反过来的坑：`endDrag` / `onLeave` 都会把内联样式重置成 `''`，**类若没摘掉**，那枚四角角标
+ * 会借着这次重置重新冒出来、盖住本该出现的圆环。所以「切类」与「设样式」必须同一处做，
+ * 谁都不许单独写 `canvas.style.cursor`。
+ */
+function applyCursor(canvas: HTMLCanvasElement, kind: CursorKind) {
+  canvas.classList.toggle('is-on-line', kind === 'on-line');
+  canvas.style.cursor = kind === 'on-line' ? '' : kind;
+}
+
+/**
  * 骨架：**还没有数据时先摆好的那张空图**，只有网格与副图分隔线。
  *
  * 与真实图共用 `chartHeights` 的那套几何（读数带多高、主图占多少、每块副图落在哪），
@@ -1410,7 +1429,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          canvas.style.cursor = 'grabbing';
+          applyCursor(canvas, 'grabbing');
           draw();
           return;
         }
@@ -1423,7 +1442,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          canvas.style.cursor = 'move';
+          applyCursor(canvas, 'move');
           draw();
           return;
         }
@@ -1434,7 +1453,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          canvas.style.cursor = 'ns-resize';
+          applyCursor(canvas, 'ns-resize');
           draw();
           return;
         }
@@ -1450,7 +1469,7 @@ export function KlineCanvas({
       lastY = e.clientY;
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
-      canvas.style.cursor = 'grabbing';
+      applyCursor(canvas, 'grabbing');
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -1526,19 +1545,22 @@ export function KlineCanvas({
         const anchor = anchorAt(x, y, plotW);
         if (anchor) pendingRef.current = { a: pending.a, to: anchor };
       }
-      // 空闲态的指针形状：复位小标 → pointer；未锁定时按「把手 / 线身 / 水平线」给
-      // grab / move / ns-resize（能抓什么就显示什么）；其余保持默认箭头。
+      // 空闲态的指针形状：复位小标 → pointer；压在画线上（把手 / 直线线身 / 水平线，优先级
+      // 依旧按这个序，只是三者**给同一个**指针）→ 四角内向的直角（`on-line`，语义是「这条线
+      // 被选中了」，不再是「抓着会怎么动」）；其余回落到默认的空心圆环。
       // 待定期间不给抓取提示 —— 这一落点是「落第二点」，不是抓线。
-      let cursor = hitBadge(e) ? 'pointer' : '';
+      let cursor: CursorKind = hitBadge(e) ? 'pointer' : '';
       if (!cursor && !pending && !modelRef.current.linesLocked) {
         const { top, bottom } = mainBounds();
         if (x <= plotW && y >= top && y <= bottom) {
-          if (nearestTrendHandle(trendHandles(plotW), x, y)) cursor = 'grab';
-          else if (nearestTrendBody(trendBodies(plotW), x, y) >= 0) cursor = 'move';
-          else if (hitLine(y) >= 0) cursor = 'ns-resize';
+          const onLine =
+            !!nearestTrendHandle(trendHandles(plotW), x, y) ||
+            nearestTrendBody(trendBodies(plotW), x, y) >= 0 ||
+            hitLine(y) >= 0;
+          if (onLine) cursor = 'on-line';
         }
       }
-      canvas.style.cursor = cursor;
+      applyCursor(canvas, cursor);
       // 十字光标照常贯穿副图：竖线跨窗格、副图读数带要能读值，那不属于「拖拽/缩放」
       // `onBar` 只关竖线（右侧留白里没有蜡烛），横线与读数带照旧。
       const px = e.clientX - rect.left;
@@ -1559,7 +1581,9 @@ export function KlineCanvas({
         canvas.releasePointerCapture(pointerId);
       }
       pointerId = null;
-      canvas.style.cursor = '';
+      // 松手回到空闲指针（`on-line` 的类也在这里一并摘掉 —— 只清内联样式的话，
+      // 那枚四角角标会顶替掉本该出现的圆环，直到下一次 pointermove 才纠正）
+      applyCursor(canvas, '');
       // 一场拖拽结束时落盘一次：过程中每帧写没有意义，松手才是「我停在这儿」的意图
       persistView();
     };
@@ -1567,6 +1591,7 @@ export function KlineCanvas({
     const onLeave = () => {
       if (mode !== 'none') return;
       crossRef.current = null;
+      applyCursor(canvas, '');
       draw();
     };
 
