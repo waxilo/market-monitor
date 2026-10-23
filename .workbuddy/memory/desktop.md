@@ -613,6 +613,30 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
   平移/缩放后锚点不变、待定 + Esc 取消、画线模式内右键只退出不删；像素判据 = 线色像素数 + 列增量 +
   **左右边缘条带都有差异**（贯穿全图，不是 A-B 线段））。两个脚本都靠预注入 fetch 桩喂确定性 K 线，不碰网络。
 
+### 画线备注（0.1.38，2026-10-23）
+- 备注**挂在线上**：`PriceLine.note?` / `TrendLine.note?`，空 = 不落字段。`lib/lineNote.ts` 统一口径
+  （60 字上限、trim、换行压成一个空格），parse 两处都过它。**增删改一律展开原对象**（`{...l, a, b}`）——
+  `moveTrendLineBy` / `moveTrendAnchor` 原先重拼 `{a,b}`，拖一下备注就丢。
+- 入口只在右键菜单：命中线给「加个备注 / 改一下备注」；文本在 `LineNoteDialog`（`.note-panel` 380 宽、
+  Enter 保存、Esc 用 capture 拦下别冒到画布的退出画线）。菜单不收文本（一次性定点操作 vs 等待输入的表单）。
+- 绘制 `KlineCanvas.drawLineNote`：**照右轴价签（`drawBadge`）做一块实色牌，且牌是「串在线上」的** ——
+  普通画线黄底 `p.line` + `p.onAccent` 字、告警线红底 `p.down` + `p.paper` 字、两点直线同普通画线；
+  高 14 / 圆角 3 / 左右 padding 4，与价签一致。水平线贴在线的左端（x=8），
+  直线挂在可见的那个锚点上（x = 锚点 + 8），横向夹进绘图区、纵向贴顶/贴底时整块夹回绘图区。
+  ❗**牌心压在线 y 上**（用户：「备注签串在画的线上，不再画线上方展示」），
+  牌实心 + 线在牌底下被盖掉一截 ⇒ 线看着从牌里穿过去。实现上**先收集 `noteChips`、等整层线
+  （含最新价虚线）画完再统一盖章** —— 否则后来画的直线会从牌面上划过去。
+  ❗两个**已废弃**的方案别回头：① halo 描边（11px 等宽字被 3px 描边吃光，深色主题看不见）；
+  ② 纸色底板 + `globalAlpha 0.92`（跟图底同色＝没底，压在 K 线/网格上字跟着背景发灰 ——
+  2026-10-23 用户截图反馈「备注容易被背景影响」，就是因为这个）。也不要再退回「画在线上方/下方」：
+  那个版本牌浮在线的旁边，用户明确要求改成串在线上。
+- 验收：`check-line-note.mjs`（40 项纯函数）+ `shoot-line-note.mjs`（22 项真实渲染，含刷新后仍在、删备注留线）
+  + `shoot-note-chip.mjs`（28 项**像素级**：黄/红各量到 14~14.5 CSS px 高的实心块、宽 59~61.5、块内有深色字，
+  且**牌心与那条线的 y 相差 ≤ 2.5px**）。
+  ❗量底板**不能按列竖直去量**（字会打断竖线 ⇒ 宽度量成 0.5px），要「按行找 ≥30px 同色横条 + 竖向相邻带合并」，
+  并按宽度 ≥200 剔掉「横贯全图的线」那条带 —— 但那条带**别扔**，它就是「线在哪儿」，用来验串线；
+  探针要重试 2 次（行情整帧重画时偶发落在两帧之间）。
+
 ## 十字光标（`lib/chartMath.ts::overDataAt`，2026-09-29 新增）
 ❗**竖线只在「真压在某根蜡烛上」时才画；视窗右侧的留白里不画竖线**（横线与右上角价格标**照旧**画，
 读数不受影响）。用户的原话是「鼠标放在最新 K 线的右侧，最新 K 线上的竖线不该展示」。
@@ -959,3 +983,40 @@ contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数�
 - 验收：`verify-ma-ema-family.mjs`（纯函数 11 项）+ `verify-ma-eye.mjs`（CDP 端到端 6 组：点眼睛 ink 变小 →
   关族再开 muted 不变 → 全部显示回基线 → 全部隐藏 → 刷新仍在）。截图 `maema-*.png` / `maeye-*.png`。
   ⚠️ 端到端脚本要先把 `mm.futuresSource` 钉到 Aster，否则默认选源会在 Gate 上 5.4s 超时反复换源、等不到 K 线。
+
+## EMA 指标分析（0.1.35 之后）
+- 入口：`ChartView` 指标栏「均线 ＋」与 BOLL 之间的一枚 chip「EMA分析」——是**动作**不是开关，所以**不带 `.on` 态**；
+  面板 `components/EmaAnalysisPanel.tsx`（`up-backdrop` / `up-panel up-wide`，与 MaPanel 同一套骨架），纯函数 `lib/emaAnalysis.ts`。
+- 打开即按「EMA 族目录 × 周期条列表」并发取 K 线、逐档算末值 EMA，按最新价分「上方压力 / 下方支撑」。
+- 取数根数下限 `HISTORY_BARS = 300`、最长档 +20、封顶 1000：图上那条线只画 300 根，**同一档绝不能出两个数**。
+- 压力 = 值 > 现价（升序，近的在前）、支撑 = 值 < 现价（降序）；**等于现价的哪边都不进**（否则出现零距离的假「最近」）；
+  同价按「周期更细、档位更短」定序 —— 否则列表顺序会随取数完成先后跳动。
+- 「取数失败」与「根数不够算不出这一档」（粗周期上的长档，如 1 月 EMA50）**分两类报**，混成一句像是数据源坏了。
+- 现价跟 `ticker.lastPrice` 实时；行情断了才回落成最细周期末根收盘，并在抬头标「末根收盘价」。EMA 是一次快照，「刷新」重取。
+- 点任意一行 = **在那个价位画/取消告警线**（`alert:true` 的水平线，面板不关，可连点几道）；点行内周期小方框才切该周期看图。
+  两种动作分开是因为把切周期放整行上，点一下人就离开表了，没法连续画。行用 `div[role=button][tabIndex=0]`
+  （`<button>` 里不能塞第二个可点元素），周期 span 里 `stopPropagation`。
+- 三态判定在 `emaAlertAction`（同价无 → `add` / 同价普通线 → `promote` 只升级不新增 / 同价告警线 → `remove`）+ `hasEmaAlert`。
+  **按严格价等找线**（拖过的线已不属于这一档）；`add` 分支若画线处于隐藏则自动睁眼，`promote`/`remove` 不动显隐。
+  已画态 = `.ema-row.on` 左边缘 2px 红条 + 淡红底（这行已有色点与两个变色数值，再加红点会分不清谁在说话）。
+- 画出的线**自带出生备注**：`emaAlertNote(intervalLabel(iv), period)` → `30分EMA21`（周期用面板小方框的短名，
+  不是「30 分钟」，图上字与面板一一对上）。`addPriceLine(l, price, alert, note)` 第 4 参走 `normalizeLineNote`；
+  `promote` 只在原线**无备注**时补，用户手写的备注不覆盖。
+- 配色压力 `--down` 红、支撑 `--up` 绿（本 App「绿涨红跌」加密口径，不套 A 股红涨绿跌）。
+- 样式前缀 `.ema-*`（`theme.css` 末尾；面板宽 720、两列、行 5 列 grid，<760px 竖排）。
+- 验证：纯函数 `check-ema-analysis.mjs`（+`ema-hooks.mjs` / `run-check-ema.mjs`，36 项）；
+  界面 `shoot-ema-alert.mjs`（真链路不 mock，23 项，验点击 → 落盘 → 红条 → 取消 → 切周期不画线 → 隐藏时自动睁眼）、
+  `ema-harness.html`·`shoot-ema.mjs` / `shoot-app-ema.mjs`（真前端只 mock fetch）/ `console-ema.mjs`。
+  坑：Node 原生 ESM 不吃省略扩展名的 import，要 `module.register` 补 `.ts`；vite dev server 走 `localhost`（IPv6）。
+- **范围永远来自用户配置**（`intervals` = 周期条 / `families.EMA.catalog` = 均线面板 EMA 页），代码里没有任何写死档位；
+  实测本机真实配置 **11 个周期（含 8时 / 15天 / 1月）× EMA12/21/50 = 33 行**全部算得出（`15d` 靠 1d 聚合只拿到 ~66 根，够 EMA50）。
+- ⚠️ **交付用截图必须走 `.workbuddy/tmp/shoot-real-ema.mjs`**（不 mock，直连 Gate + 注入真实 localStorage 配置）；
+  `ema-harness.tsx` 曾把范围写成出厂「8 周期 × 12/26/50」，截图一进对话就被当成「功能不认我的配置」——
+  harness 现已改成读 localStorage，读不到才回落后备。
+- **静默刷新（2026-10-23 二次改）**：状态收成一个 `EmaScan`（levels/failures/missing/stale/fallbackPrice），
+  `refreshing` **只喂按钮与首次加载文案，绝不遮表格**；模块级 `scanCache`（key=`market|symbol|source|intervals|periods`，
+  留 6 份）让**重开首帧就有表**（首次冷启一轮 11 周期约 5.9s，空等太明显）；换 key 立刻换成那一份的缓存。
+  `mergeEmaScan` 负责「这次没取到就留上次的」：失败周期进 `stale` 并在提示语里点明，`missing` 的档上一轮算得出也沿用，
+  配置删掉的档不捡回。自动刷新 `AUTO_REFRESH_MS=60s` 只 `setSeq+1`，与手动共用链路。
+  ❗别做「同 key 跳过」的并发保护 —— 关掉重开时旧请求在飞会导致新 effect 被跳过、旧闭包又不收 `refreshing`，
+  按钮卡「刷新中」一分钟。`.ema-refresh{min-width:62px}` 防文案切换推歪布局；更新时间只进 title。

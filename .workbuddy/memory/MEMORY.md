@@ -51,6 +51,10 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   现象很像「dev server 没起来」。另外 vite **冷启动首帧要 30s 上下**（依赖预打包），
   首次导航的等待预算要给到 120s（后续 reload 命中缓存、几秒就绪）；
   还有 **`Page.navigate` 回到同一个 URL 不会重载**（同文档导航），换场景只能 `Page.reload`。
+- ⚠️ **CDP 脚本的 Chrome profile 目录别写死**：上一轮 Chrome 没退干净时
+  `rmSync(profile, {force:true})` **静默失败**，旧 localStorage（画线、配置）原样带进这一轮 ⇒
+  「初始应为空」的断言凭空失败、数量越跑越多，现象很像功能坏了。
+  一律用 `cdp-profile-xxx-${process.pid}-${Date.now()}`，结尾再删。
 
 ## 最容易踩的几条（细节都在分册里）
 - ⚠️ **`taskkill /IM` 在 Windows 上不区分大小写**：用户安装版的 exe 就叫 `market-monitor.exe` ⇒ 会连正在跑的实例一起
