@@ -477,3 +477,8 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 这条也解释了「为什么可以不发真机走查就发版」（0.9.38 就是这么发的）。
 ⚠️ 但**同 applicationId（`com.waxilo.marketmonitor`）**⇒ 想在装过 debug 包的模拟器上装 release 包，
 必须先 `adb uninstall`（会清掉机器上的自选/规则），所以「顺手装一下官方包」并不廉价 —— 先问值不值。
+
+## 指标划线已移除（2026-10-23）
+「指标划线」（均线/均线带自动参考线 + 自动上下破告警）已整体删除，DB v9 → v10，保留全屏画线与图上告警线。
+坑：删 Room 实体的**列**必须同时写「整表重建」迁移（minSdk 26 无 DROP COLUMN），否则 Room 打开库校验表结构直接崩；只删表不删列同样崩。
+细节见 `2026-10-23.md`。

@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -304,3 +304,36 @@
   （`POST /git/tags` + `/git/refs`，先断言远端 tree == 本地 tree）。
 - ⚠️ `gh run watch` 的 `--exit-status` 能直接给结论；`gh release download` 下这个 11MB APK 花了 **7 分钟**
   （会一直感觉像卡住），别当失败重试。
+
+## 0.9.50 / desktop 0.1.36（双端同发，2026-10-23 下午）
+
+「划线统一实线（告警红 / 画线黄）+ Android 指标划线整体下线（Room v9→v10）+ 双端合约源自动兜底改用户开关（出厂关）」。
+两个 tag 同指 `be4a199`（本地 `9a27918`，tree `a051405`）：Release run **39916138844** 绿 3m16s
+（07:11:08→07:14:24Z，含 CI 内 pinned-key 断言）、Desktop Release run **39916146937** 三 job 全绿
+（win/mac 07:11:5x 起、发布 job 至 07:22Z）、main CI run **39916108554** 绿（另一条 `39916047689` 被后推的 commit 自动 cancel，正常）。
+`verify-channel.mjs 0.1.36` → **34/34 PASS**。
+
+- 桌面：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.36 无 0.1.35 残留、
+  latest.json 0.1.36（pub_date `2026-10-23T07:17:11Z`）、两平台 URL 指向本版、内联签名 == `.sig`、
+  两平台 keyid `226b03192e5df60b` == 发版前基线（签名值按内容变、keyid 不变）、
+  exe 2782117 字节内嵌 `0.1.36` utf-16le 命中 2 / `0.1.35` 命中 0、dmg 4434624、
+  CI vite 指纹 `index-B9byeY02.js 300.80` / `index-BNXBi--0.css 31.15`（95 modules）。
+- Android：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、只 0.9.50 APK
+  （**11121288**，比 0.9.49 少 49152 = 指标划线整块下线）+ `.sha256`；自算 sha256
+  `2f148fa2…` == 边车；apksigner `cf2e20c7…` == 基线；aapt2 `62 / 0.9.50` 与产物名自洽；
+  **`classes3.dex` 命中新文案「自动选择接口」「已关闭（默认）」「已开启：当前接口请求失败」、
+  且「指标划线」0 命中** ⇒ 包内确为新代码。
+- ❗**本轮踩到「本地构建被并发的在研代码污染」**：发版后在工作区跑 `vite build` 得到
+  `index-CYr7ebiD.js 306.82` / `index-BVa_c7B5.css 33.35`（97 modules），与 CI 的 95 modules 对不上 ——
+  原因是**另一个会话正在同一个工作区改 EMA 分析**（`EmaAnalysisPanel.tsx`、`emaAnalysis.ts` 未跟踪，
+  `ChartView.tsx` / `theme.css` 也有新改动），本地构建把它们打了进去。
+  正确姿势（这轮已兑现）：`git archive <发版commit> desktop | tar -x -C .workbuddy/tmp/pristine-XXXX` 导出干净副本 +
+  把 `desktop/node_modules` 拷进去再 `vite build`，得到 **`B9byeY02` / `BNXBi--0`、95 modules，与 CI 逐字一致**
+  ⇒ 「包内是新前端」这条证据依然成立。**下次开始发版前先 `git status`，发现未跟踪的 `src/` 文件就别用工作区直接构建。**
+  副产品：`.workbuddy/tmp/pristine-0136`（含一份 node_modules 拷贝，约 86MB）留着当模板，嫌大可直接删。
+- ⚠️ **`api-push.py` 原来不支持删除文件**：本次 `IndicatorLine.kt` 被删，脚本在
+  `git ls-tree <sha> <path>` 取 blob 时 `IndexError`（删除的路径查不到）。已修（`.workbuddy/tmp/api-push-0948.py`）：
+  `rows = git('ls-tree', sha, path).split()` 为空就打印「已删除」跳过上传 —— 目录树按本地 commit 重建，
+  删除自然生效。两个 commit 仍分两次推（第二个 `--parent d62a4d6…`）。
+- ⚠️ 本机 `rm -rf` 会命中企业策略被拦（`命令执行命中企业策略`），收尾清理临时目录别再拼 `rm -rf`。
+
