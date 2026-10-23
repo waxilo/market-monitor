@@ -55,6 +55,13 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   `rmSync(profile, {force:true})` **静默失败**，旧 localStorage（画线、配置）原样带进这一轮 ⇒
   「初始应为空」的断言凭空失败、数量越跑越多，现象很像功能坏了。
   一律用 `cdp-profile-xxx-${process.pid}-${Date.now()}`，结尾再删。
+- ❗**这个仓库是多会话共用工作区**（同一个 cwd 上可能有两个会话同时在改不同功能）：
+  发版「本地对齐远端」那一步**绝不要 `git reset --hard`** —— 2026-10-23 就这么冲掉了另一个会话
+  未提交的「空心圆环光标」改动（theme.css + desktop.md 共 38 行）。API 重建只差一个 SHA，
+  用 `git update-ref refs/heads/main <远端SHA>`（工作区不动）或 `reset --soft` 就够。
+  万一冲掉了：那两个文件的改动**全文还在** `~/.workbuddy/projects/<proj>/<sid>.jsonl`
+  （主会话里可能有自己 `git diff` 打出来的 hunk；子代理的在 `<sid>/subagents/agent-*.jsonl` 的
+  `function_call.arguments` 里，含 `old_string`/`new_string`），照字节写回即可（注意保持 CRLF）。
 
 ## 最容易踩的几条（细节都在分册里）
 - ⚠️ **`taskkill /IM` 在 Windows 上不区分大小写**：用户安装版的 exe 就叫 `market-monitor.exe` ⇒ 会连正在跑的实例一起
