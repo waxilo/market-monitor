@@ -5,6 +5,7 @@ import {
   parseLineStore,
   removePriceLine,
   setLineAlert,
+  setLineNote,
   type LineStore,
   type PriceLine,
 } from '../lib/priceLines';
@@ -14,6 +15,7 @@ import {
   moveTrendLineBy,
   parseTrendStore,
   removeTrendLine,
+  setTrendNote,
   type TrendAnchor,
   type TrendEnd,
   type TrendLine,
@@ -69,10 +71,14 @@ export interface DrawingsApi {
   /** 整张图的画线是否隐藏（按标的存；默认显示 = 眼睛睁着）。只藏不删，告警照常。 */
   linesHidden: boolean;
   setLinesHidden: (hidden: boolean) => void;
-  addPriceLine: (price: number, alert?: boolean) => void;
+  addPriceLine: (price: number, alert?: boolean, note?: string) => void;
   removePriceLine: (index: number) => void;
   /** 开关某条水平线的价格告警（穿越时弹系统通知）。 */
   setPriceLineAlert: (index: number, alert: boolean) => void;
+  /** 改某条水平线的备注（空串 = 删掉备注）。 */
+  setPriceLineNote: (index: number, note: string) => void;
+  /** 改某条直线的备注（空串 = 删掉备注）。 */
+  setTrendLineNote: (index: number, note: string) => void;
   /** 拖动：水平线改到新价（画布按指针位置绝对定位）。 */
   movePriceLine: (index: number, price: number) => void;
   /** 拖动：直线整体平移（画布按指针位移换算出数据空间增量）。 */
@@ -150,7 +156,8 @@ export function useDrawings(key: string | null): DrawingsApi {
   );
 
   const addLine = useCallback(
-    (price: number, alert = false) => editLines((cur) => addPriceLine(cur, price, alert)),
+    (price: number, alert = false, note = '') =>
+      editLines((cur) => addPriceLine(cur, price, alert, note)),
     [editLines],
   );
   const removeLine = useCallback(
@@ -163,6 +170,10 @@ export function useDrawings(key: string | null): DrawingsApi {
   );
   const moveLine = useCallback(
     (index: number, price: number) => editLines((cur) => movePriceLine(cur, index, price)),
+    [editLines],
+  );
+  const noteLine = useCallback(
+    (index: number, note: string) => editLines((cur) => setLineNote(cur, index, note)),
     [editLines],
   );
 
@@ -184,6 +195,10 @@ export function useDrawings(key: string | null): DrawingsApi {
       editTrends((cur) => moveTrendAnchor(cur, index, end, anchor)),
     [editTrends],
   );
+  const noteTrend = useCallback(
+    (index: number, note: string) => editTrends((cur) => setTrendNote(cur, index, note)),
+    [editTrends],
+  );
 
   const clear = useCallback(() => {
     editLines(() => []);
@@ -200,6 +215,8 @@ export function useDrawings(key: string | null): DrawingsApi {
     addPriceLine: addLine,
     removePriceLine: removeLine,
     setPriceLineAlert: alertLine,
+    setPriceLineNote: noteLine,
+    setTrendLineNote: noteTrend,
     movePriceLine: moveLine,
     moveTrendBy: dragTrendBy,
     moveTrendAnchor: dragTrendAnchor,

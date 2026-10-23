@@ -9,7 +9,10 @@
  * 命中判定每次都按当前 y 重新算下标，所以顺序对交互没有任何影响。
  *
  * 零依赖是硬要求：`.mts` 单测靠 Node 直接跑（Node 的 ESM 解析不接受无扩展名相对导入）。
+ * 唯一的例外是 `lineNote.ts` —— 它本身也是零依赖、只做文本归一化。
  */
+
+import { normalizeLineNote } from './lineNote';
 
 /** 判定「鼠标落在某条线上」的纵向容差（像素）。太小则难点中，太大则两条近线分不开。 */
 export const LINE_HIT_PX = 4;
@@ -23,6 +26,14 @@ export interface PriceLine {
    * 常态，拆成两份就会在图上叠出两根重合的线（重合了删一条会看着像没反应）。
    */
   alert: boolean;
+  /**
+   * 备注（图上线旁那几个字，如「缺口上沿」）。
+   *
+   * 挂在线上而不是另开一张标注表：删线就该连备注一起消失，两份数据必然出现
+   * 「线没了字还飘在图上」。**空备注不落字段**（不是空串）—— 存档里 `note: ""`
+   * 与「没有备注」是同一件事，留两个表示法只会让判断多一处。
+   */
+  note?: string;
 }
 
 /** 按标的索引的价目表（键 = `市场:标的`）。 */
@@ -46,10 +57,12 @@ export function parseLineStore(raw: string | null): LineStore {
       .map((v): PriceLine | null => {
         if (typeof v === 'number') return Number.isFinite(v) ? { price: v, alert: false } : null;
         if (v && typeof v === 'object') {
-          const o = v as { price?: unknown; alert?: unknown };
-          return typeof o.price === 'number' && Number.isFinite(o.price)
-            ? { price: o.price, alert: o.alert === true }
-            : null;
+          const o = v as { price?: unknown; alert?: unknown; note?: unknown };
+          if (typeof o.price !== 'number' || !Number.isFinite(o.price)) return null;
+          const note = normalizeLineNote(o.note);
+          return note
+            ? { price: o.price, alert: o.alert === true, note }
+            : { price: o.price, alert: o.alert === true };
         }
         return null;
       })
@@ -62,11 +75,20 @@ export function parseLineStore(raw: string | null): LineStore {
 /**
  * 加一条线。**同价不重复加** —— 右键落在已有线上走菜单里的「删掉这条线」，
  * 这条规则保证了两条线不会重合成一根（重合了删一条会看着像没反应）。
+ *
+ * `note` 是**出生备注**（EMA 分析里点一行画线会自动写上「1时EMA50」）。
+ * 它走与 `setLineNote` 同一个归一化：空/全空白不落字段（见 `PriceLine.note`）。
  */
-export function addPriceLine(lines: readonly PriceLine[], price: number, alert = false): PriceLine[] {
+export function addPriceLine(
+  lines: readonly PriceLine[],
+  price: number,
+  alert = false,
+  note = '',
+): PriceLine[] {
   if (!Number.isFinite(price)) return [...lines];
   if (lines.some((l) => l.price === price)) return [...lines];
-  return [...lines, { price, alert }];
+  const text = normalizeLineNote(note);
+  return [...lines, text ? { price, alert, note: text } : { price, alert }];
 }
 
 /** 删第 index 条。越界返回原样（调用方可能拿着上一帧的下标）。 */
@@ -93,6 +115,29 @@ export function setLineAlert(
 ): PriceLine[] {
   if (index < 0 || index >= lines.length) return [...lines];
   return lines.map((l, i) => (i === index ? { ...l, alert } : l));
+}
+
+/**
+ * 改第 index 条的备注。空（或全是空白）**等于删掉备注** —— 删字段而不是存空串，
+ * 见 `PriceLine.note` 的注释；超长按 `LINE_NOTE_MAX` 截断，不报错（用户是边看边改，
+ * 弹窗里已经有字数提示，图省事直接按上限收）。
+ */
+export function setLineNote(
+  lines: readonly PriceLine[],
+  index: number,
+  note: string,
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  const next = normalizeLineNote(note);
+  return lines.map((l, i) => {
+    if (i !== index) return l;
+    if (!next) {
+      const copy = { ...l };
+      delete copy.note;
+      return copy;
+    }
+    return { ...l, note: next };
+  });
 }
 
 /**

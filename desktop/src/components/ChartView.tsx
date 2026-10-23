@@ -49,13 +49,16 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
+import { emaAlertAction } from '../lib/emaAnalysis';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
 import { MaPanel } from './MaPanel';
+import { EmaAnalysisPanel } from './EmaAnalysisPanel';
 import { EyeIcon } from './EyeIcon';
-import { ChartMenu } from './ChartMenu';
+import { ChartMenu, type LineNoteTarget } from './ChartMenu';
+import { LineNoteDialog } from './LineNoteDialog';
 import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanvas';
 
 const RT_POLL_MS = 2000;
@@ -127,6 +130,8 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const { families, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
+  /** EMA 指标分析弹窗（汇总所有已配置档位 × 所有已配置周期的 EMA，按现价分压力/支撑）。 */
+  const [emaPanelOpen, setEmaPanelOpen] = useState(false);
   /**
    * 交给画布的均线族：把「藏起来」的族折算成空目录，**族内再减去眼睛闭上的那几条** ——
    * 画布只画给它的东西，不知道显隐开关这回事（与画线小眼睛同口径）。
@@ -168,6 +173,18 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const alertCount = drawings.priceLines.filter((l) => l.alert).length;
   /** 右键菜单：画布只报「落在哪儿、压着哪条线」，菜单长什么样、点完干什么都在这一层。 */
   const [menu, setMenu] = useState<ChartMenuRequest | null>(null);
+  /**
+   * 正在改备注的那条线（`null` = 备注框没开）。
+   *
+   * 与菜单分开存：菜单是「一次性定点操作」（点完就收），备注框是一个**等待输入**的弹窗，
+   * 两者生命周期不同 —— 混在一个 state 里就会出现「菜单关了、输入框跟着消失」。
+   */
+  const [noteEdit, setNoteEdit] = useState<{
+    target: LineNoteTarget;
+    /** 打开时线已有的备注（预填，改起来不用重打）。 */
+    value: string;
+    title: string;
+  } | null>(null);
   /** 递增一次 = 让画布把纵向刻度退回自动量程（见 KlineCanvas 的 `resetPriceSignal`）。 */
   const [resetPriceSignal, setResetPriceSignal] = useState(0);
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
@@ -601,6 +618,16 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           >
             ＋
           </button>
+          {/* EMA 分析：一次点击把「所有已配置的 EMA 档位 × 所有已配置的周期」汇总成
+              压力 / 支撑两栏（与实盘价实时比较）。它是**动作**不是开关，所以不带 .on 态。 */}
+          <button
+            type="button"
+            className="chip"
+            title="EMA 指标分析：把所有已配置的 EMA 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
+            onClick={() => setEmaPanelOpen(true)}
+          >
+            EMA分析
+          </button>
           <button
             type="button"
             className={`chip${showBoll ? ' on' : ''}`}
@@ -735,9 +762,36 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           onSetAlert={drawings.setPriceLineAlert}
           onRemoveTrend={drawings.removeTrendLine}
           onStartTrend={(anchor) => setTrendSeed((prev) => ({ anchor, seq: (prev?.seq ?? 0) + 1 }))}
+          onEditNote={(target, note) =>
+            setNoteEdit({
+              target,
+              value: note,
+              // 抬头要能认出是哪条线：水平线报价位（那是它唯一的身份），直线只有序号可报
+              title:
+                target.kind === 'price'
+                  ? `水平线 ${formatPrice(drawings.priceLines[target.index]?.price ?? NaN, instrument?.tickSize)}`
+                  : `直线 ${target.index + 1}`,
+            })
+          }
           onClear={drawings.clear}
           onResetPrice={() => setResetPriceSignal((n) => n + 1)}
           onClose={() => setMenu(null)}
+        />
+      )}
+
+      {/* 备注输入框：菜单点完就收起，这一层自己等着用户敲字（保存即落盘，清空即删备注） */}
+      {noteEdit && (
+        <LineNoteDialog
+          title={noteEdit.title}
+          value={noteEdit.value}
+          onSave={(note) => {
+            if (noteEdit.target.kind === 'price') {
+              drawings.setPriceLineNote(noteEdit.target.index, note);
+            } else {
+              drawings.setTrendLineNote(noteEdit.target.index, note);
+            }
+          }}
+          onClose={() => setNoteEdit(null)}
         />
       )}
 
@@ -761,6 +815,48 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           onAllMutedChange={setAllPeriodHidden}
           onReset={resetCatalog}
           onClose={() => setMaPanelOpen(false)}
+        />
+      )}
+
+      {/* EMA 分析：范围取「EMA 族的目录 × 周期条的列表」（都算配置，不管图上画没画）。
+          点一行 = 在那个价位画/取消一条告警线（自动备注「1时EMA50」，面板不关，可连点几道）；
+          点行内周期小方框才切周期 —— 切完把面板关掉，不挡着图。 */}
+      {emaPanelOpen && (
+        <EmaAnalysisPanel
+          market={item.market}
+          symbol={item.symbol}
+          price={ticker?.lastPrice ?? null}
+          tickSize={instrument?.tickSize}
+          intervals={intervals}
+          periods={families.EMA.catalog}
+          colors={families.EMA.colors}
+          sourceLabel={sourceLabel}
+          priceLines={drawings.priceLines}
+          onToggleAlert={(row, note) => {
+            const action = emaAlertAction(drawings.priceLines, row.value);
+            if (action.kind === 'add') {
+              // 自动备注（如「1时EMA50」）：线画上去就自带出处，过几天也不会忘了它是谁
+              drawings.addPriceLine(row.value, true, note);
+              // 眼睛闭着时新线画了也看不见 —— 自动睁眼，否则这一下就是「点了没反应」。
+              // 只在这一支里改显隐：取消/升级时线本来就看得见，不该顺手翻转用户的开关。
+              if (drawings.linesHidden) drawings.setLinesHidden(false);
+              return;
+            }
+            if (action.kind === 'promote') {
+              drawings.setPriceLineAlert(action.index, true);
+              // 只在**没有备注**时补：用户自己写过的（「缺口上沿」）比自动生成的值钱
+              if (!drawings.priceLines[action.index]?.note) {
+                drawings.setPriceLineNote(action.index, note);
+              }
+              return;
+            }
+            drawings.removePriceLine(action.index);
+          }}
+          onPickInterval={(iv) => {
+            setInterval_(iv);
+            setEmaPanelOpen(false);
+          }}
+          onClose={() => setEmaPanelOpen(false)}
         />
       )}
     </section>

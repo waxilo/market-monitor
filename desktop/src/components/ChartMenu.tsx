@@ -22,9 +22,17 @@ interface Props {
   onRemoveTrend: (index: number) => void;
   /** 「从这里画直线」：第一点就用右键落点，第二下左键成线（画布接着预览）。 */
   onStartTrend: (anchor: TrendAnchor) => void;
+  /** 「加/改备注」：把命中的那条线与它的现有备注交给上层去开输入框（菜单自己不收文本）。 */
+  onEditNote: (target: LineNoteTarget, note: string) => void;
   onClear: () => void;
   onResetPrice: () => void;
   onClose: () => void;
+}
+
+/** 要改备注的是哪条线：水平线与直线各有一套下标（两者互不相通）。 */
+export interface LineNoteTarget {
+  kind: 'price' | 'trend';
+  index: number;
 }
 
 interface Item {
@@ -56,8 +64,11 @@ const MENU_H = 208;
  *
  * 画线的开与关：锁定开关在指标栏的「锁定」chip 上（不在菜单里）。锁定期间画布**不识别线**
  * ——压着线右键也按空白报（见 KlineCanvas 的 onContextMenu），画新线 / 清空也一并收掉，
- * 菜单里只剩「复位纵向刻度」；解锁态才有画新线与改告警 / 删线这些落点动作。
+ * 菜单里只剩「复位纵向刻度」；解锁态才有画新线与改告警 / 改备注 / 删线这些落点动作。
  * 收完一条不剩时整个菜单不渲染（右键等于无事发生）。
+ *
+ * 备注（0.1.38 起）：菜单只负责发「给哪条线改备注」，输入框是 `LineNoteDialog`（挂在 ChartView）。
+ * 菜单是**一次性定点操作**，收文本会把它变成常驻表单 —— 两件事的生命周期不一样。
  */
 export function ChartMenu({
   x,
@@ -72,6 +83,7 @@ export function ChartMenu({
   onSetAlert,
   onRemoveTrend,
   onStartTrend,
+  onEditNote,
   onClear,
   onResetPrice,
   onClose,
@@ -141,9 +153,19 @@ export function ChartMenu({
       aside: priceText,
       run: () => onSetAlert(hit.index, !hit.alert),
     });
+    actions.push({
+      key: 'note',
+      label: hit.note ? '改一下备注' : '加个备注',
+      run: () => onEditNote({ kind: 'price', index: hit.index }, hit.note),
+    });
     actions.push({ key: 'remove', label: '删掉这条线', danger: true, run: () => onRemoveLine(hit.index) });
   }
   if (hit.kind === 'trend') {
+    actions.push({
+      key: 'note',
+      label: hit.note ? '改一下备注' : '加个备注',
+      run: () => onEditNote({ kind: 'trend', index: hit.index }, hit.note),
+    });
     actions.push({ key: 'remove', label: '删掉这条直线', danger: true, run: () => onRemoveTrend(hit.index) });
   }
 

@@ -2314,3 +2314,254 @@ body {
 .iv-custom.bad .iv-msg {
   color: var(--down);
 }
+
+/* ── EMA 指标分析（EmaAnalysisPanel）───────────────────────────────────
+   一次点击 = 「已配置的 EMA 档位 × 已配置的 K 线周期」全部取回来，
+   按最新价分成两块：上方压力 / 下方支撑。
+
+   为什么两列而不是一张长表：压力与支撑是**两个方向相反的清单**，
+   并排才看得出一侧最近的是谁、另一侧最近的是谁；长表得靠读正负号自己分。
+   两列内部都是「离现价近的在前」，所以每列第一行就是最近那道水位。
+
+   颜色只给列定调（压力红 / 支撑绿，与技术分析软件同一套语言），数值本身不染色 ——
+   整屏红绿数字反而会把「近不近」这条主要信息淹掉。 */
+.ema-summary {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-md);
+  padding-bottom: var(--sp-sm);
+  border-bottom: 1px solid var(--hairline);
+}
+.ema-sym {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ema-sym-name {
+  font-family: var(--mono);
+  font-size: 17px;
+  letter-spacing: -0.3px;
+}
+.ema-price {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-xs);
+}
+.ema-price-v {
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+/* 基准不是实时价时点明来源（否则「最新价」这三个字会误导） */
+.ema-src {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ema-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-md);
+  align-items: start;
+}
+.ema-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-xxs);
+}
+.ema-col-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-xs);
+  padding: 0 6px var(--sp-xxs);
+  border-bottom: 1px solid var(--hairline);
+}
+.ema-col-name {
+  font-size: 12px;
+}
+.ema-col.resistance .ema-col-name {
+  color: var(--down);
+}
+.ema-col.support .ema-col-name {
+  color: var(--up);
+}
+.ema-col-count {
+  font-size: 11px;
+  color: var(--muted);
+}
+.ema-col-near {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ema-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（切到那个周期看图），
+   所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。 */
+.ema-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 7px auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-xs);
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--fast) var(--ease-standard);
+}
+.ema-row:hover {
+  background: var(--wash);
+}
+/* 已画告警线：左边缘一道红条 + 极淡红底。
+   不用「红点/红字」标它，是因为这一行已经有色点（EMA 线色）与两个变色数值（偏离），
+   再加一个彩色符号就分不清哪个颜色在说什么；一道竖条是这一列里**唯一的形状差异**。 */
+.ema-row.on {
+  background: rgba(229, 56, 75, 0.09);
+}
+.ema-row.on:hover {
+  background: rgba(229, 56, 75, 0.14);
+}
+.ema-row.on::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--down);
+}
+.ema-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.ema-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+}
+/* 周期做成小方框（与 .iv-tag 的语言一致）：它是「哪根 K 线」，不是数值。
+   这一格是**独立动作**（切到该周期看图），所以 hover 要明显区别于整行的「画告警线」：
+   描边与字色抬到前景色，指针也换一下（行本身已经是 pointer，这里靠颜色说明）。 */
+.ema-iv {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  padding: 0 5px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  white-space: nowrap;
+  cursor: zoom-in;
+  transition:
+    border-color var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.ema-iv:hover {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+.ema-val {
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ema-gap {
+  min-width: 54px;
+  text-align: right;
+}
+.ema-col.resistance .ema-gap {
+  color: var(--down);
+}
+.ema-col.support .ema-gap {
+  color: var(--up);
+}
+.ema-empty {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+/* 脚注（没取到的周期 / 根数不够的档位）：11px 一行，全文进 title */
+.ema-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ema-note.bad {
+  color: var(--down);
+}
+/* 极窄窗口（< 640px 的内容宽）两列会挤成一列字，直接竖排 */
+@media (max-width: 760px) {
+  .ema-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── 画线备注（LineNoteDialog）────────────────────────────────────────
+   只问一句话的小弹窗：宽 380（比 MA / 周期面板窄一半 —— 里面就一个输入框），
+   输入框两行、打开即聚焦并全选（改已有备注时直接盖掉重打），Enter 就是保存。
+
+   备注是**一行字**：textarea 只是为了让长句在窄窗里自动折行看得见，
+   `normalizeLineNote` 会把换行压成空格，所以 Enter 不该是换行。 */
+.note-panel {
+  width: min(380px, calc(100vw - 48px));
+}
+.note-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--wash);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  padding: 7px 9px;
+  outline: none;
+  transition: border-color var(--fast) var(--ease-standard);
+}
+.note-input:focus {
+  border-color: var(--accent);
+}
+.note-input::placeholder {
+  color: var(--muted);
+}
+/* 字数在左、按钮在右：margin-right:auto 顶开，不额外塞占位元素（`.grow` 只在 up-head 里定义） */
+.note-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+}
+.note-count {
+  margin-right: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.note-count.full {
+  color: var(--down);
+}
+/* 刷新按钮：固定宽度，「刷新」↔「刷新中」切换时不要把右边的价位列推歪。
+   刷新中只靠这一枚按钮说话（表格照旧可读），所以也不再给它加重/变色的强调。 */
+.ema-refresh {
+  min-width: 62px;
+  text-align: center;
+}

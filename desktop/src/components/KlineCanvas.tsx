@@ -83,6 +83,8 @@ const MAX_TIME_LABELS = 6;
 const TIME_LABEL_GAP = 12;
 const AXIS_MIN_GAP = 13;
 const FONT = '10px ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace';
+/** 画线备注的字体：比刻度大一号 —— 它是给人读的句子，不是刻度。 */
+const NOTE_FONT = '11px ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace';
 
 /** 拖拽方向定性所需的累积位移（App 用触摸的 touchSlop，网页鼠标取固定值）。 */
 const DRAG_LOCK_PX = 6;
@@ -309,11 +311,60 @@ function drawTrendHandle(
 }
 
 /**
+ * 画线的备注标签：**一块串在线上的实色牌 + 高反差字**（照右轴那枚价签做）。
+ *
+ * 位置：牌的**竖向中心压在线的 y 上**（用户原话「串在画的线上，不再画线上方展示」）。
+ * 牌是实心的，画在线之后 ⇒ 线在牌底下被盖住、两侧照旧延伸，看着就是「线从牌里穿过去」。
+ * 贴顶/贴底时把牌整体夹回绘图区（`top`/`bottom`），否则半行字会被 canvas 裁掉。
+ *
+ * 为什么不是给字描一圈边（halo）：11px 的等宽字笔画不到 1px 宽，3px 的描边会把字
+ * 整个吃掉 —— 浅色主题下看着是一团灰、深色主题下干脆看不见（两种都实测过）。
+ *
+ * 为什么也不是「纸色半透明底板」：纸色跟图底同一个颜色，底板等于没底 —— 压在密集
+ * K 线、均线、网格上的备注，字被底下的东西拖着读不清（用户截图反馈「容易被背景影响」）。
+ * 现在牌面取**线的语义色**（黄＝普通画线 / 红＝告警），字取该色上的反差色，
+ * 与右轴价签同色同尺寸（`drawBadge`）—— 一眼读作「这条线的标签」，背景是什么都不影响。
+ *
+ * 横向夹进绘图区：备注是长句，贴着右边缘时会整段跑到轴外面去（canvas 不报错，用户只看到
+ * 「备注没了」）。
+ */
+function drawLineNote(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  color: string,
+  bg: string,
+  plotW: number,
+  top: number,
+  bottom: number,
+) {
+  if (!text) return;
+  const padX = 4;
+  const h = 14;
+  ctx.save();
+  ctx.font = NOTE_FONT;
+  ctx.textBaseline = 'middle';
+  const w = ctx.measureText(text).width + padX * 2;
+  const nx = clampNum(x - padX, 2, Math.max(2, plotW - w - 2));
+  const ny = clampNum(y, top + h / 2, Math.max(top + h / 2, bottom - h / 2));
+  // **牌面照右轴那枚价签做**：实色块 + 高反差字，不是「纸色半透明」——
+  // 纸色底板跟图底本来就同一个颜色，压在密集 K 线/网格上时字被底下的东西拖着读不清
+  // （用户反馈「容易被背景影响」）。底色即线的语义色（黄＝普通画线 / 红＝告警），
+  // 与右轴价签同色同尺寸，读起来就是「这条线的标签」。
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = bg;
+  roundRect(ctx, nx, ny - h / 2, w, h, 3);
+  ctx.fillStyle = color;
+  ctx.fillText(text, nx + padX, ny + 0.5);
+  ctx.restore();
+}
+
+/**
  * 数据空间锚点 → 主图像素（两点直线的绘制与命中判定**共用这一处**换算）。
  * 与 draw 里的 `xOf`/`yOf` 严格同式：x 走 `(i - start + 0.5) * slot`、y 走
  * `top + toFraction(量程, 价格) * 高` —— 两处各写一份必然会分叉（曾经手写过就分叉）。
- */
-function anchorPx(
+ */function anchorPx(
   anchor: TrendAnchor,
   candles: Bar[],
   intervalMs: number,
@@ -337,10 +388,10 @@ export type ChartMenuHit =
    * （「从这里画直线」的第一点就用它；图上还没有数据时为 null —— 那时没有时间锚点）。
    */
   | { kind: 'empty'; price: number; anchor: TrendAnchor | null }
-  /** 一条水平线（`alert` 决定菜单里是「设成告警」还是「取消告警」）。 */
-  | { kind: 'hline'; index: number; price: number; alert: boolean }
-  /** 一条两点直线。 */
-  | { kind: 'trend'; index: number };
+  /** 一条水平线（`alert` 决定菜单里是「设成告警」还是「取消告警」，`note` 决定「加备注」还是「改备注」）。 */
+  | { kind: 'hline'; index: number; price: number; alert: boolean; note: string }
+  /** 一条两点直线（`note` 同上）。 */
+  | { kind: 'trend'; index: number; note: string };
 
 /**
  * 菜单里那条「从这里画直线」落下的一次性信号。
@@ -742,13 +793,31 @@ export function KlineCanvas({
     // 线型只有一种（实线），语义全部交给颜色：告警线红（它要等着被触发，得一眼从普通
     // 划线里分出来）、普通划线黄（与两点直线同色系）。早期靠「点线 / 虚线」区分告警，
     // 但在密集 K 线上虚线断成一串点、反而不如实线好瞄 —— 现在红＝会响、黄＝只是记号。
+    /**
+     * 线备注牌：先记下来、等这一层所有线（连最新价那条虚线也算）画完再统一「盖章」。
+     * 牌是实心的、牌心就压在线 y 上 ⇒ 线在牌底下断成两截，看着就是线从牌里穿过去；
+     * 所以**任何线都不许从牌面上穿过去**，只能在所有线之后画。
+     */
+    const noteChips: { text: string; x: number; y: number; fg: string; bg: string }[] = [];
     if (pl.length > 0) {
       ctx.lineWidth = 1;
       for (const line of pl) {
         const y = yOf(toFraction(mainR, line.price), mainTop, mh);
         if (y < mainTop || y > mainBottom) continue;
-        ctx.strokeStyle = line.alert ? p.down : p.line;
+        const color = line.alert ? p.down : p.line;
+        ctx.strokeStyle = color;
         hline(ctx, 0, plotW, y);
+        // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
+        // 告警线红底纸色字、普通画线黄底深字。
+        if (line.note) {
+          noteChips.push({
+            text: line.note,
+            x: 8,
+            y,
+            fg: line.alert ? p.paper : p.onAccent,
+            bg: color,
+          });
+        }
       }
     }
 
@@ -761,6 +830,15 @@ export function KlineCanvas({
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       infiniteLine(a.x, a.y, b.x, b.y);
+      // 备注挂在**看得见的那个锚点**旁：A 被判出绘图区（线画到未来/过去很远）就换 B ——
+      // 否则「给这条直线写了备注但图上找不到」。
+      if (!line.note) continue;
+      const inView = (pt: { x: number; y: number }) =>
+        pt.x >= 0 && pt.x <= plotW && pt.y >= mainTop && pt.y <= mainBottom;
+      const spot = inView(a) ? a : inView(b) ? b : null;
+      if (!spot) continue;
+      // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）
+      noteChips.push({ text: line.note, x: spot.x + 8, y: spot.y, fg: p.onAccent, bg: p.line });
     }
     if (!lock) {
       for (const line of tl) {
@@ -792,6 +870,12 @@ export function KlineCanvas({
       ctx.setLineDash([4, 4]);
       hline(ctx, 0, plotW, lastY);
       ctx.setLineDash([]);
+    }
+
+    // 备注牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
+    // 放在最新价虚线之后，是为了让牌面永远干净（牌上不许有别的线划过去）。
+    for (const chip of noteChips) {
+      drawLineNote(ctx, chip.text, chip.x, chip.y, chip.fg, chip.bg, plotW, mainTop, mainBottom);
     }
     ctx.restore();
 
@@ -1549,13 +1633,13 @@ export function KlineCanvas({
       if (!model.linesLocked) {
         const body = nearestTrendBody(trendBodies(plotW), x, y);
         if (body >= 0) {
-          request({ kind: 'trend', index: body });
+          request({ kind: 'trend', index: body, note: model.trendLines[body]?.note ?? '' });
           return;
         }
         const hit = hitLine(y);
         if (hit >= 0) {
           const line = model.priceLines[hit];
-          request({ kind: 'hline', index: hit, price: line.price, alert: line.alert });
+          request({ kind: 'hline', index: hit, price: line.price, alert: line.alert, note: line.note ?? '' });
           return;
         }
       }

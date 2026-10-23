@@ -9,7 +9,10 @@
  * 顺序就是**添加顺序**，不排序（与 priceLines.ts 同一条规矩）：拖拽期间下标必须稳定。
  *
  * 零依赖是硬要求：`.mts` 单测靠 Node 直接跑（Node 的 ESM 解析不接受无扩展名相对导入）。
+ * 唯一的例外是 `lineNote.ts` —— 它本身也是零依赖、只做文本归一化。
  */
+
+import { normalizeLineNote } from './lineNote';
 
 /** 直线的一个锚点：时间戳（ms）+ 价格。 */
 export interface TrendAnchor {
@@ -23,6 +26,13 @@ export type TrendEnd = 'a' | 'b';
 export interface TrendLine {
   a: TrendAnchor;
   b: TrendAnchor;
+  /**
+   * 备注（图上线旁那几个字）。与水平线的 `note` 同一口径：空 = 没有这个字段。
+   *
+   * ⚠️ 所有「产出一条新线」的函数都必须**展开原对象**（`{ ...line, a, b }`）而不是
+   * 重新拼 `{ a, b }` —— 后者会把备注连同以后加的其它字段一起吞掉。
+   */
+  note?: string;
 }
 
 /** 按标的索引的直线表（键 = `市场:标的`，与水平线同一套键）。 */
@@ -48,11 +58,12 @@ function finiteAnchor(v: unknown): TrendAnchor | null {
 
 function finiteLine(v: unknown): TrendLine | null {
   if (!v || typeof v !== 'object') return null;
-  const { a, b } = v as { a?: unknown; b?: unknown };
+  const { a, b, note } = v as { a?: unknown; b?: unknown; note?: unknown };
   const fa = finiteAnchor(a);
   const fb = finiteAnchor(b);
   if (!fa || !fb) return null;
-  return { a: fa, b: fb };
+  const text = normalizeLineNote(note);
+  return text ? { a: fa, b: fb, note: text } : { a: fa, b: fb };
 }
 
 /** 读一份直线表：坏数据一律丢弃而不是抛错 —— 它是用户点出来的，重建成本极低。 */
@@ -109,7 +120,11 @@ export function moveTrendLineBy(
   if (!Number.isFinite(deltaTime) || !Number.isFinite(deltaPrice)) return [...lines];
   return lines.map((l, i) =>
     i === index
-      ? { a: { t: l.a.t + deltaTime, p: l.a.p + deltaPrice }, b: { t: l.b.t + deltaTime, p: l.b.p + deltaPrice } }
+      ? {
+          ...l,
+          a: { t: l.a.t + deltaTime, p: l.a.p + deltaPrice },
+          b: { t: l.b.t + deltaTime, p: l.b.p + deltaPrice },
+        }
       : l,
   );
 }
@@ -124,8 +139,29 @@ export function moveTrendAnchor(
   const fa = finiteAnchor(anchor);
   if (index < 0 || index >= lines.length || !fa) return [...lines];
   return lines.map((l, i) =>
-    i === index ? (end === 'a' ? { a: fa, b: l.b } : { a: l.a, b: fa }) : l,
+    i === index ? (end === 'a' ? { ...l, a: fa } : { ...l, b: fa }) : l,
   );
+}
+
+/**
+ * 改第 index 条的备注。空（或全是空白）等于删掉备注（删字段，不存空串 —— 与 `setLineNote` 同口径）。
+ */
+export function setTrendNote(
+  lines: readonly TrendLine[],
+  index: number,
+  note: string,
+): TrendLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  const next = normalizeLineNote(note);
+  return lines.map((l, i) => {
+    if (i !== index) return l;
+    if (!next) {
+      const copy = { ...l };
+      delete copy.note;
+      return copy;
+    }
+    return { ...l, note: next };
+  });
 }
 
 /** 主图内的像素矩形（裁剪与命中都用它，左/上含、右/下含）。 */

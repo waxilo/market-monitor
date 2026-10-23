@@ -27,6 +27,8 @@
 | 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置弹窗「告警通知」页管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置弹窗「悬浮窗」页：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
+| 桌面端 EMA 指标分析（指标栏点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
+| 桌面端画线备注（右键水平线 / 直线 →「加个备注」，图上在**线的左端把一块与右轴价签同款的实色牌串在线上**——黄底＝普通画线、红底＝告警，牌心压在线 y 上、线从牌底下穿过，压在 K 线/网格上也读得清；菜单文案随有没有备注变「改一下备注」，弹窗里可一键删掉） | `desktop/src/components/LineNoteDialog.tsx`、`lib/lineNote.ts`、`KlineCanvas` 的 `drawLineNote` | 已实现；备注就存在线对象里（`mm.priceLines` / `mm.trendLines` 的 `note`，空 = 不落字段），上限 60 字、换行压成一个空格，删线即删备注 |
 
 Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
 仓库已转为 public，匿名请求实测 200，所以这条链路是通的；若日后改回 private，匿名一律 404，
