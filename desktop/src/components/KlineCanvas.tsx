@@ -120,7 +120,10 @@ interface Palette {
   accent: string;
   /** 金/黄色徽标上的字（--on-accent）：黄底配纸色字在浅色主题下读不出来。 */
   onAccent: string;
-  /** 用户画线（水平线 / 两点直线）：黄。告警线取 down 红、现价线取 muted 灰，三种互不串。 */
+  /**
+   * 用户画线（水平线 / 两点直线）：黄。告警线取 down 红、现价线取 muted 灰，三种互不串。
+   * **三种线型一律实线**，区分只在颜色（对齐 App：红＝会响的告警、黄＝只是记号的画线）。
+   */
   line: string;
 }
 
@@ -635,19 +638,19 @@ export function KlineCanvas({
     /** 一根 K 线的时长（直线锚点的时间 ⇄ 下标换算用）。 */
     const ivMs = (minutesOf(iv) ?? 15) * 60_000;
     /**
-     * 过两点画**无限直线**并裁到主图（dash 非空则虚线）。
+     * 过两点画**无限直线**并裁到主图。
      * 直线是「两点定一条线」的语义：向两端延伸、到绘图区边界才断，不是 A-B 线段。
+     * 线型恒为实线（与水平线同一口径，见下面水平线那段）：一笔画下去就是一条实线，
+     * 不存在「预览虚线、落定实线」两套样子。
      */
     const mainRect = { left: 0, top: mainTop, right: plotW, bottom: mainBottom };
-    const infiniteLine = (fromX: number, fromY: number, toX: number, toY: number, dash: number[]) => {
+    const infiniteLine = (fromX: number, fromY: number, toX: number, toY: number) => {
       const seg = clipLineToRect(fromX, fromY, toX, toY, mainRect);
       if (!seg) return;
       ctx.beginPath();
       ctx.moveTo(seg.x1, seg.y1);
       ctx.lineTo(seg.x2, seg.y2);
-      ctx.setLineDash(dash);
       ctx.stroke();
-      ctx.setLineDash([]);
     };
 
     // ── 主图：网格 + 蜡烛 + 均线 + 最新价虚线 ──
@@ -729,30 +732,35 @@ export function KlineCanvas({
       );
     }
 
-    // 用户画的水平线：虚线横贯主图，压在 K 线/均线之上、最新价虚线之下
+    // 下面这一整段（水平线 / 两点直线 / 半截直线预览）**一律实线**：画线不靠线型表达语义，
+    // 所以进段先清掉任何残留的 dash —— 别让上面某个绘制分支的虚线渗下来。
+    ctx.setLineDash([]);
+
+    // 用户画的水平线：**实线**横贯主图，压在 K 线/均线之上、最新价虚线之下
     // （最新价是行情本身，任何时候都不该被遮）。价格标在下面与最新价标一起画。
-    // 告警线单独用红 + 点线：它是要等着被触发的，得一眼从普通划线里分出来。
+    //
+    // 线型只有一种（实线），语义全部交给颜色：告警线红（它要等着被触发，得一眼从普通
+    // 划线里分出来）、普通划线黄（与两点直线同色系）。早期靠「点线 / 虚线」区分告警，
+    // 但在密集 K 线上虚线断成一串点、反而不如实线好瞄 —— 现在红＝会响、黄＝只是记号。
     if (pl.length > 0) {
       ctx.lineWidth = 1;
       for (const line of pl) {
         const y = yOf(toFraction(mainR, line.price), mainTop, mh);
         if (y < mainTop || y > mainBottom) continue;
         ctx.strokeStyle = line.alert ? p.down : p.line;
-        ctx.setLineDash(line.alert ? [1, 3] : [5, 3]);
         hline(ctx, 0, plotW, y);
       }
-      ctx.setLineDash([]);
     }
 
-    // 用户画的两点直线：**实线**（与水平线的虚线同色系、不同线型 —— 虚线读作「一个价位」、
-    // 实线读作「一条斜率」）。端点把手只在**未锁定**时画：把手是「这条线能拖」的信号，
-    // 锁上后画布不抓线，不留任何可拖的痕迹。
+    // 用户画的两点直线：**实线**、与水平线同色（黄）。两者只差形状 —— 横线读作「一个价位」、
+    // 斜线读作「一条斜率」，颜色不必再分工。端点把手只在**未锁定**时画：把手是「这条线能拖」
+    // 的信号，锁上后画布不抓线，不留任何可拖的痕迹。
     ctx.strokeStyle = p.line;
     ctx.lineWidth = 1;
     for (const line of tl) {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
-      infiniteLine(a.x, a.y, b.x, b.y, []);
+      infiniteLine(a.x, a.y, b.x, b.y);
     }
     if (!lock) {
       for (const line of tl) {
@@ -763,14 +771,14 @@ export function KlineCanvas({
       }
     }
 
-    // 画了一半的直线（菜单里「从这里画直线」之后）的预览：起点把手 + 过起点与鼠标的**虚线**
-    // （预览的就是成品的样子：无限直线）
+    // 画了一半的直线（菜单里「从这里画直线」之后）的预览：起点把手 + 过起点与鼠标的**实线**
+    // （预览的就是成品的样子：一条黄色的无限直线）
     const pending = pendingRef.current;
     if (pending) {
       const a = anchorPx(pending.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       if (pending.to) {
         const b = anchorPx(pending.to, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
-        infiniteLine(a.x, a.y, b.x, b.y, [5, 3]);
+        infiniteLine(a.x, a.y, b.x, b.y);
       }
       drawTrendHandle(ctx, a.x, a.y, p, mainTop, mainBottom, plotW);
     }
@@ -1426,7 +1434,7 @@ export function KlineCanvas({
         draw();
         return;
       }
-      // 空闲：画了一半的直线，预览的虚线要跟着鼠标走 ——
+      // 空闲：画了一半的直线，预览的实线要跟着鼠标走 ——
       // 没有这一段的话，「从这里画直线」在点了菜单之后只剩一个孤零零的起点，
       // 第二下落在哪、线会是什么斜率完全看不出来。
       const pending = pendingRef.current;

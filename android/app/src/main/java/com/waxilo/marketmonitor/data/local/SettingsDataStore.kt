@@ -72,6 +72,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             allowInsecureWebhook = this[Keys.INSECURE] ?: d.allowInsecureWebhook,
             spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
             futuresRestHost = FuturesEndpoints.normalize(this[Keys.FUTURES_HOST]),
+            autoFuturesSource = this[Keys.AUTO_FUTURES_SOURCE] ?: d.autoFuturesSource,
             updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
             autoUpdateCheck = this[Keys.AUTO_UPDATE] ?: d.autoUpdateCheck,
             dismissedVersion = this[Keys.DISMISSED] ?: d.dismissedVersion,
@@ -174,6 +175,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.INSECURE] = allowInsecureWebhook
         prefs[Keys.SPOT_MIRROR] = spotRestMirror
         prefs[Keys.FUTURES_HOST] = futuresRestHost
+        prefs[Keys.AUTO_FUTURES_SOURCE] = autoFuturesSource
         prefs[Keys.UPDATE_PROXY] = updateMirror.key
         prefs[Keys.AUTO_UPDATE] = autoUpdateCheck
         prefs[Keys.DISMISSED] = dismissedVersion
@@ -224,6 +226,8 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val INSECURE = booleanPreferencesKey("allow_insecure_webhook")
             val SPOT_MIRROR = stringPreferencesKey("spot_rest_mirror")
             val FUTURES_HOST = stringPreferencesKey("futures_rest_host")
+            /** 合约源自动选择开关（出厂关：缺 key 即关，见 AppSettings.autoFuturesSource）。 */
+            val AUTO_FUTURES_SOURCE = booleanPreferencesKey("auto_futures_source")
             val UPDATE_PROXY = stringPreferencesKey("update_proxy_prefix")
             val AUTO_UPDATE = booleanPreferencesKey("auto_update_check")
             val DISMISSED = stringPreferencesKey("dismissed_version")

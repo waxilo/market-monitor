@@ -144,9 +144,29 @@ fun SettingsScreen(
                         TextAction("更换 / 检测", onClick = { sourcePickerOpen = true })
                     }
                     Text(
-                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。" +
-                            "当前源请求失败或响应超过 500ms 时，会自动测速：失败时切到最先响应的可用源，" +
-                            "只是响应慢时仅当候选明显更快才切换，避免来回跳源。",
+                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
+                    Rule()
+                    SwitchRow(
+                        "自动选择接口",
+                        state.autoFuturesSource,
+                        viewModel::setAutoFuturesSource,
+                    )
+                    Text(
+                        text = if (state.autoFuturesSource) {
+                            "已开启：当前接口请求失败、或响应超过 500ms 时并行测速 —— 失败就切到最先响应的可用源，" +
+                                "只是慢则仅当候选明显更快才切，避免来回跳源。换源会清空合约缓存并重拉。"
+                        } else {
+                            "已关闭（默认）：只按上面选定的接口取数，失败或变慢都不会自己换源 —— " +
+                                "要换请回来手动点选。"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -420,8 +440,12 @@ private fun FuturesSourcePickerDialog(
             )
             Text(
                 text = "检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。" +
-                    "当前源请求失败或响应超过 500ms 时，会自动测速：失败时切到最先响应的可用源，" +
-                    "只是响应慢时仅当候选明显更快才切换，避免来回跳源。",
+                    if (state.autoFuturesSource) {
+                        "当前源请求失败或响应超过 500ms 时会自动测速：失败时切到最先响应的可用源，" +
+                            "只是响应慢时仅当候选明显更快才切换，避免来回跳源。"
+                    } else {
+                        "自动选择接口当前关闭：只按你选定的这一家取数，不会自己换源。"
+                    },
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
                 modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),

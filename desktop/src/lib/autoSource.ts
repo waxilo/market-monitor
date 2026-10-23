@@ -1,7 +1,12 @@
 /**
  * 当前合约数据源的自动兜底。
  *
- * 触发条件（任一）：一次取数请求失败、或成功但往返超过 500ms。
+ * **默认不接管**：整套逻辑由用户开关 [isAutoSourceEnabled] 把关，出厂关闭（2026-10-23）。
+ * 关着的时候 [noteFuturesRequest] 一进门就返回 —— 一次探测都不发，手动选定的源就是唯一真相。
+ * 换源要清空合约缓存、重拉 K 线与交易对，而各盘口 OHLC 本就有差异，这种替用户做主的动作
+ * 必须先得到用户同意（与 App 端 `AppSettings.autoFuturesSource` 同口径）。
+ *
+ * 开启后，触发条件（任一）：一次取数请求失败、或成功但往返超过 500ms。
  *
  * 两条触发路径的取舍不同：
  * - **失败**：全部候选（含当前源）并行探测，第一个成功返回的立即采用 —— 当前源已经
@@ -30,6 +35,11 @@ const FAILURE_COOLDOWN_MS = 10_000;
 const SLOW_COOLDOWN_MS = 30_000;
 /** 跨窗口共享的「上一轮探测开始时间」。 */
 const LAST_RACE_KEY = 'mm.autoSource.lastRaceAt';
+/**
+ * 用户开关（数据源弹窗里的「自动选择接口」）。**缺省 = 关**：
+ * 老装机升上来也不会突然开始自己换源，用户点过一次才写 key。
+ */
+const ENABLED_KEY = 'mm.autoSource.enabled';
 
 let racing = false;
 
@@ -39,10 +49,32 @@ function lastRaceAt(): number {
 }
 
 /**
+ * 自动选择是否开启。读失败（隐私模式、无 localStorage）一律按**关闭** ——
+ * 「不确定」时不要替用户做主，这与默认值同一个取向。
+ */
+export function isAutoSourceEnabled(): boolean {
+  try {
+    return localStorage.getItem(ENABLED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** 写开关。写不进去也不抛：本次界面上的勾选仍然生效（下次打开会回到关闭）。 */
+export function setAutoSourceEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(ENABLED_KEY, enabled ? '1' : '0');
+  } catch {
+    /* 隐私模式等写不进 storage：不影响本次会话的显示 */
+  }
+}
+
+/**
  * 上报一次永续取数的结果。`failed` 只表示**源不可用**（网络失败 / 5xx / 网关类状态），
  * 标的不存在这类业务性 4xx 由调用方挡掉，不在这里触发换源。
  */
 export function noteFuturesRequest(durationMs: number, failed: boolean): void {
+  if (!isAutoSourceEnabled()) return;
   if (!failed && durationMs <= SLOW_RESPONSE_MS) return;
   if (racing) return;
   const now = Date.now();

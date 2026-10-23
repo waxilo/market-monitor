@@ -20,7 +20,8 @@
   --accent: #f0b90b;
   --on-accent: #1b1200;
   /* 用户画线（水平线 / 两点直线）：黄。告警线借 --down 的红、现价线借 --muted 的灰，
-     三种线色互不串；不给它们单开 token —— 借的两个 token 本来就有语义色可用 */
+     三种线色互不串；不给它们单开 token —— 借的两个 token 本来就有语义色可用。
+     三条线**一律实线**，语义只在颜色上（红 = 会响的告警 / 黄 = 只是记号的画线）。 */
   --line-mark: #f0b90b;
   /* 自绘输入框的选中底色（.ef-sel）：保持中性 —— 饱和度只留给涨跌信号 */
   --sel: rgba(236, 237, 239, 0.22);
@@ -842,7 +843,7 @@ body {
   color: var(--ink);
   flex-shrink: 0;
 }
-/* 告警条数：用告警红（--down），和图上那些告警点线同一个信号 */
+/* 告警条数：用告警红（--down），和图上那些红色告警线同一个信号 */
 .interval-bar .bar-label.alert {
   color: var(--down);
   flex-shrink: 0;
@@ -1486,6 +1487,34 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: var(--sp-xs);
+}
+/* 「自动选择接口」开关：原生 checkbox —— 它是**一个偏好**，不是一次动作，
+   做成 chip 会跟下面那些「点一行就切源」的卡片混淆。勾选色借 accent，
+   与指标栏里 chip.on 同一套「亮起来 = 开着」的语言。 */
+.src-auto {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+}
+.src-auto input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* 右侧的「开 / 关」：开着用 accent，关着用 muted —— 与 chip 的选中态同色系 */
+.src-auto-state {
+  margin-left: auto;
+  font-family: var(--mono);
+  color: var(--muted);
+}
+.src-auto input:checked ~ .src-auto-state {
+  color: var(--accent);
 }
 .src-row {
   display: grid;

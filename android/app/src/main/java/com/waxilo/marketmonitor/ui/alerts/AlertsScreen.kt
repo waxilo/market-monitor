@@ -60,8 +60,7 @@ import com.waxilo.marketmonitor.ui.theme.Spacing
  * 预警管理页（PRD FR-3.1 / FR-3.4）：规则与触发记录两个页签。
  *
  * 规则页是**三段式扁平行**（标题 / 条件+距触发进度 / 元信息），纸底 + 发丝线分隔，
- * 与行情、搜索等列表页同一套视觉语言。手动规则与指标划线挂的线都在这里展示
- * （划线线带「划线」标记，只给开关与删除，编辑在详情页划线管理）。
+ * 与行情、搜索等列表页同一套视觉语言。
  * **本页不提供创建入口**：新建预警从行情详情页的预警图标进入，那里有标的上下文。
  *
  * 整行可点进编辑页（手动规则），开关与删除就地操作。
@@ -126,7 +125,7 @@ fun AlertsScreen(
         when (state.tab) {
             AlertsTab.RULES -> RuleList(
                 rows = state.rules,
-                onClick = { row -> if (!row.indicator) onEditRule(row.rule.id) },
+                onClick = { row -> onEditRule(row.rule.id) },
                 onToggle = viewModel::setEnabled,
                 onDelete = viewModel::delete,
             )
@@ -155,7 +154,7 @@ private fun RuleList(
     if (rows.isEmpty()) {
         HintRow(
             title = "还没有预警规则",
-            subtitle = "在行情详情页点预警图标可设目标价预警，点划线图标可管理指标划线",
+            subtitle = "在行情详情页点预警图标可设目标价预警，或直接在图上拖一根告警线",
         )
         return
     }
@@ -190,9 +189,6 @@ private fun RuleList(
  * 距离进度条把「现价离阈值还有多远」画出来——只有百分比文字时还得自己心算，
  * 一根条能立刻判断这条规则是「快到了」还是「还早」（满量程见 ViewModel）。
  * 删除挂在元信息区行尾而不是标题行：标题行已有开关，再挤一颗红色图标就是误删现场。
- *
- * 指标划线挂的线带「划线」标记：阈值跟随指标值，进编辑页改它是没有意义的，
- * 所以这类行整行不响应点击，管理入口在详情页的划线面板。
  */
 @Composable
 private fun RuleItem(
@@ -205,7 +201,7 @@ private fun RuleItem(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !row.indicator, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
     ) {
         // ---- 标题区 ----
@@ -218,10 +214,6 @@ private fun RuleItem(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            if (row.indicator) {
-                StatusPill(text = "划线", tone = PillTone.Neutral)
-                Spacer(Modifier.width(Spacing.Xs))
-            }
             StatusPill(
                 text = if (row.rule.enabled) "监测中" else "已暂停",
                 tone = if (row.rule.enabled) PillTone.Positive else PillTone.Neutral,

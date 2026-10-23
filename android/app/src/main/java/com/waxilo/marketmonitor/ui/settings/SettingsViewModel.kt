@@ -38,6 +38,8 @@ data class SettingsUiState(
     val quoteAsset: String = "USDT",
     /** 用户选定的合约行情接口（FuturesEndpoints 之一）。 */
     val futuresHost: String = FuturesEndpoints.DEFAULT_URL,
+    /** 合约源自动选择开关（出厂关闭）：开着才会在失败/慢响应时自动测速换源。 */
+    val autoFuturesSource: Boolean = false,
     /** 一键检测结果：baseUrl → 结论；不在表里的即「未检测」。 */
     val probeResults: Map<String, ProbeOutcome> = emptyMap(),
     val probing: Boolean = false,
@@ -87,6 +89,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                         themeMode = it.themeMode,
                         quoteAsset = it.quoteAsset,
                         futuresHost = it.futuresRestHost,
+                        autoFuturesSource = it.autoFuturesSource,
                         notificationEnabled = it.notificationEnabled,
                         soundEnabled = it.soundEnabled,
                         vibrateEnabled = it.vibrateEnabled,
@@ -195,6 +198,15 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         if (normalized == state.value.futuresHost) return
         backing.update { it.copy(futuresHost = normalized) }
         viewModelScope.launch { container.selectFuturesSource(normalized) }
+    }
+
+    /**
+     * 开关「自动选择接口」：只改偏好，不动当前源 —— 关掉不会把用户已经用着的源换回去，
+     * 打开也不会立刻测速（下一次失败/慢响应才生效，见 [AppContainer.autoSelector]）。
+     */
+    fun setAutoFuturesSource(v: Boolean) {
+        backing.update { it.copy(autoFuturesSource = v) }
+        persist { s -> s.copy(autoFuturesSource = v) }
     }
 
     /** 网络异常的长文案（堆栈味）在手机上没意义，折成一行短结论。 */

@@ -113,28 +113,7 @@ data class AlertPriceLine(
     val ruleId: Long?,
     val price: Double,
     val dragging: Boolean = false,
-    /** 指标划线规则挂的线在虚线左端画名称胶囊（如「1h MA30」）；手动预警价为 null。 */
-    val label: String? = null,
 )
-
-/**
- * 指标划线「不告警」模式在图上的一条参考曲线：**跟着该线自己配置的 K 线周期走**，
- * 逐根台阶式对齐到当前展示序列（不是定在某个价位的水平线）。
- *
- * [values] 与主图蜡烛逐根对齐（长度 = 序列长度，无值处 NaN），[label] 供读数带标注。
- * 位置由调用方（DetailViewModel）用与引擎同一套指标纯函数算好。
- * 与 [AlertPriceLine] 分开建模：告警线是可交互的「预警」，这条只是「指标在哪」。
- */
-data class IndicatorGuideLine(val lineId: Long, val label: String, val values: DoubleArray)
-
-/**
- * 指标线模式（OFF）均线带在图上的一条灰色锚点水平线。
- *
- * 与 [IndicatorGuideLine] 的逐根台阶线不同：均线带把所有成员的均线值合成一个集合，
- * 图上只画现价上/下最近的两条水平线（锚点与换锚逻辑在 AlertEngine，这里只画结果）。
- * [lineId] 只供调用方过滤归属，图表本身不解释。
- */
-data class BandGuideLine(val lineId: Long, val price: Double)
 
 /**
  * 全屏右侧竖栏选中的划线工具。
@@ -328,18 +307,6 @@ fun KlineChart(
      * 却要进到划线模式才能调，等于把线藏进了抽屉。
      */
     alertLines: List<AlertPriceLine> = emptyList(),
-    /**
-     * 指标划线里选了「不告警」的那几条：按各自配置的 K 线周期逐根画出的细灰参考曲线
-     * （跟着指标周期走，不是定死的水平线）。不参与拖拽与删除，只随 [alertLinesVisible]
-     * 那只眼睛显隐。划线模式下不画——那时单指属于告警线，图上再叠一层拖不动的灰线只会引人去拖它。
-     */
-    indicatorGuides: List<IndicatorGuideLine> = emptyList(),
-    /**
-     * 指标线（OFF）模式均线带在图上的锚点参考线：现价上方/下方最近成员各一条
-     * **灰色水平线**（引擎按集合择近 + 穿越后静默换锚算好，始终至多两条、不会响）。
-     * 与 [indicatorGuides] 同样只随眼睛显隐、不参与拖拽；划线模式下同样不画。
-     */
-    bandGuides: List<BandGuideLine> = emptyList(),
     /**
      * 当前激活的划线工具（全屏右侧竖栏单选）。非 NONE 时：单指只服务那一条通道，
      * **不再**平移价格刻度，也不会出十字光标；且**只新建、不抓已有线**（2026-10-14）——
@@ -623,7 +590,7 @@ fun KlineChart(
         pricePan = base.panCenteringOn(close, priceZoom)
     }
 
-    // 每帧重建 7 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
+    // 每帧重建 8 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
     val scheme = MaterialTheme.colorScheme
     val palette = ChartPalette(
         up = upColor,
@@ -633,6 +600,8 @@ fun KlineChart(
         lines = ChartLineColors,
         band = scheme.primary.copy(alpha = 0.08f),
         crosshair = scheme.onSurface,
+        // primary 就是设计系统的 accent 黄（见 Color.kt 的 lightMaterialScheme）
+        mark = scheme.primary,
     )
 
     /**
@@ -977,14 +946,9 @@ fun KlineChart(
                 drawCandles(series, plot, geo, palette, mainRange)
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
-                // 指标参考线先画：它只是背景参照，告警线压上来时以告警线为准
-                if (alertLinesVisible && drawTool == DrawTool.NONE) {
-                    drawIndicatorGuides(indicatorGuides, series, plot, geo, palette, mainRange)
-                    drawBandGuides(bandGuides, geo, palette, mainRange)
-                }
                 if (visibleAlertLines.isNotEmpty()) drawAlertLines(visibleAlertLines, geo, palette, mainRange)
                 // 视觉画线压在告警线之后、蜡烛之上同区：它是用户手写的「记号」，
-                // 被预警虚线盖住时无所谓，反过来虚线该让位给刚拖的实线
+                // 被红色告警线盖住时无所谓，反过来告警线该让位给刚拖的黄色画线
                 if (visibleDrawLines.isNotEmpty()) {
                     drawDrawLines(visibleDrawLines, geo, palette, mainRange, ::anchorPx)
                 }
@@ -1053,16 +1017,6 @@ fun KlineChart(
                     tickSize = tickSize,
                     modifier = Modifier.align(Alignment.TopStart),
                 )
-                line.label?.let { label ->
-                    AlertLineLeftTag(
-                        label = label,
-                        price = line.price,
-                        range = mainRange,
-                        geo = geo,
-                        density = density,
-                        modifier = Modifier.align(Alignment.TopStart),
-                    )
-                }
             }
             // 水平画线也要给出价位：与告警线同一只右端标，落点全凭感觉是划不准的
             visibleDrawLines.forEach { line ->
@@ -1294,6 +1248,7 @@ fun ChartSkeleton(
         lines = ChartLineColors,
         band = scheme.primary.copy(alpha = 0.08f),
         crosshair = scheme.onSurface,
+        mark = scheme.primary,
     )
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // 与真实图用同一个读数带高度，否则网格与分隔线会差一行
@@ -1392,6 +1347,14 @@ private data class ChartPalette(
     val lines: List<Color>,
     val band: Color,
     val crosshair: Color,
+    /**
+     * 用户画线（水平线 / 直线）：黄（= 设计系统的 accent）。
+     *
+     * 与告警线（[down] 红）靠**颜色**分工：红 = 会响的告警、黄 = 只是记号的画线。
+     * 早期靠线型分工（告警虚线、画线实线），但虚线在密集 K 线上断成一串点、反而不如实线好瞄，
+     * 于是三条线一律实线，语义全压到颜色上（2026-10-23，与桌面端同一口径）。
+     */
+    val mark: Color,
 ) {
     /**
      * 角色 → 颜色。调色板色位（MA 八位 / EMA 八位 / BOLL 三位）直接按 ordinal 取
@@ -1663,59 +1626,14 @@ private fun DrawScope.drawLastPrice(
 }
 
 /**
- * 指标划线的「不告警」参考线：按各自配置的周期逐根台阶对齐的细灰线。
- *
- * 换算链与 [drawAlertLines] 一致（`toFraction` → `yOf`），NaN（指标窗口不足）跳过。
- * 与告警线（虚线 + 可拖）刻意不同形态：一眼分出「这是指标参照」还是「这是会响的预警」。
- */
-private fun DrawScope.drawIndicatorGuides(
-    guides: List<IndicatorGuideLine>,
-    series: ChartSeries,
-    plot: PlotGeometry,
-    geo: ChartGeo,
-    palette: ChartPalette,
-    range: ValueRange,
-) {
-    guides.forEach { guide ->
-        if (guide.values.size != series.size) return@forEach
-        val path = linePath(guide.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
-        if (path != null) drawPath(path, palette.label.copy(alpha = 0.7f), style = Stroke(width = 1.5f))
-    }
-}
-
-/**
- * 指标线模式均线带的两条锚点水平线：灰色实线，比台阶参考线略粗一档 ——
- * 它是「现价上下最近的那条均线」这个聚合结果，不是某条指标的逐根序列，
- * 形态上必须和 [drawIndicatorGuides] 区分开。
- * 换算链与 [drawAlertLines] 一致（`toFraction` → `yOf`），超出主图量程不画。
- */
-private fun DrawScope.drawBandGuides(
-    guides: List<BandGuideLine>,
-    geo: ChartGeo,
-    palette: ChartPalette,
-    range: ValueRange,
-) {
-    guides.forEach { guide ->
-        if (!guide.price.isFinite()) return@forEach
-        val y = geo.yOf(range.toFraction(guide.price), geo.mainTopPx, geo.mainHeightPx)
-        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
-        drawLine(
-            color = palette.label.copy(alpha = 0.85f),
-            start = Offset(0f, y),
-            end = Offset(geo.plotWidthPx, y),
-            strokeWidth = 2.5f,
-        )
-    }
-}
-
-/**
  * 已有的告警线，一次一排。
  *
  * 与 [drawLastPrice] 用同一条换算链（`toFraction` → `yOf`），所以线所在的高度与右侧
  * 价格标上的数字严格对应。量程是被缩放过/平移过的，超出主图区就不画 —— 一条跑到读数带
- * 或时间轴上的虚线只会让人以为刻度坏了。
+ * 或时间轴上的线只会让人以为刻度坏了。
  *
- * 只有正在拖的那根是不透明实色：其余各根属于「已经定好的参照」，压淡一档才不跟 K 线抢视线。
+ * **红 + 实线**（2026-10-23）：颜色就是它的身份（会响的那一类），线型不再承担语义。
+ * 正在拖的那根只加粗，不改色 —— 改色会让「红」这件事在拖动中时有时无。
  */
 private fun DrawScope.drawAlertLines(
     lines: List<AlertPriceLine>,
@@ -1728,15 +1646,19 @@ private fun DrawScope.drawAlertLines(
         val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
         if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
         drawLine(
-            color = if (line.dragging) palette.crosshair else palette.crosshair.copy(alpha = STATIC_ALERT_ALPHA),
+            color = palette.down,
             start = Offset(0f, y),
             end = Offset(geo.plotWidthPx, y),
-            strokeWidth = if (line.dragging) 3f else 2.5f,
-            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)),
+            strokeWidth = if (line.dragging) 3.5f else 2.5f,
         )
     }
 }
 
+/**
+ * 视觉画线（水平线 / 直线）：**黄色实线**，与告警红一眼分开。
+ *
+ * 两种形状的差别只在几何上（横线 = 一个价位、斜线 = 一条斜率），颜色统一用 [ChartPalette.mark]。
+ */
 private fun DrawScope.drawDrawLines(
     lines: List<DrawGuideLine>,
     geo: ChartGeo,
@@ -1745,7 +1667,7 @@ private fun DrawScope.drawDrawLines(
     anchorPx: (TrendAnchor) -> Offset,
 ) {
     lines.forEach { line ->
-        val color = palette.crosshair.copy(alpha = if (line.dragging) 1f else DRAW_LINE_ALPHA)
+        val color = palette.mark
         val width = if (line.dragging) 3f else 2f
         when (line.kind) {
             ChartLineKind.HORIZONTAL -> {
@@ -1789,10 +1711,10 @@ private fun DrawScope.drawDrawLines(
     }
 }
 
-/** 直线工具落第一下的种子点：比锚点略大，提示「这里已经敲过一下了」。 */
+/** 直线工具落第一下的种子点：比锚点略大，提示「这里已经敲过一下了」。颜色跟成线同色（黄）。 */
 private fun DrawScope.drawTrendSeedDot(center: Offset, palette: ChartPalette) {
     if (!center.x.isFinite() || !center.y.isFinite()) return
-    drawCircle(palette.crosshair.copy(alpha = 0.9f), radius = TREND_SEED_DOT.toPx(), center = center)
+    drawCircle(palette.mark, radius = TREND_SEED_DOT.toPx(), center = center)
 }
 
 /**
@@ -2061,9 +1983,9 @@ private fun CrosshairTimeBadge(
 }
 
 /**
- * 告警线的价格标。与十字光标的价格标同一套定位，只是 y 由**已保存的价格**反算 ——
- * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
- * 线的指标身份不标在这里（右缘只放价位），画在虚线左端（见 [AlertLineLeftTag]）。
+ * 水平线（告警线 / 画线共用）的价格标。与十字光标的价格标同一套定位，只是 y 由
+ * **已保存的价格**反算 —— 原始的落点像素并没有意义（量程可能已经被缩放/平移过），
+ * 价格才是唯一真相。右缘只放价位：线的身份由颜色回答（红 = 告警、黄 = 画线）。
  */
 @Composable
 private fun AlertLinePriceBadge(
@@ -2082,46 +2004,6 @@ private fun AlertLinePriceBadge(
         density = density,
         tickSize = tickSize,
         modifier = modifier,
-    )
-}
-
-/**
- * 虚线左端的指标名称胶囊（如「1h MA30」）：右侧价签只回答「多少钱」，
- * 几条线挤在一起时「这是哪条」靠左端这颗认。跟着线与价签同显隐（眼睛开关/划线模式）。
- */
-@Composable
-private fun AlertLineLeftTag(
-    label: String,
-    price: Double,
-    range: ValueRange,
-    geo: ChartGeo,
-    density: Density,
-    modifier: Modifier = Modifier,
-) {
-    val y = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx)
-    if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return
-    val colors = MarketTheme.colors
-    val style = rememberPriceTagStyle()
-    val measurer = rememberTextMeasurer()
-    val textHeight = remember(label, style, density) {
-        measurer.measure(AnnotatedString(label), style, density = density).size.height.toFloat()
-    }
-    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
-    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
-    Text(
-        text = label,
-        modifier = modifier
-            .offset(
-                x = 4.dp,
-                // 与右侧价签同一套垂直居中：以虚线为中心
-                y = with(density) { (y - textHeight / 2f - padV).toDp() },
-            )
-            .clip(Radius.xsShape)
-            .background(colors.ink)
-            .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
-        style = style,
-        color = colors.paper,
-        maxLines = 1,
     )
 }
 
@@ -3144,15 +3026,14 @@ private const val PRICE_BADGE_PAD_H_DP = 3.5f
 /** 价格标的垂直内边距（dp）。 */
 private const val PRICE_BADGE_PAD_V_DP = 1f
 
-/** 已有的告警线（非正在拖的那根）的不透明度：参照线不该和 K 线争视线。 */
-private const val STATIC_ALERT_ALPHA = 0.45f
-
-/**
- * 静态视觉画线的透明度：画线是用户自己做的记号，平时不该跟 K 线抢视线；
- * 拖拽中回到不透明（与告警线同一手感的「手里那根最实」）。
- * 注意画线是**实线**而告警线是虚线 —— 形态本身就把「会响的」和「只是记号」分开。
+/*
+ * 图上三类线的透明度口径：**不淡**。
+ *
+ * 2026-10-23 之前静态告警线压到 0.45、静态画线压到 0.75，理由是「参照线不该跟 K 线抢视线」。
+ * 但线型统一成实线之后，唯一的分工只剩颜色（红 = 告警 / 黄 = 画线），一淡颜色就先糊：
+ * 红会退成粉、黄会退成土黄，两种线在密集 K 线上反而分不出来了。于是全部实色，
+ * 「手里那根最实」改用**加粗**表达（见 drawAlertLines / drawDrawLines）。
  */
-private const val DRAW_LINE_ALPHA = 0.75f
 
 /** 直线两端锚点的圆点半径（dp）。 */
 private val TREND_ANCHOR_DOT = 3.dp
@@ -3172,7 +3053,7 @@ private val CORNER_BUTTON_INSET = 12.dp
 /**
  * 划线的抓取容差：按下点离某根线在这个范围内就算抓它，否则新建一根。
  *
- * 比手指触摸半径略大 —— 屏幕上那根 1.5dp 的虚线根本按不准，
+ * 比手指触摸半径略大 —— 屏幕上那根 1.5dp 的实线根本按不准，
  * 容差太小会让「微调已有预警」变成「凭空多出一条新预警」。
  */
 private val ALERT_GRAB_WIDTH = 24.dp

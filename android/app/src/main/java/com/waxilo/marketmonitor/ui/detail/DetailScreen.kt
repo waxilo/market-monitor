@@ -87,8 +87,6 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
-import com.waxilo.marketmonitor.domain.alert.IndicatorLine
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.indicator.defaultCatalog
@@ -97,14 +95,12 @@ import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
-import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
 import com.waxilo.marketmonitor.ui.chart.ChartModel
 import com.waxilo.marketmonitor.ui.chart.ChartSkeleton
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
 import com.waxilo.marketmonitor.ui.chart.DrawTool
-import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.KlineChart
 import com.waxilo.marketmonitor.ui.chart.LineRef
 import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
@@ -158,11 +154,6 @@ fun DetailScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     // 提到这一层是因为竖屏图与全屏图都要画告警线：线由预警规则派生，在哪个模式下看都该一致
     val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
-    // 「不告警」的划线画成灰参考曲线，同样两种视图都要画
-    val indicatorGuides by viewModel.indicatorGuides.collectAsStateWithLifecycle()
-    // 指标线模式均线带的两条灰色锚点水平线（引擎择近 + 穿越后静默换锚），同样两种视图共用
-    val bandGuides by viewModel.bandGuides.collectAsStateWithLifecycle()
-    val indicatorLines by viewModel.indicatorLines.collectAsStateWithLifecycle()
     val symbolRules by viewModel.symbolRules.collectAsStateWithLifecycle()
     // 同样共用一个开关：在竖屏把线藏了，进全屏不该又冒出来
     val alertLinesVisible by viewModel.alertLinesVisible.collectAsStateWithLifecycle()
@@ -184,10 +175,8 @@ fun DetailScreen(
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
     // 均线周期管理对话框同理：入口在竖屏与全屏的指标条上各有一个「＋」
     var maManagerOpen by rememberSaveable { mutableStateOf(false) }
-    // 铃铛预警整页与划线编辑框：IndicatorLine 不可序列化，旋屏丢了重开即是（同周期管理草稿）
+    // 铃铛预警整页：旋屏丢了重开即是（同周期管理草稿）
     var alertsPageOpen by rememberSaveable { mutableStateOf(false) }
-    var lineDialogOpen by remember { mutableStateOf(false) }
-    var lineEditing by remember { mutableStateOf<IndicatorLine?>(null) }
     /**
      * 十字光标下标，竖屏图与全屏图共用：K 线详情小条常显在图表顶部、读数带正上方，
      * 长按跟着手指、松手**停住**（画布上的平移/缩放/轻点才把它清掉、回到最新一根）。
@@ -204,8 +193,6 @@ fun DetailScreen(
             FullscreenChart(
                 state = state,
                 alertLines = alertLines,
-                indicatorGuides = indicatorGuides,
-                bandGuides = bandGuides,
                 drawLines = drawLines,
                 alertLinesVisible = alertLinesVisible,
                 viewModel = viewModel,
@@ -224,10 +211,6 @@ fun DetailScreen(
                     onBack = onBack,
                     onToggleWatch = viewModel::toggleWatch,
                     onShowAlerts = { alertsPageOpen = true },
-                    onShowLines = {
-                        lineEditing = indicatorLines.firstOrNull()
-                        lineDialogOpen = true
-                    },
                 )
 
                 val error = state.error
@@ -251,8 +234,6 @@ fun DetailScreen(
                 ChartArea(
                     state = state,
                     alertLines = alertLines,
-                    indicatorGuides = indicatorGuides,
-                    bandGuides = bandGuides,
                     drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
                     onToggleAlertLines = viewModel::toggleAlertLines,
@@ -342,7 +323,7 @@ fun DetailScreen(
         ) {
             SymbolAlertsPage(
                 symbolId = symbolId,
-                manualRules = symbolRules.filter { it.source != AlertRuleSource.INDICATOR },
+                manualRules = symbolRules,
                 onDismiss = { alertsPageOpen = false },
                 onNewRule = {
                     alertsPageOpen = false
@@ -354,19 +335,6 @@ fun DetailScreen(
                 },
                 onToggleRule = viewModel::setRuleEnabled,
                 onDeleteRule = viewModel::deleteRule,
-            )
-        }
-
-        if (lineDialogOpen) {
-            IndicatorLineDialog(
-                symbolId = symbolId,
-                maCatalog = state.maCatalog,
-                initial = lineEditing,
-                onDismiss = { lineDialogOpen = false },
-                onSave = { line ->
-                    viewModel.saveIndicatorLine(line)
-                    lineDialogOpen = false
-                },
             )
         }
     }
@@ -430,8 +398,6 @@ private fun FullscreenController(active: Boolean) {
 private fun FullscreenChart(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
-    indicatorGuides: List<IndicatorGuideLine>,
-    bandGuides: List<BandGuideLine>,
     drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
     viewModel: DetailViewModel,
@@ -580,8 +546,6 @@ private fun FullscreenChart(
                         // 现价改钉在读数带右端，字号与位置都受读数带约束
                         lastPriceBoard = { LastPriceBoard(state = state) },
                         alertLines = alertLines,
-                        indicatorGuides = indicatorGuides,
-                        bandGuides = bandGuides,
                         drawLines = drawLines,
                         drawTool = drawTool,
                         alertLinesVisible = alertLinesVisible,
@@ -799,8 +763,9 @@ private val RAIL_GLYPH = 12.dp
  * 全屏右侧的划线竖栏：锁 · 告警线 / 水平线 / 直线 · 删除 / 清空。
  *
  * 图标全部手搓 Canvas（同 [FullscreenGlyph] 的理由：只依赖 icons-core，
- * 不为一个图标拖进 material-icons-extended）。三枚线型刻意做成「这条线长什么样」：
- * 虚线 = 会响的告警线，实水平线 / 斜线 = 只做记号的画线，形状自身就是说明。
+ * 不为一个图标拖进 material-icons-extended）。三枚线型做成「这条线长什么样、
+ * 是什么颜色」：**红实线 = 会响的告警线，黄实线 / 黄斜线 = 只做记号的画线**，
+ * 与图上那三条线一一对应（2026-10-23 起线型统一为实线，语义只在颜色上）。
  *
  * **首枚是锁**，它管的是下面整栏：锁定 = 整张图只读（不能新建、不能拖、不能删），
  * 进入全屏默认锁定。它是整栏的总开关，所以摆最上面、与下面用一道细线隔开。
@@ -863,14 +828,16 @@ private fun DrawToolRail(
                 selected = tool == DrawTool.ALERT,
                 onClick = { onSelect(DrawTool.ALERT) },
                 dimmed = locked,
+                roleColor = colors.down,
             ) { color ->
-                DashedLineGlyph(color)
+                AlertLineGlyph(color)
             }
             DrawToolButton(
                 label = "水平线",
                 selected = tool == DrawTool.HORIZONTAL,
                 onClick = { onSelect(DrawTool.HORIZONTAL) },
                 dimmed = locked,
+                roleColor = colors.accent,
             ) { color ->
                 HorizontalLineGlyph(color)
             }
@@ -879,6 +846,7 @@ private fun DrawToolRail(
                 selected = tool == DrawTool.TREND,
                 onClick = { onSelect(DrawTool.TREND) },
                 dimmed = locked,
+                roleColor = colors.accent,
             ) { color ->
                 DiagonalLineGlyph(color)
             }
@@ -938,6 +906,12 @@ private fun DrawToolButton(
     enabled: Boolean = true,
     /** 看着置灰但**仍可点**（锁定态）：点一下由调用方说出为什么不能动。 */
     dimmed: Boolean = false,
+    /**
+     * 未选中 / 未置灰时图形用的**语义色**：线型按钮传「它在图上是什么颜色」
+     * （预警线红、水平线与直线黄），其余按钮留 null 走中性色。
+     * 选中态是整枚反色（ink 底），语义色会糊在深底上，所以那一档仍走 paper。
+     */
+    roleColor: Color? = null,
     glyph: @Composable (Color) -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -951,8 +925,8 @@ private fun DrawToolButton(
         contentAlignment = Alignment.Center,
     ) {
         // 选中态整枚反色：底色换成 ink 后图形得改走 paper，否则深底压深线看不见。
-        // 未选中用 muted（与 chip 的未选中文字同档）—— 原先用 ink 时三根纯黑粗条
-        // 是全屏最重的墨迹，比图还显眼。
+        // 未选中时：有语义色的按语义色画（与图上那条线同色），没有的用 muted
+        // （与 chip 的未选中文字同档）—— 原先用 ink 时三根纯黑粗条是全屏最重的墨迹，比图还显眼。
         //
         // 两档「看着不能用」是两回事：
         // · [enabled] = false 是真禁用（按了没反应），只留给确实没有对象的动作（清空）；
@@ -962,28 +936,38 @@ private fun DrawToolButton(
             when {
                 selected -> colors.paper
                 dimmed || !enabled -> colors.hairlineStrong
+                roleColor != null -> roleColor
                 else -> colors.muted
             },
         )
     }
 }
 
-/** 预警线工具：一条虚线（与图上告警线同形态）。 */
+/**
+ * 预警线工具：**红实线**，右端一个小圆点（「到这条线就会响」）。
+ *
+ * 早期这条图形画成虚线，用线型跟画线区分；现在图上三条线一律实线、语义全交给颜色，
+ * 图形也就跟着改成实线 —— 否则按钮上画的是一种线、图上画的是另一种。
+ * 圆点是给「红/黄分不清」的准备：形状上也留一处差别。
+ */
 @Composable
-private fun DashedLineGlyph(color: Color) {
+private fun AlertLineGlyph(color: Color) {
     Canvas(Modifier.size(RAIL_GLYPH)) {
         val stroke = size.width * 0.11f
         val y = size.height / 2f
-        val dash = size.width / 7f
-        var x = stroke / 2f
-        while (x < size.width - dash) {
-            drawLine(color, Offset(x, y), Offset(x + dash * 3f, y), stroke, cap = StrokeCap.Round)
-            x += dash * 4f
-        }
+        val dot = stroke * 1.1f
+        drawLine(
+            color,
+            Offset(stroke / 2f, y),
+            Offset(size.width - dot * 2.4f, y),
+            stroke,
+            cap = StrokeCap.Round,
+        )
+        drawCircle(color, radius = dot, center = Offset(size.width - dot * 1.2f, y))
     }
 }
 
-/** 水平线工具：一条实线。 */
+/** 水平线工具：一条黄实线（颜色由调用方按 roleColor 传入，与图上那条水平线同色）。 */
 @Composable
 private fun HorizontalLineGlyph(color: Color) {
     Canvas(Modifier.size(RAIL_GLYPH)) {
@@ -998,7 +982,7 @@ private fun HorizontalLineGlyph(color: Color) {
     }
 }
 
-/** 直线工具：一条上扬斜线，两端点各加一个圆点（两敲落锚的示意）。 */
+/** 直线工具：一条上扬的**黄**实线，两端点各加一个圆点（两敲落锚的示意）。 */
 @Composable
 private fun DiagonalLineGlyph(color: Color) {
     Canvas(Modifier.size(RAIL_GLYPH)) {
@@ -1164,15 +1148,13 @@ private val LastPriceBoardPriceStyle = HeroPriceStyle.copy(
 )
 
 /**
- * 顶栏：返回 + 币种名 + 自选 + 指标划线 + 预警铃铛。
+ * 顶栏：返回 + 币种名 + 自选 + 预警铃铛。
  *
  * 动作直接摊开而不收进「三个点」：菜单里只有一两项，多点一次只为展开一个空菜单，
- * 而且那几项（预警、划线）恰恰是详情页的主行动之一，藏起来等于没人用。
+ * 而且「预警」恰恰是详情页的主行动之一，藏起来等于没人用。
  *
  * 铃铛打开本标的价格预警弹层（先看待有的，右上角再添新的）：预警页已不提供创建入口，
  * 「给这个标的加个预警」就地完成，标的上下文也不用重新选。
- * 划线图标打开独立的指标划线弹层：预警是「会响的规则」、划线是「图上跟着指标走的线」，
- * 两件事各管各的入口，不混在一张列表里。
  *
  * 「全屏」不在这里——它在图表左上角的角标上（见 [ChartArea]）：入口离图表越近越顺手，
  * 而详情页要滚动才能看到图表，按钮钉在顶栏等于每次先得把页面翻回去。
@@ -1185,7 +1167,6 @@ private fun DetailTopBar(
     onBack: () -> Unit,
     onToggleWatch: () -> Unit,
     onShowAlerts: () -> Unit,
-    onShowLines: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     AppBar(
@@ -1201,14 +1182,6 @@ private fun DetailTopBar(
                     modifier = Modifier.size(20.dp),
                     tint = if (state.watched) colors.accent else colors.muted,
                 )
-            }
-            IconButton(
-                onClick = onShowLines,
-                modifier = Modifier
-                    .size(44.dp)
-                    .semantics { contentDescription = "管理该标的的指标划线" },
-            ) {
-                IndicatorLineGlyph(modifier = Modifier.size(20.dp))
             }
             IconButton(onClick = onShowAlerts, modifier = Modifier.size(44.dp)) {
                 Icon(
@@ -1463,8 +1436,6 @@ private fun ReadoutCell(label: String?, value: String, valueColor: Color? = null
 private fun ChartArea(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
-    indicatorGuides: List<IndicatorGuideLine>,
-    bandGuides: List<BandGuideLine>,
     drawLines: List<DrawGuideLine>,
     alertLinesVisible: Boolean,
     onToggleAlertLines: () -> Unit,
@@ -1537,8 +1508,6 @@ private fun ChartArea(
                     candleReadout = candleReadout,
                     // 只画不能拖：竖屏没有划线模式，调整预警走全屏
                     alertLines = alertLines,
-                    indicatorGuides = indicatorGuides,
-                    bandGuides = bandGuides,
                     // 视觉画线是持久化的，竖屏同样显示（改/删仍在全屏竖栏里做）
                     drawLines = drawLines,
                     alertLinesVisible = alertLinesVisible,
@@ -2359,31 +2328,6 @@ private fun StatsSection(stats: List<StatItem>) {
                 }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
-        }
-    }
-}
-
-/**
- * 「指标划线」角标：一条上扬的折线。
- *
- * 自己画而不用 `Icons.Default.ShowChart` —— 那个矢量在 material-icons-extended 里，
- * 为一个图标拖进上千个图标不划算，本应用只依赖 icons-core（同 [FullscreenGlyph]）。
- */
-@Composable
-private fun IndicatorLineGlyph(modifier: Modifier = Modifier) {
-    val colors = MarketTheme.colors
-    Canvas(modifier.size(20.dp)) {
-        val stroke = size.width * 0.09f
-        // 线以端点为中心，不内缩的话描边会被画布切掉一半
-        val i = stroke / 2f
-        val points = listOf(
-            Offset(i, size.height * 0.80f),
-            Offset(size.width * 0.36f, size.height * 0.40f),
-            Offset(size.width * 0.58f, size.height * 0.62f),
-            Offset(size.width - i, i),
-        )
-        for ((from, to) in points.zipWithNext()) {
-            drawLine(colors.ink, from, to, stroke, cap = StrokeCap.Round)
         }
     }
 }

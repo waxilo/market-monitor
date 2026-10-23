@@ -6,15 +6,10 @@ import androidx.lifecycle.viewModelScope
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
-import com.waxilo.marketmonitor.domain.alert.AlertRuleSource
 import com.waxilo.marketmonitor.domain.alert.AlertState
-import com.waxilo.marketmonitor.domain.alert.IndicatorKind
-import com.waxilo.marketmonitor.domain.alert.IndicatorLine
-import com.waxilo.marketmonitor.domain.alert.LineAlertMode
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_EMA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_MA_CATALOG
-import com.waxilo.marketmonitor.domain.indicator.Indicators
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
@@ -26,11 +21,9 @@ import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
-import com.waxilo.marketmonitor.ui.chart.BandGuideLine
 import com.waxilo.marketmonitor.ui.chart.ChartViewport
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
-import com.waxilo.marketmonitor.ui.chart.IndicatorGuideLine
 import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.chart.mainReadoutLineCount
@@ -301,7 +294,6 @@ class DetailViewModel(
     private val watchlist = container.watchlistRepository
     private val settings = container.settings
     private val alerts = container.alertRepository
-    private val engine = container.alertEngine
     private val chartLinesRepo = container.chartLineRepository
 
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
@@ -351,34 +343,14 @@ class DetailViewModel(
      */
     val alertLines: StateFlow<List<AlertPriceLine>> = combine(
         alerts.rules(),
-        alerts.indicatorLines(),
-        engine.bandAnchorInfo,
         alertDrag,
-    ) { rules, lines, anchors, drag ->
-        // 划线规则挂的线在虚线左端标身份（如「1h MA30」）：几条均线挤在一起时，
-        // 光看右侧价位认不出哪条是哪条。均线带的虚线必定锚在池里某个周期的某条均线上
-        // （引擎每轮换锚后发布），标「15m MA10·上3」= 锚在 15m MA10、池中共 3 条高于现价
-        val lineById = lines.associateBy { it.id }
-        val anchorByLine = anchors.associateBy { it.lineId }
-        fun labelOf(rule: AlertRule): String? {
-            val line = rule.indicatorLineId?.let(lineById::get) ?: return null
-            return when (line.kind) {
-                IndicatorKind.MA -> "${line.interval.label} MA${line.maPeriod}"
-                IndicatorKind.MA_BAND -> {
-                    val above = rule.condition == AlertCondition.ABOVE
-                    val side = (if (above) anchorByLine[line.id]?.upper else anchorByLine[line.id]?.lower)
-                        ?: return "均线带"
-                    "${side.member.interval.label} MA${side.member.maPeriod}·${if (above) "上" else "下"}${side.poolCount}"
-                }
-            }
-        }
+    ) { rules, drag ->
         val own = rules.filter { it.market == id.market && it.symbol == id.symbol }
             .mapNotNull { rule ->
                 val threshold = rule.threshold ?: return@mapNotNull null
                 AlertPriceLine(
                     ruleId = rule.id,
                     price = threshold.toDouble(),
-                    label = labelOf(rule),
                 )
             }
         if (drag == null) own
@@ -386,146 +358,15 @@ class DetailViewModel(
             ruleId = drag.ruleId,
             price = drag.price.toDouble(),
             dragging = true,
-            label = own.firstOrNull { it.ruleId == drag.ruleId }?.label,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val notice: StateFlow<String?> = noticeText.asStateFlow()
 
-    // ---- 指标划线（铃铛弹层与图上灰参考线的数据源） ----
-
-    /** 本标的的全部指标划线（含不告警的）：划线管理列表用。 */
-    val indicatorLines: StateFlow<List<IndicatorLine>> = alerts.indicatorLines()
-        .map { rows -> rows.filter { it.market == id.market && it.symbol == id.symbol } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /** 本标的的全部预警规则（手动 + 划线挂的）：铃铛弹层的「价格预警」区用。 */
+    /** 本标的的全部预警规则：铃铛弹层与图上告警线的数据源。 */
     val symbolRules: StateFlow<List<AlertRule>> = alerts.rules()
         .map { rows -> rows.filter { it.market == id.market && it.symbol == id.symbol } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /**
-     * 「不告警」的单周期均线画成灰色参考曲线：按它**自己配置的 K 线周期**算出指标序列，
-     * 再台阶式对齐到当前展示的蜡烛 —— 不是定死在某个价位的水平线，线随指标周期演进。
-     * 告警模式的线不在这儿：那是引擎按预警节奏同步阈值的虚线（走规则 → alertLines 那条链）。
-     * 均线带也不在这儿：它画的是 [bandGuides] 那两条锚点水平线，不是逐根台阶线。
-     *
-     * 重算只挂在「划线集合变化」与「展示序列长出新一根蜡烛」上：
-     * 每根 tick 都重算整条指标序列毫无意义，参考线慢一根无人在意。
-     */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    val indicatorGuides: StateFlow<List<IndicatorGuideLine>> = combine(
-        indicatorLines,
-        chart.map { data -> data.raw.lastOrNull()?.openTime },
-    ) { lines, _ -> lines.filter { it.enabled && it.alertMode == LineAlertMode.OFF && it.kind == IndicatorKind.MA } }
-        .flatMapLatest { offLines ->
-            flow { emit(offLines.flatMap { runCatching { buildGuides(it) }.getOrDefault(emptyList()) }) }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /**
-     * 「指标线」模式均线带的锚点水平线：引擎把所有成员均线值当一个集合，
-     * 现价上/下最近各取一条发布过来（刚被穿越的成员先静默一轮、自动换锚），
-     * 这里只按标的过滤后转成图上的灰色水平线。不挂规则、不会响。
-     */
-    val bandGuides: StateFlow<List<BandGuideLine>> = engine.bandDisplayLines
-        .map { displays ->
-            displays.filter { it.market == id.market && it.symbol == id.symbol }
-                .flatMap { display ->
-                    listOfNotNull(
-                        display.upper?.let { BandGuideLine(display.lineId, it) },
-                        display.lower?.let { BandGuideLine(display.lineId, it) },
-                    )
-                }
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    /**
-     * 一条「不告警」单周期均线对应的参考曲线；均线带走 [bandGuides] 的锚点水平线，
-     * 逐成员台阶线正是它被否决的形态，这里刻意返回空。
-     */
-    private suspend fun buildGuides(line: IndicatorLine): List<IndicatorGuideLine> = when (line.kind) {
-        IndicatorKind.MA -> listOfNotNull(
-            buildGuide(line, line.interval, line.label) { Indicators.sma(it, line.maPeriod) },
-        )
-
-        IndicatorKind.MA_BAND -> emptyList()
-    }
-
-    /** 取 [memberInterval] 周期的蜡烛算指标序列，再按 openTime 台阶映射到展示序列的下标上。 */
-    private suspend fun buildGuide(
-        line: IndicatorLine,
-        memberInterval: CandleInterval,
-        label: String,
-        seriesOf: (DoubleArray) -> DoubleArray,
-    ): IndicatorGuideLine? {
-        val page = repository.klines(id, memberInterval, GUIDE_CANDLES)
-        if (page.klines.isEmpty()) return null
-        val series = seriesOf(DoubleArray(page.klines.size) { page.klines[it].close.toDouble() })
-        val display = KlineAggregator.aggregate(chart.value.raw, interval.value)
-        if (display.isEmpty()) return null
-        val out = DoubleArray(display.size) { Double.NaN }
-        // 台阶对齐：每根展示蜡烛取「openTime 不晚于它」的最后一根指标蜡烛的值
-        var j = 0
-        for (i in display.indices) {
-            while (j + 1 < page.klines.size && page.klines[j + 1].openTime <= display[i].openTime) j++
-            if (page.klines[j].openTime <= display[i].openTime) out[i] = series[j]
-        }
-        return IndicatorGuideLine(line.id, label, out)
-    }
-
-    /**
-     * 保存一条划线：**每个标的至多一条**——已有线时本条继承其 id 与创建时间顶替它，
-     * 其余的（历史版本可能留下的多条）连同规则一并退场；
-     * 配置与原条目完全相同则只提示，不做无谓写库。
-     */
-    fun saveIndicatorLine(line: IndicatorLine) {
-        viewModelScope.launch {
-            try {
-                val incoming = line.copy(market = id.market, symbol = id.symbol)
-                val existing = indicatorLines.value
-                if (existing.any { sameLineConfig(it, incoming) }) {
-                    showNotice("已有同样配置的划线")
-                    return@launch
-                }
-                val predecessor = existing.firstOrNull()
-                existing.drop(1).forEach { stale -> deleteIndicatorLineNow(stale.id) }
-                alerts.saveIndicatorLine(
-                    incoming.copy(
-                        id = predecessor?.id ?: 0L,
-                        createdAt = predecessor?.createdAt ?: incoming.createdAt,
-                    ),
-                )
-                showNotice(if (predecessor == null) "已添加划线" else "已更新划线")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                showNotice("划线保存失败：${e.displayMessage()}")
-            }
-        }
-    }
-
-    /** 连 enabled 一起比：只拨启用开关的保存也是真实改动，漏掉它会让开关永远关不掉。 */
-    private fun sameLineConfig(a: IndicatorLine, b: IndicatorLine): Boolean {
-        if (a.kind != b.kind || a.alertMode != b.alertMode || a.enabled != b.enabled) return false
-        return if (a.members.isNotEmpty() || b.members.isNotEmpty()) {
-            a.members.toSet() == b.members.toSet()
-        } else {
-            a.interval == b.interval && a.maPeriod == b.maPeriod
-        }
-    }
-
-    /**
-     * 删除划线并立刻收掉它挂的预警规则（引擎的巡检只是兜底）。
-     *
-     * 列表弹层下线后 UI 不再有入口，但**替换**旧条目时仍要走这套即时清理，
-     * 保存路径（[saveIndicatorLine]）直接调用，不等引擎 5 秒后的巡检。
-     */
-    private suspend fun deleteIndicatorLineNow(lineId: Long) {
-        alerts.deleteIndicatorLine(lineId)
-        alerts.rules().first().filter { it.indicatorLineId == lineId }
-            .forEach { alerts.deleteRule(it.id) }
-    }
 
     fun setRuleEnabled(ruleId: Long, enabled: Boolean) {
         viewModelScope.launch { runCatching { alerts.setRuleEnabled(ruleId, enabled) } }
@@ -1143,13 +984,8 @@ class DetailViewModel(
                 // 价位没变就别写：光标清零触发状态就会让一条已经响过的「单次」
                 // 预警重新响一次，而用户可能只是按住线又松手。
                 if (existing.threshold?.compareTo(price) == 0) return true
-                // 划线引擎维护的指标规则只挪价位，名字与方向条件留给引擎下轮对号；
-                // 手动线则统一成「达到」，方向由触发时的实际穿越决定
-                if (existing.source == AlertRuleSource.MANUAL) {
-                    alerts.saveRule(existing.copy(name = name, condition = AlertCondition.REACH, threshold = price))
-                } else {
-                    alerts.saveRule(existing.copy(threshold = price))
-                }
+                // 统一成「达到」，方向由触发时的实际穿越决定
+                alerts.saveRule(existing.copy(name = name, condition = AlertCondition.REACH, threshold = price))
                 // 价位换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让
                 // 新价位一次都不提醒，wasSatisfied 也会把真正的「穿越」边沿吃掉。
                 alerts.saveState(existing.id, AlertState())
@@ -1341,9 +1177,6 @@ class DetailViewModel(
     private companion object {
         /** 基础周期的请求条数；自定义周期下展示根数按聚合倍率减少。 */
         const val BASE_PAGE = 500
-
-        /** 画一条灰参考曲线时取的历史根数：够指标成形并铺满当前视窗即可。 */
-        const val GUIDE_CANDLES = 300
 
         /** 内存里保留的最大基础蜡烛数，翻页过多时丢弃最老的。 */
         const val MAX_RAW = 2_000

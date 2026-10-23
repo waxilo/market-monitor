@@ -7,6 +7,7 @@ import {
   type FuturesEndpoint,
   type ProbeOutcome,
 } from '../lib/sources';
+import { isAutoSourceEnabled, setAutoSourceEnabled } from '../lib/autoSource';
 
 interface RowState {
   probing: boolean;
@@ -19,6 +20,10 @@ const domainOf = (baseUrl: string) => baseUrl.replace('https://', '');
  * 合约数据源弹窗：打开即**并行**检测全部候选（结果只对本机当前网络有效），点一行即选定。
  * 交互与文案照 App 的 FuturesSourcePickerDialog：每行独立回填，哪个先回来哪个先亮。
  *
+ * 另有一枚**自动选择接口**的开关（出厂关闭）：关着时选定的源就是唯一真相，失败只会
+ * 如实报错；开了才在失败 / 明显更慢时自动测速换源（规则见 `lib/autoSource.ts`）。
+ * 换源要清空合约缓存重拉，这种替用户做主的动作默认不做。
+ *
  * ⚠️ 布局刻意做成**两列卡片网格**，而不是原来的纵向长列表。候选有 12 条（币安一家就
  * 占了 5 个镜像），两行式行高 × 12 + 两段说明 ≈ 685px，而弹窗上限是 `100vh - 72px`
  * （默认 1280×820 下 748px、最小窗 1024×680 下 608px）—— 在 125%/150% 缩放的笔记本上
@@ -28,6 +33,8 @@ const domainOf = (baseUrl: string) => baseUrl.replace('https://', '');
 export function SourcePanel({ onClose }: { onClose: () => void }) {
   const selectedUrl = useFuturesSourceUrl();
   const [states, setStates] = useState<Record<string, RowState>>({});
+  /** 自动选择开关：初值取存档（缺省关），改动即时落盘 —— 关掉弹窗再开不会回弹。 */
+  const [auto, setAuto] = useState(isAutoSourceEnabled);
   /** 每行独立的一代计数：重测没回来前又点一次，旧响应不许覆盖新结果。 */
   const genRef = useRef<Record<string, number>>({});
 
@@ -159,9 +166,25 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
             只影响永续合约：K 线与 24h 行情都取自选定的这一家，现货固定走 Gate。
             切换后清空合约缓存并重新同步交易对。
           </p>
+          <label
+            className="src-auto"
+            title="关闭时只按选定的接口取数；开启后失败 / 明显更慢时会自动测速换源（默认关闭）"
+          >
+            <input
+              type="checkbox"
+              checked={auto}
+              onChange={(e) => {
+                setAuto(e.target.checked);
+                setAutoSourceEnabled(e.target.checked);
+              }}
+            />
+            <span>自动选择接口</span>
+            <span className="src-auto-state">{auto ? '开' : '关'}</span>
+          </label>
           <p className="up-hint">
-            当前源请求失败、或响应超过 500ms 时，会自动并行测速。失败时切到最先响应的可用源；
-            只是响应慢时，仅当候选明显更快才切换，避免来回跳源。
+            {auto
+              ? '已开启：当前源请求失败、或响应超过 500ms 时会自动并行测速 —— 失败就切到最先响应的可用源；只是响应慢时，仅当候选明显更快才切换，避免来回跳源。'
+              : '已关闭（默认）：只按上面选定的接口取数，失败或变慢都不会自己换源 —— 要换请点一行手动选。'}
           </p>
 
           <div className="src-grid">{ordered.map(renderRow)}</div>

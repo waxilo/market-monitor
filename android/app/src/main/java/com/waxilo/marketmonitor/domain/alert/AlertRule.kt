@@ -8,7 +8,10 @@ enum class AlertCondition(val key: String, val label: String) {
     /** 达到目标价即触发：涨到或跌到都算，方向在触发时按实际穿越自动判定。 */
     REACH("reach", "达到"),
 
-    /** 上破/下破只由指标划线引擎内部使用（按线相对现价的位置挂方向），编辑器不提供。 */
+    /**
+     * 上破/下破：编辑器不提供（用户只选「达到」，方向在触发时按实际穿越判定），
+     * 保留是因为历史数据里存过这两个 key 的规则仍要能正常求值与展示。
+     */
     ABOVE("above", "上破"),
     BELOW("below", "下破"),
     OUT_OF_RANGE("out_of_range", "区间外"),
@@ -53,20 +56,6 @@ enum class AlertDirection(val key: String) {
     }
 }
 
-/**
- * 规则由谁创建。INDICATOR 线是「指标划线」（[IndicatorLine]）自动维护的附属品：
- * 阈值跟随所属划线的指标取值，穿越后由引擎换锚重挂。
- */
-enum class AlertRuleSource(val key: String) {
-    MANUAL("manual"),
-    INDICATOR("indicator"),
-    ;
-
-    companion object {
-        fun fromKey(key: String): AlertRuleSource = entries.firstOrNull { it.key == key } ?: MANUAL
-    }
-}
-
 /** 价格预警规则（PRD FR-3.1）。金额一律 BigDecimal，序列化为字符串。 */
 data class AlertRule(
     val id: Long = 0L,
@@ -90,10 +79,6 @@ data class AlertRule(
     /** 关联的 Webhook 端点 id；为空表示不推送外部。 */
     val webhookIds: List<Long> = emptyList(),
     val createdAt: Long = 0L,
-    /** 规则来源；见 [AlertRuleSource]。 */
-    val source: AlertRuleSource = AlertRuleSource.MANUAL,
-    /** source=INDICATOR 时归属的 [IndicatorLine] 划线 id；手动规则为空。 */
-    val indicatorLineId: Long? = null,
 ) {
     val symbolKey: String get() = "${market.key}:$symbol"
 }

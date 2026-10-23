@@ -240,20 +240,6 @@ interface AlertDao {
 
     @Query("DELETE FROM alert_log WHERE triggeredAt < :before")
     suspend fun deleteLogsOlderThan(before: Long)
-
-    // ---- 指标划线 ----
-
-    @Query("SELECT * FROM indicator_line ORDER BY createdAt DESC")
-    fun observeIndicatorLines(): Flow<List<IndicatorLineEntity>>
-
-    @Upsert
-    suspend fun upsertIndicatorLine(line: IndicatorLineEntity): Long
-
-    @Query("DELETE FROM indicator_line WHERE id = :id")
-    suspend fun deleteIndicatorLine(id: Long)
-
-    @Query("UPDATE indicator_line SET alertMode = :mode WHERE id = :id")
-    suspend fun setIndicatorLineAlertMode(id: Long, mode: String)
 }
 
 @Dao

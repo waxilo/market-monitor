@@ -20,10 +20,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AlertRuleEntity::class,
         AlertStateEntity::class,
         AlertLogEntity::class,
-        IndicatorLineEntity::class,
         ChartLineEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class MarketDatabase : RoomDatabase() {
@@ -220,7 +219,7 @@ abstract class MarketDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE `alert_rule`")
                 db.execSQL("ALTER TABLE `alert_rule_new` RENAME TO `alert_rule`")
-                // 旧的「单次划线」告警随 ONCE 下线一并归一（与 LineAlertMode.fromKey 同口径）
+                // 旧的「单次划线」告警随 ONCE 下线一并归一（当时划线告警一律「每次穿越」）
                 db.execSQL("UPDATE `indicator_line` SET `alertMode` = 'every_cross' WHERE `alertMode` = 'once'")
             }
         }
@@ -250,6 +249,60 @@ abstract class MarketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v9→v10：**指标划线整体下线**。
+         *
+         * 划线表丢弃；它挂出的 source='indicator' 规则没有任何入口还能维护 ——
+         * 阈值本由引擎跟随指标实时移动，留着就是一批既不响也不更新的僵尸规则，
+         * 连同判定状态一起清掉。
+         *
+         * alert_rule 顺带重建，去掉划线留下的一串死列（source / indicatorLineId /
+         * maPeriod / indicatorAlertId）：minSdk 26 的 SQLite 无 DROP COLUMN，只能整表重建。
+         */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "DELETE FROM alert_state WHERE ruleId IN " +
+                        "(SELECT id FROM alert_rule WHERE source = 'indicator')",
+                )
+                db.execSQL("DELETE FROM alert_rule WHERE source = 'indicator'")
+                db.execSQL("DROP TABLE IF EXISTS `indicator_line`")
+                db.execSQL(
+                    """
+                    CREATE TABLE `alert_rule_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `market` TEXT NOT NULL,
+                        `symbol` TEXT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `condition` TEXT NOT NULL,
+                        `threshold` TEXT,
+                        `rangeLower` TEXT,
+                        `rangeUpper` TEXT,
+                        `changePercent` TEXT,
+                        `repeatMode` TEXT NOT NULL,
+                        `enabled` INTEGER NOT NULL,
+                        `playSound` INTEGER NOT NULL,
+                        `vibrate` INTEGER NOT NULL,
+                        `webhookIds` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `alert_rule_new`
+                        (id, market, symbol, name, condition, threshold, rangeLower, rangeUpper,
+                         changePercent, repeatMode, enabled, playSound, vibrate, webhookIds, createdAt)
+                    SELECT id, market, symbol, name, condition, threshold, rangeLower, rangeUpper,
+                           changePercent, repeatMode, enabled, playSound, vibrate, webhookIds, createdAt
+                    FROM `alert_rule`
+                    """
+                )
+                db.execSQL("DROP TABLE `alert_rule`")
+                db.execSQL("ALTER TABLE `alert_rule_new` RENAME TO `alert_rule`")
+            }
+        }
+
         fun create(context: Context): MarketDatabase =
             Room.databaseBuilder(context.applicationContext, MarketDatabase::class.java, NAME)
                 .addMigrations(
@@ -261,6 +314,7 @@ abstract class MarketDatabase : RoomDatabase() {
                     MIGRATION_6_7,
                     MIGRATION_7_8,
                     MIGRATION_8_9,
+                    MIGRATION_9_10,
                 )
                 .build()
     }

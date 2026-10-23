@@ -82,6 +82,15 @@ data class AppSettings(
      */
     val futuresRestHost: String = FuturesEndpoints.DEFAULT_URL,
     /**
+     * 合约源「自动选择」：当前接口失败或响应超过 500ms 时并行测速，按 `FuturesAutoSelector`
+     * 的规则换源（失败→最先响应的可用源；慢→仅当候选明显更快）。
+     *
+     * **出厂关闭**（2026-10-23）：换源要清空合约缓存、重拉 K 线与交易对，而各盘口 OHLC
+     * 本来就略有差异 —— 这种「在用户背后换源」的动作必须由用户主动点头，不能默认替用户做主。
+     * 关闭时 [futuresRestHost] 就是唯一真相，失败会如实报错（页面自带重试）。
+     */
+    val autoFuturesSource: Boolean = false,
+    /**
      * 更新加速站（PRD FR-6.2 国内网络加速）。默认直连 GitHub。
      * 既作用于更新包与校验值的下载，也作用于检查更新的 API —— 见 [UpdateMirror.apiChain]。
      */

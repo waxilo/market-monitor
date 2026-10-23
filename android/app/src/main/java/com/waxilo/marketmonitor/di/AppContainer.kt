@@ -152,6 +152,9 @@ class AppContainer(private val context: Context) {
     /**
      * 合约源自动兜底：一次请求失败或超过 500ms 时并行测速，第一个可用的源直接顶上。
      * 只由合约取数上报驱动；探测本身不上报（否则会自我触发）。
+     *
+     * **默认不接管**：设置页「自动选择接口」出厂关闭，[FuturesAutoSelector.report] 一进门就返回，
+     * 用户没点头之前不会有任何探测与换源（读一个快照里的布尔，代价可忽略）。
      */
     private val autoSelector: FuturesAutoSelector by lazy {
         FuturesAutoSelector(
@@ -159,6 +162,7 @@ class AppContainer(private val context: Context) {
             currentUrl = ::currentFuturesHost,
             probe = { url -> marketApi.probeFutures(url) },
             select = { url -> selectFuturesSource(url) },
+            enabled = { settingsSnapshot.value.autoFuturesSource },
         )
     }
 

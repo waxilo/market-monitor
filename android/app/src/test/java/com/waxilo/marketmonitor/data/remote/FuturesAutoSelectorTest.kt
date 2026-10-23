@@ -34,14 +34,55 @@ class FuturesAutoSelectorTest {
         probe: suspend (String) -> Long,
         select: suspend (String) -> Unit = {},
         current: () -> String = { a.baseUrl },
+        enabled: () -> Boolean = { true },
     ) = FuturesAutoSelector(
         scope = backgroundScope,
         currentUrl = current,
         probe = probe,
         select = select,
+        enabled = enabled,
         candidates = candidates,
         nowMs = { testScheduler.currentTime },
     )
+
+    @Test
+    fun `自动选择关闭时一次探测都不发`() = runTest {
+        var probes = 0
+        var selections = 0
+        val auto = selector(
+            probe = { probes += 1; 1L },
+            select = { selections += 1 },
+            enabled = { false },
+        )
+
+        // 失败与慢响应两条触发路径都得被这道闸挡住
+        auto.report(10, failed = true)
+        auto.report(5_000, failed = false)
+        runCurrent()
+
+        assertEquals(0, probes)
+        assertEquals(0, selections)
+    }
+
+    @Test
+    fun `开关打开后同一实例立刻按老规则工作`() = runTest {
+        // 开关是**读时求值**的回调：单例对象构造早于设置变更，不能在构造时就固化
+        var on = false
+        var probes = 0
+        val auto = selector(
+            probe = { probes += 1; 1L },
+            enabled = { on },
+        )
+
+        auto.report(10, failed = true)
+        runCurrent()
+        assertEquals(0, probes)
+
+        on = true
+        auto.report(10, failed = true)
+        runCurrent()
+        assertTrue(probes > 0)
+    }
 
     @Test
     fun `500ms 内的成功不触发测速`() = runTest {

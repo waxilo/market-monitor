@@ -16,7 +16,12 @@ import java.util.concurrent.atomic.AtomicLong
 /**
  * 合约数据源的自动兜底（与桌面端 `lib/autoSource.ts` 同一套规则）。
  *
- * 触发条件（任一）：一次合约请求失败、或成功但往返超过 500ms。
+ * **默认不接管**：整套逻辑由 [enabled] 这个用户开关把关，设置页「自动选择接口」出厂关闭
+ * （2026-10-23）。关着的时候 [report] 直接返回 —— 一次探测都不发，[currentUrl] 就是唯一真相。
+ * 换源要清合约缓存、重拉 K 线与交易对，而各盘口 OHLC 本就有差异，这种替用户做主的动作
+ * 必须先得到用户同意（与桌面端 `mm.autoSource` 同口径）。
+ *
+ * 开启后，触发条件（任一）：一次合约请求失败、或成功但往返超过 500ms。
  *
  * 两条路径的取舍不同：
  * - **失败**：并行探测全部候选（含当前源），第一个成功返回的立即采用 —— 不等其余候选。
@@ -35,6 +40,12 @@ class FuturesAutoSelector(
     private val currentUrl: () -> String,
     private val probe: suspend (String) -> Long,
     private val select: suspend (String) -> Unit,
+    /**
+     * 用户开关：false 时 [report] 不产生任何动作。
+     * 做成**读时求值**的回调（而不是构造参数里的布尔）—— 用户随时可能在设置页打开它，
+     * 而这个对象是单例、构造早于任何设置变更。
+     */
+    private val enabled: () -> Boolean = { true },
     private val candidates: List<FuturesEndpoint> = FuturesEndpoints.ALL,
     private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
@@ -43,6 +54,7 @@ class FuturesAutoSelector(
 
     /** 数据层在每次合约请求结束后调用；`failed` 只应包含「源不可用」，业务错误不要报。 */
     fun report(durationMs: Long, failed: Boolean) {
+        if (!enabled()) return
         if (!failed && durationMs <= SLOW_RESPONSE_MS) return
         val now = nowMs()
         val cooldown = if (failed) FAILURE_COOLDOWN_MS else SLOW_COOLDOWN_MS
