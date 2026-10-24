@@ -1,6 +1,7 @@
 package com.waxilo.marketmonitor.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -43,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -469,7 +472,14 @@ private fun FuturesSourcePickerDialog(
                 if (pinToTop) listState.scrollToItem(0)
             }
 
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            // 卡片之间的呼吸靠列表自己的间距，不塞进每张卡片内部 —— 这样选中态换底色时，
+            // 卡片边缘就是干净的圆角，不会带出一圈「内边距里的白边」
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = Spacing.Sm, vertical = Spacing.Xs),
+                verticalArrangement = Arrangement.spacedBy(Spacing.Xs),
+            ) {
                 items(ordered, key = { it.baseUrl }) { endpoint ->
                     FuturesSourceRow(
                         endpoint = endpoint,
@@ -494,7 +504,18 @@ private fun FuturesSourcePickerDialog(
 }
 
 /**
- * 候选行：名称 + 域名在左，检测结论与选中态在右。整行可点即选定。
+ * 候选行：**一张圆角卡片**，名称 + 域名在左，检测结论与「重测」在右。
+ *
+ * 卡片化（2026-10-24 用户要求）：一排扁平行在 12 个候选里读不出「一条是一条」，
+ * 选中态也只能靠行尾一个黄勾表示。改成白卡 + 发丝边之后，选中直接**换整张卡片的底色**
+ * （淡黄 wash + 黄描边）——「这家正在用」一眼可见。
+ *
+ * 行尾那枚 ✓ 已去掉（用户要求）：底色已经说清了，再多一个勾只是把行宽又占掉 26dp ——
+ * 副标题本来就在被截。选中语义交给 `selectable`，屏幕阅读器照样会念「已选中」。
+ *
+ * 行高仍守住 48dp（触控下限）：卡片内垂直留白 4dp，两行文字 34dp、右侧「重测」点击区 40dp，
+ * 都在 48dp 里装得下。左右留白 8dp 是刻意的 —— 外层列表再留 12dp，内容起点正好还是 20dp
+ * （[Spacing.Gutter]），与这一页其它行的文字左沿对齐，卡片化没有把正文往右推。
  */
 @Composable
 private fun FuturesSourceRow(
@@ -510,9 +531,14 @@ private fun FuturesSourceRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = Spacing.RowMinHeight)
-            .clickable(onClick = onSelect)
-            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+            .clip(Radius.smShape)
+            .background(if (selected) colors.accent.copy(alpha = 0.10f) else colors.surface)
+            .border(1.dp, if (selected) colors.accent else colors.hairline, Radius.smShape)
+            // 用 selectable 而不是 clickable：勾去掉之后，选中态只剩底色与描边，
+            // 屏幕阅读器得靠语义（已选中 / 未选中）知道选了哪家
+            .selectable(selected = selected, onClick = onSelect)
+            .heightIn(min = 48.dp)
+            .padding(horizontal = Spacing.Xs, vertical = Spacing.Xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -546,14 +572,6 @@ private fun FuturesSourceRow(
                 null -> StatusPill("未检测", PillTone.Neutral)
             }
             TextAction("重测", onClick = onProbeOne, color = colors.muted)
-        }
-        if (selected) {
-            Icon(
-                imageVector = Icons.Default.Check,
-                contentDescription = "使用中",
-                modifier = Modifier.padding(start = Spacing.Xs).size(18.dp),
-                tint = colors.accent,
-            )
         }
     }
 }

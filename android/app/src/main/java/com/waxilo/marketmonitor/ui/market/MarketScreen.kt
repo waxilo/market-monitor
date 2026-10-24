@@ -567,15 +567,6 @@ private fun TickerList(
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
             )
         }
-        item(key = "footer", contentType = "footer") {
-            Text(
-                text = "数据来自${market.sourceName}公开接口 · 每 500ms 合并一次推送",
-                modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Lg),
-                style = MaterialTheme.typography.labelSmall,
-                color = MarketTheme.colors.muted,
-                textAlign = TextAlign.Center,
-            )
-        }
     }
 }
 

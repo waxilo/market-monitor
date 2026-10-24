@@ -38,6 +38,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -128,6 +129,7 @@ import com.waxilo.marketmonitor.ui.common.SectionOverline
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.common.appViewModel
 import com.waxilo.marketmonitor.ui.theme.ChartLineColors
+import com.waxilo.marketmonitor.ui.theme.FontSize
 import com.waxilo.marketmonitor.ui.theme.HeroPriceStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.Motion
@@ -269,9 +271,7 @@ fun DetailScreen(
 
                 IndicatorBar(
                     maVisible = state.isVisible(MaFamily.MA),
-                    maCount = state.visiblePeriods(MaFamily.MA).size,
                     emaVisible = state.isVisible(MaFamily.EMA),
-                    emaCount = state.visiblePeriods(MaFamily.EMA).size,
                     showBoll = state.showBoll,
                     subPanes = state.subPanes,
                     oiSupported = state.oiSupported,
@@ -534,9 +534,7 @@ private fun FullscreenChart(
         // 指标常驻：与竖屏一致，改 MA / BOLL 不必先展开浮层。副图全屏不画，选项也收掉。
         IndicatorBar(
             maVisible = state.isVisible(MaFamily.MA),
-            maCount = state.visiblePeriods(MaFamily.MA).size,
             emaVisible = state.isVisible(MaFamily.EMA),
-            emaCount = state.visiblePeriods(MaFamily.EMA).size,
             showBoll = state.showBoll,
             subPanes = state.subPanes,
             oiSupported = state.oiSupported,
@@ -1419,30 +1417,49 @@ private fun DetailTopBar(
  * （Insights / ShowChart 都在 extended 包里，为一个入口拉整包依赖不划算）；
  * 而「EMA分析」四个字本身就说清了它是什么，塞进 44dp 的图标里反而要人猜。
  *
+ * **最小高度给容器（Box），不给 Text**：Compose 的 Text 拿到比行高更大的约束时是从顶部
+ * 开始画的（它只有水平对齐，没有垂直对齐），直接把 `defaultMinSize` 挂在 Text 上，
+ * 四个字的视觉中心会比旁边 44dp 的图标按钮高出小半行 —— 顶栏看着像歪的（2026-10-24 修）。
+ * 高度也与旁边那两枚 IconButton 取齐（顶栏 44dp / 全屏窄带 30dp），一排动作才在一根线上。
+ *
  * [compact] 给全屏那条窄带用（那行只有 30dp 出头，40dp 的点击区会把整行顶高）。
  */
 @Composable
 private fun EmaAnalysisAction(compact: Boolean = false, onClick: () -> Unit) {
-    Text(
-        text = "EMA分析",
+    Box(
         modifier = Modifier
             .clip(Radius.xsShape)
             .clickable(onClick = onClick)
-            .defaultMinSize(minHeight = if (compact) 30.dp else 40.dp)
+            .defaultMinSize(minHeight = if (compact) 30.dp else 44.dp)
             .padding(horizontal = Spacing.Xs),
-        style = if (compact) MaterialTheme.typography.labelSmall
-        else MaterialTheme.typography.labelMedium,
-        color = MarketTheme.colors.ink,
-        fontWeight = FontWeight.SemiBold,
-        maxLines = 1,
-    )
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "EMA分析",
+            style = if (compact) MaterialTheme.typography.labelSmall
+            else MaterialTheme.typography.labelMedium,
+            color = MarketTheme.colors.ink,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+        )
+    }
 }
 
 /**
- * Hero 价格区：大字号价格 + 涨跌 + 24h 高低区间条。
+ * Hero 价格区：左边大字号价格 + 涨跌，右边一列紧凑的 24h 最高 / 区间条 / 最低。
  *
- * 这是详情页最重要的改动——价格是全屏最大的信息，必须占据最大的视觉权重。
- * 数字用负字距的等宽体，颜色随涨跌在绿/红之间平滑过渡。
+ * 价格是全屏最大的信息，必须占据最大的视觉权重 —— 数字用负字距的等宽体，
+ * 颜色随涨跌在绿/红之间平滑过渡。
+ *
+ * 24h 高低**搬到价格右边**（2026-10-24 按用户要求）：它原先在价格下面占了整整一条
+ * （「24H 最低 / 24H 区间 / 24H 最高」一行标签 + 一行数值 + 一条区间条，连间距约 62dp），
+ * 而价格右侧那块一直是空的 —— 四十来号的大数字只用到屏幕一半宽。改成右列后：
+ * 最高在上、最低在下（与「谁高谁上」的直觉一致），区间条夹在中间，原来那个「24H 区间」
+ * 标签就不用写了（条本身放在高低之间，语义自动对上），整块从 156dp 收到 94dp。
+ *
+ * 价格用 [TextAutoSize] 兜住宽度：右列占掉 112dp 后，十来个字符的低价币
+ * （`0.00001234`）在这个字号下会顶出可用宽度，那就按步长缩字号而不是让末位被切掉 ——
+ * 价格少一位比少一个像素严重得多。
  */
 @Composable
 private fun Hero(state: DetailUiState) {
@@ -1452,53 +1469,97 @@ private fun Hero(state: DetailUiState) {
         animationSpec = tween(Motion.BaseMs),
         label = "heroPriceColor",
     )
+    val low = state.low24h
+    val high = state.high24h
+    val current = state.lastPrice
+    val hasRange = low != null && high != null && current != null && high > low
 
-    Column(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = state.price,
+                style = HeroPriceStyle,
+                color = priceColor,
+                maxLines = 1,
+                autoSize = TextAutoSize.StepBased(
+                    minFontSize = 26.sp,
+                    maxFontSize = FontSize.HeroPrice,
+                    stepSize = 1.sp,
+                ),
+            )
+            Spacer(Modifier.height(Spacing.Xxs))
+            ChangeText(
+                changePercent = state.changePercent,
+                showArrow = true,
+                fontSize = MaterialTheme.typography.titleMedium.fontSize,
+            )
+        }
+        if (hasRange) {
+            Spacer(Modifier.width(Spacing.Sm))
+            RangeSummary(
+                low = low,
+                high = high,
+                current = current,
+                state = state,
+                modifier = Modifier.width(RangeSummaryWidth),
+            )
+        }
+    }
+}
+
+/**
+ * 右列宽度：320dp 的内容区里，8 字符的价格（42sp）实测占 188dp，
+ * 留出 12dp 间距后这一列最多能拿 120dp；取 112dp 是为了给九、十字符的价留一点余地。
+ */
+private val RangeSummaryWidth = 112.dp
+
+/**
+ * 价格右侧的 24h 概览：最高 / 区间条 / 最低，竖着三行。
+ *
+ * 数值保留 `labelMedium`（不再用 [MetricValueStyle]）—— 这一列是旁注而不是主角，
+ * 字号一上去就会跟左边的大价格抢视线。
+ */
+@Composable
+private fun RangeSummary(
+    low: Double,
+    high: Double,
+    current: Double,
+    state: DetailUiState,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.End) {
+        ExtremumRow(label = "最高", value = formatPriceFor(high, state))
+        Spacer(Modifier.height(Spacing.Xxs))
+        RangeBar(low = low, high = high, current = current, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(Spacing.Xxs))
+        ExtremumRow(label = "最低", value = formatPriceFor(low, state))
+    }
+}
+
+/** 一行的「标签 + 数值」，标签靠左、数值靠右（右列是右对齐的，条与两端标签才在一根轴上）。 */
+@Composable
+private fun ExtremumRow(label: String, value: String) {
+    val colors = MarketTheme.colors
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            text = state.price,
-            style = HeroPriceStyle,
-            color = priceColor,
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.muted,
             maxLines = 1,
         )
-        Spacer(Modifier.height(Spacing.Xxs))
-        ChangeText(
-            changePercent = state.changePercent,
-            showArrow = true,
-            fontSize = MaterialTheme.typography.titleMedium.fontSize,
+        Spacer(Modifier.width(Spacing.Xxs))
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium,
+            color = colors.ink,
+            maxLines = 1,
         )
-
-        val low = state.low24h
-        val high = state.high24h
-        val current = state.lastPrice
-        if (low != null && high != null && current != null && high > low) {
-            Spacer(Modifier.height(Spacing.Md))
-            RangeBar(low = low, high = high, current = current)
-            Spacer(Modifier.height(Spacing.Xs))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                MetricCell(
-                    label = "24H 最低",
-                    value = formatPriceFor(low, state),
-                    valueStyle = MaterialTheme.typography.labelMedium,
-                )
-                Spacer(Modifier.weight(1f))
-                Text(
-                    text = "24H 区间",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.muted,
-                )
-                Spacer(Modifier.weight(1f))
-                MetricCell(
-                    label = "24H 最高",
-                    value = formatPriceFor(high, state),
-                    align = Alignment.End,
-                    valueStyle = MaterialTheme.typography.labelMedium,
-                )
-            }
-        }
     }
 }
 
@@ -1518,6 +1579,37 @@ private fun InlineLabel(text: String) {
         color = MarketTheme.colors.muted,
         maxLines = 1,
     )
+}
+
+/**
+ * 一行「行内标签 + 可横滚的 chip」——竖屏的周期 / 指标 / 副图三条共用。
+ *
+ * 三条原本都是「独占一行的 [SectionOverline] 标题 + 8dp 间距 + chip 行」，各要 64dp；
+ * 而 chip 本身写着「1分」「MACD」，标题只是分组提示，不值得占一整行。改成行内标签后
+ * 每条 40dp（2026-10-24，用户连续要求压缩页面高度，第三条也一并收掉）。
+ *
+ * 标签落在滚动区**外面**：横滚时它常驻可见，不跟着 chip 一起滚走
+ * （横屏 compact 那条把它塞进滚动区，是因为那一行本来就窄，没有第二个位置放）。
+ */
+@Composable
+private fun ChipRow(label: String, chips: @Composable RowScope.() -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xxs),
+        horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        InlineLabel(text = label)
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
+            verticalAlignment = Alignment.CenterVertically,
+            content = chips,
+        )
+    }
 }
 
 /**
@@ -1571,26 +1663,19 @@ private fun IntervalSelector(
         }
         return
     }
-    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md)) {
-        SectionOverline(text = "周期")
-        Spacer(Modifier.height(Spacing.Xs))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Gutter),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
-        ) {
-            options.forEach { option ->
-                FilterChip(
-                    text = option.label,
-                    selected = option == selected,
-                    onClick = { onSelect(option) },
-                    compact = true,
-                )
-            }
-            FilterChip(text = "＋", selected = false, onClick = onManage, compact = true)
+    // 竖屏：标题从「独占一行的 SectionOverline」改成**行内标签**，与 chip 同排（见 [ChipRow]）——
+    // 这一带原来是「标题 16 + 间距 8 + chip 24」三条 24dp 的空白叠着，
+    // 而 chip 本身就写着「1分 / 5分」，标题只是分组提示，不值得占一整行（省下 24dp 给图和读数带）。
+    ChipRow(label = "周期") {
+        options.forEach { option ->
+            FilterChip(
+                text = option.label,
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                compact = true,
+            )
         }
+        FilterChip(text = "＋", selected = false, onClick = onManage, compact = true)
     }
 }
 
@@ -1832,15 +1917,8 @@ private fun chartHeight(subPaneCount: Int): Dp {
 private fun IndicatorBar(
     /** MA 一族此刻画不画（chip 的亮灭）。 */
     maVisible: Boolean,
-    /**
-     * MA 一族此刻**真正画出来的条数**（目录 − 小眼睛闭上的）。
-     * 为 0 时 chip 置灰：点亮也不会画出任何东西。
-     */
-    maCount: Int,
     /** EMA 一族此刻画不画。 */
     emaVisible: Boolean,
-    /** EMA 一族此刻真正画出来的条数。 */
-    emaCount: Int,
     showBoll: Boolean,
     subPanes: List<SubPaneKind>,
     /** OI chip 的可用性：当前合约接口提供持仓量历史才亮，否则置灰（点了给原因）。 */
@@ -1859,16 +1937,19 @@ private fun IndicatorBar(
     showSubPanes: Boolean = true,
 ) {
     /**
-     * 一枚 chip 一族。置灰只说明「这一族此刻一条都画不出来」（没配，或全被小眼睛藏了），
-     * **仍可点** —— Android 上看不出禁用原因，点一下至少能看到 chip 的状态变化，
-     * 与 OI chip 的处理是同一套（见 [IndicatorBar] 的调用处）。
+     * 一枚 chip 一族，**不按档位数置灰**。
+     *
+     * 早先 count == 0 时走 `greyed`（文字淡到 45%、边框收到几乎看不见）：本意是「点亮也画不出
+     * 任何线」。但放在这条 chip 队里，它与旁边的 ＋ / BOLL / VOL 不像一套东西 ——
+     * 读起来是「这俩坏了、被禁用」，而不是「这一族没配档位」（2026-10-24 用户指出）。
+     * 配没配档位去「＋」的目录里看更直接，chip 只表达「这一族开没开」；
+     * 置灰留给真正用不了的情况（如现货页的 OI）。
      */
     @Composable
-    fun FamilyChip(family: MaFamily, visible: Boolean, count: Int, isCompact: Boolean) {
+    fun FamilyChip(family: MaFamily, visible: Boolean, isCompact: Boolean) {
         FilterChip(
             text = family.label,
             selected = visible,
-            greyed = count == 0,
             onClick = { onToggleFamily(family) },
             compact = isCompact,
         )
@@ -1885,8 +1966,8 @@ private fun IndicatorBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             InlineLabel(text = "指标")
-            FamilyChip(MaFamily.MA, maVisible, maCount, isCompact = true)
-            FamilyChip(MaFamily.EMA, emaVisible, emaCount, isCompact = true)
+            FamilyChip(MaFamily.MA, maVisible, isCompact = true)
+            FamilyChip(MaFamily.EMA, emaVisible, isCompact = true)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
             if (showSubPanes) {
@@ -1911,32 +1992,17 @@ private fun IndicatorBar(
         }
         return
     }
-    Column(modifier = Modifier.fillMaxWidth().padding(top = Spacing.Md, bottom = Spacing.Md)) {
-        SectionOverline(text = "指标")
-        Spacer(Modifier.height(Spacing.Xs))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Gutter),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
-        ) {
-            FamilyChip(MaFamily.MA, maVisible, maCount, isCompact = true)
-            FamilyChip(MaFamily.EMA, emaVisible, emaCount, isCompact = true)
+    // 竖屏：两条都是「行内标签 + chip」一行的 [ChipRow]（原来是 overline 标题各占一行，
+    // 两条加起来 144dp，现在 88dp）。副图那条的标题从「副图 · 可多选」缩成「副图」：
+    // 行内位置只够两个字，而「可多选」这点 chip 自己会说话（VOL 与 MACD 能同时高亮）。
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = Spacing.Xs)) {
+        ChipRow(label = "指标") {
+            FamilyChip(MaFamily.MA, maVisible, isCompact = true)
+            FamilyChip(MaFamily.EMA, emaVisible, isCompact = true)
             FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
         }
-
-        Spacer(Modifier.height(Spacing.Md))
-        SectionOverline(text = "副图 · 可多选")
-        Spacer(Modifier.height(Spacing.Xs))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = Spacing.Gutter),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.Xs),
-        ) {
+        ChipRow(label = "副图") {
             SubPaneKind.entries.forEach { kind ->
                 FilterChip(
                     text = kind.label,

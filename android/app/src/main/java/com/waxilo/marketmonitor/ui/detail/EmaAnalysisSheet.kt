@@ -314,7 +314,18 @@ private enum class Side(val title: String, val empty: String) {
     SUPPORT("下方支撑", "现价下方还没有已配置的 EMA"),
 }
 
-/** 抬头：标题 + 现价 + 刷新按钮 + 关闭。 */
+/**
+ * 抬头：标的名 + 现价 + 刷新 + 关闭 + 面板身份，压成两行 64dp 上下（原来是三行 124dp）。
+ *
+ * 早先是三行（「EMA · 压力支撑分析」+ 关闭 / 标的 + 现价 + 刷新 / 自动刷新提示）。
+ * 横屏时屏高只有 360dp 上下，那三行连分隔线要吃掉 120dp 出头 —— 表才是这块面板的主体，
+ * 抬头只该是一道边，不该占掉近半个屏。压成两行后一屏能多看出四五道 EMA。
+ *
+ * 两行怎么分按**可用宽度**决定（`screenWidthDp`，不是方向）：
+ * - 宽屏一行装得下：标的名 · 现价 · 刷新 · 关闭全在第一行，第二行只有元信息；
+ * - 窄屏（竖屏 360dp）一行装不下：第一行只放标的名与两个操作（标的名绝不能被价格挤成
+ *   「BTC/U…」—— 这块面板说的就是它），现价与元信息挪到第二行。
+ */
 @Composable
 private fun PanelHead(
     title: String,
@@ -330,16 +341,46 @@ private fun PanelHead(
     onDismiss: () -> Unit,
 ) {
     val colors = MarketTheme.colors
+    // 一行放得下三个数值 + 两个操作吗（横屏 640dp 起算宽裕，竖屏 360dp 不够）
+    val roomy = LocalConfiguration.current.screenWidthDp >= 480
+    // 元信息：窄屏承不起「面板身份 + 完整刷新节奏」一长串（价格占掉第二行左半边了），
+    // 就只留节奏与时刻 —— 身份本来也不用写，竖屏这两行上面就是「上方压力 / 下方支撑」页签
+    val meta = if (roomy) {
+        buildString {
+            append("EMA · 压力支撑分析 · 每 1 分钟自动刷新")
+            // 刷新中不报「上次」：那一秒里它正被新值取代，写出来反而让人去核对一个将过期的时刻
+            if (!refreshing && updatedAt > 0) append(" · 上次 ${clockText(updatedAt)}")
+        }
+    } else {
+        buildString {
+            append("每分钟刷新")
+            if (!refreshing && updatedAt > 0) append(" · ${clockText(updatedAt)} 更新")
+        }
+    }
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Gutter)) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.Sm),
+            modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xxs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 不给它 weight：标的名只按内容占位，价格紧随其后，剩余宽度留给尾部那个 Spacer
+            // （两个 weight 会平分空间，结果价格与「刷新」都被推到屏幕中间）
             Text(
-                text = "EMA · 压力支撑分析",
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.muted,
-                modifier = Modifier.weight(1f),
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = colors.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (roomy) {
+                Spacer(Modifier.width(Spacing.Sm))
+                PriceBlock(base = base, live = live, tickSize = tickSize)
+            }
+            // 这一格吃掉剩余宽度：数值贴着标的名，刷新与关闭靠右
+            Spacer(Modifier.weight(1f))
+            TextAction(
+                text = if (refreshing) "刷新中 $done/$total" else "刷新",
+                onClick = { if (!refreshing) onRefresh() },
+                color = if (refreshing) colors.muted else colors.ink,
             )
             Box(
                 modifier = Modifier
@@ -352,45 +393,45 @@ private fun PanelHead(
             }
         }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(bottom = Spacing.Sm),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Spacing.Xxs),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = colors.ink,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = formatPrice(base, tickSize),
-                        style = PriceTextStyle,
-                        color = colors.ink,
-                    )
-                    Spacer(Modifier.width(Spacing.Xs))
-                    Text(
-                        text = if (live) "最新价" else "末根收盘价",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = colors.muted,
-                    )
-                }
+            if (!roomy) {
+                PriceBlock(base = base, live = live, tickSize = tickSize)
+                Spacer(Modifier.width(Spacing.Sm))
             }
-            TextAction(
-                text = if (refreshing) "刷新中 $done/$total" else "刷新",
-                onClick = { if (!refreshing) onRefresh() },
-                color = if (refreshing) colors.muted else colors.ink,
-            )
-        }
-        if (!refreshing && updatedAt > 0) {
             Text(
-                text = "每 1 分钟自动刷新 · 上次 ${clockText(updatedAt)}",
+                text = meta,
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
-                modifier = Modifier.padding(bottom = Spacing.Xs),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
             )
         }
+    }
+}
+
+/** 现价 + 「最新价 / 末根收盘价」—— 一行还是两行的版式里都长这样，抽出来省得两处走样。 */
+@Composable
+private fun PriceBlock(base: Double, live: Boolean, tickSize: BigDecimal?) {
+    val colors = MarketTheme.colors
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = formatPrice(base, tickSize),
+            style = PriceTextStyle,
+            color = colors.ink,
+            maxLines = 1,
+        )
+        Spacer(Modifier.width(Spacing.Xxs))
+        Text(
+            text = if (live) "最新价" else "末根收盘价",
+            style = MaterialTheme.typography.labelSmall,
+            color = colors.muted,
+            maxLines = 1,
+        )
     }
 }
 

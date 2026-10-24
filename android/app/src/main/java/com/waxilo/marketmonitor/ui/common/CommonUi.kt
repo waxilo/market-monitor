@@ -377,18 +377,18 @@ private fun ChipSurface(
     val fg by animateColorAsState(
         targetValue = when {
             selected -> colors.paper
-            greyed -> colors.muted.copy(alpha = 0.45f)
+            // 置灰只压文字，**不撤边框**：一排 chip 里「可用 / 置灰 / 选中」要是同一个控件家族。
+            // 早先还顺手把边框收到 55% hairline，结果指标栏里那两枚（MA / EMA）看着像被禁用的
+            // 残缺按钮，与旁边同样可点的 VOL / MACD 根本不像一套东西（2026-10-24 用户指出）。
+            // 现在置灰只留给真正用不了的情况（如现货页的 OI）。
+            greyed -> colors.muted.copy(alpha = 0.5f)
             else -> colors.muted
         },
         animationSpec = tween(Motion.FastMs),
         label = "chipFg",
     )
     val border by animateColorAsState(
-        targetValue = when {
-            selected -> colors.ink
-            greyed -> colors.hairline.copy(alpha = 0.55f)
-            else -> colors.hairline
-        },
+        targetValue = if (selected) colors.ink else colors.hairline,
         animationSpec = tween(Motion.FastMs),
         label = "chipBorder",
     )
