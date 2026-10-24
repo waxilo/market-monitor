@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchKlines, type Bar, type MarketType } from '../lib/api';
 import {
   emaAlertNote,
@@ -71,6 +71,13 @@ interface Props {
    * `note` 是自动备注文案（新画时写上去）。
    */
   onToggleLine: (level: EmaLevelRow, note: string) => void;
+  /**
+   * 每一轮取数回来后回调一次（拿到的是**合并之后**的整份水位表）。
+   *
+   * 用途只有一个：让图上的系统划线跟着 EMA 走（`lib/emaAnalysis.alignEmaLines`）。
+   * 挂在「刷新」而不是「面板打开」上 —— 线要跟的是数值，而数值只在刷新时变。
+   */
+  onLevels: (levels: EmaLevel[]) => void;
   /** 点行内的周期小方框 = 切到那个 K 线周期看图（顺手关掉面板）。 */
   onPickInterval: (interval: string) => void;
   onClose: () => void;
@@ -105,9 +112,10 @@ function clockText(at: number): string {
  * - **点一行画系统划线**：表里每一行就是一个候选价位，点一下直接在图上落一条红色告警线
  *   （穿越时弹系统通知），再点一下取消 —— 面板**不关**，所以可以连着点几道压力位一起画。
  *   这条线是带**身份**落盘的（`PriceLine.origin` = 周期 + 档位），于是打开面板时会**回显**：
- *   那一行标「已画」。EMA 每分钟都在动、线却停在画它的那一刻，所以价位对不上当前值的标
- *   「待对齐」，点一下即把它拉到当前值 —— 旧逻辑在这种时候只会叠出第二条线，
- *   两条都画着、谁也不准，面板还看不出自己画过。
+ *   那一行标「已画」。EMA 每分钟都在动，所以每一轮取数回来都会把这些系统划线**自动拉到**
+ *   各自的新值（`onLevels` → `alignEmaLines`）—— 线是用来看盘的一道墙，墙得长在 EMA 现在
+ *   的位置上，不能停在画它的那一刻。手画的线一概不动：那是用户自己的判断。
+ *   旧逻辑在这种时候只会叠出第二条线，两条都画着、谁也不准，面板还看不出自己画过。
  *   想看某一道在哪根 K 线上，点行内那个周期小方框（切过去，面板随即关掉，不挡着图）。
  *   两种动作分开：整行是「盯住这个价」，周期方框是「去看这个周期」，
  *   把切周期放在整行上会让人点一下就离开表，没法连续画线。
@@ -123,6 +131,7 @@ export function EmaAnalysisPanel({
   sourceLabel,
   priceLines,
   onToggleLine,
+  onLevels,
   onPickInterval,
   onClose,
 }: Props) {
@@ -136,6 +145,20 @@ export function EmaAnalysisPanel({
 
   /** 当前这张表 —— 初值取上次看过的（读不到才是空表，见 `scanCache`）。 */
   const [scan, setScan] = useState<EmaScan>(() => scanCache.get(scanKey) ?? EMPTY_EMA_SCAN);
+  /**
+   * 与 `scan` 同源的一份镜像，只用来「并到上一轮上」。
+   *
+   * 合并本来写在 `setScan((prev) => …)` 里，但拿到新值之后面板还要干一件事：让图上的
+   * 系统划线跟着 EMA 走（`onLevels`）。那是不折不扣的副作用，塞进 updater 会在
+   * StrictMode 下被触发两遍（多跑一次对齐本身无害，但「副作用在 updater 里」这件事
+   * 迟早会被下一个人当成可靠行为），所以改成「先算出结果，再一次性上交」。
+   */
+  const scanRef = useRef(scan);
+  /** 最新的 `onLevels`：取数回调是异步的，直接读 props 会读进这一轮开始时的旧闭包。 */
+  const onLevelsRef = useRef(onLevels);
+  useEffect(() => {
+    onLevelsRef.current = onLevels;
+  });
   /** 有取数在飞。**只喂给按钮与首次加载文案**，不拿来遮表格（遮了就回到「清空刷新」）。 */
   const [refreshing, setRefreshing] = useState(true);
   /** 已回几个周期（只有首次取数时看得到，之后表已经在那儿了）。 */
@@ -148,13 +171,17 @@ export function EmaAnalysisPanel({
   // 换标的 / 换源 / 改配置：立刻换成那一份的缓存（没有就空表）并重新取。
   // 不这么做的话，切币的瞬间会先显示上一个币的价位 —— 那比空表更容易被当真。
   useEffect(() => {
-    setScan(scanCache.get(scanKey) ?? EMPTY_EMA_SCAN);
+    const cached = scanCache.get(scanKey) ?? EMPTY_EMA_SCAN;
+    // 镜像必须跟着换：并到「上一个币的表」上会把别家的水位搬过来
+    scanRef.current = cached;
+    setScan(cached);
     setRefreshing(true);
   }, [scanKey]);
 
   useEffect(() => {
     if (periods.length === 0 || intervals.length === 0) {
       setRefreshing(false);
+      scanRef.current = EMPTY_EMA_SCAN;
       setScan(EMPTY_EMA_SCAN);
       setDone(0);
       return;
@@ -219,19 +246,21 @@ export function EmaAnalysisPanel({
       }
 
       // 与上一轮合并：这一轮没取到的周期沿用旧值，表不会因为一次断网被清空
-      setScan((prev) => {
-        const merged = mergeEmaScan(prev, {
-          levels: nextLevels,
-          failures: nextFailures,
-          missing: nextMissing,
-          stale: [],
-          fallbackPrice: finestClose,
-        });
-        rememberScan(scanKey, merged);
-        return merged;
+      const merged = mergeEmaScan(scanRef.current, {
+        levels: nextLevels,
+        failures: nextFailures,
+        missing: nextMissing,
+        stale: [],
+        fallbackPrice: finestClose,
       });
+      scanRef.current = merged;
+      rememberScan(scanKey, merged);
+      setScan(merged);
       setUpdatedAt(Date.now());
       setRefreshing(false);
+      // 数值到手了：让图上的系统划线跟着走（手画的线一概不碰，见 `alignEmaLines`）。
+      // 手动「刷新」与每分钟的自动那一轮都经过这里 —— 它俩本来就是同一条路。
+      onLevelsRef.current(merged.levels);
     });
 
     return () => {
@@ -333,13 +362,15 @@ export function EmaAnalysisPanel({
                   line
                     ? `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n` +
                       `图上已画线「${line.note ?? note}」= ${lineText}` +
-                      (line.aligned ? '，与当前值一致' : `，偏离当前值 ${driftText}`) +
+                      (line.aligned
+                        ? '，与当前值一致（每次刷新自动跟到最新值）'
+                        : `，偏离当前值 ${driftText}（下一轮刷新会拉回，也可以点这一行立刻对齐）`) +
                       (line.alert ? '，穿越时弹通知' : '，告警已关') +
                       (line.aligned
                         ? '\n再点一下删掉这条线'
                         : `\n点一下把它对齐到 ${priceText}`) +
                       '（点周期方框切到该周期看图）'
-                    : `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n点一下在这个价位画告警线，自动备注「${note}」，价格穿越时弹通知（点周期方框切到该周期看图）`
+                    : `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n点一下在这个价位画告警线，自动备注「${note}」，价格穿越时弹通知；之后每次刷新会跟着 EMA 走（点周期方框切到该周期看图）`
                 }
                 onClick={() => onToggleLine(row, note)}
                 onKeyDown={(e) => {
@@ -369,8 +400,9 @@ export function EmaAnalysisPanel({
                 </span>
                 <span className="ema-val num">{priceText}</span>
                 <span className="ema-gap num">{gapText}</span>
-                {/* 回显的另一半：这条线在图上（已画），还是画在旧价位上（待对齐）。
-                    用文字不用图形 —— 这一行已经有色点、红条、两处变色数值，再加符号会看不清谁在说什么。 */}
+                {/* 回显的另一半：这条线在图上（已画），还是暂时不在当前值上（待对齐，
+                    多半是刚被拖过 —— 下一轮刷新就拉回）。用文字不用图形 ——
+                    这一行已经有色点、红条、两处变色数值，再加符号会看不清谁在说什么。 */}
                 {line && (
                   <span className={`ema-mark${line.aligned ? '' : ' drift'}`}>
                     {line.aligned ? '已画' : '待对齐'}
@@ -512,7 +544,7 @@ export function EmaAnalysisPanel({
                 )
                 .join(' / ')}
               {orphanLines.length > 4 ? ' …' : ''}
-              （改回配置即可回显，或在图上右键删掉；悬停看价位）
+              （改回配置即可回显，或在划线区选中它再删掉；悬停看价位）
             </p>
           )}
         </div>

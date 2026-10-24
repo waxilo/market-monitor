@@ -197,15 +197,16 @@ export function sideOf(gapPercent: number): 'resistance' | 'support' | 'flat' {
   return gapPercent > 0 ? 'resistance' : 'support';
 }
 
-/* ── 系统划线的回显（面板行 ↔ 图上那条线）──────────────────────────────
+/* ── 系统划线的回显与跟随（面板行 ↔ 图上那条线）────────────────────────
  *
  * 面板里点一行会**代画**一条系统划线（`PriceLine.origin = { kind: 'ema', interval, period }`），
  * 线在图上与手画的线看不出差别，但身份记在存档里。回显就是反过来读这份身份：
  *
  *  - 面板重开时，靠 (周期, 档位) 认出「这一档我已经画过了」→ 行上标「已画」；
- *  - EMA 每分钟都在动，**线不会自己跟着走**。凡线上价位与这一档当前值不一致的，
- *    行上标「待对齐」，点一下就把它拉到当前值（这比让它凭空多一条线体面得多，
- *    也正是旧逻辑的病灶：每点一次漂过的档位就叠一条新线，两条都画着、谁也不准）。
+ *  - EMA 每分钟都在动，所以**线必须跟着走**：每一轮取数回来（手动「刷新」与每分钟自动那一轮
+ *    走的是同一条路）都由面板调一次 `alignEmaLines`，把所有系统划线拉到各自的最新值。
+ *    行上仍保留「待对齐」这一态，但它只覆盖两种短暂情形：线上价位刚被用户拖过（下一轮刷新
+ *    就拉回），以及这一档这一轮没取到数。点一下那行照样能立刻拉回来。
  *
  * 一切判断都落在「这一档 ↔ 一条线」上，所以**同一档最多只认一条线**（见 `findEmaLine`）。
  */
@@ -216,11 +217,11 @@ export interface EmaLineRef {
   index: number;
   /** 线上的价位 —— **不是**当前 EMA 值：线停在画它的那一刻。 */
   price: number;
-  /** 这条线是否开着价格告警（面板点出来的默认开着，用户可在右键菜单里关）。 */
+  /** 这条线是否开着价格告警（面板点出来的默认开着，可在划线区里选中后关）。 */
   alert: boolean;
   /** 线上的备注（自动备注，或用户改写后的那句话）。 */
   note?: string;
-  /** 线上价位与这一档的当前 EMA 值是否**完全一致**（不一致 = 漂了）。 */
+  /** 线上价位与这一档的当前 EMA 值是否**完全一致**（不一致 = 漂了，下一轮刷新会把它拉回）。 */
   aligned: boolean;
 }
 
@@ -305,7 +306,8 @@ export interface EmaLinePlan {
  *  - 这一档还**没有**线 → 新画一条（带自动备注与身份，开告警）；
  *  - 有、且价位与当前值一致、还开着告警 → 删掉（「再点一下取消」的旧手感不变）；
  *  - 有、但漂了（或告警被关掉）→ **拉到当前值**（`align`）：这一档的位置变了，
- *    线留在旧价上就成了一条没人认领的横线；
+ *    线留在旧价上就成了一条没人认领的横线。（每轮刷新本来就会自动做这件事，见
+ *    `alignEmaLines`；这里留着是因为「刚拖过、等不到下一轮」时用户该能立刻拉回。）
  *  - 没有绑定线、但**这个价上正好有一条手画的线** → 收编（`adopt`）而不是新增：
  *    同价再画一条只会重合，删一条时看着像没反应（`addPriceLine` 也这么挡）。
  *
@@ -341,6 +343,62 @@ export function applyEmaLine(
 }
 
 /**
+ * 一轮自动对齐的结果。
+ *
+ * `moved === 0` 意味着**这一轮一条线都不用动**（绝大多数刷新就是这样：EMA 没走出
+ * 一个 double 的差别），调用方据此跳过落盘 —— 每分钟都往 localStorage 里写一份同样的
+ * 线表，既没必要，也会把「上次修改」这类将来的审计信息搅浑。
+ */
+export interface EmaAlignPlan {
+  /** 落盘用的新线表（`moved === 0` 时是原表的浅拷贝，内容一字不差）。 */
+  lines: PriceLine[];
+  /** 被拉动的条数。 */
+  moved: number;
+}
+
+/**
+ * 把图上**所有系统划线**拉到各自最新的 EMA 值上 —— 「线跟着 EMA 走」的唯一执行点。
+ *
+ * 只认 `origin.kind === 'ema'` 的线：手画的线价位是用户自己的判断，刷新不该去动它
+ * （连「价格正好落在某条手画线上」也不动 —— 那是两条各司其职的线，重合就重合）。
+ *
+ * 只改 `price` 一个字段：备注可能是用户改过的、告警开关可能是用户关掉的，这一下只是
+ * 「同一条线挪到新价位」，不是重新生成，也不替用户做决定。
+ *
+ * 认不出对应档位的线（配置里删了 EMA50、或换了周期）原地不动：它已经不属于面板里任何
+ * 一行，没有「当前值」可对齐 —— 面板另有「不在当前配置里」的提示管它们。
+ *
+ * 判据是**精确相等**：面板与这里用的是同一个 `lastEma` 算出来的同一个 double，
+ * 落盘再读回来也还是那个数。不设容差 —— 设了就会出现「差一点点也算对齐」，
+ * 于是面板说「已画」、图上的线却明显偏着，两边开始各说各话。
+ *
+ * 同一档撞上多条线（旧逻辑每点一次漂过的档位就叠一条）时**全部拉到同一个价**：
+ * 它们本来就是同一条 EMA 的重复落款，让其中几条留在旧价上反而更难收拾。
+ */
+export function alignEmaLines(
+  lines: readonly PriceLine[],
+  levels: readonly EmaLevel[],
+): EmaAlignPlan {
+  const targets = new Map<string, number>();
+  for (const level of levels) {
+    if (!Number.isFinite(level.value) || level.value <= 0) continue;
+    targets.set(`${level.interval}|${level.period}`, level.value);
+  }
+  if (targets.size === 0) return { lines: [...lines], moved: 0 };
+
+  let moved = 0;
+  const next = lines.map((line) => {
+    const origin = line.origin;
+    if (!origin || origin.kind !== 'ema') return line;
+    const target = targets.get(`${origin.interval}|${origin.period}`);
+    if (target === undefined || target === line.price) return line;
+    moved += 1;
+    return { ...line, price: target };
+  });
+  return { lines: moved > 0 ? next : [...lines], moved };
+}
+
+/**
  * 从面板画一条线时自动写上的备注，如 `1时EMA50`、`30分EMA21`、`15天EMA200`。
  *
  * 周期那一半**用面板行里那枚小方框的字**（`intervalLabel` 的短名，由调用方传入）：
@@ -353,3 +411,4 @@ export function emaAlertNote(intervalText: string, period: number): string {
   const name = intervalText.trim();
   return `${name}EMA${period}`;
 }
+

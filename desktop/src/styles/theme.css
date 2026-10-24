@@ -884,10 +884,39 @@ body {
   font-size: 10px;
   padding: 3px 7px;
 }
-/* ── 图表右键菜单 ─────────────────────────────────────────
-   ChartMenu 用 portal 挂到 body、按光标 fixed 定位（贴边翻转）。
-   层级 62：压过拖动幽灵(60)、拉伸把手(55)、各类弹窗(50)——菜单是就地的一次操作，
-   开着的时候它必须最大。造型与更新弹窗同一套：实底 + 一圈强发丝线，不靠阴影。 */
+/* 图标 + 文字并排的 chip（划线区的「水平线 / 直线」）：inline-grid 会把文字压到图标下面 */
+.interval-bar .chip.with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.interval-bar .chip.with-icon svg {
+  display: block;
+  flex-shrink: 0;
+}
+/* 破坏性动作（清空 / 删除）：平时压着不动声色，hover 才亮成告警红 —— 与图上告警线同一个信号 */
+.interval-bar .chip.danger {
+  color: var(--muted);
+}
+.interval-bar .chip.danger:hover:not(:disabled) {
+  color: var(--down);
+  border-color: var(--down);
+}
+/* 划线区选中态的那枚身份字（价位 / 直线 N）：
+   比组名再重一档，它是这一整行按钮「在对谁动手」的唯一答案。 */
+.interval-bar .bar-label.draw-target {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+/* ── 右键菜单壳 ───────────────────────────────────────────
+   图表区的右键菜单（ChartMenu）已于 2026-10-24 整档移除，但这套壳**不能删**：
+   侧栏自选行的「从自选移除」还在用它（MarketList 的 RowMenu），
+   删除会让那个菜单变成一串裸按钮（无底、无边框、无层级）。
+
+   定位用 portal + fixed，按光标贴边翻转；层级 62：压过拖动幽灵(60)、拉伸把手(55)、
+   各类弹窗(50)——就地弹出的一次操作，开着的时候它必须最大。
+   造型与更新弹窗同一套：实底 + 一圈强发丝线，不靠阴影。 */
 .chart-menu {
   position: fixed;
   z-index: 62;
@@ -926,7 +955,7 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
-/* 落点动作与全局动作之间的一条线：左右缩进，像「分组」而不是一条合法条目。 */
+/* 分组之间的一条线：左右缩进，像「分组」而不是一条合法条目。 */
 .chart-menu-sep {
   height: 1px;
   margin: 2px 4px;

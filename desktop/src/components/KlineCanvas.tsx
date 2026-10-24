@@ -58,6 +58,7 @@ import {
   scheduleChartViewPrefsSave,
 } from '../lib/chartViewPrefs';
 import { minutesOf } from '../lib/intervals';
+import { isSameLine, type DrawTool, type LineSelection } from '../lib/lineSelection';
 import { nearestLineWithin, type PriceLine } from '../lib/priceLines';
 import {
   clipLineToRect,
@@ -97,7 +98,7 @@ const OLDER_MARGIN_MAX = 120;
 /** 价格刻度偏离自动量程时的复位小标（缩放或平移都会出现）。 */
 const RESET_BADGE_TEXT = '刻度已调 · 复位';
 const RESET_BADGE_H = 16;
-/** 两点直线：菜单起笔之后，第二次落点的最短距离。太近就当这一下还没落定，别画出退化的线。 */
+/** 两点直线：起笔之后，第二次落点的最短距离。太近就当这一下还没落定，别画出退化的线。 */
 const TREND_MIN_DRAW_PX = 8;
 /** 待定起点的把手半径（画出来的大小；命中不用它 —— 画布上没有抓取）。 */
 const TREND_HANDLE_R = 3.5;
@@ -232,9 +233,10 @@ function roundRect(
 
 /**
  * 画布指针的取值。`''` = 不设内联样式，回落到 CSS 里 `.chart-canvas` 的那枚空心圆环；
- * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）。
+ * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）；
+ * `'crosshair'` = 划线工具已就位（这一下点下去是落点，不是拖拽）。
  */
-type CursorKind = '' | 'pointer' | 'on-line' | 'grabbing' | 'move' | 'ns-resize';
+type CursorKind = '' | 'pointer' | 'on-line' | 'crosshair' | 'grabbing' | 'move' | 'ns-resize';
 
 /**
  * 画布指针的**唯一出口**：`on-line` 靠 CSS 类，其余走内联 `style.cursor`。
@@ -400,37 +402,10 @@ function drawLineNote(
   return { x, y };
 }
 
-/** 右键落在什么上面 —— 决定菜单给哪几条。 */
-export type ChartMenuHit =
-  /**
-   * 空白处：`price` 是落点反算出来的价格；`anchor` 是同一个落点的数据空间坐标
-   * （「从这里画直线」的第一点就用它；图上还没有数据时为 null —— 那时没有时间锚点）。
-   */
-  | { kind: 'empty'; price: number; anchor: TrendAnchor | null }
-  /** 一条水平线（`alert` 决定菜单里是「设成告警」还是「取消告警」，`note` 决定「加备注」还是「改备注」）。 */
-  | { kind: 'hline'; index: number; price: number; alert: boolean; note: string }
-  /** 一条两点直线（`note` 同上）。 */
-  | { kind: 'trend'; index: number; note: string };
-
-/**
- * 菜单里那条「从这里画直线」落下的一次性信号。
- * `seq` 每递一次就重新起线：只带 anchor 的话，连着两次点在同一处会被 React 当成
- * 同一个 state（不触发 effect），第二次就静默没能开始。
+/*
+ * 画布**不再**往外报「右键落在什么上面」—— 右键菜单已整档移除（2026-10-24）。
+ * 落点命中的判定留在画布内部：命中谁就 `onSelect` 谁，改哪条线由 ChartView 的划线区按钮决定。
  */
-export interface TrendSeed {
-  anchor: TrendAnchor;
-  seq: number;
-}
-
-/** 画布请求弹右键菜单：菜单本身在 ChartView（画布只报落点，不画浮层）。 */
-export interface ChartMenuRequest {
-  /** 视口坐标（菜单是 `position: fixed` 的浮层，直接按光标定位）。 */
-  x: number;
-  y: number;
-  hit: ChartMenuHit;
-  /** 纵向刻度是否已被拖离自动量程 —— 决定给不给「复位纵向刻度」那一条。 */
-  adjusted: boolean;
-}
 
 interface Props {
   candles: Bar[];
@@ -463,31 +438,35 @@ interface Props {
   resetKey: string;
   /**
    * 用户画的水平线（价格 + 告警标记）与两点直线。状态与落盘都在 ChartView 侧（`useDrawings`），
-   * 这里只负责画与命中判定（右键菜单要知道「压着哪条线」）—— 画布不做持久化。
+   * 这里只负责画、命中判定与拖动 —— 画布不做持久化。
    */
   priceLines: PriceLine[];
   trendLines: TrendLine[];
   /**
-   * 菜单里「从这里画直线」落下的一次性起点；`null` = 没有画了一半的直线。
-   * 换了它就把第一点落在这个锚点上，之后鼠标一动预览线跟着走、左键再落一下就成线
-   * （Esc / 右键撤销）。新增、删除、清空全在右键菜单里；已有线的**改位**手势是直接拖，
-   * 但只在未锁定时（见 `linesLocked`）。
+   * 划线区里选中的线型（`none` = 没在画）。
+   *
+   * 工具激活期间左键落点就是「画」，不会去选线；水平线落一次即成，
+   * 两点直线落两次（第一次起笔、第二次成线，Esc 撤掉起笔）。
    */
-  trendSeed: TrendSeed | null;
+  tool: DrawTool;
+  /**
+   * 当前选中的线（`null` = 没选中）。**只有选中的线能拖** —— 选中是「我在改这一条」的凭据，
+   * 也是划线区切换成编辑按钮条的开关（见 ChartView）。
+   */
+  selection: LineSelection | null;
+  /** 点图上报：命中一条线就选中它，落空就取消选中（`null`）。 */
+  onSelect: (selection: LineSelection | null) => void;
   onAddTrend: (a: TrendAnchor, b: TrendAnchor) => void;
+  /** 工具落点划出一条水平线（价位由画布按落点反算，精度不在画布这侧定）。 */
+  onAddPriceLine: (price: number) => void;
+  /** 一条线画完了：让划线区把工具收回去（一次一个动作，别让它一直举着）。 */
+  onDrawn: () => void;
   /** 整张图的画线是否锁定（默认解锁）：锁上后画布不抓线、不画把手，拖动落点一律还给「拖画布」。 */
   linesLocked: boolean;
   /** 拖动回报（状态与落盘都在 ChartView 的 useDrawings）：水平线改价、直线整体平移、直线端点。 */
   onMovePriceLine: (index: number, price: number) => void;
   onMoveTrendBy: (index: number, deltaTime: number, deltaPrice: number) => void;
   onMoveTrendAnchor: (index: number, end: TrendEnd, anchor: TrendAnchor) => void;
-  /** 右键落点上报（加线、删线、清空都由 ChartView 在菜单里做）。 */
-  onMenu: (request: ChartMenuRequest) => void;
-  /**
-   * 递增一次 = 把纵向刻度退回自动量程。菜单里那条「复位纵向刻度」走的就是这个：
-   * 量程意图住在画布的 ref 里，父层没有别的入口能改它。
-   */
-  resetPriceSignal: number;
   /**
    * 时间轴快够到最老一根了（还剩约一屏，见 OLDER_MARGIN_*）—— 请上层补一页更早的。
    * 画布只负责上报「到墙了没」；去重、在飞、失败退避都在 ChartView（它才知道当前标的是谁）。
@@ -508,14 +487,16 @@ export function KlineCanvas({
   resetKey,
   priceLines,
   trendLines,
-  trendSeed,
+  tool,
+  selection,
+  onSelect,
   onAddTrend,
+  onAddPriceLine,
+  onDrawn,
   linesLocked,
   onMovePriceLine,
   onMoveTrendBy,
   onMoveTrendAnchor,
-  onMenu,
-  resetPriceSignal,
   onNeedOlder,
 }: Props) {
   const series = useMemo(
@@ -550,7 +531,7 @@ export function KlineCanvas({
   /** 复位小标上一帧的落点，供点击命中判定；不在图上时为 null。 */
   const badgeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   /**
-   * 画了一半的直线：起点（菜单里「从这里画直线」落下的那个锚点）与预览的当前点。
+   * 画了一半的直线：起点（划线区选了「直线」后的第一次落点）与预览的当前点。
    * `to` 为空 = 还没动过（只有起点圆点），移动后才出现预览线。
    * 内容一律是**数据空间**锚点，所以预览期间自动量程变化也不会甩开鼠标。
    */
@@ -580,38 +561,32 @@ export function KlineCanvas({
    * 事件监听只在挂载时绑一次（见下面手势 effect 的依赖），闭包里拿不到新 props，
    * 所以一律从这里读；同步 effect **不写依赖数组**，保证每轮渲染后都是最新的，
    * 且声明在绘制 effect 之前（effect 按声明顺序跑，先同步再画）。
+   *
+   * 抽成一个对象字面量再赋值，而不是两处各抄一遍字段清单 —— 漏一个字段的表现是
+   * 「某个交互始终读到旧值」，排查成本远高于这里多一个变量。
    */
-  const modelRef = useRef({
+  const liveModel = {
     series,
     heights,
     interval,
     tickSize,
     priceLines,
     trendLines,
+    tool,
+    selection,
     linesLocked,
+    onSelect,
     onAddTrend,
+    onAddPriceLine,
+    onDrawn,
     onMovePriceLine,
     onMoveTrendBy,
     onMoveTrendAnchor,
-    onMenu,
     onNeedOlder,
-  });
+  };
+  const modelRef = useRef(liveModel);
   useEffect(() => {
-    modelRef.current = {
-      series,
-      heights,
-      interval,
-      tickSize,
-      priceLines,
-      trendLines,
-      linesLocked,
-      onAddTrend,
-      onMovePriceLine,
-      onMoveTrendBy,
-      onMoveTrendAnchor,
-      onMenu,
-      onNeedOlder,
-    };
+    modelRef.current = liveModel;
   });
 
   /**
@@ -650,6 +625,7 @@ export function KlineCanvas({
       priceLines: pl,
       trendLines: tl,
       linesLocked: lock,
+      selection: sel,
     } = modelRef.current;
     const mh = gh.mainH;
     const list = s.candles;
@@ -818,13 +794,24 @@ export function KlineCanvas({
      * 所以**任何线都不许从牌面上穿过去**，只能在所有线之后画。
      */
     const noteChips: { text: string; x: number; y: number; fg: string; bg: string }[] = [];
+    /** 选中的那条线：加粗 + 一层同色光晕（不换色 —— 红/黄本身就是语义，选中只是临时状态）。 */
+    const selPrice = sel?.kind === 'price' ? sel.index : -1;
+    const selTrend = sel?.kind === 'trend' ? sel.index : -1;
     if (pl.length > 0) {
-      ctx.lineWidth = 1;
-      for (const line of pl) {
+      pl.forEach((line, index) => {
         const y = yOf(toFraction(mainR, line.price), mainTop, mh);
-        if (y < mainTop || y > mainBottom) continue;
+        if (y < mainTop || y > mainBottom) return;
         const color = line.alert ? p.down : p.line;
+        const selected = index === selPrice;
+        if (selected) {
+          ctx.globalAlpha = 0.22;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 7;
+          hline(ctx, 0, plotW, y);
+          ctx.globalAlpha = 1;
+        }
         ctx.strokeStyle = color;
+        ctx.lineWidth = selected ? 2 : 1;
         hline(ctx, 0, plotW, y);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
         // 告警线红底纸色字、普通画线黄底深字。
@@ -837,39 +824,49 @@ export function KlineCanvas({
             bg: color,
           });
         }
-      }
+      });
     }
 
     // 用户画的两点直线：**实线**、与水平线同色（黄）。两者只差形状 —— 横线读作「一个价位」、
-    // 斜线读作「一条斜率」，颜色不必再分工。端点把手只在**未锁定**时画：把手是「这条线能拖」
-    // 的信号，锁上后画布不抓线，不留任何可拖的痕迹。
+    // 斜线读作「一条斜率」，颜色不必再分工。端点把手**只画在选中的那条上**：把手是
+    // 「这条线现在能拖」的信号，没选中就没有能拖的理由（0.1.x 起先选中、后拖动）。
     ctx.strokeStyle = p.line;
     ctx.lineWidth = 1;
-    for (const line of tl) {
+    tl.forEach((line, index) => {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
+      const selected = index === selTrend;
+      if (selected) {
+        ctx.globalAlpha = 0.22;
+        ctx.strokeStyle = p.line;
+        ctx.lineWidth = 7;
+        infiniteLine(a.x, a.y, b.x, b.y);
+        ctx.globalAlpha = 1;
+      }
+      ctx.strokeStyle = p.line;
+      ctx.lineWidth = selected ? 2 : 1;
       infiniteLine(a.x, a.y, b.x, b.y);
       // 备注挂在**看得见的那个锚点**旁：A 被判出绘图区（线画到未来/过去很远）就换 B ——
       // 否则「给这条直线写了备注但图上找不到」。
-      if (!line.note) continue;
+      if (!line.note) return;
       const inView = (pt: { x: number; y: number }) =>
         pt.x >= 0 && pt.x <= plotW && pt.y >= mainTop && pt.y <= mainBottom;
       const spot = inView(a) ? a : inView(b) ? b : null;
-      if (!spot) continue;
+      if (!spot) return;
       // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）
       noteChips.push({ text: line.note, x: spot.x + 8, y: spot.y, fg: p.onAccent, bg: p.line });
-    }
-    if (!lock) {
-      for (const line of tl) {
-        for (const anchor of [line.a, line.b]) {
-          const pt = anchorPx(anchor, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
-          drawTrendHandle(ctx, pt.x, pt.y, p, mainTop, mainBottom, plotW);
-        }
+    });
+    ctx.lineWidth = 1;
+    const selectedTrend = selTrend >= 0 ? tl[selTrend] : undefined;
+    if (!lock && selectedTrend) {
+      for (const anchor of [selectedTrend.a, selectedTrend.b]) {
+        const pt = anchorPx(anchor, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
+        drawTrendHandle(ctx, pt.x, pt.y, p, mainTop, mainBottom, plotW);
       }
     }
 
-    // 画了一半的直线（菜单里「从这里画直线」之后）的预览：起点把手 + 过起点与鼠标的**实线**
-    // （预览的就是成品的样子：一条黄色的无限直线）
+    // 画了一半的直线（划线区选了「直线」、已经落了第一个点）的预览：起点把手 + 过起点与鼠标的
+    // **实线**（预览的就是成品的样子：一条黄色的无限直线）
     const pending = pendingRef.current;
     if (pending) {
       const a = anchorPx(pending.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
@@ -1176,27 +1173,6 @@ export function KlineCanvas({
     draw();
   }, [resetKey, draw]);
 
-  /**
-   * 右键菜单里那条「复位纵向刻度」：父层把信号递增一次，画布就只把**纵向**意图退回自动量程
-   * （时间视窗不动 —— 用户调的是刻度，不是看多宽）。0 是初始值，不做任何事。
-   */
-  useEffect(() => {
-    if (resetPriceSignal === 0) return;
-    priceRef.current = initialPriceView();
-    persistView();
-    draw();
-  }, [resetPriceSignal, draw, persistView]);
-
-  /**
-   * 菜单里「从这里画直线」落下的一次性起点：把第一点落在锚点上，等下一次左键落点成线。
-   * 起笔这个动作**只有菜单一个入口**（工具条上没有画图开关了），所以这里没有别的分支。
-   */
-  useEffect(() => {
-    if (!trendSeed) return;
-    pendingRef.current = { a: trendSeed.anchor, to: null };
-    draw();
-  }, [trendSeed, draw]);
-
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -1216,9 +1192,13 @@ export function KlineCanvas({
     if (!canvas) return;
     /**
      * 本场手势的种类，在**按下那一刻**由落点决定：
-     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖已有的画线（只在未锁定时
-     * 可能被抓到，锁上后落点一律走 `pan`）。画新线一律从右键菜单起笔 ——
-     * 菜单里「从这里画直线」落下的起点在 `pendingRef`，左键那一下只是「落第二点」。
+     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖**已选中的**那条线。
+     *
+     * 两条铁律（2026-10-24 起）：
+     * · 未选中任何线时，按下只做「选中 / 取消选中」，绝不拖动 —— 一场误拖会把线挪走，
+     *   而用户以为自己在平移画布；
+     * · 工具（划线区里点的线型）激活时，按下即落点画线，不进入拖拽。
+     * 锁定时整段抓取跳过，落点一律走 `pan`（锁 = 线一根都不许动）。
      * 副图（以及它下面的时间轴）不参与任何手势。
      */
     type Mode = 'none' | 'pan' | 'trend-anchor' | 'trend-body' | 'line';
@@ -1271,7 +1251,7 @@ export function KlineCanvas({
       return top + toFraction(currentMainRange(), price) * (bottom - top);
     };
 
-    /** 主图内的 y → 价格（右键落点的反算）。 */
+    /** 主图内的 y → 价格（工具落点的反算）。 */
     const priceOfY = (y: number) => {
       const { top, bottom } = mainBounds();
       const height = bottom - top;
@@ -1322,7 +1302,7 @@ export function KlineCanvas({
       );
     };
 
-    /** 所有直线的两点像素（右键的线身命中用；无限直线的距离只由这两点定）。 */
+    /** 所有直线的两点像素（单击选中的线身命中用；无限直线的距离只由这两点定）。 */
     const trendBodies = (plotW: number) =>
       modelRef.current.trendLines.map((line) => {
         const a = pxOfAnchor(line.a, plotW);
@@ -1389,8 +1369,46 @@ export function KlineCanvas({
       return x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h;
     };
 
+    /**
+     * 工具落点（划线区里选了线型之后，图上的每一次点击都走这里）。
+     *
+     * · 水平线：落一次即成，价位由落点反算；
+     * · 两点直线：第一次落点起笔（记在 `pendingRef`，之后鼠标一动就预览），第二次成线；
+     *   两下离得太近当作没落成 —— 退化的零长度直线没有意义，也不该被建出来。
+     *
+     * 画成一条就 `onDrawn()` 把工具收回去：一次点击一个动作，举着工具连画只是「多点了一下
+     * 又画一条」的风险，没有收益（要接着画再点一次线型就行）。
+     */
+    const addPointAt = (x: number, y: number, plotW: number, tool: DrawTool) => {
+      const model = modelRef.current;
+      if (tool === 'hline') {
+        const price = priceOfY(y);
+        if (Number.isFinite(price)) model.onAddPriceLine(price);
+        model.onDrawn();
+        crossRef.current = null;
+        draw();
+        return;
+      }
+      const anchor = anchorAt(x, y, plotW);
+      if (!anchor) return; // 图上还没有数据：没有时间锚点，画不出直线
+      const seed = pendingRef.current;
+      if (!seed) {
+        pendingRef.current = { a: anchor, to: null };
+        crossRef.current = null;
+        draw();
+        return;
+      }
+      const a = pxOfAnchor(seed.a, plotW);
+      if (Math.hypot(a.x - x, a.y - y) < TREND_MIN_DRAW_PX) return;
+      model.onAddTrend(seed.a, anchor);
+      pendingRef.current = null;
+      model.onDrawn();
+      crossRef.current = null;
+      draw();
+    };
+
     const onPointerDown = (e: PointerEvent) => {
-      // 只认左键：右键走 contextmenu（弹菜单），按下时不吞掉它
+      // 只认左键：右键既不画线也不选线（浏览器自带菜单已在 contextmenu 里挡掉）
       if (e.button !== 0) return;
       const { rect, plotW } = geom();
       const x = e.clientX - rect.left;
@@ -1403,26 +1421,35 @@ export function KlineCanvas({
         return;
       }
       const { top, bottom } = mainBounds();
-      // 画了一半的直线优先：菜单里「从这里画直线」之后，这一下就是第二点。
-      if (pendingRef.current && x <= plotW && y >= top && y <= bottom) {
-        const anchor = anchorAt(x, y, plotW);
-        if (anchor) {
-          const a = pxOfAnchor(pendingRef.current.a, plotW);
-          // 离第一点太近：当作空点，别画出退化的线（保持待定，等下一次落点）
-          if (Math.hypot(a.x - x, a.y - y) >= TREND_MIN_DRAW_PX) {
-            modelRef.current.onAddTrend(pendingRef.current.a, anchor);
-            pendingRef.current = null;
-          }
+      const inMain = x <= plotW && y >= top && y <= bottom;
+
+      // 工具态：按下即落点，不进拖拽（拖画布请先在划线区把工具点掉）
+      const activeTool = modelRef.current.tool;
+      if (activeTool !== 'none') {
+        if (inMain) addPointAt(x, y, plotW, activeTool);
+        return;
+      }
+
+      // 抓取已有的画线（只在**未锁定 + 已选中**时）：把手 → 直线线身 → 水平线 ——
+      // 把手最小、最难中，排最前。锁定时整段跳过：落点照旧是「拖画布」。
+      //
+      // **没选中的线这一下只选中、不拖动**：一场误拖会把线挪走，而用户以为在平移画布；
+      // 「先单击选中，再按住拖」也让划线区的编辑按钮先出现一次，动作永远有据可查。
+      if (!modelRef.current.linesLocked && inMain) {
+        const model = modelRef.current;
+        /**
+         * 命中一条线：已是选中的那条 → true（继续进入拖拽）；否则只上报选中 → false。
+         */
+        const pick = (next: LineSelection) => {
+          if (isSameLine(model.selection, next)) return true;
+          model.onSelect(next);
           crossRef.current = null;
           draw();
-          return;
-        }
-      }
-      // 抓取已有的画线（只在**未锁定**时）：把手 → 直线线身 → 水平线 —— 与右键菜单的落点
-      // 判定同序（把手最小、最难中，排最前）。锁定时整段跳过：落点照旧是「拖画布」。
-      if (!modelRef.current.linesLocked && x <= plotW && y >= top && y <= bottom) {
+          return false;
+        };
         const handle = nearestTrendHandle(trendHandles(plotW), x, y);
         if (handle) {
+          if (!pick({ kind: 'trend', index: handle.index })) return;
           mode = 'trend-anchor';
           grabIndex = handle.index;
           grabEnd = handle.end;
@@ -1435,6 +1462,7 @@ export function KlineCanvas({
         }
         const body = nearestTrendBody(trendBodies(plotW), x, y);
         if (body >= 0) {
+          if (!pick({ kind: 'trend', index: body })) return;
           mode = 'trend-body';
           grabIndex = body;
           grabLastX = x;
@@ -1448,6 +1476,7 @@ export function KlineCanvas({
         }
         const hit = hitLine(y);
         if (hit >= 0) {
+          if (!pick({ kind: 'price', index: hit })) return;
           mode = 'line';
           grabIndex = hit;
           crossRef.current = null;
@@ -1460,7 +1489,8 @@ export function KlineCanvas({
       }
       // 副图与时间轴：只读区，不参与拖拽
       if (belowMain(y)) return;
-      // 其余 = 拖画布
+      // 空白处 = 取消选中 + 拖画布
+      if (modelRef.current.selection) modelRef.current.onSelect(null);
       mode = 'pan';
       axis = null;
       accumX = 0;
@@ -1545,19 +1575,33 @@ export function KlineCanvas({
         const anchor = anchorAt(x, y, plotW);
         if (anchor) pendingRef.current = { a: pending.a, to: anchor };
       }
-      // 空闲态的指针形状：复位小标 → pointer；压在画线上（把手 / 直线线身 / 水平线，优先级
-      // 依旧按这个序，只是三者**给同一个**指针）→ 四角内向的直角（`on-line`，语义是「这条线
-      // 被选中了」，不再是「抓着会怎么动」）；其余回落到默认的空心圆环。
-      // 待定期间不给抓取提示 —— 这一落点是「落第二点」，不是抓线。
+      // 空闲态的指针形状，按「这一下按下去会发生什么」给：
+      // · 复位小标 → pointer；
+      // · 工具就位 → 十字（这一下是落点）；
+      // · 压在**已选中**的那条线上 → 抓手/上下箭头（按住就能拖）；
+      // · 压在别的线上 → 四角内向的直角（`on-line`，语义是「点一下选中它」）；
+      // · 其余回落到默认的空心圆环。
       let cursor: CursorKind = hitBadge(e) ? 'pointer' : '';
-      if (!cursor && !pending && !modelRef.current.linesLocked) {
+      if (!cursor && modelRef.current.tool !== 'none') cursor = 'crosshair';
+      if (!cursor && !modelRef.current.linesLocked) {
         const { top, bottom } = mainBounds();
         if (x <= plotW && y >= top && y <= bottom) {
-          const onLine =
-            !!nearestTrendHandle(trendHandles(plotW), x, y) ||
-            nearestTrendBody(trendBodies(plotW), x, y) >= 0 ||
-            hitLine(y) >= 0;
-          if (onLine) cursor = 'on-line';
+          const sel = modelRef.current.selection;
+          const onTrend = (index: number) => sel?.kind === 'trend' && sel.index === index;
+          const handle = nearestTrendHandle(trendHandles(plotW), x, y);
+          if (handle) {
+            cursor = onTrend(handle.index) ? 'move' : 'on-line';
+          } else {
+            const body = nearestTrendBody(trendBodies(plotW), x, y);
+            if (body >= 0) {
+              cursor = onTrend(body) ? 'move' : 'on-line';
+            } else {
+              const line = hitLine(y);
+              if (line >= 0) {
+                cursor = sel?.kind === 'price' && sel.index === line ? 'ns-resize' : 'on-line';
+              }
+            }
+          }
         }
       }
       applyCursor(canvas, cursor);
@@ -1605,6 +1649,8 @@ export function KlineCanvas({
       if (belowMain(e.clientY - rect.top)) return;
       // 画了一半的直线时不复位：这两下点击里有一半是「落第二点」，顺手把视窗弹回自动量程会很意外
       if (pendingRef.current) return;
+      // 工具就位时也不复位：那两下是「点了两下落点」，不是「双击看全景」
+      if (modelRef.current.tool !== 'none') return;
       vpRef.current = initialViewport();
       priceRef.current = initialPriceView();
       crossRef.current = null;
@@ -1613,70 +1659,31 @@ export function KlineCanvas({
     };
 
     /**
-     * Esc = 撤掉画了一半的那条直线（待定的第一下）。挂 document 而不是 canvas：
-     * canvas 不可聚焦，焦点多半在别处，挂它自己一条都收不到（与搜索浮层的教训同）。
+     * Esc = 撤掉画了一半的那条直线（待定的第一下），顺手取消选中。
+     * 挂 document 而不是 canvas：canvas 不可聚焦，焦点多半在别处，挂它自己一条都收不到。
      */
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !pendingRef.current) return;
-      pendingRef.current = null;
-      draw();
-    };
-
-    /**
-     * 右键 = **一律弹菜单**（用户拍板）：先按「直线线身 → 水平线 → 空白」判出落点
-     * 落在谁身上，连同这一点的价格与「刻度是否已被拖离自动」一起报给 ChartView，
-     * 由那边弹出浮层。删线、设告警、清空、从这里起一条直线都在菜单里做，
-     * 画布自己不长菜单 —— 它只管像素，菜单要的是「这条线现在能不能动」这类父层语义。
-     *
-     * 只有主图里给菜单：副图、时间轴、右侧刻度列没有「这个价」的语义，右键仍是右键。
-     * 画了一半的直线例外 —— 那一下右键还是「撤销这次画线」，弹菜单反而多一次点击。
-     */
-    const onContextMenu = (e: MouseEvent) => {
-      e.preventDefault(); // 挡住 Chromium 自带的「另存为图片」
-      const model = modelRef.current;
-      const request = (hit: ChartMenuHit) =>
-        model.onMenu({ x: e.clientX, y: e.clientY, hit, adjusted: priceAdjusted(priceRef.current) });
-      const { rect, plotW } = geom();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      const { top, bottom } = mainBounds();
-      // 只有主图里能操作：副图、时间轴、右侧价格刻度列一律不管
-      if (x > plotW || y < top || y > bottom) return;
-      // 把十字光标先钉到这一下右键的落点，再拿同一个 y 算菜单价：菜单里的价和图上那枚价格标
-      // 必须是同一个 y 出来的。光标跟着 pointermove 走，而右键事件的坐标可能和最后一次移动
-      // 差一个物理像素（Retina 上就是半个 CSS 像素）—— 这个刻度下足以差出 6 个价格单位，
-      // 于是同一个落点看着像有两个价（菜单 3853.37 / 标 3847.10）。
-      const n = model.series.candles.length;
-      const fraction = x / plotW;
-      const index = indexAt(vpRef.current, fraction, n);
-      crossRef.current = index >= 0
-        ? { index, y, onBar: overDataAt(vpRef.current, fraction, n) }
-        : null;
-      draw();
-      // 锁定 = 菜单**不识别线**（0.1.27 用户拍板）：压着线右键和空白右键弹同一套菜单，
-      // 线命中（直线线身 / 水平线）整段跳过，落点一律按空白报 —— 改告警 / 删线是解锁态才有的动作。
-      if (!model.linesLocked) {
-        const body = nearestTrendBody(trendBodies(plotW), x, y);
-        if (body >= 0) {
-          request({ kind: 'trend', index: body, note: model.trendLines[body]?.note ?? '' });
-          return;
-        }
-        const hit = hitLine(y);
-        if (hit >= 0) {
-          const line = model.priceLines[hit];
-          request({ kind: 'hline', index: hit, price: line.price, alert: line.alert, note: line.note ?? '' });
-          return;
-        }
-      }
+      if (e.key !== 'Escape') return;
       if (pendingRef.current) {
         pendingRef.current = null;
         draw();
-        return;
       }
-      const price = priceOfY(y);
-      // 空白处给菜单带上数据空间锚点：「从这里画直线」要以这一落点起笔，
-      // 菜单关掉之后量程/视窗可能已经变过，像素坐标不能留过夜。
-      if (Number.isFinite(price)) request({ kind: 'empty', price, anchor: anchorAt(x, y, plotW) });
+      if (modelRef.current.selection) modelRef.current.onSelect(null);
+    };
+
+    /**
+     * 右键 = **只挡掉浏览器自带菜单**（canvas 上的「另存为图片」没有意义），不再弹自定义菜单。
+     *
+     * 划线的入口全在划线区（画什么线、改哪条线都由那里的按钮决定），所以画布这一侧
+     * 不需要知道"落点落在谁身上"。唯一的保留动作：画了一半的直线用右键撤销 ——
+     * 与 Esc 并行，符合"右键 = 退一步"的手感。
+     */
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      if (pendingRef.current) {
+        pendingRef.current = null;
+        draw();
+      }
     };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });

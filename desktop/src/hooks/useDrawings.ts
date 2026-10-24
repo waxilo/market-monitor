@@ -39,10 +39,11 @@ import {
  * 两种线都按「市场:标的」存（与自选同一个键，见 `watchKey`）—— 线画在这段行情上，
  * 换周期不该丢，换标的必须分开。
  *
- * 画线有一个按标的的**锁定开关**（`mm.linesLock`，默认解锁）：解锁时画布可直接拖已有的线
- * （水平线上下拖、直线整体拖 / 端点转角度），锁上后画布不抓任何线、也不画把手；
- * 锁定期间右键**不识别线**（压着线也按空白弹菜单），画新线 / 清空也随之收掉。
- * 新增 / 删除 / 清空仍只在右键菜单里（一次点击一次改动）。
+ * 画线有一个按标的的**锁定开关**（`mm.linesLock`，默认解锁）：解锁时单击画布上的线先选中它，
+ * 再按住才能拖（水平线上下拖、直线整体拖 / 端点转角度）；锁上后画布不抓任何线、也不画把手，
+ * 连选中都不成立，画新线 / 清空也一并收掉（见 ChartView 的划线区）。
+ * **新增 / 删除 / 清空 / 改备注都只在划线区里**（2026-10-24 起右键菜单整档移除）：
+ * 一次点击一次改动，且改哪条线由「当前选中的那条」唯一确定。
  *
  * 另有一个按标的的**显隐开关**（`mm.linesHidden`，默认显示）：眼睛只藏不删，
  * 落盘与告警判定都不受影响（见 lib/linesHidden）。
@@ -65,7 +66,7 @@ function readRaw(key: string): string | null {
 export interface DrawingsApi {
   priceLines: PriceLine[];
   trendLines: TrendLine[];
-  /** 整张图的画线是否锁定（按标的存；默认解锁 = 可拖动，且右键不给画新线）。 */
+  /** 整张图的画线是否锁定（按标的存；默认解锁 = 可选中可拖，且能画新线）。 */
   linesLocked: boolean;
   setLinesLocked: (locked: boolean) => void;
   /** 整张图的画线是否隐藏（按标的存；默认显示 = 眼睛睁着）。只藏不删，告警照常。 */
@@ -98,6 +99,15 @@ export interface DrawingsApi {
    * 必然隔着一次渲染，所以不存在「读到上一帧线表把前一下冲掉」的问题。
    */
   setPriceLines: (lines: PriceLine[]) => void;
+  /**
+   * 以**当前线表**为基准改一次（读闭包里的旧表不安全时用它）。
+   *
+   * 唯一的调用方是 EMA 的分钟自动对齐：它发生在一次异步取数回来之后，与「上一帧线表」
+   * 之间隔着整整一两秒 —— 用户完全可能刚把某条线拖到别处。拿闭包里的旧表去改，
+   * 就会把这一拖连本带利地抹掉（不只是那条 EMA 线，所有线都会退回一两秒前的样子）。
+   * 这里走的是函数式 setState，读到的永远是提交那一刻的线表。
+   */
+  editPriceLines: (change: (current: PriceLine[]) => PriceLine[]) => void;
 }
 
 /**
@@ -151,7 +161,13 @@ export function useDrawings(key: string | null): DrawingsApi {
   const editLines = useCallback(
     (change: (current: PriceLine[]) => PriceLine[]) => {
       if (!key) return;
-      setLineStore((prev) => ({ ...prev, [key]: change(prev[key] ?? []) }));
+      setLineStore((prev) => {
+        const current = prev[key] ?? NO_LINES;
+        const next = change(current);
+        // 原样返回 = 这次没有实际改动（自动对齐一轮下来常常一条都不用动）：
+        // 别造新数组，省掉一次重渲染、一次落盘，以及下游那一串 memo 的失效
+        return next === current ? prev : { ...prev, [key]: next };
+      });
     },
     [key],
   );
@@ -241,5 +257,6 @@ export function useDrawings(key: string | null): DrawingsApi {
     removeTrendLine: removeTrend,
     clear,
     setPriceLines: replaceLines,
+    editPriceLines: editLines,
   };
 }

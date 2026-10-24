@@ -46,3 +46,57 @@ export function SidebarIcon({ open }: { open: boolean }) {
     </svg>
   );
 }
+
+/*
+ * 划线区用的一组图标（2026-10-24）。
+ *
+ * 线型用图形而不是文字缩写：两种线只差「横着」和「斜着」，一条线的小图比
+ * 「水平线 / 直线」六个字更快认出来，也不占那一行本就不宽的位置。
+ */
+const LINE_ICON = { ...BASE, width: 12, height: 12 };
+
+/** 水平线：一条横线，两端各一个小刻度（像钉在价格轴上的那条）。 */
+export function HLineIcon() {
+  return (
+    <svg {...LINE_ICON}>
+      <line x1="1.6" y1="8" x2="14.4" y2="8" />
+      <line x1="4.2" y1="5.6" x2="4.2" y2="10.4" />
+      <line x1="11.8" y1="5.6" x2="11.8" y2="10.4" />
+    </svg>
+  );
+}
+
+/** 两点直线：一条斜线，两端各一个锚点。 */
+export function TrendIcon() {
+  return (
+    <svg {...LINE_ICON}>
+      <line x1="3.4" y1="12.2" x2="12.6" y2="3.8" />
+      <circle cx="3.4" cy="12.2" r="1.5" fill="currentColor" stroke="none" />
+      <circle cx="12.6" cy="3.8" r="1.5" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** 备注：一支笔（右上角一道短斜线是笔尖）。 */
+export function NoteIcon() {
+  return (
+    <svg {...BASE} width={12} height={12}>
+      <path d="M3 13h2.2l7-7-2.2-2.2-7 7Z" />
+      <line x1="9.4" y1="3.4" x2="11.6" y2="5.6" />
+    </svg>
+  );
+}
+
+/** 删除：垃圾桶（`danger` 类给红色，图标本身不表态）。 */
+export function TrashIcon() {
+  return (
+    <svg {...BASE} width={12} height={12}>
+      <path d="M3 4.6h10" />
+      <path d="M6.2 4.6V3.2h3.6v1.4" />
+      <path d="M4.4 4.6l.7 8.2h5.8l.7-8.2" />
+      <line x1="6.8" y1="7" x2="6.8" y2="10.4" />
+      <line x1="9.2" y1="7" x2="9.2" y2="10.4" />
+    </svg>
+  );
+}
+

@@ -38,6 +38,7 @@ import {
   serializeIntervals,
   synthesisOf,
 } from '../lib/intervals';
+import type { DrawTool, LineSelection } from '../lib/lineSelection';
 import { useSourceKey, endpointOf } from '../lib/sources';
 import {
   assignMaColor,
@@ -49,7 +50,7 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
-import { applyEmaLine } from '../lib/emaAnalysis';
+import { alignEmaLines, applyEmaLine } from '../lib/emaAnalysis';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
@@ -57,9 +58,9 @@ import { IntervalPanel } from './IntervalPanel';
 import { MaPanel } from './MaPanel';
 import { EmaAnalysisPanel } from './EmaAnalysisPanel';
 import { EyeIcon } from './EyeIcon';
-import { ChartMenu, type LineNoteTarget } from './ChartMenu';
+import { HLineIcon, NoteIcon, TrashIcon, TrendIcon } from './icons';
 import { LineNoteDialog } from './LineNoteDialog';
-import { KlineCanvas, type ChartMenuRequest, type TrendSeed } from './KlineCanvas';
+import { KlineCanvas } from './KlineCanvas';
 
 const RT_POLL_MS = 2000;
 const HISTORY_BARS = 300;
@@ -155,7 +156,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
    * 一个是这个周期本来就没数据，提示语不同。
    */
   const [load, setLoad] = useState({ loading: true, failed: false, reason: '' });
-  /** 「重新加载」递一次 = 让取数 effect 重跑（与 resetPriceSignal 同套路）。 */
+  /** 「重新加载」递一次 = 让取数 effect 重跑（空数据时那块提示里的按钮）。 */
   const [reloadSeq, setReloadSeq] = useState(0);
   const market = item?.market;
   const symbol = item?.symbol;
@@ -164,29 +165,28 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
    * 换周期不该丢，换标的必须分开。
    */
   const drawings = useDrawings(item ? watchKey(item) : null);
-  /**
-   * 菜单里那条「从这里画直线」落下的一次性信号（第一点 = 右键落点，第二下左键成线）。
-   * 画布侧的动作（预览、成线、Esc 撤销）都住在 KlineCanvas，这一层只递信号。
-   */
-  const [trendSeed, setTrendSeed] = useState<TrendSeed | null>(null);
   const drawingCount = drawings.priceLines.length + drawings.trendLines.length;
   const alertCount = drawings.priceLines.filter((l) => l.alert).length;
-  /** 右键菜单：画布只报「落在哪儿、压着哪条线」，菜单长什么样、点完干什么都在这一层。 */
-  const [menu, setMenu] = useState<ChartMenuRequest | null>(null);
+  /**
+   * 划线区的两个状态（口径见 `lib/lineSelection`）：
+   * · `tool` —— 刚点了哪种线型，接下来在图上落点就是画线；
+   * · `selection` —— 图上哪条线被选中，划线区随之整块变成对它的操作按钮（备注 / 告警 / 删除 / ✕）。
+   * 两者互斥（工具优先），且都只在解锁态成立。
+   */
+  const [tool, setTool] = useState<DrawTool>('none');
+  const [selection, setSelection] = useState<LineSelection | null>(null);
   /**
    * 正在改备注的那条线（`null` = 备注框没开）。
    *
-   * 与菜单分开存：菜单是「一次性定点操作」（点完就收），备注框是一个**等待输入**的弹窗，
-   * 两者生命周期不同 —— 混在一个 state 里就会出现「菜单关了、输入框跟着消失」。
+   * 与选中分开存：选中是「图上那条线被点亮」，备注框是一个**等待输入**的弹窗 ——
+   * 关掉弹窗后线仍然是选中的（用户可能接着点删除），两者的生命周期不一样。
    */
   const [noteEdit, setNoteEdit] = useState<{
-    target: LineNoteTarget;
+    target: LineSelection;
     /** 打开时线已有的备注（预填，改起来不用重打）。 */
     value: string;
     title: string;
   } | null>(null);
-  /** 递增一次 = 让画布把纵向刻度退回自动量程（见 KlineCanvas 的 `resetPriceSignal`）。 */
-  const [resetPriceSignal, setResetPriceSignal] = useState(0);
   // 换数据源 = 换盘口：整段 K 线重拉（历史与增量都吃这个依赖）
   const source = useSourceKey(market);
   /**
@@ -212,6 +212,22 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   /** 持仓量序列（原始点，对齐在画布层做）；换标的 / 换源 / 关副图都会重取或清空。 */
   const [oi, setOi] = useState<OpenInterestSeries | null>(null);
   const oiSelected = subPanes.includes('OI');
+
+  // 换标的（画线的落盘键变了）/ 眼睛把线全藏起来：选中与工具一律作废。
+  // 它们指向的是**上一张图**（或者图上已经看不见）的线，留着只会让划线区对着一条
+  // 不存在的线发指令。
+  useEffect(() => {
+    setTool('none');
+    setSelection(null);
+  }, [item?.market, item?.symbol, drawings.linesHidden]);
+
+  // 线被删掉了（自己删、清空、EMA 面板收回）：选中跟着失效 —— 否则划线区会继续显示
+  // 那条已经不在的线，点一下删除还会按旧下标删到别人。
+  useEffect(() => {
+    if (!selection) return;
+    const count = selection.kind === 'price' ? drawings.priceLines.length : drawings.trendLines.length;
+    if (selection.index >= count) setSelection(null);
+  }, [selection, drawings.priceLines.length, drawings.trendLines.length]);
 
   useEffect(() => {
     localStorage.setItem(INTERVALS_KEY, serializeIntervals(intervals));
@@ -474,11 +490,31 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const cls = changeClass(ticker?.priceChangePercent);
 
   /**
-   * 菜单右侧那列价位：空白落点用反算出来的价，命中水平线用那条线自己的价；
-   * 直线没有「一个价位」可报，留空。精度跟着标的的 tickSize，和轴上的标号同一套。
+   * 划线区在选中态下要显示的那串身份字：
+   * 水平线报价位（那是它唯一的身份），直线只有序号可报。精度跟着 tickSize，与轴上的标号同一套。
    */
-  const menuPriceText =
-    menu == null || menu.hit.kind === 'trend' ? '' : formatPrice(menu.hit.price, instrument?.tickSize);
+  const selectedLine =
+    selection?.kind === 'price' ? drawings.priceLines[selection.index] : undefined;
+  const selectedLineLabel = !selection
+    ? ''
+    : selection.kind === 'price'
+      ? formatPrice(selectedLine?.price ?? NaN, instrument?.tickSize)
+      : `直线 ${selection.index + 1}`;
+
+  /** 打开备注框：预填已有备注，抬头要能认出是哪条线（水平线报价位、直线报序号）。 */
+  function openNote(target: LineSelection) {
+    if (target.kind === 'price') {
+      const line = drawings.priceLines[target.index];
+      setNoteEdit({
+        target,
+        value: line?.note ?? '',
+        title: `水平线 ${formatPrice(line?.price ?? NaN, instrument?.tickSize)}`,
+      });
+    } else {
+      const line = drawings.trendLines[target.index];
+      setNoteEdit({ target, value: line?.note ?? '', title: `直线 ${target.index + 1}` });
+    }
+  }
 
   if (!item) {
     return (
@@ -539,9 +575,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
       </div>
 
-      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图两组，末尾是画线的锁定与小眼睛。
-          「画图」那组（水平线/直线选择、手势提示、清空）已整组拿掉 —— 画线一律走右键菜单，
-          工具条上留「锁定」、画线小眼睛 + 「告警 N」这个纯状态读数。
+      {/* 工具条两行：第一行只有周期，第二行是指标 / 副图 / 划线三组。
+          「划线区」在最末尾（组名「划线」到行尾）：选线型、清空、锁定、眼睛、告警数都在那里，
+          选中图上某条线之后整块变成对那条线的操作按钮 —— 详见下面那一段注释。
           均线不占额外的眼睛：MA / EMA 两枚 chip 自己就是整族显隐开关。
           宽度不够靠 .interval-bar 的 wrap 兜底。 */}
       <div className="bar-stack">
@@ -663,44 +699,169 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             );
           })}
 
-          {/* 工具条末尾：锁定 + 画线小眼睛。锁定管「能不能拖 / 能不能画新线」，
-              小眼睛管「图上看不看得到画线」（只藏不删，隐藏期间告警照常，见 useDrawings/linesHidden）。
-              均线那只眼睛已经收进指标栏：MA / EMA 两枚 chip 本身就是整族显隐开关，
-              这里再放一只眼睛会与它们重复。 */}
-          <div className="sep" />
-          <button
-            type="button"
-            className={`chip${drawings.linesLocked ? ' on' : ''}`}
-            aria-pressed={drawings.linesLocked}
-            title={
-              drawings.linesLocked
-                ? '画线已锁定：不能拖线，右键也不给画新线；点一下解锁'
-                : '锁定全部画线：不能拖线，右键不给画新线'
-            }
-            onClick={() => drawings.setLinesLocked(!drawings.linesLocked)}
-          >
-            锁定
-          </button>
-          <button
-            type="button"
-            className={`chip icon-only${drawings.linesHidden ? ' on' : ''}`}
-            aria-pressed={drawings.linesHidden}
-            title={
-              drawings.linesHidden
-                ? '显示全部画线（隐藏期间线没删，告警照常）'
-                : '隐藏全部画线（只藏不删，告警照常）'
-            }
-            onClick={() => drawings.setLinesHidden(!drawings.linesHidden)}
-          >
-            <EyeIcon off={drawings.linesHidden} />
-          </button>
+          {/* ── 划线区 ────────────────────────────────────────────────
+              从「划线」这个组名到本行末尾，整块就是**划线区**（2026-10-24 定名）：
+              画什么线、改哪条线都只在这里做。右键菜单已整档移除 —— 画线不再依赖
+              「光标刚好落在哪儿」这种隐式状态，靠的是划线区里显式的当前状态。
 
-          {alertCount > 0 && (
+              两种面孔（互斥）：
+              · 平时 = 选线型（水平线 / 直线，点一次进入、再点一次退出）+ 清空 + 锁定 + 眼睛 + 告警数；
+              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 删除 / ✕）。
+                整块换掉而不是并排，是因为这两组动作天生冲突：一边在画新线、一边在改旧线，
+                并排放只会让人在同一行里同时看到两件不相干的事。 */}
+          <div className="sep" />
+          <span className="bar-label grp">划线</span>
+
+          {selection ? (
             <>
-              <div className="sep" />
-              <span className="bar-label alert" title="价格穿越这些红色告警线时弹系统通知（主窗收进托盘也照弹）">
-                告警 {alertCount}
+              {/* 先报清是哪条：水平线读价位（那是它唯一的身份），直线报序号 */}
+              <span className="bar-label draw-target" title="当前选中的线（在图上单击另一条可换）">
+                {selectedLineLabel}
               </span>
+              <button
+                type="button"
+                className="chip icon-only"
+                title={selectedLine?.note ? `改备注：${selectedLine.note}` : '给这条线加备注'}
+                aria-label="备注"
+                onClick={() => openNote(selection)}
+              >
+                <NoteIcon />
+              </button>
+              {selection.kind === 'price' && (
+                <button
+                  type="button"
+                  className={`chip${selectedLine?.alert ? ' on' : ''}`}
+                  aria-pressed={selectedLine?.alert === true}
+                  title={
+                    selectedLine?.alert
+                      ? '取消这条线的价格告警（不再弹通知）'
+                      : '设成告警线：价格穿越时弹系统通知'
+                  }
+                  onClick={() => drawings.setPriceLineAlert(selection.index, !selectedLine?.alert)}
+                >
+                  {selectedLine?.alert ? '取消告警' : '告警'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="chip icon-only danger"
+                title="删除这条线"
+                aria-label="删除"
+                onClick={() => {
+                  if (selection.kind === 'price') drawings.removePriceLine(selection.index);
+                  else drawings.removeTrendLine(selection.index);
+                  setSelection(null);
+                }}
+              >
+                <TrashIcon />
+              </button>
+              <button
+                type="button"
+                className="chip icon-only"
+                title="取消选中（Esc）"
+                aria-label="取消选中"
+                onClick={() => setSelection(null)}
+              >
+                ✕
+              </button>
+            </>
+          ) : (
+            <>
+              {/* 线型：点一次进入（图上左键 = 落点，光标变十字），再点一次退出。
+                  画成一条自动收回，见 KlineCanvas 的 addPointAt。锁定时不给画。 */}
+              <button
+                type="button"
+                className={`chip with-icon${tool === 'hline' ? ' on' : ''}`}
+                aria-pressed={tool === 'hline'}
+                disabled={drawings.linesLocked}
+                title={
+                  drawings.linesLocked
+                    ? '画线已锁定：先解锁才能画（点右边「锁定」）'
+                    : tool === 'hline'
+                      ? '正在画水平线：在图上点一下就是它的价位；再点这里退出'
+                      : '画水平线：点这里，然后在图上点一下落点'
+                }
+                onClick={() => setTool(tool === 'hline' ? 'none' : 'hline')}
+              >
+                <HLineIcon />
+                水平线
+              </button>
+              <button
+                type="button"
+                className={`chip with-icon${tool === 'trend' ? ' on' : ''}`}
+                aria-pressed={tool === 'trend'}
+                disabled={drawings.linesLocked}
+                title={
+                  drawings.linesLocked
+                    ? '画线已锁定：先解锁才能画（点右边「锁定」）'
+                    : tool === 'trend'
+                      ? '正在画直线：点两下成线（第二点离第一点太近不算）；Esc 撤掉起点'
+                      : '画两点直线：点这里，然后在图上点两下成线'
+                }
+                onClick={() => setTool(tool === 'trend' ? 'none' : 'trend')}
+              >
+                <TrendIcon />
+                直线
+              </button>
+              {/* 清空是破坏性动作，与画新线同门：锁定时一并收掉（锁 = 线一根都不许动） */}
+              <button
+                type="button"
+                className="chip icon-only danger"
+                disabled={drawingCount === 0 || drawings.linesLocked}
+                title={
+                  drawingCount === 0
+                    ? '当前标的还没有画线'
+                    : `清空当前标的的全部画线（${drawingCount} 条，画线会一起没）`
+                }
+                aria-label="清空全部画线"
+                onClick={() => {
+                  drawings.clear();
+                  setSelection(null);
+                }}
+              >
+                <TrashIcon />
+              </button>
+              {/* 锁定管「线能不能动 / 能不能画」，眼睛管「图上看不看得到」 */}
+              <button
+                type="button"
+                className={`chip${drawings.linesLocked ? ' on' : ''}`}
+                aria-pressed={drawings.linesLocked}
+                title={
+                  drawings.linesLocked
+                    ? '画线已锁定：不能选线、不能拖、不能画新线；点一下解锁'
+                    : '锁定全部画线：不能选线、不能拖、不能画新线'
+                }
+                onClick={() => {
+                  const next = !drawings.linesLocked;
+                  drawings.setLinesLocked(next);
+                  // 锁上的一瞬间把选中与工具都收掉：锁定的语义就是「一根都不许动」，
+                  // 留着选中态等于留着一个随时会动的入口。
+                  if (next) {
+                    setSelection(null);
+                    setTool('none');
+                  }
+                }}
+              >
+                锁定
+              </button>
+              <button
+                type="button"
+                className={`chip icon-only${drawings.linesHidden ? ' on' : ''}`}
+                aria-pressed={drawings.linesHidden}
+                title={
+                  drawings.linesHidden
+                    ? '显示全部画线（隐藏期间线没删，告警照常）'
+                    : '隐藏全部画线（只藏不删，告警照常）'
+                }
+                onClick={() => drawings.setLinesHidden(!drawings.linesHidden)}
+              >
+                <EyeIcon off={drawings.linesHidden} />
+              </button>
+              {alertCount > 0 && (
+                <span className="bar-label alert" title="价格穿越这些红色告警线时弹系统通知（主窗收进托盘也照弹）">
+                  告警 {alertCount}
+                </span>
+              )}
             </>
           )}
         </div>
@@ -733,53 +894,24 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           theme={theme}
           loading={load.loading}
           resetKey={`${item.market}|${item.symbol}|${interval}`}
-          // 眼睛隐藏 = 直接喂空数组：画、价格标、命中判定（右键/拖抓）自然全关，画布不用知道「隐藏」这回事
+          // 眼睛隐藏 = 直接喂空数组：画、价格标、命中判定（选中/拖抓）自然全关，画布不用知道「隐藏」这回事
           priceLines={drawings.linesHidden ? [] : drawings.priceLines}
           trendLines={drawings.linesHidden ? [] : drawings.trendLines}
-          trendSeed={trendSeed}
+          tool={drawings.linesHidden ? 'none' : tool}
+          selection={drawings.linesHidden ? null : selection}
+          onSelect={setSelection}
           onAddTrend={drawings.addTrendLine}
+          onAddPriceLine={(price) => drawings.addPriceLine(price, false)}
+          onDrawn={() => setTool('none')}
           linesLocked={drawings.linesLocked}
           onMovePriceLine={drawings.movePriceLine}
           onMoveTrendBy={drawings.moveTrendBy}
           onMoveTrendAnchor={drawings.moveTrendAnchor}
-          onMenu={setMenu}
-          resetPriceSignal={resetPriceSignal}
           onNeedOlder={loadOlder}
         />
       )}
 
-      {menu && (
-        <ChartMenu
-          x={menu.x}
-          y={menu.y}
-          hit={menu.hit}
-          priceText={menuPriceText}
-          drawingCount={drawingCount}
-          linesLocked={drawings.linesLocked}
-          adjusted={menu.adjusted}
-          onAddLine={drawings.addPriceLine}
-          onRemoveLine={drawings.removePriceLine}
-          onSetAlert={drawings.setPriceLineAlert}
-          onRemoveTrend={drawings.removeTrendLine}
-          onStartTrend={(anchor) => setTrendSeed((prev) => ({ anchor, seq: (prev?.seq ?? 0) + 1 }))}
-          onEditNote={(target, note) =>
-            setNoteEdit({
-              target,
-              value: note,
-              // 抬头要能认出是哪条线：水平线报价位（那是它唯一的身份），直线只有序号可报
-              title:
-                target.kind === 'price'
-                  ? `水平线 ${formatPrice(drawings.priceLines[target.index]?.price ?? NaN, instrument?.tickSize)}`
-                  : `直线 ${target.index + 1}`,
-            })
-          }
-          onClear={drawings.clear}
-          onResetPrice={() => setResetPriceSignal((n) => n + 1)}
-          onClose={() => setMenu(null)}
-        />
-      )}
-
-      {/* 备注输入框：菜单点完就收起，这一层自己等着用户敲字（保存即落盘，清空即删备注） */}
+      {/* 备注输入框：划线区的「备注」按钮打开，这一层自己等着用户敲字（保存即落盘，清空即删备注） */}
       {noteEdit && (
         <LineNoteDialog
           title={noteEdit.title}
@@ -822,6 +954,8 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           点一行 = 把这一档落成图上一条**系统划线**（自动备注「1时EMA50」，带 origin 身份落盘，
           面板不关，可连点几道）：没画就画、漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
           带着身份落盘，面板重开时那几行才能回显「已画 / 待对齐」。
+          每一轮取数回来（手动刷新 + 每分钟自动）都把系统划线拉到新值：EMA 是活的，
+          线得跟着走。手画的线一概不动。
           点行内周期小方框才切周期 —— 切完把面板关掉，不挡着图。 */}
       {emaPanelOpen && (
         <EmaAnalysisPanel
@@ -841,6 +975,14 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             // 画 / 对齐之后图上多了条看得见的东西：眼睛闭着就得自动睁开，否则这一下
             // 就是「点了没反应」。取消时不碰 —— 该保留用户自己那个开关。
             if (plan.did !== 'remove' && drawings.linesHidden) drawings.setLinesHidden(false);
+          }}
+          onLevels={(levels) => {
+            // 先用函数式写法读**提交那一刻**的线表：这一轮取数飞了一两秒，期间用户很可能
+            // 刚拖过某条线，拿闭包里的旧表去覆盖会把那一拖连本带利抹掉。
+            drawings.editPriceLines((current) => {
+              const plan = alignEmaLines(current, levels);
+              return plan.moved > 0 ? plan.lines : current;
+            });
           }}
           onPickInterval={(iv) => {
             setInterval_(iv);
