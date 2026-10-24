@@ -81,7 +81,7 @@
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
 - 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`、`desktop-v0.1.39`、`0.9.52`、
-  `desktop-v0.1.40`、`0.9.53`。
+  `desktop-v0.1.40`、`0.9.53`、`0.9.54`、`desktop-v0.1.41`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -469,4 +469,33 @@ Release run **40084940181** 绿（Android ~3min）、Desktop Release run **40084
 - ⚠️ 无头 Chrome 验收脚本三条硬规矩（这轮全踩了一遍）：dist 别和后台 build 抢（先 build 完再跑）；
   页面上下有**两条** `.interval-bar`，入口在第二条；spawn 的 vite preview 必须在 `finally` 里 `kill()`，
   否则 node 打完结果还不退出、还占着 4173。
+
+## 0.9.54 / desktop 0.1.41（双端同发，2026-10-24 晚）
+
+「K 线『补更早历史』的触发判据统一成 `needsOlder`（视窗左端进入 24–120 根提前量即算，与手势方向无关）」。
+两个 tag 同指 `b2e9c1ca`（本地 `a1b4632` feat(chart) → `ac22110` chore(release)）。
+Release run **40087018064** 绿 2m39s、Desktop Release run **40087022941** 三 job 全绿
+（mac 10:43:15→10:48:10Z / win →10:50:39Z / 发布 →10:50:59Z，合计 7m45s）、main CI run **40087004276** 绿。
+`verify-channel.mjs 0.1.41` → **34/34 PASS**。
+
+- 本轮改动：Android 补上 `onZoom` 上报 + `LaunchedEffect(barCount)` 落地续补；桌面端把上报点从
+  wheel / pointermove / series 三处收敛到 `draw()` 尾巴一处。
+- 桌面：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.41 无 0.1.40 残留、
+  latest.json 0.1.41（pub_date `2026-10-24T10:50:47.113Z`）、两平台 URL 指向本版、内联签名 == `.sig`、
+  两平台 keyid `226b03192e5df60b` == 发版前基线；exe **2789445** 字节 sha256 `a61ed1d5…` == 边车、
+  内嵌 `0.1.41` utf-16le 命中 2 / `0.1.40` 命中 0；
+  CI vite 指纹 `index-CXoxJ9kC.js 316.89` / `index-CQrlH82n.css 35.83`（99 modules）== 本地 `npm run build` 逐字一致。
+- Android：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、只有
+  `market-monitor-0.9.54.apk`（**11186824**，0.9.53 = 11186820，仅差 4 字节）+ `.sha256`；自算 sha256
+  `0b0f293e5a96a13badc4ff03c5cc3c0e63db5363a5fac8a29fd237a082125117` == 边车；apksigner `cf2e20c7…` == 基线；
+  aapt2 `versionCode=66 / versionName=0.9.54`；`classes3.dex` 命中 `needsOlder` ×1 / `MIN_OLDER_MARGIN` ×1 /
+  `MAX_OLDER_MARGIN` ×1（0.9.53 里没有这些标识符）⇒ 包内确为新代码。
+- ✅ 打 tag 前本地跑了 `:app:testDebugUnitTest` **390 例全绿**（1m23s；`-I ../.workbuddy/tmp/init-builddir.gradle
+  --project-cache-dir ../.workbuddy/tmp/agcache --offline`）。
+- push 仍被沙箱拦（`fatal: not a git repository`）：走 `.workbuddy/tmp/api-push-0948.py` 两次
+  （`HEAD~1` → 远端 `98b8089a`；`HEAD --parent 98b8089a` → 远端 `b2e9c1ca`）；打 tag 用
+  `.workbuddy/tmp/tag-0141-0954.py`（**先断言远端 tree == 本地 tree**，两个 tag 一次打完）。
+- ⚠️ **`gh release download 0.9.54 -R waxilo/market-monitor` 报 `release not found`** —— 版本号 tag 只是
+  **触发器**，产物挂在固定通道 `android-latest` / `desktop-latest` 上，按 tag 下载必然失败；
+  要下就 `-p <产物名>` 到通道，或直接 `gh release download android-latest`。
 
