@@ -415,3 +415,26 @@ commit 自动 cancel，正常）。`verify-channel.mjs 0.1.37` → **34/34 PASS*
 - 用掉的 tag 追加：`0.9.52`。
 
 
+## desktop 0.1.39（只发桌面端，2026-10-24 下午）
+
+「EMA 面板回显系统划线（origin 身份 + 已画/待对齐 + 孤儿线提示）」。Desktop Release run **40076960846**
+三 job 全绿（08:09:53 → 08:16:15Z，**6m22s**：win 08:10:44 打出 vite 产物、发布 job 18s）；main CI run
+**40076927040** 绿。`verify-channel.mjs 0.1.39` → **34/34 PASS**。
+
+- 两个 commit：feat `937e733`（6 个源文件 + `memory/desktop.md`，7 files +443/−74）→ 远端 `06a5d315`；
+  chore(release) `58e3063`（只 bump `tauri.conf.json` 0.1.38→0.1.39）→ 远端 `f402ed95`。
+  tag `desktop-v0.1.39`（附注 tag，`.workbuddy/tmp/tag-0139.py` 走 `POST /git/tags` + `/git/refs`）→ `a472835b`。
+  ⇒ **桌面端版本号唯一载体仍是 `tauri.conf.json`**：`package.json` / `Cargo.toml` 一直是 0.1.0（构建与身份分离），别顺手 bump。
+- `desktop-latest` id/created_at 原地不变（`398800166` / `2026-09-28T12:55:50Z`）、8 产物全 0.1.39 无 0.1.38 残留、
+  latest.json 0.1.39（pub_date `2026-10-24T08:16:01.541Z`）、两平台 URL 指向本版、内联签名 == `.sig`、
+  两平台 keyid `226b03192e5df60b` == 发版前基线。
+- exe **2791011** 字节 sha256 `39cc6a7af9…` == 边车、内嵌 `0.1.39` utf-16le 命中 2 / `0.1.38` 命中 0；
+  dmg 4439168、mac app.tar.gz 4364741（0.1.38：4436754 / 4362022）。
+- 包内新前端：CI vite 指纹 `index-O_sf9lRl.js 315.05` / `index-CBmnEC-Q.css 35.45`（**99 modules**）
+  == 本地 `npm run build` 逐字一致（两平台一致）。
+- 发版前本地：`verify-ema-line-echo.mjs` **32/32**、`tsc --noEmit` 绿、`npm run build` 绿（99 modules）。
+- ⚠️ 开工时 `git status -sb | head -3` 只显示了两行 —— **别用 head 截断判断「改动还在不在」**，
+  本次差点误判成「另一个会话把在研改动冲掉了」（其实 9 个文件都在，是被 head 切掉）。
+  另外本轮开始前另一个会话已把 main 推到 `2e1bada`（0.9.52 的 docs(memory)），push 前的 parent 就用它。
+- ⚠️ 用户线的**老存档认领**已在 0.1.39 内验证（`echo-legacy-check.ts` 用真实 localStorage 喂纯函数）：
+  `6时EMA200` / `1周EMA100` 都命中 → 待对齐、点一下 = `align` 不叠线。
