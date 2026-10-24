@@ -127,3 +127,27 @@ val SectionOverlineStyle = TextStyle(
     lineHeight = 14.sp,
     letterSpacing = 1.4.sp,
 )
+
+/**
+ * 与标题**同一行**的动作文字（「刷新」「关闭」这类）。
+ *
+ * 为什么不能直接用 [Typography.labelLarge]（15sp）：**中文比拉丁大写字母看起来大**。
+ * 标的名是 `BTC/USDT` 这种全大写拉丁串，它的视觉高度只有 cap-height（≈0.72em，
+ * 16sp 的字只占 11.4sp）；而「刷新」是汉字，按字面框撑满（≈0.86em，15sp 就占 12.9sp）。
+ * 于是同一行里右侧那个 15sp 的中文按钮反而比 16sp 的标题还高出一成 —— 标题被压了一头，
+ * 看着就是「刷新这个字怎么比标的名还大」（2026-10-24 用户截图指出）。
+ *
+ * 所以同行动作统一**比标题低一档**（16sp 标题配 14sp 动作）：14 × 0.86 ≈ 12.0sp，
+ * 与 16 × 0.72 ≈ 11.4sp 基本齐平，层级关系也回到「标题是主、操作是从」。
+ * 不再往 13sp 压：那会明显小于全 App 其它按钮（labelLarge 15sp），同一颗按钮换个
+ * 位置就换了字号，比差这一两像素更难解释。
+ *
+ * lineHeight 取 21sp（= titleMedium 的行高）：两个盒子等高、都在各自行盒里居中，
+ * 居中后基线才不会差出半像素。
+ */
+val InlineActionStyle = TextStyle(
+    fontFamily = Sans,
+    fontWeight = FontWeight.SemiBold,
+    fontSize = 14.sp,
+    lineHeight = 21.sp,
+)

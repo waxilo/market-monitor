@@ -65,6 +65,7 @@ import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SegmentedControl
 import com.waxilo.marketmonitor.ui.common.TextAction
 import com.waxilo.marketmonitor.ui.theme.ChartLineColors
+import com.waxilo.marketmonitor.ui.theme.InlineActionStyle
 import com.waxilo.marketmonitor.ui.theme.MarketTheme
 import com.waxilo.marketmonitor.ui.theme.PriceTextStyle
 import com.waxilo.marketmonitor.ui.theme.Radius
@@ -88,8 +89,11 @@ import java.util.Locale
  *   不够算这一档（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
  * - **点一行画告警线**：每一行就是一个候选价位，点一下在图上落一条告警线（穿越弹通知），
  *   再点一下取消。面板**不关**，所以可以连着点几道压力位一起画。这条线是普通告警规则
- *   （名字 = `1时EMA50`），面板靠这个名字回显：行尾标「已画」；EMA 每分钟都在动、线停在
- *   画它的那一刻，所以价位对不上当前值的标「待对齐」，点一下把它拉到当前值。
+ *   （名字 = `1时EMA50`），面板靠这个名字回显：行尾标「已画」。
+ *   EMA 每分钟都在动，所以**每轮刷新都会把这些自动线拉到新值**（见
+ *   `DetailViewModel.alignEmaRules` → `EmaAnalysis.alignments`）—— 线是用来看的一道墙，
+ *   得长在 EMA 现在的位置上。行尾的「待对齐」因此只剩两种短暂情形：刚被拖过（下一轮就拉回），
+ *   以及这一档这一轮没取到数；点一下那行照样能立刻拉回来。手画的线一概不动。
  *
  * 版式与桌面端不同：桌面端两列并排（宽屏），这里**竖屏用页签切换**、横屏仍两列。
  * 竖屏一行放不下两列（每列不到 180dp，六个字段会挤成一团）；早先的做法是把两侧叠在一列里
@@ -377,10 +381,13 @@ private fun PanelHead(
             }
             // 这一格吃掉剩余宽度：数值贴着标的名，刷新与关闭靠右
             Spacer(Modifier.weight(1f))
+            // 字号走「同行动作」口径：标的名是全大写拉丁（cap-height 只占 0.72em），
+            // 用默认的 15sp 中文按钮会显得比 16sp 的标题还大（见 InlineActionStyle）
             TextAction(
                 text = if (refreshing) "刷新中 $done/$total" else "刷新",
                 onClick = { if (!refreshing) onRefresh() },
                 color = if (refreshing) colors.muted else colors.ink,
+                style = InlineActionStyle,
             )
             Box(
                 modifier = Modifier
@@ -389,7 +396,8 @@ private fun PanelHead(
                     .clickable(onClick = onDismiss),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text = "✕", style = MaterialTheme.typography.titleMedium, color = colors.ink)
+                // ✕ 与「刷新」同一口径：三者在一行里，字号必须一套
+                Text(text = "✕", style = InlineActionStyle, color = colors.ink)
             }
         }
         Row(

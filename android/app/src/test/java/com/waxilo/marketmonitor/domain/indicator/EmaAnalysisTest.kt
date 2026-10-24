@@ -265,4 +265,79 @@ class EmaAnalysisTest {
         val orphans = EmaAnalysis.orphanLineNames(rules, listOf(h1), listOf(50))
         assertEquals(listOf("4时EMA999"), orphans)
     }
+
+    /* ── 刷新后自动对齐（alignments） ────────────────────────── */
+
+    @Test
+    fun `漂了的自动线在刷新后要挪到新值`() {
+        val rules = listOf(rule(7, "1时EMA50", "100.0"))
+        val moves = EmaAnalysis.alignments(rules, listOf(level(h1, 50, 123.5)))
+        assertEquals(listOf(7L), moves.map { it.ruleId })
+        assertEquals(123.5, moves[0].level.value, 0.0)
+        // 落库用的 BigDecimal 就是新值（不对齐 tickSize，见 saveEmaRule）
+        assertEquals(0, BigDecimal.valueOf(123.5).compareTo(moves[0].price))
+    }
+
+    @Test
+    fun `已对齐的自动线不进改动列表（小数位数不同也算对齐）`() {
+        // 库里存 "100.00"、算出来 100.0：equals 不等、compareTo 相等 —— 这就是同一个价位
+        assertTrue(EmaAnalysis.alignments(listOf(rule(7, "1时EMA50", "100.00")), listOf(level(h1, 50, 100.0))).isEmpty())
+    }
+
+    @Test
+    fun `用户手建的预警线一根都不动`() {
+        val rules = listOf(rule(3, "BTC 十万", "90000"), rule(4, "前高", "98000"))
+        assertTrue(EmaAnalysis.alignments(rules, listOf(level(h1, 50, 100.0))).isEmpty())
+    }
+
+    @Test
+    fun `只挪「达到」类的线，其它条件不自动改`() {
+        // ABOVE 是水平比较（price >= target），挪阈值可能当场把「满足」翻过来 ⇒ 凭空弹提醒
+        val above = rule(7, "1时EMA50", "100.0").copy(condition = AlertCondition.ABOVE)
+        assertTrue(EmaAnalysis.alignments(listOf(above), listOf(level(h1, 50, 200.0))).isEmpty())
+        // 没有阈值的那种（区间 / 涨跌幅）本来就没有线可挪
+        assertTrue(EmaAnalysis.alignments(listOf(rule(8, "1时EMA50", null)), listOf(level(h1, 50, 200.0))).isEmpty())
+    }
+
+    @Test
+    fun `英文旧名的线照样跟着走`() {
+        val legacy = listOf(rule(7, "1hEMA50", "100.0"))
+        assertEquals(listOf(7L), EmaAnalysis.alignments(legacy, listOf(level(h1, 50, 110.0))).map { it.ruleId })
+    }
+
+    @Test
+    fun `配置里已经删掉的那一档原地不动`() {
+        val rules = listOf(rule(8, "1时EMA999", "100.0"))
+        assertTrue(EmaAnalysis.alignments(rules, listOf(level(h1, 50, 110.0))).isEmpty())
+    }
+
+    @Test
+    fun `同名多条（旧逻辑叠出来的）一起挪`() {
+        val rules = listOf(rule(9, "1时EMA50", "100.0"), rule(3, "1时EMA50", "101.0"))
+        assertEquals(listOf(9L, 3L), EmaAnalysis.alignments(rules, listOf(level(h1, 50, 120.0))).map { it.ruleId })
+    }
+
+    @Test
+    fun `水位非法时不产生任何改动`() {
+        val rules = listOf(rule(7, "1时EMA50", "100.0"))
+        for (bad in listOf(Double.NaN, 0.0, -1.0, Double.POSITIVE_INFINITY)) {
+            assertTrue("水位 $bad 不该产生改动", EmaAnalysis.alignments(rules, listOf(level(h1, 50, bad))).isEmpty())
+        }
+    }
+
+    @Test
+    fun `规则表或水位表为空时无事可做`() {
+        assertTrue(EmaAnalysis.alignments(emptyList(), listOf(level(h1, 50, 100.0))).isEmpty())
+        assertTrue(EmaAnalysis.alignments(listOf(rule(7, "1时EMA50", "100.0")), emptyList()).isEmpty())
+    }
+
+    @Test
+    fun `对齐之后 lineOf 立刻认得出「已对齐」`() {
+        // 两条路（回显与对齐）必须用同一套判据，否则面板会永远显示「待对齐」
+        val rules = listOf(rule(7, "1时EMA50", "100.0"))
+        val target = level(h1, 50, 108.25)
+        val move = EmaAnalysis.alignments(rules, listOf(target)).single()
+        val aligned = rules.map { if (it.id == move.ruleId) it.copy(threshold = move.price) else it }
+        assertTrue(EmaAnalysis.lineOf(aligned, target)!!.aligned)
+    }
 }

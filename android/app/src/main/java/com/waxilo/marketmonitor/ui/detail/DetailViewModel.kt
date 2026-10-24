@@ -926,6 +926,9 @@ class DetailViewModel(
      *
      * **不清旧值**：结果经 [EmaAnalysis.merge] 并到上一轮上（某周期没取到时沿用它的旧数）。
      * 上一轮还在飞就先取消 —— 两轮结果交错落盘会让表在新旧之间跳。
+     *
+     * 拿到新值的最后一件事是**让图上的自动线跟着走**（[alignEmaRules]）：手动「刷新」与
+     * 每分钟的自动那一轮都经过这里 —— 它俩本来就是同一条路，对齐也该只挂在一处。
      */
     fun refreshEmaAnalysis() {
         val intervals = state.value.intervals
@@ -949,9 +952,13 @@ class DetailViewModel(
                     async { scanOneEmaInterval(iv, barCount).also { emaDone.update { n -> n + 1 } } }
                 }.awaitAll()
             }
-            emaScan.value = EmaAnalysis.merge(emaScan.value, tallyEma(outcomes, periods))
+            val merged = EmaAnalysis.merge(emaScan.value, tallyEma(outcomes, periods))
+            emaScan.value = merged
             emaUpdatedAt.value = System.currentTimeMillis()
             emaRefreshing.value = false
+            // 数值到手：图上的自动线跟着走（与桌面端 onLevels → alignEmaLines 同一时刻）。
+            // 放在 refreshing 落下之后 —— 对齐要写库，别让按钮多转那一会儿。
+            alignEmaRules(merged)
         }
     }
 
@@ -1009,7 +1016,8 @@ class DetailViewModel(
      * 存 EMA 原值，**不对齐 tickSize**。
      *
      * 两个理由：① 桌面端也是原样落，两边数值才对得上；② 一旦四舍五入，「已对齐」这个判据
-     * 就永远不成立（线价被改过，与下一轮的 EMA 值不可能再相等），面板会满屏「待对齐」。
+     * 就永远不成立（线价被改过，与下一轮的 EMA 值不可能再相等），面板会满屏「待对齐」，
+     * 而且每轮刷新都判成「漂了」，[alignEmaRules] 会不停写库（写得还是同一个价）。
      * 规则表本身不校验刻度（那条校验只在预警编辑器里）。
      */
     private suspend fun saveEmaRule(row: EmaLevelRow, note: String) {
@@ -1046,6 +1054,34 @@ class DetailViewModel(
         // 只是重新打开告警（价位没变）时不能清，那会把「已经满足」的边沿判断重置。
         if (moved) alerts.saveState(ruleId, AlertState())
         showNotice("已对齐 $note 到 ${priceLabel(price)}")
+    }
+
+    /**
+     * 每轮扫描结束后把图上的 EMA 自动线拉到新值（判据见 [EmaAnalysis.alignments]）。
+     *
+     * 与上面的人工对齐 [alignEmaRule] 有两处**故意不同**：
+     *
+     *  - **不改 `enabled`**：用户可能在预警页特意关掉了这条线，每分钟自动打开一次就成了
+     *    骚扰；人工点那一下是「我要它盯着」，自动这一趟不是。
+     *  - **不清 `AlertState`**：自动对齐每 60 秒就可能执行一次，每次都清 `fired` 会让
+     *    「只响一次」的规则永远重新武装；而 REACH 的边沿判定读的是价格本身（`lastPrice`），
+     *    阈值被挪走不会误判，不清更安全。
+     *
+     * 写库是**逐条、静默**的：一条失败不该拖住其余几条，也不该弹提示 —— 这是背景动作，
+     * 下一轮（60 秒后）还会再试。取消失常照样往上抛，别把 cancel 吞成「对齐失败」。
+     */
+    private suspend fun alignEmaRules(scan: EmaScan) {
+        val moves = EmaAnalysis.alignments(symbolRules.value, scan.levels)
+        for (move in moves) {
+            try {
+                val rule = alerts.rule(move.ruleId) ?: continue
+                alerts.saveRule(rule.copy(threshold = move.price))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 静默：下轮重试。这里刻意不 showNotice —— 每分钟弹一次「对齐失败」比不对齐更糟
+            }
+        }
     }
 
     private suspend fun scanOneEmaInterval(interval: CandleInterval, bars: Int): EmaOutcome = try {

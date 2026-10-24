@@ -1,7 +1,9 @@
 package com.waxilo.marketmonitor.domain.indicator
 
+import com.waxilo.marketmonitor.domain.alert.AlertCondition
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
+import java.math.BigDecimal
 
 /**
  * EMA 压力支撑分析：「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA 值
@@ -18,7 +20,8 @@ import com.waxilo.marketmonitor.domain.kline.CandleInterval
  *     它会随机停在任意位置。
  *
  * 落库形态与桌面端不同：桌面端一条「系统划线」是带 `origin` 的独立实体，Android 这边
- * 告警线由 `alert_rule` 派生（一条规则 = 一条线），所以**回显靠规则名**认人，见 [note]。
+ * 告警线由 `alert_rule` 派生（一条规则 = 一条线），所以**回显靠规则名**认人，见 [EmaAnalysis.note]；
+ * **跟随也靠名字**（[EmaAnalysis.alignments] 按名字把线拉到新值，每轮刷新一次）。
  */
 
 /** 一条 EMA 水位（还没跟现价比较）。 */
@@ -74,15 +77,33 @@ data class EmaScan(
 data class EmaLineRef(
     /** 那条告警规则 id —— 改它 / 删它都要用。 */
     val ruleId: Long,
-    /** 线上的价位 —— **不是**当前 EMA 值：线停在画它的那一刻。 */
+    /**
+     * 线上的价位 = 它**现在**在图上钉在哪儿。
+     *
+     * 它与这一档的当前 EMA 值不等，只说明「刚漂过」：用户刚把线拖走，或者这一轮没取到数。
+     * 正常情况下每轮刷新都会把线拉回当前值（见 [EmaAnalysis.alignments]）。
+     */
     val price: Double,
     /** 这条线的告警开着吗（关掉的线仍画在图上，但不会响）。 */
     val enabled: Boolean,
     /** 规则名（= 自动备注，用户可能改过）。 */
     val name: String,
-    /** 线上价位与这一档的当前 EMA 值是否一致（不一致 = 漂了）。 */
+    /** 线上价位与这一档的当前 EMA 值是否一致（不一致 = 漂了，下一轮刷新会拉回）。 */
     val aligned: Boolean,
 )
+
+/**
+ * 一条**要挪的系统划线**：把 [ruleId] 的阈值改成 [price]。
+ *
+ * 只描述「该改成什么」，不碰数据库 —— 落库要 suspend，纯函数层留在这里是为了能单测。
+ */
+data class EmaAlign(
+    val ruleId: Long,
+    /** 目标档位（周期 + 档位 + 新值）。 */
+    val level: EmaLevel,
+) {
+    val price: BigDecimal get() = BigDecimal.valueOf(level.value)
+}
 
 /** 点了面板里一行之后对告警线该做什么。 */
 sealed interface EmaTick {
@@ -265,6 +286,54 @@ object EmaAnalysis {
             hit.aligned && hit.enabled -> EmaTick.Remove(hit.ruleId)
             else -> EmaTick.Align(hit.ruleId)
         }
+    }
+
+    /**
+     * 一轮扫描结束后**该落到线上的改动**：把所有 EMA 自动线拉到各自的新值。
+     *
+     * 与桌面端 `alignEmaLines` 同一条口径 —— 「线跟着 EMA 走」这句话的唯一执行点。
+     * EMA 每分钟都在动，线是拿来看的一道墙，墙必须长在 EMA **现在**的位置上；
+     * 停在画它的那一刻只会让面板说「已画」、图上那条线却离得老远。
+     *
+     * 三条边界，每条都对应一类不该被碰的线：
+     *
+     *  1. **认不出的名字不动**（[AlertRule.name] 不等于任何一档的 [note] / [legacyNote]）。
+     *     用户手建的预警线（`BTC 十万`）价位是他自己的判断，刷新凭什么改。
+     *  2. **只改「达到」条件**（[AlertCondition.REACH]）：这一类规则的触发判据是
+     *     「两次观测价之间穿过了阈值」，只挪阈值不会凭空造出一次穿越（价格确实从旧阈值
+     *     走到新阈值那一侧时算真穿越，那本来就是一次穿越）。而 ABOVE / BELOW 是水平比较
+     *     （`price >= target`），阈值一挪「满足」状态可能当场翻转，于是凭空弹一条提醒 ——
+     *     所以这类规则的线一律不自动改，用户点了面板那一行才走人工对齐。
+     *  3. **只改阈值一个字段**：名字（回显的钥匙）、开关（用户可能特意关掉）、备注、
+     *     重复模式一概保留。**也不动 [com.waxilo.marketmonitor.domain.alert.AlertState]**：
+     *     清状态会把 `ONCE` 的 fired 闸门重新打开，于是「只响一次」的规则每 60 秒复活一次；
+     *     而 REACH 的边沿判定读的是**价格**（`lastPrice`），不是阈值，不清也不会误判。
+     *
+     * 同一档撞上多条同名规则（旧逻辑叠出来的）时**全部拉过去**：它们本来就是同一条 EMA 的
+     * 重复落款，留几条在旧价上反而更难收拾。
+     */
+    fun alignments(rules: List<AlertRule>, levels: List<EmaLevel>): List<EmaAlign> {
+        if (rules.isEmpty() || levels.isEmpty()) return emptyList()
+        // 名字是唯一的跨重启线索（Android 的线上没有 (周期, 档位) 这样的结构化身份字段）
+        val byName = HashMap<String, EmaLevel>(levels.size * 2)
+        for (level in levels) {
+            if (!level.value.isFinite() || level.value <= 0) continue
+            byName[note(level.interval, level.period)] = level
+            byName[legacyNote(level.interval, level.period)] = level
+        }
+        if (byName.isEmpty()) return emptyList()
+
+        val out = ArrayList<EmaAlign>(rules.size)
+        for (rule in rules) {
+            if (rule.condition != AlertCondition.REACH) continue
+            val level = byName[rule.name] ?: continue
+            val threshold = rule.threshold ?: continue
+            // compareTo 而不是 equals：库里存的可能是 `68000.0`、算出来的是 `68000`，
+            // 这两个 BigDecimal 不 equals，但就是同一个价位
+            if (BigDecimal.valueOf(level.value).compareTo(threshold) == 0) continue
+            out += EmaAlign(rule.id, level)
+        }
+        return out
     }
 
     /**

@@ -483,13 +483,20 @@ fun HintRow(
     }
 }
 
-/** 文字按钮：极简风的按钮就是「一段带下划线的文字」，不用填充矩形。 */
+/**
+ * 文字按钮：极简风的按钮就是「一段带下划线的文字」，不用填充矩形。
+ *
+ * [style] 默认走全局的 [Typography.labelLarge]（15sp）；**与标的名同处一行**时改传
+ * [InlineActionStyle]（14sp）—— 中文比拉丁大写字母视觉上大，同一行里不压一档会像
+ * 「刷新」比 `BTC/USDT` 还大（见 Type.kt 里那个样式的注释）。
+ */
 @Composable
 fun TextAction(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     color: Color? = null,
+    style: TextStyle = MaterialTheme.typography.labelLarge,
 ) {
     val colors = MarketTheme.colors
     Text(
@@ -499,7 +506,7 @@ fun TextAction(
             .clickable(onClick = onClick)
             .defaultMinSize(minHeight = 40.dp)
             .padding(horizontal = Spacing.Xs, vertical = Spacing.Xs),
-        style = MaterialTheme.typography.labelLarge,
+        style = style,
         color = color ?: colors.ink,
         fontWeight = FontWeight.SemiBold,
     )
