@@ -388,3 +388,30 @@ commit 自动 cancel，正常）。`verify-channel.mjs 0.1.37` → **34/34 PASS*
   （本次就这样提交了，用 `--amend -F 文件` 修）。以后多行消息一律**先 Write 到文件再 `-F`**。
 - 用掉的 tag 追加：`0.9.51`。
 
+## 0.9.52（只发 Android，2026-10-24 下午）
+
+「详情页/接口弹窗整体收紧（24H 高低搬到价格右侧、周期·指标·副图标题行内化、面板头部三行压两行）
++ chip 置灰不再撤几何 + 接口行卡片化」。Release run **40075806093** 绿 **3m11s**
+（07:51:52 → 07:55:03Z，含 CI 内 pinned-key 断言）、main 的 CI run **40075786474** 绿（Build & unit test）。
+`verify-channel.mjs 0.9.52` → **34/34 PASS**。
+
+- `android-latest` 的 `id` / `created_at`（`398798258` / `2026-09-29T03:22:14Z`）发版前后逐字不变（原地换）；
+  通道里只有 `market-monitor-0.9.52.apk`（**11186824**）+ `.sha256`（65），无 0.9.51 残留。
+- 包内证据：`aapt2 dump badging` → `versionCode=64 / versionName=0.9.52`；自算 sha256 `6646789b…` == 边车；
+  `apksigner --print-certs` 的 cert sha256 `cf2e20c7…` == 基线（DN 仍 `CN=Waxilo, …`）；
+  **`classes3.dex` 命中新文案「每分钟刷新」1 次，已删文案「每 500ms 合并一次推送」0 命中**
+  ⇒ 包内确为新代码（这本轮改动几乎全是布局与配色，新增字符串只有这一条，取证就靠它）。
+- ✅ **打 tag 前先在本地跑了 `:app:testDebugUnitTest`（1m29s，全绿）** —— 兑现 0.9.51 的「发版工作流不跑单测」教训。
+- push 仍走 Git Data API（`.workbuddy/tmp/api-push-0948.py HEAD --slug waxilo/market-monitor --ref main`，
+  **单 commit 且 parent 就是远端 main，不用 `--parent`**；8 个文件 1m20s）→ 远端 `4b840ef6`
+  （本地 `ad31d03`，tree 同为 `71e8e405`）→ `.workbuddy/tmp/tag-0952.py` 打附注 tag
+  （先断言远端 tree == 本地 tree）。推完 `git fetch origin main` + `update-ref refs/heads/main <远端SHA>`
+  对齐（工作区不动），`tag -f -a 0.9.52` 重指。
+- ⚠️ 本轮工作区里还有**另一个会话未提交的桌面端在研改动**（`ChartView.tsx` / `EmaAnalysisPanel.tsx` /
+  `useDrawings.ts` / `emaAnalysis.ts` / `priceLines.ts` / `theme.css`）—— 提交时只 `add` 了 Android 的 5 个源文件
+  + `build.gradle.kts` + 两份 memory，**没有 `git add -A`**。以后发单端版本都按名单 add。
+- 真机验收用的是 debug 包（本轮每次改动都装机截图核过）；release 包 `isMinifyEnabled = false`，
+  与 debug 同观感，因此**没在设备上装 release 包**（签名是正式 keystore，装上去要卸掉 debug 包，得不偿失）。
+- 用掉的 tag 追加：`0.9.52`。
+
+
