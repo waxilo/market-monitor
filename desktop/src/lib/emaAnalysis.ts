@@ -15,7 +15,13 @@
  */
 
 import type { Bar } from './api';
-import type { PriceLine } from './priceLines';
+import {
+  addPriceLine,
+  bindPriceLine,
+  removePriceLine,
+  type LineOrigin,
+  type PriceLine,
+} from './priceLines';
 import { ema } from './indicators';
 
 /** 一条 EMA 水位（还没跟现价比较）。 */
@@ -191,33 +197,147 @@ export function sideOf(gapPercent: number): 'resistance' | 'support' | 'flat' {
   return gapPercent > 0 ? 'resistance' : 'support';
 }
 
-/** 点一条水位时对画线表该做什么（见 `emaAlertAction`）。 */
-export type EmaAlertAction =
-  /** 这个价还没有线：新增一条告警线。 */
-  | { kind: 'add' }
-  /** 已经有一条普通水平线：只把它升级成告警线（不再新增，否则图上会重合两根）。 */
-  | { kind: 'promote'; index: number }
-  /** 已经是一条告警线：删掉它（同一个条目再点一下即取消）。 */
-  | { kind: 'remove'; index: number };
-
-/**
- * 判断「在 EMA 分析面板里点这一档」对当前画线表意味着什么。
+/* ── 系统划线的回显（面板行 ↔ 图上那条线）──────────────────────────────
  *
- * 为什么按**精确价**找线（`===` 而不是带容差）：线是「这个 EMA 值」的化身，
- * 面板里再点一次是同一个快照里的同一个数，必然精确相等；用容差反而会把
- * 「用户刚拖到 81,636.00 的那条线」误认成 81,636.80 的 EMA —— 拖过的线已经
- * 不属于这一档了。这也与 `addPriceLine` 的去重口径一致（同价不重复加）。
+ * 面板里点一行会**代画**一条系统划线（`PriceLine.origin = { kind: 'ema', interval, period }`），
+ * 线在图上与手画的线看不出差别，但身份记在存档里。回显就是反过来读这份身份：
+ *
+ *  - 面板重开时，靠 (周期, 档位) 认出「这一档我已经画过了」→ 行上标「已画」；
+ *  - EMA 每分钟都在动，**线不会自己跟着走**。凡线上价位与这一档当前值不一致的，
+ *    行上标「待对齐」，点一下就把它拉到当前值（这比让它凭空多一条线体面得多，
+ *    也正是旧逻辑的病灶：每点一次漂过的档位就叠一条新线，两条都画着、谁也不准）。
+ *
+ * 一切判断都落在「这一档 ↔ 一条线」上，所以**同一档最多只认一条线**（见 `findEmaLine`）。
  */
-export function emaAlertAction(lines: readonly PriceLine[], price: number): EmaAlertAction {
-  if (!Number.isFinite(price)) return { kind: 'add' };
-  const index = lines.findIndex((line) => line.price === price);
-  if (index < 0) return { kind: 'add' };
-  return lines[index].alert ? { kind: 'remove', index } : { kind: 'promote', index };
+
+/** 图上与某一档 EMA 绑定的那条线（面板行据此回显）。 */
+export interface EmaLineRef {
+  /** 画线表里的下标（`applyEmaLine` 立刻拿它改同一帧的线表，所以别隔着一次渲染用）。 */
+  index: number;
+  /** 线上的价位 —— **不是**当前 EMA 值：线停在画它的那一刻。 */
+  price: number;
+  /** 这条线是否开着价格告警（面板点出来的默认开着，用户可在右键菜单里关）。 */
+  alert: boolean;
+  /** 线上的备注（自动备注，或用户改写后的那句话）。 */
+  note?: string;
+  /** 线上价位与这一档的当前 EMA 值是否**完全一致**（不一致 = 漂了）。 */
+  aligned: boolean;
 }
 
-/** 这个价位上是否已经有一条**告警线**（面板行的红条与文案都看它）。 */
-export function hasEmaAlert(lines: readonly PriceLine[], price: number): boolean {
-  return lines.some((line) => line.price === price && line.alert);
+/** 一档 EMA 在面板里的身份：匹配键 (周期, 档位) + 算漂移用的当前值。 */
+export interface EmaLineKey {
+  interval: string;
+  period: number;
+  value: number;
+}
+
+/** 这一档的系统划线身份 —— 落进 `PriceLine.origin` 的就是它。 */
+export function emaOrigin(interval: string, period: number): LineOrigin {
+  return { kind: 'ema', interval, period };
+}
+
+/**
+ * 在画线表里找这一档 EMA 对应的线，找不到给 null。
+ *
+ * 两道匹配，**身份优先、备注兜底**：
+ *  1. `origin` 里记的 (周期, 档位) 与这一行相同 —— 带上这个字段之后画出来的线；
+ *  2. 没有 `origin`、但备注**正好等于**自动备注（`1时EMA50`）—— 老存档里的线就长这样，
+ *     那时候还没有身份字段。自动备注是 (周期, 档位) 的双射，按它认不会串档；
+ *     手改过备注的老线认不回来，这与「备注就是线的出处」的既有口径一致。
+ *
+ * 同身份撞上多条（旧逻辑每点一次漂过的档位就叠一条）时只认**第一条**：
+ * 回显回答的是「这一档画过没有」，不是「画了几条」。
+ */
+export function findEmaLine(
+  lines: readonly PriceLine[],
+  level: EmaLineKey,
+  note: string,
+): EmaLineRef | null {
+  const refOf = (index: number): EmaLineRef => {
+    const line = lines[index];
+    const ref: EmaLineRef = {
+      index,
+      price: line.price,
+      alert: line.alert,
+      aligned: line.price === level.value,
+    };
+    if (line.note) ref.note = line.note;
+    return ref;
+  };
+  /* 身份优先：两遍扫而不是一遍 —— 老存档的线一定排在前面（它是先画的），
+     一遍扫会先撞上它，于是「已经带身份的那条」永远轮不到。 */
+  let legacy = -1;
+  for (let index = 0; index < lines.length; index++) {
+    const origin = lines[index].origin;
+    if (origin) {
+      if (origin.kind === 'ema' && origin.interval === level.interval && origin.period === level.period) {
+        return refOf(index);
+      }
+      continue;
+    }
+    if (legacy < 0 && note !== '' && lines[index].note === note) legacy = index;
+  }
+  return legacy >= 0 ? refOf(legacy) : null;
+}
+
+/** `applyEmaLine` 干了什么（调用方据此决定要不要把画线眼睛自动睁开）。 */
+export type EmaLineDid =
+  /** 新画了一条。 */
+  | 'add'
+  /** 已有那条被拉到当前值（顺带补上身份 / 打开告警）。 */
+  | 'align'
+  /** 同价上本来是手画的线，被收编成系统划线。 */
+  | 'adopt'
+  /** 已对齐的线被删掉（再点一下即取消）。 */
+  | 'remove'
+  /** 什么都不用做（价位非法）。 */
+  | 'none';
+
+export interface EmaLinePlan {
+  did: EmaLineDid;
+  /** 落盘用的新线表（`did === 'none'` 时原样返回）。 */
+  lines: PriceLine[];
+}
+
+/**
+ * 面板里点一行 = 对画线表做**一次**完整改动，四种结果：
+ *
+ *  - 这一档还**没有**线 → 新画一条（带自动备注与身份，开告警）；
+ *  - 有、且价位与当前值一致、还开着告警 → 删掉（「再点一下取消」的旧手感不变）；
+ *  - 有、但漂了（或告警被关掉）→ **拉到当前值**（`align`）：这一档的位置变了，
+ *    线留在旧价上就成了一条没人认领的横线；
+ *  - 没有绑定线、但**这个价上正好有一条手画的线** → 收编（`adopt`）而不是新增：
+ *    同价再画一条只会重合，删一条时看着像没反应（`addPriceLine` 也这么挡）。
+ *
+ * 返回改好的整张表而不是「动作」：这一下可能同时改价位 + 告警 + 来源 + 备注，
+ * 让调用方逐条调四个接口，中间态就会落盘。
+ */
+export function applyEmaLine(
+  lines: readonly PriceLine[],
+  level: EmaLineKey,
+  note: string,
+): EmaLinePlan {
+  if (!Number.isFinite(level.value) || level.value <= 0) return { did: 'none', lines: [...lines] };
+  const origin = emaOrigin(level.interval, level.period);
+  const hit = findEmaLine(lines, level, note);
+  if (hit) {
+    if (hit.aligned && hit.alert) {
+      return { did: 'remove', lines: removePriceLine(lines, hit.index) };
+    }
+    return {
+      did: 'align',
+      lines: bindPriceLine(lines, hit.index, { price: level.value, alert: true, origin, note }),
+    };
+  }
+  // 精确价：与 `addPriceLine` 的去重口径一致（面板里点的就是同一个快照里的同一个数）
+  const same = lines.findIndex((line) => line.price === level.value);
+  if (same >= 0) {
+    return {
+      did: 'adopt',
+      lines: bindPriceLine(lines, same, { price: level.value, alert: true, origin, note }),
+    };
+  }
+  return { did: 'add', lines: addPriceLine(lines, level.value, true, note, origin) };
 }
 
 /**

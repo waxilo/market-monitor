@@ -17,6 +17,18 @@ import { normalizeLineNote } from './lineNote';
 /** 判定「鼠标落在某条线上」的纵向容差（像素）。太小则难点中，太大则两条近线分不开。 */
 export const LINE_HIT_PX = 4;
 
+/**
+ * 系统划线的**身份**：这条线由哪个分析面板生成、在面板里绑的是哪一行。
+ *
+ * 只有「生成它的那个面板」认这个字段：画布渲染、命中、拖拽、告警判定一概不看它 ——
+ * 一条系统线在图上与用户手画的线没有任何区别。它的唯一用途是**回显**：
+ * 面板再打开时据此认出「这一档我已经在图上划过线了」，而不是再叠一条。
+ *
+ * `kind` 做成联合而不是布尔：以后 MA / 布林带面板也可能代画线，多一个来源只加一支，
+ * 不会出现「是不是系统线」与「哪个系统的线」两处判断各写一遍。
+ */
+export type LineOrigin = { kind: 'ema'; interval: string; period: number };
+
 export interface PriceLine {
   price: number;
   /**
@@ -34,10 +46,52 @@ export interface PriceLine {
    * 与「没有备注」是同一件事，留两个表示法只会让判断多一处。
    */
   note?: string;
+  /**
+   * 系统划线身份（见 `LineOrigin`）。**字段缺失 = 用户划线** —— 右键菜单画出来的、
+   * 老版本存档里的线全都落在这一类，所以判断一律是 `line.origin == null`，
+   * 不要指望有一个 `origin: 'user'` 的显式取值（那会让每条老线在解析时被补一次字段）。
+   */
+  origin?: LineOrigin;
 }
 
 /** 按标的索引的价目表（键 = `市场:标的`）。 */
 export type LineStore = Record<string, PriceLine[]>;
+
+/**
+ * 在一条线上落「备注 / 来源」这两个可缺省字段：**空值 = 删字段**（不存空串、不存 null）。
+ * 两条写入路径（`setLineNote` / `setLineOrigin`）都走它，免得一处记得删、另一处忘了。
+ */
+function withLineFields(
+  base: PriceLine,
+  note: string | null,
+  origin: LineOrigin | null,
+): PriceLine {
+  const next: PriceLine = { ...base };
+  if (note) next.note = note;
+  else delete next.note;
+  if (origin) next.origin = origin;
+  else delete next.origin;
+  return next;
+}
+
+/**
+ * 读一条线的来源字段。认不出的 `kind`（未来版本写的、或存档被手改过）**一律当用户划线**：
+ * 系统划线只是回显用的附注，丢掉它不影响这条线的价位与告警，硬保留反而会让面板
+ * 拿一个不认识的来源去匹配行。
+ */
+function parseOrigin(v: unknown): LineOrigin | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as { kind?: unknown; interval?: unknown; period?: unknown };
+  if (o.kind !== 'ema') return null;
+  if (typeof o.interval !== 'string' || o.interval === '') return null;
+  if (typeof o.period !== 'number' || !Number.isFinite(o.period) || o.period <= 0) return null;
+  return { kind: 'ema', interval: o.interval, period: o.period };
+}
+
+/** 这条线是不是系统画的（缺省 `origin` = 用户画的）。 */
+export function isSystemLine(line: PriceLine): boolean {
+  return line.origin != null;
+}
 
 /** 读一份价目表：坏数据一律丢弃而不是抛错 —— 它是用户右键点出来的，重建成本极低。 */
 export function parseLineStore(raw: string | null): LineStore {
@@ -57,12 +111,14 @@ export function parseLineStore(raw: string | null): LineStore {
       .map((v): PriceLine | null => {
         if (typeof v === 'number') return Number.isFinite(v) ? { price: v, alert: false } : null;
         if (v && typeof v === 'object') {
-          const o = v as { price?: unknown; alert?: unknown; note?: unknown };
+          const o = v as { price?: unknown; alert?: unknown; note?: unknown; origin?: unknown };
           if (typeof o.price !== 'number' || !Number.isFinite(o.price)) return null;
+          const line: PriceLine = { price: o.price, alert: o.alert === true };
           const note = normalizeLineNote(o.note);
-          return note
-            ? { price: o.price, alert: o.alert === true, note }
-            : { price: o.price, alert: o.alert === true };
+          if (note) line.note = note;
+          const origin = parseOrigin(o.origin);
+          if (origin) line.origin = origin;
+          return line;
         }
         return null;
       })
@@ -76,19 +132,21 @@ export function parseLineStore(raw: string | null): LineStore {
  * 加一条线。**同价不重复加** —— 右键落在已有线上走菜单里的「删掉这条线」，
  * 这条规则保证了两条线不会重合成一根（重合了删一条会看着像没反应）。
  *
- * `note` 是**出生备注**（EMA 分析里点一行画线会自动写上「1时EMA50」）。
- * 它走与 `setLineNote` 同一个归一化：空/全空白不落字段（见 `PriceLine.note`）。
+ * `note` 是**出生备注**（EMA 分析里点一行画线会自动写上「1时EMA50」），
+ * `origin` 是**出生身份**（同上，记下它属于哪一档 EMA；手画的不传）。
+ * 两者走与 `setLineNote` / `setLineOrigin` 同一套归一化：空值不落字段。
  */
 export function addPriceLine(
   lines: readonly PriceLine[],
   price: number,
   alert = false,
   note = '',
+  origin?: LineOrigin | null,
 ): PriceLine[] {
   if (!Number.isFinite(price)) return [...lines];
   if (lines.some((l) => l.price === price)) return [...lines];
   const text = normalizeLineNote(note);
-  return [...lines, text ? { price, alert, note: text } : { price, alert }];
+  return [...lines, withLineFields({ price, alert }, text, origin ?? null)];
 }
 
 /** 删第 index 条。越界返回原样（调用方可能拿着上一帧的下标）。 */
@@ -129,14 +187,40 @@ export function setLineNote(
 ): PriceLine[] {
   if (index < 0 || index >= lines.length) return [...lines];
   const next = normalizeLineNote(note);
+  return lines.map((l, i) => (i === index ? withLineFields(l, next, l.origin ?? null) : l));
+}
+
+/**
+ * 给第 index 条线打上 / 摘掉系统划线身份（`null` = 摘掉，它变回一条普通的用户划线）。
+ * 摘掉是**不删线**的：用户想摆脱某个面板的绑定，线本身仍是他画在那儿的价位。
+ */
+export function setLineOrigin(
+  lines: readonly PriceLine[],
+  index: number,
+  origin: LineOrigin | null,
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  return lines.map((l, i) => (i === index ? withLineFields(l, l.note ?? null, origin) : l));
+}
+
+/**
+ * 把第 index 条线**改绑**：价位 / 告警 / 来源一次改到位，备注只在原来没有时补。
+ *
+ * 「改到新价 + 打开告警 + 打上系统身份」这三件事在面板里永远同时发生（那一档漂了，
+ * 把线拉回当前值），拆成三个接口逐次调用就会落一份中间态存档。
+ * 备注不覆盖：用户写过的「缺口上沿」比自动生成的值钱。
+ */
+export function bindPriceLine(
+  lines: readonly PriceLine[],
+  index: number,
+  target: { price: number; alert: boolean; origin: LineOrigin; note?: string },
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  if (!Number.isFinite(target.price)) return [...lines];
   return lines.map((l, i) => {
     if (i !== index) return l;
-    if (!next) {
-      const copy = { ...l };
-      delete copy.note;
-      return copy;
-    }
-    return { ...l, note: next };
+    const note = l.note ?? normalizeLineNote(target.note);
+    return withLineFields({ ...l, price: target.price, alert: target.alert }, note, target.origin);
   });
 }
 

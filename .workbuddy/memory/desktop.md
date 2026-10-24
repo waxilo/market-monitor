@@ -1072,3 +1072,50 @@ contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数�
   配置删掉的档不捡回。自动刷新 `AUTO_REFRESH_MS=60s` 只 `setSeq+1`，与手动共用链路。
   ❗别做「同 key 跳过」的并发保护 —— 关掉重开时旧请求在飞会导致新 effect 被跳过、旧闭包又不收 `refreshing`，
   按钮卡「刷新中」一分钟。`.ema-refresh{min-width:62px}` 防文案切换推歪布局；更新时间只进 title。
+
+## 系统划线（origin）与 EMA 面板回显
+
+- 口径：`PriceLine` 加隐藏字段 `origin?: { kind: 'ema'; interval; period }`，**字段缺失 = 用户划线**。
+  右键画的老线全在这一类，所以判断只写 `line.origin == null`；**没有 `origin:'user'`** ——
+  那会给每条老线补一次字段（迁移量白送），而缺失本身就够表达。
+  `parseOrigin` 认不出的 kind / 非法 period 一律降级成用户划线（宁可少认，不可错认）。
+- 字段写入统一走 `withLineFields`（`setLineNote` / `setLineOrigin` 都过它），保证**改备注不丢 origin**。
+  「补备注」「补来源」是两条独立路径，各自写各自的字段，不要手搓对象字面量。
+- `useDrawings.setPriceLines(lines)`：整体替换当前标的线表。一次点击要同时改**价位 + 告警 + 来源 + 备注**，
+  逐条调接口会落中间态存档（关掉就成了一条价对、来源丢的线）。面板是这条路唯一写入口，
+  两次点击之间隔着一次渲染 ⇒ 不会读到上一帧的线表，不需要读后写保护。
+- 四态（`applyEmaLine` 取代旧 `emaAlertAction`）：
+  - `add` —— 找不到对应线 ⇒ 按当前价新画一条（带 origin + 自动备注）；
+  - `align` —— 有身份线但价漂了 ⇒ 拉到当前值；
+  - `adopt` —— 当前价上已有手画线 ⇒ 收编（补 origin），不新增；
+  - `remove` —— 已对齐且开告警 ⇒ 删。
+  「已对齐但告警被关掉」走 `align`（先恢复告警），**不是直接删** —— 否则关一次告警再点一下就永远画不回来。
+- 为什么要重写：旧逻辑按**精确价**加/取消告警线，而 EMA 每分钟都在动、线停在画它的那一刻 ⇒
+  再点就按新价**叠第二条**，两条都画着，面板还看不出自己画过。判据是「线在不在」而不是「价等不等」。
+- 回显 `findEmaLine`：**两遍扫，身份优先、备注兜底**。
+  第一遍认 `origin`，第二遍认自动备注（`1时EMA50`，`emaAlertNote(intervalLabel, period)` 生成），
+  认到后在下一次点击时补上 origin。**必须两遍**：老线一定排在前面（先画的），一遍扫会永远先撞上它，
+  带身份的那条永远轮不到 ⇒ 老存档的线永远显示不出「已画」。
+- 面板 UI：
+  - `.ema-row` 的 grid 从 5 列改成**固定 6 列**（末列留给徽标）；没有徽标的行留空，
+    这样各行价位才能纵向对齐（按内容自适应会让每行价位错位）。
+  - 行尾徽标 `.ema-mark`：`已画`（`--down`）/ `待对齐`（`--muted` + 左红条淡到 0.4 透明度）；
+    列头 `已画 N`（`.ema-col-marked`）。
+  - 行 title 写全：「图上已画线「备注」= 价位，偏离 x%，再点一下删掉 / 点一下对齐到 y」。
+    两个分支都写清，用户才知道同一行点下去会做不同的事。
+- 孤儿系统线：`origin` 的 (周期, 档位) **不在当前 intervals×periods 配置里**（用户删过 EMA 目录/周期条）⇒
+  配不上任何一行。不点一句 `.ema-note` 出来，用户就只能在图上看见一条红线、面板里怎么也找不到。
+  判据用**配置**，不用 `scan.levels` —— 某档这次没取到数不代表被删。
+- 拖动（`movePriceLine`）**保留 origin** ⇒ 拖过的系统线在面板里显示「待对齐」，点一下即归位。
+  这是有意取舍：一条绑了身份的线，点它就是要它回到该在的价；想要「另画一条」得用右键菜单。
+  代价是拖完再点会回弹，收益是「面板说画过、图上找不到」这类鬼故事不再发生。
+- 验收脚本（都在 `desktop/.workbuddy/tmp`，下次回归直接跑）：
+  - `verify-ema-line-echo.mjs`：32 条纯函数断言。依赖 `ema-echo-entry.ts` 用 esbuild 打成 bundle：
+    `node node_modules/esbuild/bin/esbuild ../.workbuddy/tmp/ema-echo-entry.ts --bundle --format=esm --platform=node --outfile=../.workbuddy/tmp/ema-echo-bundle.mjs`
+    （在 `desktop` 下跑），再 `node .workbuddy/tmp/verify-ema-line-echo.mjs`。
+  - `shoot-ema-echo.mjs`：21 条 UI 断言，无头 Chrome 走 `ema-harness.tsx`；**复用用户已开着的 5173 dev server**，
+    页面 `http://localhost:5173/.workbuddy/tmp/ema-harness.html`（写 `localhost`，本机解析到 IPv6）。
+    覆盖：预置三态各自出对的标记、点漂了那行 `did=align` 且条数不变、点空行 `did=add`、再点 `did=remove`、孤儿提示出现。
+    截图 `ema-echo-1-seeded.png` / `-2-after-add.png` / `-3-after-remove.png` / `-4-orphan.png`。
+  - `ema-harness.tsx` 本轮改造过：不再给空 `priceLines`，而是预置「已对齐 / 待对齐 / 老存档只有备注 / 孤儿(EMA999)」
+    四条线，点击走真实 `applyEmaLine`（原 `onToggleAlert` 已随改名变成 `onToggleLine`）。

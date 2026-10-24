@@ -2427,12 +2427,13 @@ body {
   flex-direction: column;
   gap: 1px;
 }
-/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（切到那个周期看图），
-   所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。 */
+/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离 / 回显标记。整行可点（画·对齐·取消这条系统划线），
+   所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。
+   六列是固定的：没有回显标记的行把最右那格空着，保证各行的价位纵向对齐。 */
 .ema-row {
   position: relative;
   display: grid;
-  grid-template-columns: 7px auto auto minmax(0, 1fr) auto;
+  grid-template-columns: 7px auto auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--sp-xs);
   padding: 4px 6px;
@@ -2469,6 +2470,11 @@ body {
   width: 2px;
   border-radius: 1px;
   background: var(--down);
+}
+/* 漂了的那条：线还画在旧价位上（EMA 一直在动，线不会自己走）。
+   形状留着、分量减轻 —— 它仍然属于这一档，只是已经不对齐了。 */
+.ema-row.on.drift::before {
+  opacity: 0.4;
 }
 .ema-row:focus-visible {
   outline: 1px solid var(--accent);
@@ -2514,6 +2520,26 @@ body {
 }
 .ema-col.support .ema-gap {
   color: var(--up);
+}
+/* 回显标记：这条线在图上（已画），还是画在旧价位上（待对齐）。
+   10px 纯文字、不做胶囊 —— 这一行已经有红竖条 + 两处变色数值，再加一块底色会把它
+   读成按钮，而它只是状态。价位与偏离的差都写在 title 里（行上放不下两句）。 */
+.ema-mark {
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--down);
+  white-space: nowrap;
+}
+.ema-mark.drift {
+  color: var(--muted);
+}
+/* 列名旁那枚「已画 N」：这一侧画到图上的档数（与行尾标记同一件事的总数） */
+.ema-col-marked {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--down);
+  white-space: nowrap;
 }
 .ema-empty {
   font-size: 12px;

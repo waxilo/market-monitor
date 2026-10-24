@@ -49,7 +49,7 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
-import { emaAlertAction } from '../lib/emaAnalysis';
+import { applyEmaLine } from '../lib/emaAnalysis';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
@@ -819,7 +819,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
       )}
 
       {/* EMA 分析：范围取「EMA 族的目录 × 周期条的列表」（都算配置，不管图上画没画）。
-          点一行 = 在那个价位画/取消一条告警线（自动备注「1时EMA50」，面板不关，可连点几道）；
+          点一行 = 把这一档落成图上一条**系统划线**（自动备注「1时EMA50」，带 origin 身份落盘，
+          面板不关，可连点几道）：没画就画、漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
+          带着身份落盘，面板重开时那几行才能回显「已画 / 待对齐」。
           点行内周期小方框才切周期 —— 切完把面板关掉，不挡着图。 */}
       {emaPanelOpen && (
         <EmaAnalysisPanel
@@ -832,25 +834,13 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           colors={families.EMA.colors}
           sourceLabel={sourceLabel}
           priceLines={drawings.priceLines}
-          onToggleAlert={(row, note) => {
-            const action = emaAlertAction(drawings.priceLines, row.value);
-            if (action.kind === 'add') {
-              // 自动备注（如「1时EMA50」）：线画上去就自带出处，过几天也不会忘了它是谁
-              drawings.addPriceLine(row.value, true, note);
-              // 眼睛闭着时新线画了也看不见 —— 自动睁眼，否则这一下就是「点了没反应」。
-              // 只在这一支里改显隐：取消/升级时线本来就看得见，不该顺手翻转用户的开关。
-              if (drawings.linesHidden) drawings.setLinesHidden(false);
-              return;
-            }
-            if (action.kind === 'promote') {
-              drawings.setPriceLineAlert(action.index, true);
-              // 只在**没有备注**时补：用户自己写过的（「缺口上沿」）比自动生成的值钱
-              if (!drawings.priceLines[action.index]?.note) {
-                drawings.setPriceLineNote(action.index, note);
-              }
-              return;
-            }
-            drawings.removePriceLine(action.index);
+          onToggleLine={(row, note) => {
+            const plan = applyEmaLine(drawings.priceLines, row, note);
+            if (plan.did === 'none') return;
+            drawings.setPriceLines(plan.lines);
+            // 画 / 对齐之后图上多了条看得见的东西：眼睛闭着就得自动睁开，否则这一下
+            // 就是「点了没反应」。取消时不碰 —— 该保留用户自己那个开关。
+            if (plan.did !== 'remove' && drawings.linesHidden) drawings.setLinesHidden(false);
           }}
           onPickInterval={(iv) => {
             setInterval_(iv);

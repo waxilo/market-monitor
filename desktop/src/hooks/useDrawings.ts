@@ -89,6 +89,15 @@ export interface DrawingsApi {
   removeTrendLine: (index: number) => void;
   /** 清空当前标的的**全部**画线（两种一起）。 */
   clear: () => void;
+  /**
+   * 整体替换当前标的的线表（传进来的就是落盘结果）。
+   *
+   * 与上面那些「一次改一个字段」的接口并列，专供**一次改动同时改好几个字段**的场合：
+   * EMA 分析面板点一下会同时改价位 / 告警 / 来源 / 备注，逐条调用会落中间态存档
+   * （见 `lib/emaAnalysis.applyEmaLine`）。面板是这条路的唯一写入口，两下点击之间
+   * 必然隔着一次渲染，所以不存在「读到上一帧线表把前一下冲掉」的问题。
+   */
+  setPriceLines: (lines: PriceLine[]) => void;
 }
 
 /**
@@ -205,6 +214,14 @@ export function useDrawings(key: string | null): DrawingsApi {
     editTrends(() => []);
   }, [editLines, editTrends]);
 
+  const replaceLines = useCallback(
+    (next: PriceLine[]) => {
+      if (!key) return;
+      setLineStore((prev) => ({ ...prev, [key]: next }));
+    },
+    [key],
+  );
+
   return {
     priceLines: (key ? lineStore[key] : undefined) ?? NO_LINES,
     trendLines: (key ? trendStore[key] : undefined) ?? NO_TRENDS,
@@ -223,5 +240,6 @@ export function useDrawings(key: string | null): DrawingsApi {
     addTrendLine: addTrend,
     removeTrendLine: removeTrend,
     clear,
+    setPriceLines: replaceLines,
   };
 }
