@@ -168,6 +168,27 @@ data class ChartViewport(
     fun atOldestEdge(barCount: Int): Boolean = barCount > 0 && startIndex(barCount) <= 0
 
     /**
+     * 「现在该请上层补一页更早的历史了吗」—— 翻页触发的**唯一判据**，与手势方向无关。
+     *
+     * 为什么不能只看 [atOldestEdge]（窗口贴到最老一根）：**缩放不改变「贴边」这个状态**。
+     * 缩小（可见根数变大）时 [clamp] 会把 `rightOffset` 往小处夹，窗口左端一路越过序列
+     * 起点 —— 画面上左侧的数据“用完”了、露出空白，而手指既没拖动，[atOldestEdge] 也只在
+     * 缩到极限的那一帧才为真。触发点原先只挂在 `onPan` 上，于是「一直捏合缩小」整段不补页
+     * （2026-10-24 用户报的正是这个：往前拖会刷新，一直缩小不刷新）。
+     *
+     * 取**提前量**而不是「贴到 0」：真到 0 才请求，数据回来之前的那几帧左端就是空白，
+     * 一屏一屏地“撞墙”。提前量取一屏，夹在 [MIN_OLDER_MARGIN, MAX_OLDER_MARGIN]。
+     *
+     * 只回答「需不需要」，不做去重：拖动/缩放/数据落地每帧都会问一次，
+     * 该不该真发请求由 ViewModel 按（这一段序列 + 已经请过哪一页）收口。
+     */
+    fun needsOlder(barCount: Int): Boolean {
+        if (barCount <= 0) return false
+        val margin = clamp(barCount).visibleBars.coerceIn(MIN_OLDER_MARGIN, MAX_OLDER_MARGIN)
+        return plotStart(barCount) < margin
+    }
+
+    /**
      * 平移：[deltaBars] > 0 表示手指往右移 = 看更早的数据（窗口左移）；
      * 负值表示手指往左移 = 把最新一根往屏幕里推，右侧露出空白。
      *
@@ -231,6 +252,16 @@ data class ChartViewport(
     companion object {
         const val MIN_BARS = 15
         const val MAX_BARS = 600
+
+        /**
+         * 翻页提前量的下限/上限（根）。取「一屏」（= [visibleBars]）夹在这两个数之间：
+         * 根数少时至少留 24 根余量（一屏 15 根也能提前半屏去要），
+         * 根数多时也不必超过 120 —— 再早请求只是把网络提前量拉长，肉眼一样是「撞墙才来」。
+         *
+         * 与桌面端 `chartMath` 的 `OLDER_MARGIN_MIN/MAX`（24/120）同口径。
+         */
+        const val MIN_OLDER_MARGIN = 24f
+        const val MAX_OLDER_MARGIN = 120f
 
         /**
          * 默认可见根数。

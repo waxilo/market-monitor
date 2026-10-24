@@ -463,6 +463,8 @@
 「这次没请求成」记成「已经请求过」，一次误记就永久堵死；先落标记再起协程，同一帧的重复触发当场挡掉；
 回写前**再校验一次** `rawBase == base`，在途期间换过的周期整页丢掉（否则旧周期的基础蜡烛会混进 raw）。
 
+- **2026-10-24 判据升级**：统一为 `ChartViewport.needsOlder(barCount)`（提前量 24–120 根 = `clamp(visibleBars, 24f, 120f)`，`plotStart < margin`，**与手势方向无关**）；`atOldestEdge` 只留「精确贴到最老一根」的语义。**缩放手势（`onZoom`）与数据落地（`LaunchedEffect(barCount)`）都要上报**，不能只挂在 `onPan` 上 —— 否则捏合缩小把窗口左端推出序列起点也不会补页。
+
 回归 `ui/chart/ChartViewportTest`（5 条，含 -1 / -47 这两格证据）。
 另注：`visibleBars = 57.37f` 这组输入的期望值是用 float32 复算钉住的
 （`tmp/f32check.py`）—— 手算 double 会得到 0，正是这个 bug 骗过人的地方。

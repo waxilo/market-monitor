@@ -11,6 +11,7 @@ import {
   indexAt,
   initialPriceView,
   initialViewport,
+  needsOlder,
   overDataAt,
   panPriceView,
   panViewport,
@@ -89,12 +90,6 @@ const NOTE_FONT = '11px ui-monospace, SFMono-Regular, Consolas, "Courier New", m
 
 /** 拖拽方向定性所需的累积位移（App 用触摸的 touchSlop，网页鼠标取固定值）。 */
 const DRAG_LOCK_PX = 6;
-/**
- * 「该补历史了」的提前量（根）：视窗左缘推进到离最老一根还剩这么多根时就上报。
- * 按当前视窗宽给（约一屏提前量），夹在 24~120 之间 —— 太窄来不及补、太宽在窄视窗上会一直挂着请求。
- */
-const OLDER_MARGIN_MIN = 24;
-const OLDER_MARGIN_MAX = 120;
 /** 价格刻度偏离自动量程时的复位小标（缩放或平移都会出现）。 */
 const RESET_BADGE_TEXT = '刻度已调 · 复位';
 const RESET_BADGE_H = 16;
@@ -590,18 +585,17 @@ export function KlineCanvas({
   });
 
   /**
-   * 「快够到最老一根了」上报（提前量见 OLDER_MARGIN_*）。
-   * 平移的每一帧都可能进来 —— 去重、在飞、失败退避都在 ChartView 侧收口。
+   * 「该补更早的历史了」上报 —— 判据本体在 `chartMath.needsOlder`（与 App 同一套口径：
+   * 视窗左缘进入一屏提前量即算，**不看是哪条手势把视窗挪过去的**）。
+   *
+   * 调用点只有 [draw] 的尾巴一处（见那里的说明）：平移、滚轮缩放、复位、尺寸变化、
+   * 恢复上次视角最终都会重画，挂在重画之后就不存在「某条入口忘了上报」。
+   * 去重、在飞、失败退避都在 ChartView 侧收口。
    */
   const reportOlder = useCallback(() => {
-    const n = modelRef.current.series.candles.length;
-    if (n === 0) return;
-    const margin = clampNum(
-      clampViewport(vpRef.current, n).visibleBars,
-      OLDER_MARGIN_MIN,
-      OLDER_MARGIN_MAX,
-    );
-    if (plotStart(vpRef.current, n) < margin) modelRef.current.onNeedOlder();
+    if (needsOlder(vpRef.current, modelRef.current.series.candles.length)) {
+      modelRef.current.onNeedOlder();
+    }
   }, []);
 
   /**
@@ -1109,7 +1103,14 @@ export function KlineCanvas({
     } else {
       badgeRef.current = null;
     }
-  }, []);
+
+    // ── 视窗落定 → 判一次要不要更早的历史 ──
+    // 挂在重画的尾巴而不是散在 wheel / pointermove 里：所有改变视窗的路径最终都会走到
+    // 这里（滚轮缩放、拖动平移、双击复位、容器尺寸变化、恢复上次视角），
+    // 少一处就少一条补页入口 —— 「一直缩小不刷新」正是漏在这类入口上。
+    // 判据本身很便宜（几次浮点比较），真发不发请求由 ChartView 的门闸决定。
+    reportOlder();
+  }, [reportOlder]);
 
   /**
    * 视角落盘：拖拽松手、复位这类「一次性动作」立即写；滚轮连续缩放走防抖
@@ -1354,7 +1355,6 @@ export function KlineCanvas({
         anchor,
         modelRef.current.series.candles.length,
       );
-      reportOlder();
       persistView(true);
       draw();
     };
@@ -1554,7 +1554,6 @@ export function KlineCanvas({
           const vp = clampViewport(vpRef.current, n);
           const slot = plotW / Math.max(1, vp.visibleBars);
           vpRef.current = panViewport(vpRef.current, dx / slot, n);
-          reportOlder();
         } else {
           // 上下拖 = 拖拽画布：把价格刻度整体搬走，K 线跟着鼠标（缩放只留给 Shift+滚轮）。
           priceRef.current = panPriceView(

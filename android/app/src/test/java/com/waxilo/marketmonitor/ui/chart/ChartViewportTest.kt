@@ -72,4 +72,55 @@ class ChartViewportTest {
         val any = ChartViewport(visibleBars = 60f, rightOffset = 0f)
         assertFalse(any.atOldestEdge(0))
     }
+
+    /* ── needsOlder：翻页判据与「有没有在拖动」解耦 ─────────────────────── */
+
+    @Test
+    fun `一直缩小把窗口撑得比数据还宽时必须判「要补页」`() {
+        // 这才是用户报的场景：手指只捏合、没拖动。初始 60 根，一次放大因子拉到 600 根，
+        // 500 根数据被夹在右端、左边空一大片 —— 旧写法只在 onPan 里判，这里没人问。
+        val start = ChartViewport(visibleBars = 60f, rightOffset = 3f)
+        val zoomed = start.zoom(barFactor = 10f, anchorRatio = 0.5f, barCount = bars)
+
+        assertEquals(600f, zoomed.visibleBars)
+        assertTrue("左端已经越过序列起点", zoomed.startIndex(bars) <= 0)
+        assertTrue("缩小时必须判「要补页」", zoomed.needsOlder(bars))
+    }
+
+    @Test
+    fun `数据撑满窗口且贴着最新一根时不补页`() {
+        val v = ChartViewport(visibleBars = 60f, rightOffset = 3f)
+        assertEquals(443f, v.plotStart(bars))
+        assertFalse("视窗左侧还有 443 根余量", v.needsOlder(bars))
+    }
+
+    @Test
+    fun `左端进入提前量就算要补页——不必等到贴上最老一根`() {
+        // 提前量 = 一屏（可见 60 根）。左端剩 50 根时就该提前去要，
+        // 此时 startIndex 还是 50，atOldestEdge 仍是 false —— 两个判据在这里必须分得开。
+        val near = ChartViewport(visibleBars = 60f, rightOffset = -390f)
+        assertEquals(50f, near.plotStart(bars))
+        assertFalse("还没贴到最老一根", near.atOldestEdge(bars))
+        assertTrue("但已经在提前量里", near.needsOlder(bars))
+    }
+
+    @Test
+    fun `提前量夹在上下限之间——很窄的窗口也有 24 根、很宽的窗口不超过 120 根`() {
+        // 可见 15 根：余量 24 根时就该要，而不是 15 根
+        val narrow = ChartViewport(visibleBars = 15f, rightOffset = -(bars - 15 - 20).toFloat())
+        assertEquals(20f, narrow.plotStart(bars))
+        assertTrue(narrow.needsOlder(bars))
+        // 可见 600 根：余量 120 根就够，不必等到剩 600 根
+        val wide = ChartViewport(visibleBars = 600f, rightOffset = 0f)
+        assertEquals(-100f, wide.plotStart(bars))
+        assertTrue(wide.needsOlder(bars))
+    }
+
+    @Test
+    fun `短序列与空序列`() {
+        // 13 根的 1M 图：窗口比数据宽，必须一直可补（补不到会由 hasMore 收口）
+        assertTrue(ChartViewport(visibleBars = 60f, rightOffset = 0f).needsOlder(13))
+        // 空序列没有「更早」可翻
+        assertFalse(ChartViewport(visibleBars = 60f, rightOffset = 0f).needsOlder(0))
+    }
 }

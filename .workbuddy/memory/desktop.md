@@ -259,6 +259,8 @@
   `ChartView` 改成把方言层抛出的 message 显示出来（**截断 64 字 + `title` 放全文**）。
   ⇒ 以后给方言抛错**写清参数与期望值**，别只抛 `Error('request failed')`，它会直接出现在用户眼前。
 
+- ❗**历史补页（翻页）的判据与上报点（2026-10-24 收敛）**：判据只有一处 `src/lib/chartMath.ts::needsOlder(v, barCount)`（提前量 `OLDER_MARGIN_MIN / OLDER_MARGIN_MAX` = 24 / 120，与 Android 同口径）；**上报点收敛在 `KlineCanvas` 的 `draw()` 尾巴一处**（`draw` 的 `useCallback` 依赖 `[reportOlder]`），`useEffect([series], reportOlder)` 负责数据落地后的链式补页。**别再往 `onWheel` / `pointermove` 里各加一处** —— 所有改视窗的路径最终都会重画，挂 `draw` 才不漏入口。
+
 ## 悬浮窗断联遮罩（2026-10-14 新增）
 - 用户需求原文：**「当 api 断联时，桌面端的悬浮窗的数字就卡住了，用户不知道，还以为价格没变；
   断联时遮罩层遮住整个悬浮窗，显示已断联」**。

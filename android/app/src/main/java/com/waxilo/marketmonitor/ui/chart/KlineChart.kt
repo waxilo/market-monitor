@@ -592,6 +592,20 @@ fun KlineChart(
     val liveLoadMore by rememberUpdatedState(onLoadMore)
 
     /**
+     * 序列**落地之后**再判一次要不要继续补（补页回来 / 换周期 / 首屏取到）。
+     *
+     * 补页落地时视窗一动不动，只是「更早的根数」变多了：若一次缩小跨过了不止一页，
+     * 窗口仍比数据宽，这时没人再问一次就停在半屏空白上 —— 表现为「缩到底了还是不刷新，
+     * 得再捏一下才动」。桌面端同一处在 `KlineCanvas` 的 `useEffect([series], reportOlder)`。
+     *
+     * 只按 [barCount] 重启：视窗自己的变化（拖动、缩放）已经在手势里报过了，
+     * 这里再挂视窗会把每帧都刷成一次 effect。
+     */
+    LaunchedEffect(barCount) {
+        if (viewport.needsOlder(barCount)) liveLoadMore()
+    }
+
+    /**
      * 换周期/换标的/首次进入后，新序列一就绪就把纵轴**位置**重定到最新价（现价居中）。
      *
      * 只动位置，**不动缩放倍数**：纵向缩放是跨周期、跨标的全局保留的看图意图
@@ -869,7 +883,13 @@ fun KlineChart(
                             if (deltaBars != 0f) {
                                 val moved = viewport.pan(deltaBars, bars)
                                 viewport = moved
-                                // 拖到最左端还继续往右拖 = 要看更早的历史（PRD FR-2.2）。
+                                // 视窗左端进了「提前量」就要更早的历史（PRD FR-2.2），
+                                // **与拖动方向无关**：数据不足一屏时往左拖也是在看空白。
+                                //
+                                // 判据收在 [ChartViewport.needsOlder] 一处，缩放走的是同一支
+                                // （见 onZoom）—— 原先这里写的是 `deltaBars > 0 && atOldestEdge`，
+                                // 两个条件都把「缩小时需要补页」排除在外，用户报的
+                                // 「一直缩小不刷新」就是这么来的。
                                 //
                                 // 这里**只报事件、自己不做去重**：该不该真取下一段，只有 ViewModel
                                 // 说了算 —— 它手上才有 (rawBase, raw, hasMore) 这一组「这段序列是什么」。
@@ -882,17 +902,21 @@ fun KlineChart(
                                 //      而它又与 ViewModel 的闸门各自独立，两边生命周期对不上。
                                 // 现在去重收归 ViewModel（标记与序列同生共死），这边每帧照报，
                                 // 重复调用由那边一次性挡掉，代价只是几次状态读取。
-                                if (deltaBars > 0f && moved.atOldestEdge(bars)) liveLoadMore()
+                                if (moved.needsOlder(bars)) liveLoadMore()
                             }
                         },
                         onZoom = { barFactor, anchorX ->
                             // 因子直接交给 zoom()：视窗是浮点的，`visibleBars` 不会被取整，
                             // 缓慢捏合的零点几根也能逐帧体现，不需要再攒余量。
-                            viewport = viewport.zoom(
+                            val zoomed = viewport.zoom(
                                 barFactor = barFactor,
                                 anchorRatio = anchorX / liveGeo.plotWidthPx,
                                 barCount = liveBarCount,
                             )
+                            viewport = zoomed
+                            // 缩小 = 视窗变宽 = 需要更长的历史：这里不报的话，
+                            // 「一直捏合缩小」会一路把左端推成空白却永远不补页。
+                            if (zoomed.needsOlder(liveBarCount)) liveLoadMore()
                         },
                         onPriceZoom = { factor ->
                             // 用 autoRange 当基准算钳制边界，不能传当前量程（会越缩越跑）

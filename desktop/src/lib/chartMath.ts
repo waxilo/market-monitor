@@ -205,6 +205,16 @@ export const DEFAULT_VISIBLE = 60;
 export const DEFAULT_RIGHT_BLANK = 3;
 const MIN_VISIBLE_SHARE = 0.25;
 
+/**
+ * 翻页提前量的下限/上限（根）。取「一屏」（= 可见根数）夹在这两个数之间：
+ * 窗口很窄时至少留 24 根余量，很宽时也不必超过 120 —— 再早请求只是把网络提前量拉长，
+ * 肉眼看到的仍然是「撞墙才来」。
+ *
+ * 与 App `ChartViewport.MIN_OLDER_MARGIN/MAX_OLDER_MARGIN` 同口径。
+ */
+export const OLDER_MARGIN_MIN = 24;
+export const OLDER_MARGIN_MAX = 120;
+
 export function initialViewport(): Viewport {
   return { visibleBars: DEFAULT_VISIBLE, rightOffset: DEFAULT_RIGHT_BLANK };
 }
@@ -248,6 +258,29 @@ export function plotStart(v: Viewport, barCount: number): number {
   if (barCount <= 0) return 0;
   const c = clampViewport(v, barCount);
   return barCount + c.rightOffset - c.visibleBars;
+}
+
+/**
+ * 「现在该请上层补一页更早的历史了吗」—— 翻页触发的**唯一判据**，与手势方向无关。
+ *
+ * 判据必须由视窗自己回答，而不是由某条手势路径回答：缩小（可见根数变大）时
+ * `clampViewport` 会把 `rightOffset` 往小处夹，窗口左端一路越过序列起点，
+ * 画面上左侧数据“用完”、露出空白 —— 手指既没拖动、也没发生 pan。若这个判断只写在
+ * 拖动分支里，「一直缩小」整段都不会补页。
+ *
+ * 取**提前量**而不是「贴到第 0 根」：真到 0 才请求，数据回来前的那几帧左端就是空白，
+ * 一屏一屏地“撞墙”。提前量 = 一屏，夹在 [OLDER_MARGIN_MIN, OLDER_MARGIN_MAX]。
+ *
+ * 只回答「需不需要」，不负责去重 / 在飞 / 失败退避 —— 那些在 ChartView 侧收口。
+ */
+export function needsOlder(v: Viewport, barCount: number): boolean {
+  if (barCount <= 0) return false;
+  const margin = clampNum(
+    clampViewport(v, barCount).visibleBars,
+    OLDER_MARGIN_MIN,
+    OLDER_MARGIN_MAX,
+  );
+  return plotStart(v, barCount) < margin;
 }
 
 /** 真实数据的可见区间（夹在 0..barCount-1 内），只用于算量程。 */
