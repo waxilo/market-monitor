@@ -13,6 +13,12 @@
 ## 设计系统
 极简杂志风，Ink/Paper 灰阶 + 涨绿跌红，语义色走 `MarketTheme.colors`，尺寸全在 `Tokens.kt`。**改前先 grep 调用点**。
 
+## 同行动作字号（InlineActionStyle：中文比拉丁大写视觉大，同行操作比标题低一档 16→14）
+汉字按字面框撑满（≈0.86em），全大写拉丁只占 cap-height（≈0.72em）⇒ 同一行里 15sp 的汉字按钮比 16sp 的全大写标题高约 13%（2026-10-24 用户截图：EMA 面板「刷新」压过 `BTC/USDT`）。
+- 口径：**标题旁的行内动作（刷新 / ✕ 等）一律用 `InlineActionStyle`**（`ui/theme/Type.kt`，14sp / lineHeight 21sp；21 与 titleMedium 同行盒高 ⇒ 居中后基线齐）。
+- 为什么不压到 13sp：那会明显小于全 App 其它按钮的 `labelLarge` 15sp，同一颗按钮换个位置就换字号更难解释。
+- `TextAction` 的 `style` 默认仍是 `labelLarge`，只在同行共存时覆盖；同一行里的标题 / 按钮 / ✕ 必须**一套字号**。
+
 ## 图表视窗
 `ChartViewport` 只存 `visibleBars` + `rightOffset`（**`barCount` 是方法入参、不存字段**）；复位 = 重挂
 `remember(symbolKey, interval.storageKey)`，别用 `LaunchedEffect` 事后对齐。`window()` 管量程、`plotRange()` 管像素
@@ -49,6 +55,11 @@
   `ChartModel.formatTime(openTime, interval.minutes)`；以竖线为心中再 `coerceIn(0, plotWidthPx - boxWidth)`
   夹进绘图区（贴边不切字）。排在 `TimeAxisLabels` 之后 ⇒ 实底压住同位的刻度文字。
   样式复用 `rememberPriceTagStyle()`（`colors.ink` 底 / `colors.paper` 字 / `Radius.xsShape`）。
+- **右轴价格标优先级与让位（2026-10-24 定版）**：最新价 > 十字光标 > 划线。上面那三个 `*PriceBadge`
+  composable 已删，改 `lastPriceTag` / `crosshairPriceTag` / `linePriceTag` + `RightPriceBadges` 一处绘制：
+  `staggerAxisTags` 先按**高→低占位**（重叠者上下交替让位，≤`PRICE_BADGE_MAX_SHIFTS`=8 档），再**低→高倒序落笔**
+  ⇒ 现价永远压最上层。`PriceTag` 的 `priceYPx`（读数）与 `centerYPx`（贴位）分开，**让位只动位置、不动读数**
+  （读数始终 `ValueRange.fromFraction` 反算）。单测 `AxisPriceTagLayoutTest` 7 例。
 
 ## 测速 5 秒超时（0.1.16 批）
 - ❗**探测请求 5 秒不响应即判超时**（用户口径，与桌面端同）：`BinanceMarketApi.probeFutures` 用
@@ -653,4 +664,25 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 那条测试线在横屏时弹了「BTCUSDT 上破 80958.79」）。
 
 **面板头已压成两行（2026-10-24）**：三行 → 两行，横屏 ~124dp → ~64dp，按 `screenWidthDp >= 480` 分「单行装全部」与「窄屏价格下移」两版。
+
+**EMA 自动线「跟着 EMA 走」（2026-10-24 定版，随 0.9.53 发布）**：涨落每轮都把 `alert_rule` 阈值拉回当前 EMA 值。
+
+- 唯一执行点 `EmaAnalysis.alignments(rules, levels)`（纯函数，返回 `List<EmaAlign>`，不碰数据库以便单测）：
+  按**规则名**认人（`1时EMA50`，兼容英文旧名 `1hEMA50` —— 见 `noteOf`/`namesOf` 那套短名口径，这是 Android
+  侧唯一的跨重启身份，线上没有结构化 origin）。只挪 `AlertCondition.REACH` 类；手建预警、非 REACH 条件
+  （ABOVE 是水平比较，挪阈值可能当场把「满足」翻过来 ⇒ 凭空弹提醒）、配置里已删掉的档位、阈值缺失的规则一律不动；
+  同名多条（旧逻辑叠出来的）**全部挪**。
+- 调用点只有一个：`DetailViewModel.refreshEmaAnalysis()` 里 `emaScan.value = …` 之后 `alignEmaRules(merged)`，
+  于是**手动「刷新」与每分钟自动那一轮走同一条路**，对齐只挂一处。放在 `emaRefreshing = false` 之后 ——
+  对齐要写库，别让按钮多转那一会儿。写库失败**静默**（下轮重试）：每分钟弹一次「对齐失败」比不对齐更糟。
+- 判据 `compareTo`（不是 `equals`）：库里 `"100.00"` 与算出 `100.0` 视为已对齐，否则每轮都判「漂了」、
+  `alignEmaRules` 会不停写库（写的还是同一个价）。
+- **原值不对齐 `tickSize`**（`saveEmaRule` 的老口径继续成立）：一旦四舍五入，「已对齐」这个判据就永远不成立
+  ⇒ 面板满屏「待对齐」。「待对齐」只剩两种短暂情形：刚被拖过（下轮拉回）、这一档这轮没取到数。
+- 单测 +10 例（`EmaAnalysisTest`）：漂移要挪 / `100.00` vs `100.0` 算已对齐 / 手建线不动 / 只挪 REACH /
+  英文旧名照样跟 / 已删档原位 / 同名多条一起挪 / 水位非法（NaN·0·负·Inf）不产生改动 / 空表 /
+  「对齐之后 `lineOf` 立刻认得出已对齐」的回显闭环。全量 `:app:testDebugUnitTest` **385 例全绿**（1m49s）。
+- ⚠️ 未做真机目视（`emulator-5554` 一直 offline，沙箱不能替用户起 MuMu）；release `isMinifyEnabled = false`，
+  与已验过的 debug 包同观感。
+
 

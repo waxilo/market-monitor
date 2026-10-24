@@ -1119,3 +1119,78 @@ contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数�
     截图 `ema-echo-1-seeded.png` / `-2-after-add.png` / `-3-after-remove.png` / `-4-orphan.png`。
   - `ema-harness.tsx` 本轮改造过：不再给空 `priceLines`，而是预置「已对齐 / 待对齐 / 老存档只有备注 / 孤儿(EMA999)」
     四条线，点击走真实 `applyEmaLine`（原 `onToggleAlert` 已随改名变成 `onToggleLine`）。
+
+## 划线区（2026-10-24 定版）
+
+**范围与命名**：图表上方第二行 `.interval-bar` 里，**从组名「划线」到行尾**那一整块 —— `划线` + `─水平线` +
+`╱直线` + 清空（垃圾桶）+ `锁定` + `眼睛` + `告警 N` —— 统称**划线区**（0.1.11 叫「画图」组，2026-10-24 用户定名
+「划线」：它管的是划线，不是画布）。新增 CSS：`.interval-bar .chip.with-icon`（图标+文字 `inline-flex`）、
+`.chip.danger`（**hover 才**转告警红，平时安静）、`.bar-label.draw-target`（选中态身份字，accent 色）；四个图标
+`HLineIcon` / `TrendIcon` / `NoteIcon` / `TrashIcon` 在 `icons.tsx`。
+
+**三态切换规则**（同一块 DOM 换内容，**不是**并排）
+
+1. 平时 —— `划线` `─水平线` `╱直线` `清空`(垃圾桶,danger) `锁定` `眼睛` `告警 N`。
+2. 工具态 —— 某一枚线型 chip `aria-pressed="true"`，其余照旧；再点同一枚退出；**落一次点成线后自动收回**；
+   锁定时三枚线型 chip 置灰不可点（锁只管拖，但工具态会画新线，所以也挡）。
+3. 选中态 —— 整块换成 `[线的身份字]` + 备注(icon) + `告警 / 取消告警`（仅水平线）+ 删除(icon,danger) + `✕`。
+   身份字：水平线报**价位**，直线报**序号**。`✕` 与点空白都退出选中。
+
+**五个铁律**（改这块先逐条对）
+- 工具态点击 = **落点** `addPointAt(idx, y)`，绝不命中已有线 —— 否则想画新线却把旧线选中了。
+- 点**未选中**的线只选中、**不拖动**；已选中再按下才进拖拽。`pointerdown` 分支顺序不可换：
+  工具态 → 命中线（未选中 / 已选中）→ 空白（取消选中 + 拖画布）。
+- 只有**选中**线才画端点把手、才可拖；未选中线一根把手都不画（不给能抓的错觉，0.1.12 的老口径）。
+- 画完**工具自动收回**；两点直线的 `pendingRef` 等待期不算画完（第二下成线才算），Esc / 右键只撤销这一笔。
+- 删除只剩「**选中 → 编辑栏删除**」一条路；右键不再删线、也不再有「删掉这条直线」。
+
+**右键菜单整档移除**：`ChartMenu.tsx` 删除，`KlineCanvas` 的 `ChartMenuHit` / `ChartMenuRequest` / `TrendSeed`
+三个类型与 `onMenu` / `trendSeed` / `resetPriceSignal` 三个 prop 一并删。右键现在只剩 `preventDefault()`（挡浏览器
+菜单）+ 撤销待定直线。**复位纵向刻度因此只剩图上「刻度已调·复位」小标**这一个入口（它本来就可点，右键菜单只是
+第二条路）。`dblclick` 在工具态下不复位。
+
+❗**`.chart-menu*` 那套样式不能删**：侧栏自选行的「从自选移除」菜单（`MarketList` 的 `RowMenu`）一直复用这层壳。
+随组件删样式，侧栏菜单会变成一块无底无边的文字。`theme.css` 里规则保留，注释已改写成「图表侧已移除、这套壳只剩
+侧栏在用」，回归脚本加了一条断言守住。
+
+**失效口径**：两个 effect 兜底 —— 换标的 / 眼睛隐藏 → `tool` + `selection` 一起清；线数变短（删除 / 清空 /
+EMA 面板收回）→ 选中越界即清。**不要**用时间窗或「下次点击顺便检查」：越界那一帧还在画光晕，等于把已不存在的
+句柄递给了工具条。类型收在 `src/lib/lineSelection.ts`（`DrawTool = 'none'|'hline'|'trend'`、
+`LineSelection { kind:'price'|'trend'; index }`、`isSameLine`）。
+
+**验证**：`.workbuddy/tmp/verify-draw-zone.mjs`（vite preview + 无头 Chrome，真点击/真拖动，**29 条断言**）覆盖
+三态、右键不弹自定义菜单、侧栏 `.chart-menu` 样式仍在、点线型→落点成线→工具收回、点未选中线只选中不位移、
+选中后拖才改价、告警切换、删除、空白取消选中、两点直线两下成线、锁定时线型置灰、清空两种线一起清。截图
+`draw-zone-1-idle.png` / `-2-selected.png` / `-3-final.png`（同目录）。`tsc --noEmit` + `npm run build` 绿；
+**Tauri 真窗口未目视验收、未发版**。
+
+## EMA 系统划线「跟着 EMA 走」（2026-10-24 定版，随 0.1.40 发布）
+
+**用户判据**：「桌面端和 app 端的 ema 分析划的线会出现没对齐，**每次刷新应该自动对齐**」。0.1.39 的语义是
+「线停在画线那一刻，行上标『待对齐』，点一下才拉回」—— 用户要的正是把这一下点掉。
+
+- **唯一执行点** `lib/emaAnalysis.alignEmaLines(lines, levels)`（纯函数）：只认 `origin.kind === 'ema'` 的线、
+  **只改 `price` 一个字段**（备注可能是用户改过的、告警开关可能是用户关掉的 —— 这一下只表示「同一条线挪位置」，
+  不是重新生成）；手画的线一根不碰（连「价格正好落在手画线上」也不收编，两条各司其职）；认不出档位的线
+  （配置里删了该档 / 换了周期）原地不动，面板另有「不在当前配置里」的提示；同档撞上多条（旧逻辑叠出来的）
+  **全部拉到同一个价**。返回 `{ lines, moved }`，`moved === 0` 时调用方**跳过落盘**（EMA 没走出一个 double 的
+  差别就别每分钟写一份同样的表）。
+- **触发时刻 = 取数回来那一刻**：`EmaAnalysisPanel` 新增 `onLevels(levels)` prop，在 `setScan(merged)` 之后调
+  一次（手动「刷新」与每分钟自动那一轮**本来就是同一条路**，所以只挂一处）。`ChartView` 接到
+  `drawings.editPriceLines((current) => …)` —— **必须用函数式写法读提交那一刻的线表**：这一轮取数飞了一两秒，
+  期间用户很可能刚拖过某条线，拿闭包里的旧表覆盖会把那一拖连本带利抹掉（`useDrawings` 为此新增 `editPriceLines`）。
+- **判据仍是精确相等**（`line.price === level.value`），故意不设容差：面板与对齐用的是同一个 `lastEma` 算出来的
+  同一个 double，落盘再读回来也还是那个数；设了容差就会出现「差一点点也算对齐」，于是面板说「已画」、图上的线
+  却明显偏着。`findEmaLine` 的 `aligned` 与 `alignEmaLines` 的目标值同源，两边不会各说各话。
+- **「待对齐」这一态保留但收窄**：只剩「刚被拖过（下一轮拉回）」与「这一档这一轮没取到数」两种短暂情形；
+  点那行照样立刻拉回（`applyEmaLine` 的 `align` 分支留着就是为这个）。
+- **验证**：`.workbuddy/tmp/verify-ema-autofollow.mjs`（vite preview + 无头 Chrome + 真 localStorage，**20 条断言全绿**）：
+  画线 → 直接改 localStorage 造出「漂了」+ 补一条手画线 → 重载 → 打开面板等一轮 → 断言系统线被拉回面板值、
+  手画线一字未动、线数不变、行上仍是「已画」；再点一次「刷新」断言**仍然只有一条且仍等于面板此刻的值**。
+  截图 `ema-follow-1-drawn.png` / `-2-aligned.png`。
+- ⚠️ 脚本本身踩到两个坑（下次写同类断言直接用）：① 图表上下有**两条** `.interval-bar`（周期条 + 指标条），
+  `querySelector` 只取第一条 ⇒ 「没找到『EMA分析』入口」误报；② spawn 出去的 vite preview 不 `kill()` 会让
+  node 事件循环不退出 —— 打完结果一直 running（看着像卡死），还占着 4173 挡下一轮；
+  ③ 幂等断言**不能写「价位与上一轮完全相等」**：EMA 是活的，两轮之间现价动一点它就动一点，线跟着动才是对的，
+  正确口径是「仍然只有一条 且 仍等于面板此刻的值」。
+

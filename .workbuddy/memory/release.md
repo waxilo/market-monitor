@@ -80,7 +80,8 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`、`desktop-v0.1.39`、`0.9.52`、
+  `desktop-v0.1.40`、`0.9.53`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -438,3 +439,34 @@ commit 自动 cancel，正常）。`verify-channel.mjs 0.1.37` → **34/34 PASS*
   另外本轮开始前另一个会话已把 main 推到 `2e1bada`（0.9.52 的 docs(memory)），push 前的 parent 就用它。
 - ⚠️ 用户线的**老存档认领**已在 0.1.39 内验证（`echo-legacy-check.ts` 用真实 localStorage 喂纯函数）：
   `6时EMA200` / `1周EMA100` 都命中 → 待对齐、点一下 = `align` 不叠线。
+
+## 0.9.53 / desktop 0.1.40（双端同发，2026-10-24 傍晚）
+
+「现价签优先于划线价签 + 同排动作字号收一档 + EMA 系统划线每轮刷新自动对齐（两端）+
+桌面端划线区三态重构、图表右键菜单整档移除」。两个 tag 同指 `5ba79fb`
+（本地 `537dbb5`；远端 `86401d0` feat(android) → `e08e59a` feat(desktop) → `5ba79fb` chore(release)）。
+Release run **40084940181** 绿（Android ~3min）、Desktop Release run **40084943615** 三 job 全绿
+（win 10:11:50→10:19:54Z / mac →10:18:08 / 发布 →10:20:18）、main CI run **40084910535** 绿。
+`verify-channel.mjs 0.1.40` → **34/34 PASS**。
+
+- 桌面：`desktop-latest` id/created 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.40 无 0.1.39 残留、
+  latest.json 0.1.40（pub_date `2026-10-24T10:20:04.598Z`）、两平台 URL 指向本版、内联签名 == `.sig`、
+  两平台 keyid `226b03192e5df60b` == 发版前基线；exe **2790255** 字节 sha256 `16c64047…` == 边车、
+  内嵌 `0.1.40` utf-16le 命中 2 / `0.1.39` 命中 0；dmg 4438487、mac app.tar.gz 4363866；
+  CI vite 指纹 `index-CQrlH82n.css 35.83` / `index-DUUHj2mW.js 316.87`（99 modules）== 本地 build 逐字一致。
+- Android：`android-latest` id/created 原地不变（398798258 / 2026-09-29T03:22:14Z）、只有
+  `market-monitor-0.9.53.apk`（**11186820**，0.9.52 = 11186824）+ `.sha256`；自算 sha256 `fc643e42…` == 边车；
+  apksigner `cf2e20c7…` == 基线；aapt2 `65 / 0.9.53`；**`classes3.dex` 命中 `staggerAxisTags` ×2 /
+  `InlineActionStyle` ×2 / `alignments` ×1 / `EmaAlign` ×2 / `RightPriceTag` ×3 / `PRICE_BADGE` ×7**
+  ⇒ 包内确为新代码（本轮几乎无新增用户文案，取证靠标识符 —— 与 0.9.49 同一套路）。
+- ✅ 打 tag 前先在本地跑了 `:app:testDebugUnitTest`（**385 例全绿**，1m49s）+ 桌面 `tsc` / `vite build` /
+  `verify-ema-autofollow.mjs` 20/20 / `verify-draw-zone.mjs` 29/29（回归）。
+- ⚠️ **`gh api` 端点别带前导斜杠**：Git Bash 会把它当 Windows 路径改写，报
+  `invalid API endpoint: ".../PortableGit/repos/waxilo/market-monitor/..."`。写
+  `gh api "repos/waxilo/market-monitor/releases/tags/desktop-latest"` 即可。
+- ⚠️ 三个 commit 仍分三次 API 推（第 2/3 个显式 `--parent`），1m49s / 59s / 26s；推完 `git fetch` +
+  `update-ref`（**不用 reset --hard**，多会话共用工作区），tag 用 `tag-0140-0953.py`（两个 tag 一次打完）。
+- ⚠️ 无头 Chrome 验收脚本三条硬规矩（这轮全踩了一遍）：dist 别和后台 build 抢（先 build 完再跑）；
+  页面上下有**两条** `.interval-bar`，入口在第二条；spawn 的 vite preview 必须在 `finally` 里 `kill()`，
+  否则 node 打完结果还不退出、还占着 4173。
+

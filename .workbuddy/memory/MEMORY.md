@@ -7,7 +7,7 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
 - `desktop.md` —— 桌面端结构 / 悬浮窗几何与交互 / **设置与快捷键** / **画线（水平线 + 两点直线）** /
   **十字光标（竖线规则 + 两枚标）** / **MA·EMA 双族收敛（指标栏只留 MA / EMA 两枚 chip = 整族显隐；面板里每行还有自己的小眼睛 = 逐条显隐，两级正交，2026-10-22）** / **搜索框只收英文 + 测速 5s 判超时** / **持仓量副图（四家源方言 + 对齐）** /
   **z 序守护（压住任务栏）** / **悬浮窗断联遮罩** / 图表加载态（骨架+遮罩 / 失败提示带真实原因） /
-  **方言周期码（大小写白名单 + 粗档 utc 变体 + Bitget ~90 天深度）** / **程序坞唤回（macOS `RunEvent::Reopen`）** / 构建与身份分离 / 自动更新 / 本地校验 / **系统划线 origin + EMA 面板回显（2026-10-24）**
+  **方言周期码（大小写白名单 + 粗档 utc 变体 + Bitget ~90 天深度）** / **程序坞唤回（macOS `RunEvent::Reopen`）** / 构建与身份分离 / 自动更新 / 本地校验 / **系统划线 origin + EMA 面板回显（2026-10-24）** / **划线区三态（右键菜单整档移除）+ EMA 每轮刷新自动对齐（0.1.40）**
 - `android.md` —— Android 环境、设计系统、图表视窗、**十字光标（松手保持 + 日期标）**、**测速 5s 超时**、
   **持仓量副图（chip 置灰可点 + 基础周期取数）**、**全屏划线（竖栏一副身子两种面孔，2026-10-24 定版：
   工具栏 5 枚 = 锁 + 三线型 + 清空 / 选中线后变编辑栏 3 枚 = 备注 + 删除 + ✕；删除只剩「选中→编辑栏」这一条路，
@@ -24,7 +24,7 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   EMA 原值不对齐 tickSize；**入口 = 详情页顶栏右上角（全屏在周期条右端）的文字按钮，指标栏不再有 chip**；
   竖屏「上方压力/下方支撑」= 两枚页签、两侧各持一个 LazyListState；
   坑 = 提示条必须浮层 / 偏离配色按列取 / dialog 铺到状态栏下要自己声明图标明暗 /
-  `rememberSaveable(inputs)` 不按 input 分存（切页签会跳回顶部））**、
+  `rememberSaveable(inputs)` 不按 input 分存（切页签会跳回顶部））**、**EMA 自动线每轮刷新对齐（`EmaAnalysis.alignments`，按规则名认人、只挪 REACH、0.9.53）**、
   **周期短名中文（`1h → 1时`，与桌面同源；`storageKey` 不动；自动名变 `8时EMA50` ⇒ 留 legacyName 认领老线）**、
   **MuMu 验收注入拖动的坑（上拖会被主图顶边夹住 ⇒ 改向下拖；判锁定的「离线 30px 按下」口径；
   **沙箱不能替用户起模拟器**（拦 `sc.exe`、`emulator-5554` 永久 offline）但用户手动启动后可连：
@@ -39,6 +39,9 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
 - 绝对路径：`git`=`C:/Program Files/Git/cmd/git.exe`、`node`=`C:/Program Files/nodejs/`、
   `adb`=`C:/Users/sloan.wang/android-sdk/platform-tools/adb.exe`。`gh` 前先
   `export APPDATA="C:\Users\sloan.wang\AppData\Roaming"`。taskkill 的 `/PID` 要写 `//PID`（MSYS 把它当路径）。
+  ⚠️ **`gh api` 的端点别带前导斜杠**（2026-10-24 实测）：`gh api "/repos/..."` 会被 Git Bash 改写成
+  `.../PortableGit/repos/...` ⇒ `invalid API endpoint`；写 `gh api "repos/o/r/..."` 即可。
+  `netstat` / `taskkill` / `curl` 一律走 `/c/Windows/system32/…`（`/usr/bin` 里没有 netstat）。
 - 沙箱 `tasklist` 看不到外部进程（用 Python `CreateToolhelp32Snapshot`）；`rm` 被 safe-delete 拦时 `os.rename` 能过。
 - `.workbuddy/tmp/` 已被 gitignore（校验脚本是本地工具，不入库）。
   ❗**但它是跨会话累积的**（里面躺着几个月的一次性探测脚本与基线包）—— **只删本次自己新建的文件**，
