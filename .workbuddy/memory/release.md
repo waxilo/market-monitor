@@ -80,7 +80,7 @@
   判据是 `ps -o etime,time` 的 CPU 时间不涨，别一直等。
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
-- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`。
+- 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -359,4 +359,32 @@ commit 自动 cancel，正常）。`verify-channel.mjs 0.1.37` → **34/34 PASS*
   「parent 不在远端分支上」。推完本地 `reset --hard origin/main`（`c3a9a5f`）+ `tag -f desktop-v0.1.37`。
 - 发版前基线（`.workbuddy/tmp/mm-rel-before-0137.json` + `mm-latest-before-0137.json`）：
   id 398800166 / created 2026-09-28T12:55:50Z / latest.json 0.1.36（pub_date 2026-10-23T07:17:11Z）/ keyid 同上。
+
+## 0.9.51（只发 Android，2026-10-24 中午）
+
+「EMA 压力支撑面板 + 全屏划线编辑栏与划线备注（Room v10→v11）+ 周期短名中文」。Release run **40063808082**
+绿 **3m13s**（04:48:42 → 04:51:55Z，含 CI 内 pinned-key 断言）。`verify-channel.mjs 0.9.51` → **34/34 PASS**。
+
+- ❗**这次 Release 绿了、main 的 CI 却红**：`CandleIntervalTest > 聚合倍率与请求周期码`（`DomainKlineTest.kt:70`）
+  还在断言英文 label `10m / 3h / 2d`，而本轮把 `CandleInterval.label` 改成了中文短名 —— 单测没跟上，
+  368 条里红 1 条（run 40063786162）。修 8/3 行（`10分/3时/2天` + 另断言 `legacyLabel` 仍是 `10m/2d`）后
+  再推，CI run **40064363327 绿**。
+  **教训：改完先本地跑 `:app:testDebugUnitTest` 再打 tag** —— 发版工作流只 build + 验签名，**不跑单测**，
+  所以「APK 已发布 = 单测全绿」不成立。命令见 `MEMORY.md` 工具链条（`JAVA_HOME=~/.jdks/ms-17.0.19` +
+  `-I ../.workbuddy/tmp/init-builddir.gradle`，1m22s）。
+- `android-latest` 的 `id` / `created_at`（`398798258` / `2026-09-29T03:22:14Z`）发版前后逐字不变（原地换）；
+  通道里只有 `market-monitor-0.9.51.apk`（**11170440**）+ `.sha256`（65），无 0.9.50 残留。
+  ⚠️ 体积与 0.9.49 完全相同（11170440），第四次印证「别拿体积当证据」。
+- 包内证据：`aapt2 dump badging` → `versionCode=63 / versionName=0.9.51`；自算 sha256 `7c199bfa…` == 边车；
+  `apksigner --print-certs` 的 cert sha256 `cf2e20c7…` == 基线（签名跨版本稳定）；
+  **`classes3.dex` 命中新文案**：「右侧可以给这条线写备注或删掉它」「这条线的备注」「留空 = 删掉备注」
+  「上方压力」「下方支撑」「删除这条线」各 1 次，且**旧提示「拖到竖栏松手删除」0 命中** ⇒ 包内确为新代码。
+- push 照旧走 Git Data API（`.workbuddy/tmp/api-push-0948.py`）：21 个文件 → **2m19s**。
+  第二个（测试修复）commit 的 parent 必须显式 `--parent d181a661…`（远端 parent 是 API 重建的 SHA，
+  与本地 `cbb3429` 不同，脚本会报「parent 不在远端分支上」）。
+  ⚠️ 推完对齐本地：**先 `git fetch origin main` 再 `update-ref`** —— 远端新 commit 的对象本地还没有，
+  直接 `update-ref` 会报 `nonexistent object`。
+- ⚠️ **`git commit -m @'…'@` 是 PowerShell here-string，Bash 里不认**：消息首尾会多一行字面 `@`
+  （本次就这样提交了，用 `--amend -F 文件` 修）。以后多行消息一律**先 Write 到文件再 `-F`**。
+- 用掉的 tag 追加：`0.9.51`。
 
