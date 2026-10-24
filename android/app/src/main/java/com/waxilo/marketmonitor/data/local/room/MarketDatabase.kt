@@ -22,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AlertLogEntity::class,
         ChartLineEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class MarketDatabase : RoomDatabase() {
@@ -303,6 +303,24 @@ abstract class MarketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v11：划线备注（2026-10-24）。
+         *
+         * 全屏点一下线 → 右侧竖栏变编辑栏 → 「备注」写一句。两张线表各加一列，都可空：
+         * 老行读出来是 null = 没备注，与「删掉备注」同义（清空即写 null，不写空串）。
+         *
+         * **为什么 alert_rule 不拿 `name` 当备注**：自动画的线名字形如 `8时EMA50`，
+         * 它是 EMA 压力支撑面板按名字认领那条线的键（`EmaAnalysis.lineOf`）——
+         * 用户一改备注，面板里那行就再也对不上号（变成孤儿线）。所以备注单开一列，
+         * name 留给「这条线是谁画的」。
+         */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `alert_rule` ADD COLUMN `note` TEXT")
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `note` TEXT")
+            }
+        }
+
         fun create(context: Context): MarketDatabase =
             Room.databaseBuilder(context.applicationContext, MarketDatabase::class.java, NAME)
                 .addMigrations(
@@ -315,6 +333,7 @@ abstract class MarketDatabase : RoomDatabase() {
                     MIGRATION_7_8,
                     MIGRATION_8_9,
                     MIGRATION_9_10,
+                    MIGRATION_10_11,
                 )
                 .build()
     }

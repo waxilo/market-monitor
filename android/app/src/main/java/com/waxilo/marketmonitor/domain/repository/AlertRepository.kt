@@ -55,6 +55,14 @@ interface AlertRepository {
 
     suspend fun setRuleEnabled(id: Long, enabled: Boolean)
 
+    /**
+     * 只改这条线自己的备注，不动 name / 条件 / 阈值。
+     *
+     * 与 [saveRule] 分开：那是整行 REPLACE，调用方若只拿着部分字段（备注场景就是这样）
+     * 写回去会把重复模式、Webhook 关联一起抹掉。
+     */
+    suspend fun setNote(id: Long, note: String?)
+
     suspend fun state(ruleId: Long): AlertState
 
     suspend fun saveState(ruleId: Long, state: AlertState)

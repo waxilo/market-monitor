@@ -89,6 +89,9 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
 
     override suspend fun setRuleEnabled(id: Long, enabled: Boolean) = dao.setEnabled(id, if (enabled) 1 else 0)
 
+    override suspend fun setNote(id: Long, note: String?) =
+        dao.setNote(id, note?.takeIf { it.isNotBlank() })
+
     override suspend fun state(ruleId: Long): AlertState = dao.findState(ruleId)?.toDomain() ?: AlertState()
 
     override suspend fun saveState(ruleId: Long, state: AlertState) = dao.upsertStateIfRuleExists(state.toEntity(ruleId))
@@ -130,6 +133,9 @@ class ChartLineRepositoryImpl(private val dao: ChartLineDao) : ChartLineReposito
     }
 
     override suspend fun delete(id: Long) = dao.delete(id)
+
+    override suspend fun setNote(id: Long, note: String?) =
+        dao.setNote(id, note?.takeIf { it.isNotBlank() })
 
     override suspend fun deleteAll(market: MarketType, symbol: String) =
         dao.deleteAll(market.key, symbol)

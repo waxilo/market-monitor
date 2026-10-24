@@ -48,8 +48,21 @@ data class CandleInterval(val minutes: Long, val official: OfficialInterval?) {
     /** REST 请求参数。 */
     val apiCode: String get() = baseInterval?.apiCode ?: ""
 
-    /** 展示名：官方用其码，自定义按分钟数人性化（10m / 45m / 3h / 2d）。 */
-    val label: String get() = official?.apiCode ?: humanize(minutes)
+    /**
+     * 展示名：**中文短名**（`15分` / `1时` / `1天` / `1周` / `1月`），与桌面端周期条、
+     * 以及「自定义周期」对话框里的单位名是同一套字。
+     *
+     * 只换单位不换数字：`4h` 写成 `4时` 而不是「4 小时」—— 这一栏在周期条 chip、
+     * EMA 面板行尾这种窄地方出现，多一个字就挤掉价位。
+     */
+    val label: String get() = humanize(minutes)
+
+    /**
+     * **旧版**展示名（`1h` / `15m` / `4h`）：改中文之前周期条上就是这串，只留给
+     * 「认领老告警线」用（见 `EmaAnalysis.lineOf`）—— 0.9.51 之前自动命名是 `1hEMA50`，
+     * 不认它就等于把用户之前画的线全变成孤儿。界面上不再出现它。
+     */
+    val legacyLabel: String get() = official?.apiCode ?: humanizeLegacy(minutes)
 
     /** 存储用的稳定键。 */
     val storageKey: String get() = if (isOfficial) "o:${official?.apiCode}" else "c:$minutes"
@@ -94,7 +107,21 @@ data class CandleInterval(val minutes: Long, val official: OfficialInterval?) {
             else -> null
         }
 
+        /**
+         * 分钟数 → 中文短名。与桌面端 `intervals.ts` 的 `SHORT_UNIT` 同一套单位
+         * （分 / 时 / 天 / 周 / 月），顺序必须由粗到细：`10080`（1 周）先被「周」认走，
+         * 落不到「7 天」上；`43200` 同理。
+         */
         fun humanize(minutes: Long): String = when {
+            minutes % 43_200L == 0L -> "${minutes / 43_200L}月"
+            minutes % 10_080L == 0L -> "${minutes / 10_080L}周"
+            minutes % 1_440L == 0L -> "${minutes / 1_440L}天"
+            minutes % 60L == 0L -> "${minutes / 60L}时"
+            else -> "${minutes}分"
+        }
+
+        /** 改中文之前的英文短名（`1mo` / `2d` / `3h` / `45m`）：只为认领老线，别在界面上用。 */
+        fun humanizeLegacy(minutes: Long): String = when {
             minutes % 43_200L == 0L -> "${minutes / 43_200L}mo"
             minutes % 1_440L == 0L -> "${minutes / 1_440L}d"
             minutes % 60L == 0L -> "${minutes / 60L}h"

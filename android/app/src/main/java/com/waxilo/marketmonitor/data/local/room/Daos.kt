@@ -194,6 +194,14 @@ interface AlertDao {
     @Query("UPDATE alert_rule SET enabled = :enabled WHERE id = :id")
     suspend fun setEnabled(id: Long, enabled: Int)
 
+    /**
+     * 只改备注，**不动 name**：自动线的名字（`8时EMA50`）是 EMA 压力支撑面板按名字认领
+     * 那条线的键（见 `EmaAnalysis.lineOf`），拿备注去写 name 会让面板里那行再也对不上号。
+     * 传 null 表示删掉备注（不写空串，读出来两边同义但省一次判空）。
+     */
+    @Query("UPDATE alert_rule SET note = :note WHERE id = :id")
+    suspend fun setNote(id: Long, note: String?)
+
     @Query("DELETE FROM alert_rule WHERE id = :id")
     suspend fun deleteRule(id: Long)
 
@@ -250,6 +258,15 @@ interface ChartLineDao {
 
     @Upsert
     suspend fun upsert(line: ChartLineEntity): Long
+
+    /**
+     * 只改备注，不动几何（价位 / 两个端点）。
+     *
+     * 不走 [upsert] 是因为那要先把整行读出来再写回去：读与写之间图表可能正拖这根线，
+     * 写回去就把刚拖到的位置又盖回旧值。一条 UPDATE 只碰 note 这一列，没有这个窗口。
+     */
+    @Query("UPDATE chart_line SET note = :note WHERE id = :id")
+    suspend fun setNote(id: Long, note: String?)
 
     @Query("DELETE FROM chart_line WHERE id = :id")
     suspend fun delete(id: Long)

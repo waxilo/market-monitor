@@ -140,11 +140,17 @@
    解法：同一条命令开头先 `adb start-server >/dev/null; adb -s <S> wait-for-device`，再干正事。
 2. **MSYS 会把设备路径 `/sdcard/x.xml` 翻译成 Windows 路径**（dump 输出变成
    `/C:/…/PortableGit/sdcard/x.xml`，`cat` 回来是 0 字节）。必须 `MSYS_NO_PATHCONV=1 adb … shell …`。
-3. MuMu 同时挂两个入口（`emulator-5554` 与 `127.0.0.1:16384`）⇒ 不带 `-s` 就 `more than one device`。
+3. MuMu 同时挂两个入口（`emulator-5554` 与 `127.0.0.1:<adb_port>`）⇒ 不带 `-s` 就 `more than one device`。
+   **端口别写死**：`MuMuManager.exe info -v 0` 的 `adb_port` 是多少就连多少（2026-10-09 是 16384，
+   **2026-10-24 实测是 16385**）；TCP 那条通常可用，`emulator-5554` 经常 offline。连上后固定用 `-s` 全量指定。
 4. **退出全屏后 MuMu 回竖屏有十几秒延迟**：`dumpsys` 立刻就是 `mCurrentAppOrientation=UNSPECIFIED` /
    `ROTATION_0`，但 `screencap` 仍是 1920×1080 —— **别据此判定方向没恢复**（应用侧是对的）。
 5. ❗**在详情页做垂直滑动会被图表吃成纵轴刻度缩放**，页面根本不会滚（想滚下去找副图 chip，结果图被拉成
    1000~4000、冒出「刻度已缩放 · 复位」chip）。要滚页面必须从**非图表区域**（如周期行）起手。
+6. ❗**要读库就直接拉着看，别猜 UI**：`adb exec-out "run-as com.waxilo.marketmonitor cat databases/market-monitor.db" > x.db`
+   （**必须 `exec-out`**；`adb shell cat` 走 pty 会改换行，导出字节数对不上），WAL 模式还要连 `-wal` / `-shm`
+   一起拉，Python `sqlite3` 打开才读得到最新提交。判断「线到底动没动」用它比截图硬得多。
+   另外「复位」/自动量程**只框蜡烛不框线** —— 线被拖到远离行情区时，复位后它留在画面外是正常的，别当丢数据。
 
 ## ⚠️ LazyColumn 的 key 锚定
 给了 `key` 就按「第一个可见项」锚定：重排时（测速弹窗按延迟逐条回填）被锚定那条一旦排到后面，**视口跟着往下滚 ⇒
@@ -152,14 +158,25 @@
 重排时 `scrollToItem(0)`；但**单行「重测」别抢视口**（用户正盯着那行看结果，key 锚定恰好是他要的），用 `pinToTop`
 标志区分批量与单行。排序规则抽成纯函数 `ui/settings/ProbeOrdering.kt`（+7 单测）。
 
-## 全屏划线：竖栏六枚（锁 + 三种线 + 删除 + 清空）· 2026-10-14 定版
+## 全屏划线：竖栏一副身子两种面孔（工具栏 5 枚 / 编辑栏 3 枚）· **2026-10-24 定版**
+
+> **当前口径（2026-10-24，以此为准）**：点线 → **选中** → 右侧竖栏当场变成这条线的**编辑栏**
+> （备注 / 删除 / 退出编辑）；没选中线时才是**工具栏**（锁 / 告警线 / 水平线 / 直线 / 清空）。
+> **删除只剩这一条路**：`DrawTool.ERASE`（删除工具）整档删除、「拖到竖栏松手即删」整套撤掉、
+> 竖栏**不再有常驻垃圾桶**。线还可以带**备注**（`note` 列，Room v11），备注与 `alert_rule.name`
+> 必须分家。详见当日流水 `2026-10-24.md` 的同名小节。
+> 下面标 `2026-10-14` 的段落是当年的设计（含已经作废的垃圾桶/ERASE），留着是因为其中的
+> 手势定性、命中判定、竖栏尺寸那几条**现在仍然成立**；带【已撤】标记的段落只看教训、别照抄实现。
 
 > 本节在 2026-10-12 版之上改了三处，都已就地更新：**竖栏由五枚变六枚**（新增最上面的锁按钮、
 > 占位 30dp → 26dp）；**新增「解锁后长按线拖动 + 拖到竖栏变垃圾桶即删」**
 > （2026-10-15 改口径：原「按下即拖」会误划拖走线，改为**按住满系统长按时长才转正**）；
-> **进入全屏默认锁定**。下面标 `2026-10-14` 的就是本次改的。
+> ~~**进入全屏默认锁定**~~ **2026-10-24 起默认不锁**，且「长按转正」整个废掉、改成
+> **先单击选中再按住拖**（见文末「单击选中再拖动」一节）。下面标 `2026-10-14` 的就是当年那次改的。
 
-`DrawTool = { NONE, ALERT, HORIZONTAL, TREND, ERASE }`，单指手势一次只有一种语义。
+`DrawTool = { NONE, ALERT, HORIZONTAL, TREND }`，单指手势一次只有一种语义。
+`ERASE` **2026-10-24 已整档删除**（枚举值、`eraseHitAt`、`EraseHit`、手势里的 ERASE 分支全部移除）。
+
 最后一枚「清空」**不进 `DrawTool`** —— 它不是一种模式，按一次就完事。
 **2026-10-14**：锁**也不是** `DrawTool` 成员（它是「能不能动」的总开关，不是「用哪种工具」），
 它单独占最上面一枚，用 `RailDivider` 与下面隔开。
@@ -178,7 +195,7 @@
 按钮本身一直很小。改成跟着内容走（六枚 ≈ 180dp）+ `Radius.fullShape` 胶囊底，占位面积降到 1/3。
 判定「大不大」要**按像素量**，别只看 dp 数字：实测改造前 102×1080、改造后 78×443（含 4dp 右留白共 90px 宽）。
 
-**2026-10-14：竖栏是「拖线时的垃圾桶落点」**。`FullscreenChart` 里
+**【2026-10-24 已撤】2026-10-14：竖栏曾是「拖线时的垃圾桶落点」**。`FullscreenChart` 里
 `val draggingLine = alertLines.any { it.dragging } || drawLines.any { it.dragging }`，
 为真时在 `DrawToolRail` 的 Box 里叠一层 `matchParentSize()` + `colors.down` + 一只放大到
 `RAIL_BUTTON * 0.62f` 的 `TrashGlyph(colors.paper, …)`。
@@ -190,6 +207,8 @@
   （换周期/旋屏/组合销毁）漏一次收尾，竖栏就永久变成垃圾桶。
   ⚠️ **2026-10-15 起轻点线什么都不发生**：解锁态抓线改为**挂起**——down 就近判「抓哪根」，
   但按住满系统长按时长且没滑出 slop 才转正开始拖；滑走/落第二指即作废，这场照常平移缩放。
+  ⚠️ **2026-10-24 起整套「长按转正」作废**：改成「先单击选中，再按住拖」（长按还给十字光标，
+  见文末那节）。下面这段「轻点什么都不发生」只描述 10-15 ~ 10-23 的行为。
   挂起期间**不发任何拖线回调** ⇒ 轻点不再「垃圾桶亮一下再落库」，旧版那笔「轻点亮一下」
   的取舍连同原因一起作废。拖到竖栏垃圾桶=先长按转正、再拖过去松手。
   与长按十字光标共用「时长 + slop」判定：按在线上转正拖线、按在空处出十字光标。
@@ -203,10 +222,14 @@
 底部提示条会报出当前工具名，用户看得见也能改。想彻底避免就得把间距拉到 ≥8dp 或按钮回到 30dp，
 那是拿宽度换精度，别再无声地改回去。
 
-**删线的三个粒度**：① 竖栏「删除」工具**点线即删**（`DrawTool.ERASE`）；
-② **2026-10-14 重新加回**的「长按线转正后拖到右侧竖栏、竖栏变垃圾桶时松手即删」（见上）；
-③ **清空**一次删光本标的的全部划线。第 ③ 条口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
+**删线的粒度（2026-10-24 定版）：只有一条主路 + 一个清空**。
+① **点线选中 → 右侧竖栏（编辑栏）「删除」**，一次一条，删完由调用方把 `selectedLine` 清空
+（线已不存在，图表收不到通知，会一直举着这个 ref）；
+② **清空**一次删光本标的的全部划线。清空口径与 `alertLines` 严格对齐（`threshold != null` 的规则），
 于是手动在预警页建的价位预警也会被一起清 —— 这是有意的，否则会出现「清空了但还剩一条线」。
+~~③ 竖栏「删除」工具（`DrawTool.ERASE`）点线即删~~ 与 ~~④ 长按转正后拖到竖栏松手即删~~
+都在 2026-10-24 撤掉了：删除曾经有三条路，每条都要求用户先记住「删除住在哪」，
+而删除的对象恰恰是眼前这条线 ⇒ 改成「选中即进编辑栏」。**别再把人请回来。**
 
 **❗2026-10-12 晚曾撤掉「把线拖到画布右上角的垃圾桶落点」**（用户口径：「拖线时那个小垃圾桶
 去掉，竖栏已经能删了」）。撤的范围当时是**整条**：渲染层那个 `showTrash` Box、
@@ -245,28 +268,29 @@
 不隔开的话五枚圆钮看着像一个集合里的五种线型。未选中图形用 `muted` 不用 `ink`
 （三根纯黑粗条曾是全屏最重的墨迹）。
 
-**`DrawTool.ERASE` 的两条设计约束**：
+**【已撤】`DrawTool.ERASE` 的两条设计约束**（工具本身 2026-10-24 删了，留着看约束思路）：
 - 可点的都必须看得见 ⇒ `visibleDrawLines` 在 ERASE 下取**全部**（不看同型过滤、也不看那只眼睛），
   `alertLinesShown` 强制为真。藏起来一半等于「明明有这条线却删不掉」。
 - 它不拖线 ⇒ 右上角不再有任何落点（那条路整条已撤，见上）。
 
-**命中判定 `eraseHitAt(point)`**：告警线 / 水平线 / 直线**放在一起比距离**取最近的一条。
+**命中判定 `eraseHitAt(point)`（函数 2026-10-24 已随 ERASE 删除，判据思路沿用）**：告警线 / 水平线 / 直线**放在一起比距离**取最近的一条。
 分类各判一次再按优先级挑会删错（水平线与告警线只差一个价位、直线能从任何东西上穿过）。
 距离口径随线型：水平类是 `|y - point.y|`，直线复用 `closestTrend`（点到**线段**）。
 容差沿用拖拽抓取半径 `ALERT_GRAB_WIDTH`(24dp)。
 `EraseHit` 分 `Alert(ruleId)` / `Draw(lineId)` 两型 —— 告警线删的是**规则**（顺带通知配置），
 画线删的是 `chart_line` 一行，两张表两条回调，混成一个 id 空间迟早删错。
+（这套两型分流现在由 `LineRef.Alert/Guide` 承担，删除走 `viewModel.deleteAlertLine/deleteDrawLine`。）
 
 **手势接线（这次的真 bug，务必别再踩）**：所有「按下命中什么」的判定都必须在 **down 那一刻**
 用 `first.position` 定死。`awaitFirstDown()` 已经把 down 事件消费掉，循环里第一帧
 `awaitPointerEvent()` 拿到的是**第一个 MOVE**；手指一动就滑出抓取半径，
 「按住已有的线拖走」会被判成「新建一根」⇒ 表象就是「划的线无法删除」。
 （直线工具从一开始就是 down 定性，所以它没这个毛病 —— 水平/告警线是这次补上的。）
-删除动作放在**松手后**：手指没抬起就给结果，误按一下没有回头路。
-ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命中 ——
-不设这道闸，一次想吃掉误触的横滑会把它路过的线删掉（已实测：横滑穿过直线不删）。
+删除动作放在**松手后**（2026-10-24 起删除是竖栏按钮，这条只剩「松手才选中」那半仍然成立）。
+~~ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命中~~
+（ERASE 已删；同一条「滑出 slop 即作废」的思路现在用在「单击选中」上）。
 
-**别的删除入口**：没有了。删线只有上面那两条粒度（`删除` 工具点线 / `清空`）。
+**别的删除入口**：没有了。删线只有「选中 → 编辑栏删除」与「清空」这两处（2026-10-24 定版）。
 
 **单击也要落线（2026-10-12 用户反馈后补）**：光有上面的 down 定性还不够 —— 轻点（down→up、
 中间没有 MOVE）时循环首帧 `pressed` 已空，而 `break` 排在**循环体之前**，循环体一次都不进，
@@ -280,7 +304,8 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 
 ## 划线锁（`linesLocked`）：2026-10-14 新增，并在真机验收里抓到一个真 bug
 
-竖栏最上面一枚，`rememberSaveable { mutableStateOf(true) }`（**进全屏默认锁定**；旋屏重建不丢锁）。
+竖栏最上面一枚，`rememberSaveable { mutableStateOf(false) }`（**2026-10-24 起进全屏默认不锁**；
+此前是 true。旋屏重建不丢锁态）。
 `linesEditable = !linesLocked`、`lineDropToTrailingRail = !linesLocked` 两个参数传给 `KlineChart`；
 锁定态 `drawTool` 一律收成 `NONE`（手上举着工具时上锁，单指会被划线通道吃掉却画不出东西，看着像图卡住）。
 口径（用户原话）：锁 = 不能拖已有线 + **新建也一起锁**；解锁后**不必先选工具**，按住线即可拖。
@@ -322,7 +347,9 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
   实测三组：A 解锁 `83254.57 → 83241.93`；B 锁定 `83241.93 → 83241.93`（轴整体下移 47px）；
   C 再解锁 `83241.93 → 83229.87`。
 - 竖栏各按钮的真实像素中心可以用像素聚类量（`.workbuddy/tmp/rail_probe.py`）：
-  横屏 1920×1080 下锁 y=286、告警线 380、水平线 464、直线 548、垃圾桶 648、清空 732，**x 一律 1865**。
+  横屏 1920×1080 下**工具栏（5 枚）**锁 y=276、告警线 384、水平线 468、直线 556、清空 649；
+  **编辑栏（3 枚，选中线之后）**锁 276、备注 384、删除 468、✕ 552。**x 一律 1865~1881**。
+  （2026-10-24 实测；旧表里「垃圾桶 648 / 清空 732」是六枚版，已作废。）
 
 ## 划线工具 = 只新建 + 纯净画布 + 直线十字辅助线（2026-10-14 下午，用户五条需求的 3/4/5）
 
@@ -482,3 +509,146 @@ ERASE 分支里 `(raw - first.position).getDistance() > touchSlop` 就作废命�
 「指标划线」（均线/均线带自动参考线 + 自动上下破告警）已整体删除，DB v9 → v10，保留全屏画线与图上告警线。
 坑：删 Room 实体的**列**必须同时写「整表重建」迁移（minSdk 26 无 DROP COLUMN），否则 Room 打开库校验表结构直接崩；只删表不删列同样崩。
 细节见 `2026-10-23.md`。
+
+## 单击选中再拖动 + 全屏默认不锁（2026-10-24）
+
+用户口径两条：**全屏默认不锁定**；**拖动划线必须先单击选中**（原先是「按住满长按时长才转正」）。
+
+**口径**
+- `linesLocked` 初值改 `false`。配套：锁定态本来就不摆 `toolHint`，默认解锁后那条横幅会常驻 ⇒
+  `DrawTool.NONE` 档加「图上一根线都没有就返回 `null`」，有划线才提示
+  「点线选中再按住拖动 · 点空白取消 · 选中后右侧可备注/删除」（2026-10-24 后半句改成这样：
+  拖到竖栏删除已撤，删除/备注都在选中后的编辑栏里）。
+- 判据是纯函数 `lineTouch(hit, selected): LineTouch`：命中==已选中 → `Drag`（当场接管）；
+  命中别的 → `Select`（松手且没滑走才选中）；落空 → `None`（松手取消选中）。
+  配 `LineRef.selectable()`：**草稿不可选中**（`Alert(ruleId == null)` / `Guide(id == 0)`）。
+- 长按空出来**还给十字光标**；长按激活那一刻清掉 `pendingSelect` / `tapOnBlank`
+  （长按 = 看读数，不是选线）。
+- 选中态 `selectedLine` 挂在 KlineChart 内部（`remember(symbolKey, interval.storageKey)`）：
+  上锁、切工具由 `LaunchedEffect` 清；换标的/周期随 key 作废。
+  ~~三个删除出口顺手清~~ **2026-10-24 起删除只剩竖栏编辑栏那一个出口，且清空由调用方负责**：
+  高亮 = **同色半透明外发光 + 加粗**（`.copy(alpha = 0.22f)`、宽 9f），直线锚点圆点 ×1.7。
+  **不换色** —— 红/黄是语义（会响 / 用户记号），临时状态不许借。
+
+**三个手势坑（都踩过，改之前先读）**
+1. ❗**抓已有线时不能在 down 发首帧**。原写法 `if (horizontalActive) onHorizontalDrag(grab, downY)`
+   是为「工具下单击落线」补的；Drag 通道也走这条 ⇒ 「选中后点一下线」就把价位设成手指所在处
+   （容差 24dp，最多偏 72px），松手还 commit 落库 = 「点一下线，线自己跳了一格」。
+   现在 `if (horizontalActive && horizontalGrab == null)`，拖已有线从**第一帧 MOVE** 起算。
+2. ❗**`grabOffsetY`**：24dp 抓取半径内按下，线不该往指尖跳。down 记「线 y − 手指 y」，
+   每帧落点 `y + grabOffsetY` 再夹进绘图区。
+3. ❗**快速滑一帧会漏判**：循环里的作废判定读的是**上一帧** `travelled`（累加在循环末尾），
+   「一帧 MOVE 就抬手」的快速滑动漏判 ⇒ 被当成点击选中。**收尾必须再用最终 `travelled` 判一次**。
+
+**验收现状（2026-10-24 真机已过）**：单测 `LineTouchTest.kt`（8 条）+ 全量 `--rerun` 全绿；
+MuMu 真机 6 项手势全过 —— 默认不锁（锁钮透明 / 线型彩色）、未选中按住拖只平移画布（线价不动）、
+单击出 halo（像素 2 行→9 行黄）、选中后拖改价（50409.22→41303.08 且落库）、
+点空白掉 halo、上锁后按住拖 DB 价位不变。截图 `.workbuddy/tmp/v4-fullscreen.png` / `v8-dragged.png` / `v9-locked.png`。
+
+**关于「MuMu 起不来」的订正**：沙箱里 `MuMuManager launch` 确实起不来（拦 `sc.exe`，进程秒退、
+`emulator-5554` 永久 offline），**但用户手动启动后完全可连** —— 所以这不是「无法真机验收」，
+而是「沙箱不能替用户启动」。遇到同样情况直接请用户开模拟器，别重试命令、也别下「验不了」的结论。
+连法见 `MEMORY.md` 工具链里那几条（端口从 `info -v 0` 的 `adb_port` 读，本机 **16385**；每次 Bash 调用 adb server 都重启，
+connect 必须与操作同条命令；导库要 `exec-out`）。
+
+## 全屏「编辑栏」+ 划线备注（2026-10-24，用户：去掉常驻垃圾桶与拖动删除）
+
+**一条状态决定竖栏长什么样**：图表把内部 `selectedLine` 通过 `onSelectionChange: (LineRef?) -> Unit`
+逐次上报，页面 `FullscreenChart` 存一份，`DrawToolRail(editing = selectedLine != null)`。
+上报必须用 `val sink by rememberUpdatedState(onSelectionChange)` + `LaunchedEffect(selectedLine)`，
+否则调用方换了 lambda 这边还捏着旧的。
+❗**删除后由调用方 `selectedLine = null`**：线已经不在，图表收不到通知，会一直举着这个 ref，
+竖栏永远停在编辑栏、备注按钮拿到空 note。
+
+**编辑栏三枚**：备注（`NoteGlyph`）/ 删除（复用 `TrashGlyph` + `colors.down`）/ 分隔 / ✕（`CloseGlyph`）。
+`hasNote = true` 时备注那枚走 `colors.accent` —— 竖栏放不下正文，只能用「亮不亮」说「写过」。
+两者都受锁定态约束（`dimmed`，点了 `notifyLinesLocked()`）。
+
+**备注不加在 `alert_rule.name` 上（关键）**：`name` 是 EMA 面板的认领键（自动名 `8时EMA50`
+是 (周期, 档位) 的双射），拿备注改 name ⇒ 面板回显全丢。单开一列：
+- Room `version = 10 → 11`，`MIGRATION_10_11` = 两条 `ALTER TABLE alert_rule / chart_line ADD COLUMN note TEXT`
+  （minSdk 26 的 SQLite 支持加列，不用整表重建；迁移在既有 v10 库上实测过：`user_version` 变 11、老数据还在）。
+- 两个实体 / 两个领域模型（`AlertRule` / `ChartLine`）/ 两个 DAO / 两个仓库 + `updateLineNote(ref, note)`。
+- 写入**只改一列** `UPDATE ... SET note = :note WHERE id = :id`（`AlertDao.setNote` / `ChartLineDao.setNote`）。
+  别走整行 upsert：那是「读出→写回」，会把图表刚拖到的价位盖回旧值，也会在调用方没拿全字段时
+  抹掉重复模式 / Webhook。`dragDrawLine` 要 `note = existing?.note` 透传，否则拖一下价位就没备注了。
+- 弹窗 `LineNoteDialog`：`BasicTextField` + 占位 + `n / 60` 计数，新行被换成空格，留空 = 删备注。
+  备注**不上图**（常驻文字牌跟着线飘、盖住 K 线）。
+
+**两条 adb 注入的坑（验收时会误判成功能坏了）**：
+- ❗`input swipe x y x y <ms>`（起止同坐标）被当成 **tap**、**不发 MOVE 帧**。长按判定写在事件循环里
+  （`held >= longPressMs && travelled <= touchSlop`），没有 MOVE 就永远轮不到 ⇒ 十字光标「按不出来」。
+  带 1–2px 位移（`input swipe 800 400 802 401 1500`）立刻正常。
+- ❗**直线只能用「拖动」画**：纯 tap 一场是 `SEED`（准星不动），第二下 tap 的落点与种子重合 ⇒ 恒判
+  「太近」→ 撤销，且撤销会把工具收成 `NONE`（表象：点了两下什么也没出现、栏里高亮也没了）。
+  要造线就发两次带位移的 `input swipe`。
+
+## EMA 压力支撑分析面板（2026-10-24，桌面端功能的 Android 复刻）
+
+三层：`domain/indicator/EmaAnalysis.kt`（纯逻辑，22 条单测）→ `DetailViewModel`（扫描 / 静默合并 /
+每分钟定时 / 点击动作）→ `ui/detail/EmaAnalysisSheet.kt`（`Dialog` 面板）。
+
+**入口位置变过两次**：最初在指标栏 `＋` 与 `BOLL` 之间的 `EMA分析` chip；2026-10-24 用户要求搬到
+**详情页顶栏右上角**（`DetailTopBar` 的 actions 最左、自选之前），指标栏那枚 chip 一并删掉 ——
+它是弹窗不是图表开关，跟旁边「点了会记状态」的 chip 不是一回事；且指标栏在页面中段要滚动才看见。
+全屏没有顶栏，入口放在**周期条那一行的右端**（`IntervalSelector` 的 actions，`✕` 左边）。
+`IndicatorBar` 因此**不再有 `onOpenEmaAnalysis` 参数**。按钮是文字不是图标：只引了
+`material-icons-core`，Insights / ShowChart 都在 extended 包里，为一个入口拉整包依赖不划算。
+
+**口径**（与桌面端 `emaAnalysis.ts` 同）：每档下限 300 / 上限 1000 根；算不出的不进表（NaN 会毁排序）；
+`merge` 静默刷新（失败沿用旧值记 `stale`，根数不够也沿用并从 `missing` 划掉，只认当前配置范围）；
+`split` 按现价分压力/支撑，恰好等于现价两边都不进；同价按「细周期 → 短档位 → label」定序。
+
+**回显只能靠名字**（结构性差异，动手前先认清）：桌面端的系统划线是带 `origin` 的独立实体；
+Android 的线由 `alert_rule` 派生，规则表**没有 (周期, 档位) 的结构化身份字段**。自动名 `8时EMA50`
+是 (周期, 档位) 的双射，靠它认领就够，不必改表。**不做 adopt（收编）** —— 这里的规则是会响、会推送、
+可能挂 Webhook 的真资产，悄悄改名比多一条重合线糟得多。**EMA 原值不对齐 tickSize**：一是与桌面端数值一致，
+二是一旦四舍五入「已对齐」判据永不成立（满屏「待对齐」），三是 `alert_rule` 表本来就不校验刻度。
+
+**周期短名是中文，与桌面端同源**（2026-10-24 用户要求，`1h → 1时`）：全 App 从 `CandleInterval.label` 出，
+单位表 分/时/天/周/月，`humanize` 由粗到细判（月→周→天→时→分，否则 10080 会写成「7 天」）。
+`storageKey` / `apiCode` **不动**（界面「8时」、请求仍 `8h`）。❗自动名因此从 `8hEMA50` 变成 `8时EMA50`，
+而它同时是回显的识别键 ⇒ 必须留 `legacyLabel` / `EmaAnalysis.legacyNote`：`lineOf` 新旧名都认、
+`orphanLineNames` 的已配置集合两种命名都放进去，`AUTO_NAME` 正则改成 `[0-9]+[\p{IsHan}a-zA-Z]+EMA[0-9]+`。
+迁移靠「点一下」（`alignEmaRule` 会把 `name = note` 写回），不主动扫库改用户的规则名。
+
+**竖屏改成页签（2026-10-24 用户要求）**：原先单列把两侧叠在一起（压力倒序 → 现价分隔 → 支撑正序），
+压力十几道时「下方支撑」被顶出屏幕，用户根本不知道下面还有内容。改用项目自带的 `SegmentedControl`
+（下划线指示那种）两枚页签，各带条数（`上方压力 16` / `下方支撑 11`），一次只渲一侧。
+- 页签挂在外层 `Column`（**不随列表滚**，滚到十几行还能切），且只在 `!twoColumn && hasTable` 时出现；横屏仍两列。
+- **行序跟着改**：两侧都按「离现价由近到远」（= `buckets` 原序：压力升序 / 支撑降序）。原先压力倒序
+  是为了与图的纵轴同向，页签化后这个约束没了，第一条该是最有用的那条，也与表头「最近 X · EMA Y」对得上；
+  横屏仍保留倒序（贴着图看，纵向对得上图更重要）。
+- 表头走 `ColumnHead(showTitle = false)`：title 与条数已在页签上，只留左「已画 N」（用本侧色，页签是墨黑的，
+  这点色接住「这列是哪一类」）/ 右「最近 X · EMA Y」。
+- 默认页签压力；`picked == -1`（还没手动切过）且压力为空、支撑非空时默认支撑 —— 现价站在所有 EMA 之上时
+  迎面一张空表会像取数坏了。手动切过就认用户的选择，不给他弹回去。
+- ❗**两侧滚动位置要各持一个 `LazyListState`，且都挂在 `EmaAnalysisSheet` 这一层**。
+  `rememberSaveable(side, saver = LazyListState.Saver)` 看着最省事，实际 **inputs 一变就丢旧值重新 init**
+  ⇒ 切走再切回跳回顶部（真机验过）；共用一个 state 又会让行数少的一侧直接落到空白处。
+- 单列那条「现价分隔线」一并删掉（现价在抬头已经写了）。
+
+**三个 UI 坑（都真机踩过）**
+1. ❗**提示条不能当 `Column` 的普通子节点** —— notice 出现/消失改变 `LazyColumn` 高度，列表在那一秒
+   自己挪几行（症状：点一下，正在看的那行跑了）。改成外层 `Box` + `align(BottomCenter)` 浮层；
+   `Banner` 底色只有 7% 透明，浮起来透出底下文字，要再垫一层 `Surface(paper, shadowElevation = 6.dp)`。
+2. ❗**偏离配色按列取，不按正负号** —— 压力列偏离恒为正，交给 `forChange` 渲成「涨绿」，与红色列头自相矛盾。
+3. ❗**`decorFitsSystemWindows = false` 之后状态栏图标整片消失** —— dialog 是新窗口，不继承 Activity 的
+   `enableEdgeToEdge`，默认浅色图标画在纸白顶栏上（看着像「时间、电量没了」）。面板里 `SideEffect` +
+   `DialogWindowProvider` 设 `isAppearanceLightStatusBars/NavigationBars = colors.paper.luminance() > 0.5f`。
+
+**小坑**：`IntervalBadge` 的 `clickable` 触控区被 Compose 扩到 48dp ⇒ 会吞掉「行首那段点整行」的落点
+（点 EMA50 旁边会切周期而不是画线），自动化验收点行请落在价格列。砂箱 `screencap` 在 MuMu 上旋转后仍是
+1080×1920 —— 横屏要走 App 自己的全屏看图（`requestedOrientation = LANDSCAPE`），别用 `settings put system user_rotation`。
+
+**验收（2026-10-24 真机 8 项全过）**：表与分档 / Add（`已画` + 列头 `已画 N` + 浮层回执）/
+Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remove（DB `alert_rule` 清空）/
+周期小方框切周期并关面板 / 每分钟自动刷新（`上次` 时间戳与整表数值同步变）/ 横屏两列 / 竖屏单列滚到支撑区。
+截图 `.workbuddy/tmp/e6-*` `e7-*` `e8-a.png`。
+
+**页签版验收（同日第二次，截图 `tab-*` `pos-*` `fin-*`）**：两枚页签带条数、点即切（18/9 → 20/7，随现价变动）✓；
+压力页滚到中段 → 切支撑 → 切回，**仍停在原位** ✓；页签内第一条恒为最近的一档（表头「最近」与首行同一行）✓；
+画线后左侧出现彩色「已画 1」+ 行尾 `已画` + 浮层回执，切到支撑页该标记不串 ✓；
+横屏仍两列、无页签 ✓。验收完 `DELETE FROM alert_rule` 复原（顺带确认了告警真的会响：
+那条测试线在横屏时弹了「BTCUSDT 上破 80958.79」）。
+

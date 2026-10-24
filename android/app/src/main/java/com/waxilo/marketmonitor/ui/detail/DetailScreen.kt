@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,6 +53,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -61,7 +63,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -87,12 +91,14 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.indicator.defaultCatalog
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.SymbolId
+import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.repository.DataOrigin
 import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.ChartCornerAction
@@ -160,6 +166,9 @@ fun DetailScreen(
     // 视觉画线（水平线/直线）：竖屏只显不可编，全屏可编辑 —— 两种视图同一份数据
     val chartLines by viewModel.chartLines.collectAsStateWithLifecycle()
     val drawDraft by viewModel.drawDraftLine.collectAsStateWithLifecycle()
+    // EMA 分析的面板状态与操作回执：面板是叠加层，竖屏也要能显示它（notice 原先只喂全屏）
+    val emaAnalysis by viewModel.emaAnalysis.collectAsStateWithLifecycle()
+    val notice by viewModel.notice.collectAsStateWithLifecycle()
     // 每次现折：时间戳→下标依赖「这份序列的头一根」，翻页/切周期都要整体重折
     val drawLines = remember(chartLines, drawDraft, state.candles, state.interval) {
         val saved = chartLines.mapNotNull { it.toGuideLine(state.candles, state.interval) }
@@ -175,6 +184,8 @@ fun DetailScreen(
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
     // 均线周期管理对话框同理：入口在竖屏与全屏的指标条上各有一个「＋」
     var maManagerOpen by rememberSaveable { mutableStateOf(false) }
+    // EMA 压力支撑分析面板：竖屏顶栏与全屏周期条各有一枚「EMA分析」，共用一个开关
+    var emaSheetOpen by rememberSaveable { mutableStateOf(false) }
     // 铃铛预警整页：旋屏丢了重开即是（同周期管理草稿）
     var alertsPageOpen by rememberSaveable { mutableStateOf(false) }
     /**
@@ -187,6 +198,8 @@ fun DetailScreen(
     FullscreenController(active = fullscreen)
     // 预警整页盖在详情页之上，系统返回键要先退这一层而不是整个详情页路由
     BackHandler(enabled = alertsPageOpen) { alertsPageOpen = false }
+    // 面板开 = 取一轮 + 开始每分钟自动刷新；关 = 停掉定时器（静默刷新的定时器归 ViewModel 管）
+    LaunchedEffect(emaSheetOpen) { viewModel.setEmaPanelOpen(emaSheetOpen) }
 
     Box(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         if (fullscreen) {
@@ -194,10 +207,14 @@ fun DetailScreen(
                 state = state,
                 alertLines = alertLines,
                 drawLines = drawLines,
+                // 编辑栏要读备注：从原始表查，而不是从图表的绘制语言里带
+                rules = symbolRules,
+                lines = chartLines,
                 alertLinesVisible = alertLinesVisible,
                 viewModel = viewModel,
                 onManageIntervals = { intervalManagerOpen = true },
                 onManageMa = { maManagerOpen = true },
+                onOpenEmaAnalysis = { emaSheetOpen = true },
                 onExit = { fullscreen = false },
             )
         } else {
@@ -209,6 +226,7 @@ fun DetailScreen(
                 DetailTopBar(
                     state = state,
                     onBack = onBack,
+                    onOpenEmaAnalysis = { emaSheetOpen = true },
                     onToggleWatch = viewModel::toggleWatch,
                     onShowAlerts = { alertsPageOpen = true },
                 )
@@ -295,8 +313,7 @@ fun DetailScreen(
         }
 
         if (maManagerOpen) {
-            MaManagerDialog(
-                initial = mapOf(
+            MaManagerDialog(                initial = mapOf(
                     MaFamily.MA to MaDraft(state.maCatalog, state.maColors, state.mutedOf(MaFamily.MA)),
                     MaFamily.EMA to MaDraft(state.emaCatalog, state.emaColors, state.mutedOf(MaFamily.EMA)),
                 ),
@@ -308,6 +325,25 @@ fun DetailScreen(
                     }
                     maManagerOpen = false
                 },
+            )
+        }
+
+        // EMA 分析面板：Dialog 自成一层，压在详情页与全屏图之上。
+        // 取数与每分钟自动刷新的开关由上方的 LaunchedEffect 交给 ViewModel。
+        if (emaSheetOpen) {
+            EmaAnalysisSheet(
+                state = state,
+                analysis = emaAnalysis,
+                rules = symbolRules,
+                notice = notice,
+                onRefresh = viewModel::refreshEmaAnalysis,
+                onToggleLine = viewModel::toggleEmaLine,
+                onPickInterval = { target ->
+                    viewModel.selectInterval(target)
+                    // 切过去就把面板关掉：留着它正好挡住「那个周期长什么样」
+                    emaSheetOpen = false
+                },
+                onDismiss = { emaSheetOpen = false },
             )
         }
 
@@ -380,10 +416,11 @@ private fun FullscreenController(active: Boolean) {
  * 工具激活时单指被图征用，**且不需要长按** —— 划线就是这个工具下唯一的目的：
  * · 告警线：纵向拖出即拖一根「达到」预警（涨跌碰到都提醒）；
  * · 水平线：拖出即一条纯视觉记号（不响）；
- * · 直线：第一敲落起点、第二敲落终点（两下太近 = 撤销），抓到已有直线可整体平移。
+ * · 直线：第一敲落起点、第二敲落终点（两下太近 = 撤销）。
  * 双指缩放照旧可用。画线是**一次性**的：松手落库后自动退回普通态，
  * 单指随即恢复平移画布 —— 常驻工具会让「画完线想看别的区间」做不到。
- * 已有的告警线在工具下按到它（容差 24dp）是**改它**而不是在旁边叠一条。
+ * 已有线在工具下不可见也不可抓（纯净画布）：要改它得先退回普通态，
+ * **单击选中那条线、再按住拖动**（2026-10-24 口径，此前要求长按满时长）。
  *
  * 换周期与改指标也在这里给到：全屏是横屏，竖屏那套控件（周期条、指标条）整块被图表顶掉了，
  * 只剩一个「退出全屏」的话，用户每次想换个周期都得先退出、改完、再进来。
@@ -399,22 +436,31 @@ private fun FullscreenChart(
     state: DetailUiState,
     alertLines: List<AlertPriceLine>,
     drawLines: List<DrawGuideLine>,
+    /** 本标的的告警规则与画线：编辑栏要读出「选中的这条线有没有备注」。 */
+    rules: List<AlertRule>,
+    lines: List<ChartLine>,
     alertLinesVisible: Boolean,
     viewModel: DetailViewModel,
     onManageIntervals: () -> Unit,
     onManageMa: () -> Unit,
+    onOpenEmaAnalysis: () -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     /**
-     * 划线锁：**进入全屏默认锁定**（用户口径）。锁定 = 整张图只读 ——
-     * 已有的线不能拖、不能删，也不能新建；要动线先解锁。
+     * 划线锁：**进入全屏默认不锁**（2026-10-24 用户改口径，此前是默认锁定）。
+     *
+     * 锁 = 整张图只读 —— 已有的线不能选、不能拖、不能删，也不能新建。
+     * 默认解锁的理由：全屏最常见的操作就是「调一下这条线」，
+     * 进来先解锁一遍等于每次多一拍；而误拖早就不靠锁来防了
+     * （现在必须**先单击选中**那条线才拖得动，见 KlineChart 的 linesEditable），
+     * 锁只剩下「我要纯看图、谁都别动」这一个用途，需要时点竖栏顶部那枚即可。
      *
      * 和 [toolName] 一样用 `rememberSaveable`：全屏要横屏，旋屏重建不能把锁弄丢
-     * （否则用户解锁后一旋屏，手上那根线又变回不可动，像是操作没生效）。
+     * （否则用户上锁后一旋屏，图又变成可动的）。
      */
-    var linesLocked by rememberSaveable { mutableStateOf(true) }
+    var linesLocked by rememberSaveable { mutableStateOf(false) }
     // 挂在全屏内部：退出全屏再进来就该回到普通看图态，不该还停在划线工具上。
     // 存 name 而不是枚举本身：DrawTool 不在默认 Saver 的支持面里，旋屏重建不能丢工具态。
     var toolName by rememberSaveable { mutableStateOf(DrawTool.NONE.name) }
@@ -428,13 +474,26 @@ private fun FullscreenChart(
     }
     fun selectTool(next: DrawTool) { toolName = next.name }
     /**
-     * 拖动中的线：整条竖栏变成垃圾桶落点。
+     * 图上当前选中的那条线（`null` = 没选中）。
      *
-     * 由**已经落库/预览的线自己的 dragging 标记**推出来，而不是手势回调里另报一个布尔 ——
-     * 那个布尔一旦在异常路径（换周期、旋屏、组合被销毁）漏掉一次收尾，竖栏就永久变成垃圾桶。
-     * 草稿本来就是「正在拖」的唯一事实来源，用它是免费的，也不会漏收尾。
+     * 由图表回报（点一下线选中、点空白取消），**竖栏靠它决定自己是哪一种**：
+     * 没选中 = 划线工具列表；选中 = 这条线的编辑栏（备注 / 删除）。
+     * 这也是删除现在唯一的入口 —— 拖动删除已经撤掉（见 [DrawTool] 的说明）。
      */
-    val draggingLine = alertLines.any { it.dragging } || drawLines.any { it.dragging }
+    var selectedLine by remember { mutableStateOf<LineRef?>(null) }
+    // 备注输入框：开着时盖住全屏，旋屏会丢 → 不进 rememberSaveable（草稿本来就是一次性的）
+    var noteDialogOpen by remember { mutableStateOf(false) }
+    /**
+     * 选中的那条线的备注（没有就是空串）。
+     *
+     * 从**原始表**里查而不是从画线/告警线的派生列表里带：那两个类型是图表的绘制语言
+     * （只有价位和端点），备注属于业务字段，塞进去只会让图表多背一个它不用的东西。
+     */
+    val selectedNote: String = when (val ref = selectedLine) {
+        is LineRef.Alert -> ref.ruleId?.let { id -> rules.firstOrNull { it.id == id }?.note }.orEmpty()
+        is LineRef.Guide -> lines.firstOrNull { it.id == ref.lineId }?.note.orEmpty()
+        null -> ""
+    }
     // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
     // 清空划线的确认框：不进 DrawTool（它不是一种「模式」，按一次就完事），
@@ -457,6 +516,9 @@ private fun FullscreenChart(
             onManage = onManageIntervals,
             compact = true,
             actions = {
+                // 「EMA分析」从指标条搬到了这里（与竖屏顶栏同一处语义：右上角）。
+                // 全屏没有顶栏，周期条这一行就是它的「右上角」。
+                EmaAnalysisAction(compact = true, onClick = onOpenEmaAnalysis)
                 // 划线工具不在这里：它们搬到了图右侧的竖栏（DrawToolRail），顶栏只留「退出」
                 IconButton(onClick = onExit, modifier = Modifier.size(30.dp)) {
                     Icon(
@@ -554,12 +616,7 @@ private fun FullscreenChart(
                         onAlertLineCommit = {
                             viewModel.commitAlertLine()
                             // 划线是一次性动作：落一根就收起工具，单指拖动立刻还给平移画布；
-                            // 画下一根需重新点竖栏。删除同样收起，见 onAlertLineDelete。
-                            selectTool(DrawTool.NONE)
-                        },
-                        onAlertLineDelete = { id ->
-                            viewModel.deleteAlertLine(id)
-                            // 删一条也算「用完一次划线」：留在工具里只会让人误以为还能继续拖线
+                            // 画下一根需重新点竖栏。
                             selectTool(DrawTool.NONE)
                         },
                         onDrawLineDrag = viewModel::dragDrawLine,
@@ -568,28 +625,16 @@ private fun FullscreenChart(
                             selectTool(DrawTool.NONE)
                         },
                         onDrawLineDelete = { lineId ->
+                            // 图表侧现在只剩一个用途：直线两敲落得太近 = 撤销这一笔
                             viewModel.deleteDrawLine(lineId)
                             selectTool(DrawTool.NONE)
                         },
-                        // 解锁态：不选工具也能按住线直接拖（水平线改价位、直线整体平移）
+                        // 解锁态：不选工具也能动已有的线 —— 先单击选中那条，再按住拖动
                         linesEditable = !linesLocked,
-                        // 右侧竖栏就是删除落点：拖到它上面松手即删（锁定态不给这条路）
-                        lineDropToTrailingRail = !linesLocked,
-                        onLineDropDelete = { ref ->
-                            when (ref) {
-                                is LineRef.Alert -> viewModel.deleteAlertLine(ref.ruleId)
-                                is LineRef.Guide -> viewModel.deleteDrawLine(ref.lineId)
-                                // ref 为 null = 落到垃圾桶上的是「刚新建的那根」：
-                                // 按当前工具把对应的草稿清掉（拖废纸篓本来就不该留下新线）
-                                null -> when (drawTool) {
-                                    DrawTool.ALERT -> viewModel.deleteAlertLine(null)
-                                    DrawTool.HORIZONTAL -> viewModel.deleteDrawLine(0L)
-                                    else -> Unit
-                                }
-                            }
-                            // 拖到垃圾桶上删完 = 这一笔用完：与「删完自动收起」同一个出口
-                            selectTool(DrawTool.NONE)
-                        },
+                        // 选中了哪条线 → 竖栏在「工具列表」与「编辑栏」之间切换。
+                        // 图表是选中态的唯一持有者（它决定这一笔手势是拖动还是平移），
+                        // 这里只是**跟着它**摆 UI。
+                        onSelectionChange = { selectedLine = it },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -601,26 +646,30 @@ private fun FullscreenChart(
             // ⚠️ 文案必须**短到一行放得下**（2026-10-12 修）：这里是 maxLines=1，
             // 而原先 TREND 那句 88 字，在 640dp 宽的横屏上被父容器裁掉了一半 ——
             // 被裁的正是「删除怎么用」那半句，用户于是只看到怎么画。删减原则：
-            // **怎么删 > 怎么画 > 题外话**；而「删除」现在由竖栏那枚独立按钮说清，
-            // 这三句只管怎么画（各留一句最不容易猜错的：告警线会响、水平线落一根即收、直线两敲）。
+            // **怎么删 > 怎么画 > 题外话**；删除的口径 2026-10-24 起变成「选中后看右侧竖栏」，
+            // 所以 NONE 那一档先说选中（选中之后删除就在眼前了）。
             val toolHint = when {
-                // 锁定态不摆常驻提示：默认就是锁定，一进全屏就挂条横幅太吵。
-                // 那条「锁了」的话由点竖栏里置灰按钮时的提示负责说（notifyLinesLocked）。
+                // 锁定态不摆常驻提示：那条「锁了」的话由点竖栏里置灰按钮时的提示负责说
+                // （notifyLinesLocked）。
                 linesLocked -> null
-                // 解锁但没选工具：这一档新增了「按住线就能拖」，不说一句没人会去试
+                // 解锁但没选工具：这一档的交互是「先点一下选中、再按住拖」，不说一句
+                // 用户根本猜不到（2026-10-24 从「长按」改成两拍，旧习惯会往长按上试）。
+                // **图上一根线都没有时不说**：没有可动的东西，横幅只会白占一条。
                 drawTool == DrawTool.NONE ->
-                    "按住线即可拖动 · 拖到右侧竖栏松手删除"
+                    when {
+                        // 已经选中一条：这时该说的是「竖栏已经变成编辑栏了」，否则用户
+                        // 还在照着「点线选中」那句反复点同一条线。
+                        selectedLine != null -> "右侧可以给这条线写备注或删掉它 · 点空白退出"
+                        alertLines.isEmpty() && drawLines.isEmpty() -> null
+                        else -> "点线选中再按住拖动 · 点空白取消 · 选中后右侧可备注/删除"
+                    }
                 drawTool == DrawTool.ALERT ->
                     "上下拖动放告警线 · 涨跌都提醒 · 落一根即收起"
                 drawTool == DrawTool.HORIZONTAL ->
                     // 「按住可改价位」已删（2026-10-14）：工具下不再抓旧线，改价归解锁态直接拖
                     "拖动放水平线 · 落一根即自动收起"
-                drawTool == DrawTool.TREND ->
-                    "拖动图中准星，松手定第一点 · 再拖一次松手连成线（太近=撤销）"
-                // 删除模式与上面三枚是相反方向的动作用，这句必须**先说要做什么**：
-                // 用户点完删除图上看不出任何变化（线本来就在），不说就会以为没生效
                 else ->
-                    "点一下要删的那条线即删除 · 告警线/水平线/直线都可以 · 删完自动收起"
+                    "拖动图中准星，松手定第一点 · 再拖一次松手连成线（太近=撤销）"
             }
             toolHint?.let { hint ->
                 Text(
@@ -659,8 +708,10 @@ private fun FullscreenChart(
                     // 留着「水平线」在下一次解锁时会突然又是新建模式，很容易误画一根
                     if (linesLocked) selectTool(DrawTool.NONE)
                 },
-                // 拖动中的线 → 整栏变成垃圾桶落点
-                dropActive = draggingLine,
+                // 选中了哪条线 → 竖栏换一副面孔（编辑栏）。null = 还是工具列表。
+                editing = selectedLine != null,
+                // 这条线有没有备注：编辑栏那枚「备注」据此换色，一眼看出写过没写过
+                hasNote = selectedNote.isNotEmpty(),
                 onSelect = { next ->
                     // 锁定态：按钮置灰但**仍可点**，点一下把「为什么不能动」说出来。
                     // 真做成禁用的话，App 上没有 hover，用户只会以为图坏了。
@@ -671,6 +722,22 @@ private fun FullscreenChart(
                         selectTool(if (next == drawTool) DrawTool.NONE else next)
                     }
                 },
+                onEditNote = { noteDialogOpen = true },
+                onDeleteLine = {
+                    val ref = selectedLine ?: return@DrawToolRail
+                    if (linesLocked) {
+                        viewModel.notifyLinesLocked()
+                        return@DrawToolRail
+                    }
+                    when (ref) {
+                        is LineRef.Alert -> viewModel.deleteAlertLine(ref.ruleId)
+                        is LineRef.Guide -> viewModel.deleteDrawLine(ref.lineId)
+                    }
+                    // 线没了，选中态必须跟着作废：图表那边收不到「这条线已经不存在」，
+                    // 而我们又要靠这个 state 决定竖栏长什么样
+                    selectedLine = null
+                },
+                onExitEditing = { selectedLine = null },
                 // 不做二次点击确认（「再点一次就清」那种）：清空连带删预警规则、不可撤销，
                 // 得让用户在看清删掉几条之后再说「是」
                 onClear = {
@@ -678,6 +745,16 @@ private fun FullscreenChart(
                 },
             )
         }
+    }
+
+    if (noteDialogOpen && selectedLine != null) {
+        LineNoteDialog(
+            initial = selectedNote,
+            onDismiss = { noteDialogOpen = false },
+            onSave = { text ->
+                selectedLine?.let { viewModel.updateLineNote(it, text) }
+            },
+        )
     }
 
     if (clearConfirm) {
@@ -694,6 +771,85 @@ private fun FullscreenChart(
         )
     }
 }
+
+/**
+ * 一条线的备注输入框。
+ *
+ * 备注住在**竖栏的编辑栏**里（选中那条线才出现），但竖栏只有 26dp 宽、放不下字，
+ * 所以正文进这个对话框 —— 与「图上不画备注牌」是同一个取舍：全屏横屏每一行都紧张，
+ * 一条常驻的文字牌会跟着线飘、还会盖住 K 线。备注的用途是「我记得我为什么画这条线」，
+ * 点开看得到就够了。
+ *
+ * 上限 [LINE_NOTE_MAX] 与桌面端同一档（60 字）：备注是便条不是文档，
+ * 再长在弹窗里也要滚，反而不好改。
+ */
+@Composable
+private fun LineNoteDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    val colors = MarketTheme.colors
+    var text by remember(initial) { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = colors.surface,
+        title = {
+            Text(text = "这条线的备注", style = MaterialTheme.typography.titleMedium, color = colors.ink)
+        },
+        text = {
+            Column {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(Radius.xsShape)
+                        .background(colors.wash)
+                        .padding(horizontal = Spacing.Xs, vertical = Spacing.Sm),
+                ) {
+                    if (text.isEmpty()) {
+                        Text(
+                            text = "比如「周线压力，跌破转支撑」",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.muted.copy(alpha = 0.6f),
+                        )
+                    }
+                    BasicTextField(
+                        value = text,
+                        onValueChange = { text = it.replace('\n', ' ').take(LINE_NOTE_MAX) },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = colors.ink),
+                        cursorBrush = SolidColor(colors.ink),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { onSave(text); onDismiss() }),
+                    )
+                }
+                Text(
+                    text = if (text.isEmpty()) {
+                        "留空 = 删掉备注"
+                    } else {
+                        "${text.length} / $LINE_NOTE_MAX"
+                    },
+                    // 与输入框同宽右对齐：字数在右边是表单的通用位置
+                    modifier = Modifier.fillMaxWidth().padding(top = Spacing.Xs),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                    textAlign = TextAlign.End,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(text); onDismiss() }) {
+                Text(text = "保存", color = colors.ink, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(text = "取消", color = colors.muted) }
+        },
+    )
+}
+
+/** 一条线备注的字数上限（与桌面端 `lineNote.ts` 同一档）。 */
+private const val LINE_NOTE_MAX = 60
 
 /**
  * 清空全部划线的二次确认：**先把会删掉什么说清楚**再让点。
@@ -760,7 +916,16 @@ private val RAIL_BUTTON = 24.dp
 private val RAIL_GLYPH = 12.dp
 
 /**
- * 全屏右侧的划线竖栏：锁 · 告警线 / 水平线 / 直线 · 删除 / 清空。
+ * 全屏右侧的划线竖栏。**一副身子两种面孔**：
+ *
+ * · 没选中线 → **工具栏**：锁 · 告警线 / 水平线 / 直线 · 清空；
+ * · 选中了线 → **编辑栏**：备注 · 删除 · 退出编辑（2026-10-24 用户口径）。
+ *
+ * 为什么合成一处：删除曾经是这栏里的一枚「垃圾桶」按钮（选中它、再点图上的线），
+ * 加上「拖到竖栏松手即删」，一共两条路。两条都要求用户先记住「删除住在哪」，
+ * 而删除的对象恰恰是「眼前这条线」—— 于是改成：点线把这条线**选中**，
+ * 竖栏当场变成它的编辑栏，删除就在手边。少一个模式，也少一次「点错了删掉别的线」。
+ * 拖到竖栏删除一并撤掉：拖动是「改线」的手势，改到一半被当成删除是反直觉的。
  *
  * 图标全部手搓 Canvas（同 [FullscreenGlyph] 的理由：只依赖 icons-core，
  * 不为一个图标拖进 material-icons-extended）。三枚线型做成「这条线长什么样、
@@ -768,24 +933,15 @@ private val RAIL_GLYPH = 12.dp
  * 与图上那三条线一一对应（2026-10-23 起线型统一为实线，语义只在颜色上）。
  *
  * **首枚是锁**，它管的是下面整栏：锁定 = 整张图只读（不能新建、不能拖、不能删），
- * 进入全屏默认锁定。它是整栏的总开关，所以摆最上面、与下面用一道细线隔开。
- * 锁定态下其余按钮**置灰但仍可点**：点一下弹一句「先解锁」—— App 上没有 hover，
- * 真正禁用的按钮说不出话，用户只会以为图坏了（与 OI chip 那条口径相同）。
- *
- * 删除 / 清空与三枚线型之间也有一道细线：它们回答的是另一个问题 ——「这些线怎么撤掉」。
- * 子删除有两条路：① 那枚「删除」选中后点图上的线（[DrawTool.ERASE]）；
- * ② **按住线直接拖到这条竖栏上松手**（拖线中整栏会变成垃圾桶，见 [dropActive]）。
- * 第 ② 条与第 ① 条互补：拖动本来就是「改线」的手势，改了不如意时手已经在半路，
- * 顺手拖出去比先松手、再点删除、再点那条线少两步。
- * （2026-10-12 曾有一条「拖到画布右上角垃圾桶」的路被撤掉，原因是那个落点
- * **平时不存在**、要靠猜；这次是把落点做成**拖线时才出现**的整栏高亮，看得见才敢拖。）
- * 清空是一次性动作，不进任何模式，按下去先弹确认（见 [ClearAllLinesDialog]），
- * 一条线都没有时整枚置灰 —— 空图上摆一个按了没反应的按钮只会让人怀疑它坏了。
+ * 进入全屏默认**不**锁（见 [FullscreenChart] 的 linesLocked）。它是整栏的总开关，
+ * 所以摆最上面、与下面用一道细线隔开。锁定态下其余按钮**置灰但仍可点**：
+ * 点一下弹一句「先解锁」—— App 上没有 hover，真正禁用的按钮说不出话，
+ * 用户只会以为图坏了（与 OI chip 那条口径相同）。
  *
  * 规格按「图上配角」定：2026-10-12 用户连着两轮反馈「太大」后收成现在这个尺寸。
  * **关键的一条是高度**：原先 `.fillMaxHeight()` + `wash` 底色会在屏幕右缘拉出一条
  * 102px 宽 × 1080px 高的整条灰带 —— 那才是「大」的主体，按钮本身其实很小。
- * 竖栏只该是一小块工具面板：高度跟着按钮走（6 枚 ≈ 180dp），下缘留白还给图。
+ * 竖栏只该是一小块工具面板：高度跟着按钮走，下缘留白还给图。
  *
  * 其余尺寸：竖栏占位 30dp（其中右留白 4dp，不贴着屏幕边）、按钮 24dp、图形 12dp、
  * 间距 4dp（都是设计常量阶梯里的值）。按钮小于 Material 的 48dp 触控标准是**有意的** ——
@@ -798,10 +954,15 @@ private fun DrawToolRail(
     clearable: Boolean,
     /** 锁定态：新建 / 编辑 / 删除全关。按钮照样可点，点一下由调用方把原因说出来。 */
     locked: Boolean,
+    /** 已经选中一条线：整栏换成这条线的编辑栏。 */
+    editing: Boolean,
+    /** 选中的那条线已有备注（「备注」那枚据此换色，一眼看出写过没写过）。 */
+    hasNote: Boolean,
     onToggleLock: () -> Unit,
-    /** 正在拖一根线：整栏盖成垃圾桶落点（拖到它上面松手即删）。 */
-    dropActive: Boolean,
     onSelect: (DrawTool) -> Unit,
+    onEditNote: () -> Unit,
+    onDeleteLine: () -> Unit,
+    onExitEditing: () -> Unit,
     onClear: () -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -823,70 +984,77 @@ private fun DrawToolRail(
                 LockGlyph(color, locked)
             }
             RailDivider(colors.hairline)
-            DrawToolButton(
-                label = "预警线",
-                selected = tool == DrawTool.ALERT,
-                onClick = { onSelect(DrawTool.ALERT) },
-                dimmed = locked,
-                roleColor = colors.down,
-            ) { color ->
-                AlertLineGlyph(color)
-            }
-            DrawToolButton(
-                label = "水平线",
-                selected = tool == DrawTool.HORIZONTAL,
-                onClick = { onSelect(DrawTool.HORIZONTAL) },
-                dimmed = locked,
-                roleColor = colors.accent,
-            ) { color ->
-                HorizontalLineGlyph(color)
-            }
-            DrawToolButton(
-                label = "直线",
-                selected = tool == DrawTool.TREND,
-                onClick = { onSelect(DrawTool.TREND) },
-                dimmed = locked,
-                roleColor = colors.accent,
-            ) { color ->
-                DiagonalLineGlyph(color)
-            }
-            // 画 / 撤 是两类动作：不隔开的话，六枚圆钮看着像同一个集合里的六种线型
-            RailDivider(colors.hairline)
-            DrawToolButton(
-                label = "删除",
-                selected = tool == DrawTool.ERASE,
-                onClick = { onSelect(DrawTool.ERASE) },
-                dimmed = locked,
-            ) { color ->
-                TrashGlyph(color)
-            }
-            DrawToolButton(
-                label = "清空全部划线",
-                selected = false,
-                // 空了就真禁用（按了没反应）；锁定态另说 —— 那时让它可点，
-                // 点一下由调用方解释「先解锁」，比一个哑按钮有用
-                enabled = clearable || locked,
-                dimmed = locked,
-                onClick = onClear,
-            ) { color ->
-                ClearAllGlyph(color)
-            }
-        }
-        if (dropActive) {
-            // 拖线中：整栏盖成一只垃圾桶。
-            //
-            // 盖在**同一块几何**上而不是替换内容 —— 拖动途中目标不能自己动，
-            // 尺寸与位置必须与松手前逐像素一致，否则「看见落点、拖过去」会扑空。
-            // 这层没有 pointerInput，不吃指针事件；再说这一场手势的指针本来就是
-            // 图那边按下时认领的，事件也不经过这里。
-            Box(
-                modifier = Modifier
-                    .matchParentSize()
-                    .clip(Radius.fullShape)
-                    .background(colors.down),
-                contentAlignment = Alignment.Center,
-            ) {
-                TrashGlyph(colors.paper, glyphSize = RAIL_BUTTON * 0.62f)
+            if (editing) {
+                // 编辑栏：这条线的两件事（备注 / 删除）+ 一个出口。
+                // 备注有内容时用 accent：竖栏里放不下备注正文，只能用「这枚亮不亮」
+                // 告诉用户「这条线写过备注」。
+                DrawToolButton(
+                    label = if (hasNote) "编辑备注（已有备注）" else "给这条线写备注",
+                    selected = false,
+                    onClick = onEditNote,
+                    dimmed = locked,
+                    roleColor = if (hasNote) colors.accent else null,
+                ) { color ->
+                    NoteGlyph(color)
+                }
+                DrawToolButton(
+                    label = "删除这条线",
+                    selected = false,
+                    onClick = onDeleteLine,
+                    dimmed = locked,
+                    roleColor = colors.down,
+                ) { color ->
+                    TrashGlyph(color)
+                }
+                RailDivider(colors.hairline)
+                DrawToolButton(
+                    label = "退出编辑（也可以点图上空白处）",
+                    selected = false,
+                    onClick = onExitEditing,
+                ) { color ->
+                    CloseGlyph(color)
+                }
+            } else {
+                DrawToolButton(
+                    label = "预警线",
+                    selected = tool == DrawTool.ALERT,
+                    onClick = { onSelect(DrawTool.ALERT) },
+                    dimmed = locked,
+                    roleColor = colors.down,
+                ) { color ->
+                    AlertLineGlyph(color)
+                }
+                DrawToolButton(
+                    label = "水平线",
+                    selected = tool == DrawTool.HORIZONTAL,
+                    onClick = { onSelect(DrawTool.HORIZONTAL) },
+                    dimmed = locked,
+                    roleColor = colors.accent,
+                ) { color ->
+                    HorizontalLineGlyph(color)
+                }
+                DrawToolButton(
+                    label = "直线",
+                    selected = tool == DrawTool.TREND,
+                    onClick = { onSelect(DrawTool.TREND) },
+                    dimmed = locked,
+                    roleColor = colors.accent,
+                ) { color ->
+                    DiagonalLineGlyph(color)
+                }
+                // 画 / 清空是两类动作：不隔开的话，按钮看着像同一个集合里的几种线型
+                RailDivider(colors.hairline)
+                DrawToolButton(
+                    label = "清空全部划线",
+                    selected = false,
+                    // 空了就真禁用（按了没反应）；锁定态另说 —— 那时让它可点，
+                    // 点一下由调用方解释「先解锁」，比一个哑按钮有用
+                    enabled = clearable || locked,
+                    dimmed = locked,
+                    onClick = onClear,
+                ) { color ->
+                    ClearAllGlyph(color)
+                }
             }
         }
     }
@@ -1067,6 +1235,48 @@ private fun TrashGlyph(color: Color, glyphSize: Dp = RAIL_GLYPH) {
 }
 
 /**
+ * 备注：一张小便签（圆角方框 + 两条字）。
+ *
+ * 不用 `Icons.Default.Edit`（图标集里唯一沾边的）：那支笔在 12dp 下与「直线」的斜线
+ * 几乎分不出谁是谁，而这一栏里两者会同时出现（编辑栏的备注 vs 工具栏的直线）。
+ * 画成「框 + 两道横字」之后形状与三根线型完全不一样，扫一眼就知道那是「写点东西」。
+ */
+@Composable
+private fun NoteGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val w = size.width
+        val h = size.height
+        val cap = StrokeCap.Round
+        // 便签外框
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.10f, h * 0.10f),
+            size = Size(w * 0.80f, h * 0.80f),
+            cornerRadius = CornerRadius(w * 0.14f, w * 0.14f),
+            style = Stroke(width = stroke),
+        )
+        // 两道「字」
+        drawLine(color, Offset(w * 0.28f, h * 0.40f), Offset(w * 0.72f, h * 0.40f), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.28f, h * 0.62f), Offset(w * 0.58f, h * 0.62f), stroke, cap = cap)
+    }
+}
+
+/** 退出编辑：一个叉。与顶栏那个退出全屏的 ✕ 同形，但这里退出的是「选中的那条线」。 */
+@Composable
+private fun CloseGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.11f
+        val w = size.width
+        val h = size.height
+        val cap = StrokeCap.Round
+        val i = w * 0.24f
+        drawLine(color, Offset(i, i), Offset(w - i, h - i), stroke, cap = cap)
+        drawLine(color, Offset(w - i, i), Offset(i, h - i), stroke, cap = cap)
+    }
+}
+
+/**
  * 清空全部划线：三条被一道斜杠划掉的线。
  *
  * 为什么不用第二只垃圾桶：垃圾桶在这条竖栏里已经是「删一条」的意思（见 [TrashGlyph]），
@@ -1148,10 +1358,15 @@ private val LastPriceBoardPriceStyle = HeroPriceStyle.copy(
 )
 
 /**
- * 顶栏：返回 + 币种名 + 自选 + 预警铃铛。
+ * 顶栏：返回 + 币种名 + EMA分析 + 自选 + 预警铃铛。
  *
  * 动作直接摊开而不收进「三个点」：菜单里只有一两项，多点一次只为展开一个空菜单，
  * 而且「预警」恰恰是详情页的主行动之一，藏起来等于没人用。
+ *
+ * 「EMA分析」原先在指标条上（「＋」与 BOLL 之间），2026-10-24 按用户要求搬到这里的右上角：
+ * 它是个**弹窗、不是图表开关**，跟旁边「MA / EMA / BOLL」那几枚「点了会记状态」的 chip
+ * 本来就不是一回事；而且指标条在页面中段，要滚动才看得见，而这道表的用途恰恰是「看完
+ * 价位就去图上画线」，入口离图表越近越顺手。放在动作区最左 —— 不动「铃铛永远在最右」的习惯。
  *
  * 铃铛打开本标的价格预警弹层（先看待有的，右上角再添新的）：预警页已不提供创建入口，
  * 「给这个标的加个预警」就地完成，标的上下文也不用重新选。
@@ -1165,6 +1380,7 @@ private val LastPriceBoardPriceStyle = HeroPriceStyle.copy(
 private fun DetailTopBar(
     state: DetailUiState,
     onBack: () -> Unit,
+    onOpenEmaAnalysis: () -> Unit,
     onToggleWatch: () -> Unit,
     onShowAlerts: () -> Unit,
 ) {
@@ -1175,6 +1391,7 @@ private fun DetailTopBar(
         onBack = onBack,
         large = false,
         actions = {
+            EmaAnalysisAction(onClick = onOpenEmaAnalysis)
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = if (state.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -1192,6 +1409,32 @@ private fun DetailTopBar(
                 )
             }
         },
+    )
+}
+
+/**
+ * 「EMA分析」入口：一段带点击区的文字。
+ *
+ * 用文字不用图标：图标集只引了 material-icons-core，里面没有能一眼表达「压力支撑」的
+ * （Insights / ShowChart 都在 extended 包里，为一个入口拉整包依赖不划算）；
+ * 而「EMA分析」四个字本身就说清了它是什么，塞进 44dp 的图标里反而要人猜。
+ *
+ * [compact] 给全屏那条窄带用（那行只有 30dp 出头，40dp 的点击区会把整行顶高）。
+ */
+@Composable
+private fun EmaAnalysisAction(compact: Boolean = false, onClick: () -> Unit) {
+    Text(
+        text = "EMA分析",
+        modifier = Modifier
+            .clip(Radius.xsShape)
+            .clickable(onClick = onClick)
+            .defaultMinSize(minHeight = if (compact) 30.dp else 40.dp)
+            .padding(horizontal = Spacing.Xs),
+        style = if (compact) MaterialTheme.typography.labelSmall
+        else MaterialTheme.typography.labelMedium,
+        color = MarketTheme.colors.ink,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
     )
 }
 

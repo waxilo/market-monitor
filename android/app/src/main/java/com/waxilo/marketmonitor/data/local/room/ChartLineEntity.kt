@@ -20,6 +20,8 @@ data class ChartLineEntity(
     val p1: String?,
     val t2: Long?,
     val p2: String?,
+    /** 用户写的备注（全屏选中这条线后在竖栏里加）。null / 空串都表示没备注。 */
+    val note: String? = null,
     val createdAt: Long,
 )
 
@@ -35,6 +37,7 @@ fun ChartLineEntity.toDomain(): ChartLine? {
         p1 = p1?.toBigDecimalOrNull(),
         t2 = t2,
         p2 = p2?.toBigDecimalOrNull(),
+        note = note,
         createdAt = createdAt,
     )
 }
@@ -49,5 +52,6 @@ fun ChartLine.toEntity(): ChartLineEntity = ChartLineEntity(
     p1 = p1?.toPlainString(),
     t2 = t2,
     p2 = p2?.toPlainString(),
+    note = note,
     createdAt = createdAt,
 )

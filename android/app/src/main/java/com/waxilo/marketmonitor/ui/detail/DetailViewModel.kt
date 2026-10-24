@@ -10,12 +10,20 @@ import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_EMA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_MA_CATALOG
+import com.waxilo.marketmonitor.domain.indicator.EmaAnalysis
+import com.waxilo.marketmonitor.domain.indicator.EmaFailure
+import com.waxilo.marketmonitor.domain.indicator.EmaLevel
+import com.waxilo.marketmonitor.domain.indicator.EmaLevelRow
+import com.waxilo.marketmonitor.domain.indicator.EmaMissing
+import com.waxilo.marketmonitor.domain.indicator.EmaScan
+import com.waxilo.marketmonitor.domain.indicator.EmaTick
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.closeDouble
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
 import com.waxilo.marketmonitor.domain.repository.ChartLine
@@ -24,6 +32,7 @@ import com.waxilo.marketmonitor.ui.chart.AlertPriceLine
 import com.waxilo.marketmonitor.ui.chart.ChartViewport
 import com.waxilo.marketmonitor.ui.chart.ChartViewState
 import com.waxilo.marketmonitor.ui.chart.DrawGuideLine
+import com.waxilo.marketmonitor.ui.chart.LineRef
 import com.waxilo.marketmonitor.ui.chart.MA_COLOR_SLOT_COUNT
 import com.waxilo.marketmonitor.ui.chart.SubPaneKind
 import com.waxilo.marketmonitor.ui.chart.mainReadoutLineCount
@@ -32,6 +41,9 @@ import com.waxilo.marketmonitor.ui.common.displayMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,6 +66,9 @@ import java.math.RoundingMode
 
 /** 详情页默认周期：日线信息密度最低，首屏最不容易看起来空白。 */
 val DEFAULT_CHART_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.D1)
+
+/** EMA 分析面板开着时的自动刷新间隔：1 分钟（K 线最细一档就是 1 分钟，再密没有新东西）。 */
+private const val EMA_AUTO_REFRESH_MS = 60_000L
 
 /** 均线期数取值范围，与桌面端（lib/maPeriods.ts）同口径。 */
 const val MA_PERIOD_MIN = 1
@@ -276,6 +291,24 @@ data class DetailUiState(
         }
     }
 }
+
+/**
+ * EMA 分析面板的一次扫描状态。
+ *
+ * 单独一个 StateFlow 而不是塞进 [DetailUiState]：面板是叠加层，它的刷新节奏（每分钟）
+ * 与图表完全不同，合进主 state 会让整张图跟着重组。扫描结果本身打包在 [scan] 里 ——
+ * 静默刷新要求「旧值一直可用、新值一次换到位」，分开 set 会渲染出「新表配旧异常」的中间态。
+ */
+@Immutable
+data class EmaAnalysisState(
+    val scan: EmaScan = EmaScan(),
+    /** 有取数在飞。**只喂给按钮与首次加载文案**，不拿来遮表（遮了就回到「清空刷新」）。 */
+    val refreshing: Boolean = false,
+    /** 已回来几个周期（只在首次取数、表还空着时看得到）。 */
+    val done: Int = 0,
+    /** 上次拿到新值的时间（0 = 还没成功过），面板的刷新按钮据此报「上次更新」。 */
+    val updatedAt: Long = 0L,
+)
 
 /**
  * 单个交易对详情（PRD FR-1.3 / FR-2.1 / FR-2.3）。
@@ -860,6 +893,209 @@ class DetailViewModel(
         }
     }
 
+    // ---- EMA 压力支撑分析（桌面端 EmaAnalysisPanel 的 Android 版） ----
+
+    /*
+     * 一次扫描 = 「周期条上配置的每个周期」各取一段 K 线，算出「EMA 目录里每一档」的末值，
+     * 再按最新价分成上方压力 / 下方支撑。范围取**配置**（[DetailUiState.intervals] ×
+     * [DetailUiState.emaCatalog]）而不是「图上画了哪几条」：被小眼睛藏起来的档位也该在表里，
+     * 这张表的用途正是「我现在该盯哪几道」。
+     *
+     * 状态放在 ViewModel 而不是面板内部：面板一关就整个卸载，state 全丢，下次点开又得从头
+     * 取十来个周期的 K 线 —— 那几百毫秒里表是空的，而这份表的用法恰恰是「点开看一眼就走」。
+     * 存在这里，关掉再开能立刻看到上次的数值，同时后台静默换成新的。
+     */
+    private val emaScan = MutableStateFlow(EmaScan())
+    private val emaRefreshing = MutableStateFlow(false)
+    private val emaDone = MutableStateFlow(0)
+    private val emaUpdatedAt = MutableStateFlow(0L)
+    private var emaJob: Job? = null
+    private var emaAutoJob: Job? = null
+
+    val emaAnalysis: StateFlow<EmaAnalysisState> = combine(
+        emaScan,
+        emaRefreshing,
+        emaDone,
+        emaUpdatedAt,
+    ) { scan, refreshing, done, updatedAt ->
+        EmaAnalysisState(scan, refreshing, done, updatedAt)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EmaAnalysisState())
+
+    /**
+     * 取一轮各周期 K 线并重算整表。
+     *
+     * **不清旧值**：结果经 [EmaAnalysis.merge] 并到上一轮上（某周期没取到时沿用它的旧数）。
+     * 上一轮还在飞就先取消 —— 两轮结果交错落盘会让表在新旧之间跳。
+     */
+    fun refreshEmaAnalysis() {
+        val intervals = state.value.intervals
+        val periods = state.value.emaCatalog
+        if (intervals.isEmpty() || periods.isEmpty()) {
+            emaJob?.cancel()
+            emaJob = null
+            emaScan.value = EmaScan()
+            emaRefreshing.value = false
+            emaDone.value = 0
+            return
+        }
+        emaJob?.cancel()
+        emaJob = viewModelScope.launch {
+            emaRefreshing.value = true
+            emaDone.value = 0
+            val barCount = EmaAnalysis.window(periods)
+            val outcomes = coroutineScope {
+                intervals.map { iv ->
+                    // 每个周期各自 +1，面板据此说「正在取 3 / 9」（只喂首次加载的文案）
+                    async { scanOneEmaInterval(iv, barCount).also { emaDone.update { n -> n + 1 } } }
+                }.awaitAll()
+            }
+            emaScan.value = EmaAnalysis.merge(emaScan.value, tallyEma(outcomes, periods))
+            emaUpdatedAt.value = System.currentTimeMillis()
+            emaRefreshing.value = false
+        }
+    }
+
+    /**
+     * 面板开 / 关：开就立刻取一轮并开始每分钟自动刷新，关就停掉定时器。
+     *
+     * 定时器放在 ViewModel 而不是面板的 `LaunchedEffect`：旋屏重建不该让「每分钟自己变新」
+     * 断在一半（重建后面板会再 open 一次，但那两次之间的计时是白丢的）。
+     */
+    fun setEmaPanelOpen(open: Boolean) {
+        if (open) {
+            refreshEmaAnalysis()
+            if (emaAutoJob == null) {
+                emaAutoJob = viewModelScope.launch {
+                    while (isActive) {
+                        delay(EMA_AUTO_REFRESH_MS)
+                        refreshEmaAnalysis()
+                    }
+                }
+            }
+        } else {
+            emaAutoJob?.cancel()
+            emaAutoJob = null
+        }
+    }
+
+    /**
+     * 面板里点一行：把这一档落成 / 对齐 / 撤掉一条告警线（判据见 [EmaAnalysis.tick]）。
+     *
+     * 画出来的就是**普通告警线**（`alert_rule`）—— 与拖出来的是同一种东西，所以在图上能拖、
+     * 能在预警列表里看到、也能在预警页关掉或删掉。名字用自动备注（`1时EMA50`），面板靠它回显。
+     */
+    fun toggleEmaLine(row: EmaLevelRow) {
+        val note = EmaAnalysis.note(row.interval, row.period)
+        viewModelScope.launch {
+            try {
+                when (val tick = EmaAnalysis.tick(symbolRules.value, row.level, note)) {
+                    EmaTick.None -> showNotice("这一档还没算出来，稍后再试")
+                    EmaTick.Add -> saveEmaRule(row, note)
+                    is EmaTick.Align -> alignEmaRule(tick.ruleId, row, note)
+                    is EmaTick.Remove -> {
+                        alerts.deleteRule(tick.ruleId)
+                        showNotice("已取消 $note 的告警线")
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("操作失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 存 EMA 原值，**不对齐 tickSize**。
+     *
+     * 两个理由：① 桌面端也是原样落，两边数值才对得上；② 一旦四舍五入，「已对齐」这个判据
+     * 就永远不成立（线价被改过，与下一轮的 EMA 值不可能再相等），面板会满屏「待对齐」。
+     * 规则表本身不校验刻度（那条校验只在预警编辑器里）。
+     */
+    private suspend fun saveEmaRule(row: EmaLevelRow, note: String) {
+        val price = BigDecimal.valueOf(row.value)
+        alerts.saveRule(
+            AlertRule(
+                market = id.market,
+                symbol = id.symbol,
+                name = note,
+                condition = AlertCondition.REACH,
+                threshold = price,
+                // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
+        showNotice("已画 $note · 穿越 ${priceLabel(price)} 提醒")
+    }
+
+    private suspend fun alignEmaRule(ruleId: Long, row: EmaLevelRow, note: String) {
+        val existing = alerts.rule(ruleId) ?: return
+        val price = BigDecimal.valueOf(row.value)
+        val moved = existing.threshold?.compareTo(price) != 0
+        alerts.saveRule(
+            existing.copy(
+                name = note,
+                condition = AlertCondition.REACH,
+                threshold = price,
+                // 之前被用户在预警页关掉的那条，对齐时就当场恢复 —— 面板说「已画」的线该是活的
+                enabled = true,
+            ),
+        )
+        // 价位换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让新价位一次都不提醒，
+        // wasSatisfied 也会把真正的「穿越」边沿吃掉（与 commitAlertLine 同一条理由）。
+        // 只是重新打开告警（价位没变）时不能清，那会把「已经满足」的边沿判断重置。
+        if (moved) alerts.saveState(ruleId, AlertState())
+        showNotice("已对齐 $note 到 ${priceLabel(price)}")
+    }
+
+    private suspend fun scanOneEmaInterval(interval: CandleInterval, bars: Int): EmaOutcome = try {
+        // 排序是幂等的保险：只依赖「最后一根是此刻」这一条，不赌数据源返回的方向
+        EmaOutcome.Ok(interval, repository.klines(id, interval, bars).klines.sortedBy { it.openTime })
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        EmaOutcome.Bad(interval, e.displayMessage())
+    }
+
+    private fun tallyEma(outcomes: List<EmaOutcome>, periods: List<Int>): EmaScan {
+        val levels = mutableListOf<EmaLevel>()
+        val failures = mutableListOf<EmaFailure>()
+        val missing = mutableListOf<EmaMissing>()
+        // 兜底基准取**最细**那个周期：周期越细，最后一根离「此刻」越近
+        var finest = Long.MAX_VALUE
+        var finestClose = Double.NaN
+        for (outcome in outcomes) {
+            when (outcome) {
+                is EmaOutcome.Bad -> failures += EmaFailure(outcome.interval, outcome.reason)
+
+                is EmaOutcome.Ok -> {
+                    val bars = outcome.bars
+                    if (bars.isEmpty()) {
+                        failures += EmaFailure(outcome.interval, "这个周期没有取到 K 线")
+                        continue
+                    }
+                    val closes = DoubleArray(bars.size) { bars[it].closeDouble() }
+                    val close = closes[closes.size - 1]
+                    if (outcome.interval.minutes < finest && close.isFinite() && close > 0) {
+                        finest = outcome.interval.minutes
+                        finestClose = close
+                    }
+                    for (period in periods) {
+                        val value = EmaAnalysis.lastEma(closes, period)
+                        if (value.isFinite() && value > 0) {
+                            levels += EmaLevel(outcome.interval, period, value)
+                        } else {
+                            missing += EmaMissing(outcome.interval, period, closes.size)
+                        }
+                    }
+                }
+            }
+        }
+        return EmaScan(levels, failures, missing, emptyList(), finestClose)
+    }
+
+    private fun priceLabel(price: BigDecimal): String = PriceFormatter.format(price, state.value.tickSize)
+
     // ---- 视觉画线（水平线/直线，纯记号不告警） ----
 
     /** 本标的已落库的视觉画线。 */
@@ -886,6 +1122,8 @@ class DetailViewModel(
             candles = displayCandles(chart.value, interval.value),
             interval = interval.value,
             createdAt = existing?.createdAt ?: System.currentTimeMillis(),
+            // 拖一根已有的线不该顺手抹掉它的备注：落库是整行 upsert，见 toChartLine 的说明
+            note = existing?.note,
         )
     }
 
@@ -919,6 +1157,34 @@ class DetailViewModel(
                 throw e
             } catch (e: Exception) {
                 showNotice("删除画线失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 给图上的一条线写 / 清备注（全屏选中一条线后，右侧编辑栏那个「备注」）。
+     *
+     * 两类线分属两个存储域，各写各的列：
+     * · 告警线 → `alert_rule.note`，**不动 name** —— 自动画的线名字形如 `8时EMA50`，
+     *   它是 EMA 压力支撑面板按名字认领那条线的键（见 [EmaAnalysis.lineOf]）；
+     * · 水平线 / 直线 → `chart_line.note`。
+     *
+     * 空白（含全空格）统一按「删掉备注」写 null：库里不该同时躺着 "" 与 null 两种
+     * 「没有备注」，否则每处判断都得写两遍。
+     */
+    fun updateLineNote(ref: LineRef, note: String) {
+        val trimmed = note.trim().ifEmpty { null }
+        viewModelScope.launch {
+            try {
+                when (ref) {
+                    is LineRef.Alert -> ref.ruleId?.let { alerts.setNote(it, trimmed) }
+                    is LineRef.Guide -> chartLinesRepo.setNote(ref.lineId, trimmed)
+                }
+                showNotice(if (trimmed == null) "已清除备注" else "备注已保存")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("备注保存失败：${e.displayMessage()}")
             }
         }
     }
@@ -1214,3 +1480,10 @@ private fun String.toSubPaneKinds(): List<SubPaneKind> {
 }
 
 private fun List<SubPaneKind>.toSubPaneKeys(): String = joinToString(",") { it.name }
+
+/** 单个周期取数的结果：拿到 K 线，或一句**原样留着**的失败原因（见面板的异常提示）。 */
+private sealed interface EmaOutcome {
+    data class Ok(val interval: CandleInterval, val bars: List<Kline>) : EmaOutcome
+
+    data class Bad(val interval: CandleInterval, val reason: String) : EmaOutcome
+}

@@ -31,6 +31,11 @@ data class AlertRuleEntity(
     val vibrate: Int,
     /** 关联 Webhook 端点 id，逗号分隔。 */
     val webhookIds: String,
+    /**
+     * 图上这条线自己的备注。**与 [name] 是两件事**：name 回答「这条线是谁画的」
+     * （自动画的线 `8时EMA50` 还是 EMA 面板的认领键），note 才是用户随手写的一句话。
+     */
+    val note: String? = null,
     val createdAt: Long,
 )
 
@@ -88,6 +93,7 @@ fun AlertRuleEntity.toDomain(): AlertRule {
         playSound = playSound == 1,
         vibrate = vibrate == 1,
         webhookIds = webhookIds.split(',').mapNotNull { it.trim().toLongOrNull() },
+        note = note?.takeIf { it.isNotBlank() },
         createdAt = createdAt,
     )
 }
@@ -107,6 +113,7 @@ fun AlertRule.toEntity(): AlertRuleEntity = AlertRuleEntity(
     playSound = if (playSound) 1 else 0,
     vibrate = if (vibrate) 1 else 0,
     webhookIds = webhookIds.joinToString(","),
+    note = note,
     createdAt = createdAt,
 )
 

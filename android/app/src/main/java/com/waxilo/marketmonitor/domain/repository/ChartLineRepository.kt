@@ -33,6 +33,8 @@ data class ChartLine(
     val p1: BigDecimal? = null,
     val t2: Long? = null,
     val p2: BigDecimal? = null,
+    /** 用户写的备注（全屏选中后在竖栏里加）。null = 没备注。 */
+    val note: String? = null,
     val createdAt: Long,
 )
 
@@ -45,6 +47,14 @@ interface ChartLineRepository {
     suspend fun save(line: ChartLine): Long
 
     suspend fun delete(id: Long)
+
+    /**
+     * 只改备注，不动几何。
+     *
+     * 不复用 [save]：那是整行 upsert，调用方手上若没有完整的原行（比如只改备注时
+     * 没有端点字段），写回去会把价位/端点一起抹掉。
+     */
+    suspend fun setNote(id: Long, note: String?)
 
     /**
      * 清空指定标的的全部画线（「清空划线」用）。

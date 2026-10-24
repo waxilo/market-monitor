@@ -78,6 +78,13 @@ data class AlertRule(
     val vibrate: Boolean = true,
     /** 关联的 Webhook 端点 id；为空表示不推送外部。 */
     val webhookIds: List<Long> = emptyList(),
+    /**
+     * 图上这条线自己的备注（全屏选中后在竖栏里加），null = 没备注。
+     *
+     * **与 [name] 分家**：name 是「这条线是谁画的」（自动线 `8时EMA50` 还是 EMA 面板的
+     * 认领键），note 是用户随手写的一句话。让备注去改 name 会把面板的回显弄丢。
+     */
+    val note: String? = null,
     val createdAt: Long = 0L,
 ) {
     val symbolKey: String get() = "${market.key}:$symbol"
