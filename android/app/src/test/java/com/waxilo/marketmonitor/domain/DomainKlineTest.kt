@@ -67,9 +67,14 @@ class CandleIntervalTest {
         val tenMinutes = CandleInterval.custom(10)!!
         assertEquals(2, tenMinutes.aggregateRatio)
         assertEquals("5m", tenMinutes.apiCode)
-        assertEquals("10m", tenMinutes.label)
-        assertEquals("3h", CandleInterval.custom(180)!!.label)
-        assertEquals("2d", CandleInterval.custom(2_880)!!.label)
+        // 展示名 2026-10-24 起是**中文短名**（与桌面端周期条同一套单位字），
+        // 请求周期码 `apiCode` 一个字都不能跟着变 —— 那才是发给出接口的。
+        assertEquals("10分", tenMinutes.label)
+        assertEquals("3时", CandleInterval.custom(180)!!.label)
+        assertEquals("2天", CandleInterval.custom(2_880)!!.label)
+        // 旧英文短名只留给「认领老线」（升级前画的 `8hEMA50` 那批），界面上不再出现
+        assertEquals("10m", tenMinutes.legacyLabel)
+        assertEquals("2d", CandleInterval.custom(2_880)!!.legacyLabel)
     }
 
     @Test
