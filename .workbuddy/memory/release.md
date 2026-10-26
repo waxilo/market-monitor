@@ -81,7 +81,7 @@
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
 - 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`、`desktop-v0.1.39`、`0.9.52`、
-  `desktop-v0.1.40`、`0.9.53`、`0.9.54`、`desktop-v0.1.41`。
+  `desktop-v0.1.40`、`0.9.53`、`0.9.54`、`desktop-v0.1.41`、`desktop-v0.1.42`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -526,3 +526,29 @@ Release run **40256230411** 绿 `01:51:18 → 01:54:40Z`（3m22s）；main CI ru
   （`aidr-hook-engine` PreToolUse）拦截（「命令执行命中企业策略」）。按规范不绕过 —— 版本/签名以 CI 日志
   与通道产物名为准；需要包内标识符（`repinPriceRange` / `overlapShare` / 不再有 `chart_right_offset`）时
   请人工在受控环境复核。
+
+## desktop 0.1.42（**只发桌面端**，2026-10-26 下午）
+
+「横向拖到历史时纵轴不再重排」（用户「桌面端也存在同样问题，修复」；详见 `2026-10-26.md` 与
+`desktop.md` 的 2026-10-26 条）。tag `desktop-v0.1.42`（annotated `d322a1e94f35`）→ 远端 `64d6168e`
+（本地 `4941d89` fix(chart) → `3f2f0b2` chore(release)）。Desktop Release run **40281142105** 三 job 全绿
+`06:39:51 → 06:47:50Z`（7m59s：mac →06:45:11 / win →06:47:31 / 发布 →06:47:50）；main CI run
+**40281122925** 绿（本次推送那次）。
+
+- 本轮改动：`KlineCanvas` 进入拖拽时冻结 `panBaseRef`，松手把**显示量程**反算成相对新窗口的意图
+  （`chartMath.priceIntentFor` / `overlapShare`，与 App `ValueRange.intentFor` / `overlapShare` 同口径）。
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.42
+  无 0.1.41 残留、latest.json 0.1.42（pub_date `2026-10-26T06:47:38.392Z`）、两平台 URL 指向本版、
+  两平台 keyid `226b03192e5df60b` == 发版前基线；exe **2791327** 字节 sha256
+  `3f2d03a77be03d5d4ced32ee0a9cc7032ed89a83d0c3e16923d8abb52c33fefb` == 边车、内嵌 `0.1.42`
+  utf-16le 命中 2 / `0.1.41` 命中 0；mac app.tar.gz 4365660、dmg 4440436；
+  CI vite 指纹 `index-CQrlH82n.css 35.83` / `index-DVLAlg9X.js 317.68`（99 modules）== 本地 `npm run build` 逐字一致。
+- ⚠️ `.sig` 比对要**解两层**：`.sig` 文件本身就是 base64 文本，manifest 里的 `signature` 是 base64(**解一层后的
+  minisign 文本**)；直接拿 manifest 去比 `.sig` 文件必然不等（本轮先踩了一次）。
+- push 仍走 API（`api-push-0948.py` 两次：`--parent 84f5ea97` → 远端 `59783cae`；`--parent 59783cae` → 远端
+  `64d6168e`）；tag 用 `tag-0142.py`（先断言远端 tree == 本地 tree）。
+- ⚠️ **发版期间另一会话在同一仓库推了 Android 0.9.56**（`27d72a62` fix(ema) + `ec8b9f60` chore(release)，
+  动了 README 与 `EmaAnalysisSheet.kt`），远端 main 已到 `ec8b9f60`；桌面 tag 指向 `64d6168e`，构建按 tag
+  checkout，不受影响。**之后的 docs(memory) 提交要基于新 remote head 再推**，别拿旧树覆盖别人的改动。
+- ⚠️ 本地 `README.md` 的桌面 version 行此前停在 **0.1.34**（0.1.35–0.1.41 的发版提交只改了 `tauri.conf.json`）；
+  本轮一并补成 0.1.42。
