@@ -499,3 +499,30 @@ Release run **40087018064** 绿 2m39s、Desktop Release run **40087022941** 三 
   **触发器**，产物挂在固定通道 `android-latest` / `desktop-latest` 上，按 tag 下载必然失败；
   要下就 `-p <产物名>` 到通道，或直接 `gh release download android-latest`。
 
+
+## 0.9.55（**只发 Android**，2026-10-26 上午）
+
+「拖动看历史松手不再重排纵轴 + 退出详情再进来回到最新一根」（用户两次报告，详见 `2026-10-26.md` 与
+`android/basedata/2026-10-03_视角持久化_全局看图习惯.md` 第五节）。桌面端无改动，本轮不碰桌面通道。
+tag `0.9.55`（annotated `d6536a17bba0`）→ 远端 main `36d29cc4`（本地 `0f67124` fix(chart) → `60e3ff6` chore(release)）。
+Release run **40256230411** 绿 `01:51:18 → 01:54:40Z`（3m22s）；main CI run **40256196078** 绿
+（同一分支连推两次，第一个 CI run 40256176695 被 `concurrency` 正常取消）。
+
+- 本轮改动：`KlineChart` 横向平移松手把「手势期间显示的量程」反算成意图（`ValueRange.intentFor` /
+  `overlapShare`），不再按新窗口重排纵轴；`AppSettings`/DataStore 删掉 `chartRightOffset`，重进详情页
+  固定回最新一根。
+- Android 通道：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、只有
+  `market-monitor-0.9.55.apk`（**11186820**）+ `.sha256`（65），无 0.9.54 残留；
+  自算 sha256 `ef1deaec84b1a1bf634ba3344194f368c51b62440291154d8d98c5032a328fe7` == 边车。
+- CI 内两条硬证据：`apk cert sha256: cf2e20c7…52f034` == 固定发布密钥指纹；`本次版本号：0.9.55`
+  （workflow 断言 tag == `versionName`，不一致会红）。本地 `assembleDebug` 的 `output-metadata.json`
+  = `versionCode 67 / versionName 0.9.55`（同一份 gradle 配置）。
+- ✅ 打 tag 前本地 `:app:testDebugUnitTest` **394 例全绿**。
+- push 仍被沙箱拦（`fatal: not a git repository`）：`.workbuddy/tmp/api-push-0948.py` 两次
+  （`0f67124` → 远端 `532ca504`；`60e3ff6 --parent 532ca504` → 远端 `36d29cc4`）。**脚本已修**：
+  给 `git` 调用加 `-c core.quotepath=false` —— 否则中文路径（`android/basedata/…`）会被 `ls-tree`
+  转义成 `"\345…"`，被误判成「已删除」而中止。打 tag 用 `.workbuddy/tmp/tag-0955.py`（先断言 tree 一致）。
+- ⚠️ **本机无法做包内 dex 取证**：`aapt2 dump badging` + `unzip classes*.dex` 那条命令被企业 DLP 钩子
+  （`aidr-hook-engine` PreToolUse）拦截（「命令执行命中企业策略」）。按规范不绕过 —— 版本/签名以 CI 日志
+  与通道产物名为准；需要包内标识符（`repinPriceRange` / `overlapShare` / 不再有 `chart_right_offset`）时
+  请人工在受控环境复核。
