@@ -80,7 +80,7 @@ export function gridLines(range: Range, count = 5): number[] {
 export const MIN_SPAN_RATIO = 0.08;
 export const MAX_SPAN_RATIO = 12;
 /** 可视区与数据区的最小重叠比例（等于 App ValueRange.MIN_VISIBLE_SHARE）。 */
-const PRICE_MIN_VISIBLE_SHARE = 0.25;
+export const PRICE_MIN_VISIBLE_SHARE = 0.25;
 
 /**
  * 价格量程上的「用户意图」：只存这两个量，实际量程由它们和当帧自动量程（base）算出。
@@ -147,8 +147,50 @@ export function priceRange(base: Range, view: PriceView): Range {
   if (!(baseSpan > 0)) return base;
   const v = clampPriceView(view, base);
   const span = baseSpan * v.zoom;
-  const center = (base.low + base.high) / 2 + v.pan * baseSpan;
+  const center = rangeCenter(base) + v.pan * baseSpan;
   return { low: center - span / 2, high: center + span / 2 };
+}
+
+function rangeCenter(range: Range): number {
+  return (range.low + range.high) / 2;
+}
+
+/**
+ * 把一段**绝对量程** [target] 换算成相对 [base]（当前窗口的自动量程）的意图，
+ * 使 `priceRange(base, 意图)` 仍落在 [target] 上。
+ *
+ * 用在**横向平移松手**的那一刻：手势期间量程被冻结（见 KlineCanvas 的 `panBaseRef`），
+ * 松手若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下 ——
+ * 用户报的「拖到历史时自动把 K 线摆到画布中间」。把这个冻结量程落成意图，
+ * 取景就原地不动；之后是否回到自动适配，交给「刻度已调 · 复位」小标。
+ *
+ * 量程退化（跨度非正 / 非有限）返回 null：调用方保持原意图即可。
+ * 与 App `ValueRange.intentFor` 同口径。
+ */
+export function priceIntentFor(target: Range, base: Range): PriceView | null {
+  const baseSpan = baseSpanOf(base);
+  const targetSpan = baseSpanOf(target);
+  if (!Number.isFinite(baseSpan) || !Number.isFinite(targetSpan)) return null;
+  if (baseSpan <= EPSILON || targetSpan <= EPSILON) return null;
+  const zoom = clampNum(targetSpan / baseSpan, MIN_SPAN_RATIO, MAX_SPAN_RATIO);
+  const pan = (rangeCenter(target) - rangeCenter(base)) / baseSpan;
+  if (!Number.isFinite(pan)) return null;
+  return { zoom, pan };
+}
+
+/**
+ * [a] 与 [b] 的重叠占 [a] 跨度的比例（0..1）。
+ *
+ * 用来判「还要不要把取景钉在原地」：横向平移后新窗口的数据若基本落在冻结量程之外，
+ * 硬留就会得到一张空图 —— 这时宁可按自动量程重排一次。跨度退化时返回 1。
+ * 与 App `ValueRange.overlapShare` 同口径。
+ */
+export function overlapShare(a: Range, b: Range): number {
+  const span = baseSpanOf(a);
+  if (!Number.isFinite(span) || span <= EPSILON) return 1;
+  const overlap = Math.min(a.high, b.high) - Math.max(a.low, b.low);
+  if (!Number.isFinite(overlap)) return 1;
+  return clampNum(overlap / span, 0, 1);
 }
 
 /**

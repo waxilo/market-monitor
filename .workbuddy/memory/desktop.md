@@ -261,6 +261,22 @@
 
 - ❗**历史补页（翻页）的判据与上报点（2026-10-24 收敛）**：判据只有一处 `src/lib/chartMath.ts::needsOlder(v, barCount)`（提前量 `OLDER_MARGIN_MIN / OLDER_MARGIN_MAX` = 24 / 120，与 Android 同口径）；**上报点收敛在 `KlineCanvas` 的 `draw()` 尾巴一处**（`draw` 的 `useCallback` 依赖 `[reportOlder]`），`useEffect([series], reportOlder)` 负责数据落地后的链式补页。**别再往 `onWheel` / `pointermove` 里各加一处** —— 所有改视窗的路径最终都会重画，挂 `draw` 才不漏入口。
 
+- ❗**横向拖动不重排纵轴（2026-10-26，与 App 0.9.55 同一处修正）**：横向平移时可见窗口每帧都在变，
+  旧实现每帧拿 `mainRange(ws, we)` 当纵向基准 ⇒ K 线一边横移一边上下缩放（用户报「拖到历史 K 线跳动」）。
+  现在 `pointerdown` 进入拖拽那一刻把当帧自动量程冻结进 `panBaseRef`，`draw()` 用
+  `panBaseRef.current ?? mainRange(...)` 当基准；松手时若 `axis === 'H'`，`repinPriceAfterPan(frozenBase)`
+  把**手势期间显示的**量程（`priceRange(frozenBase, priceRef)` —— 不是冻结的基准，基准还要叠加 zoom/pan）
+  反算成相对新窗口的意图并落盘，松手逐像素不跳。反算/重叠判据在 `chartMath.priceIntentFor` /
+  `overlapShare`（同 App `ValueRange.intentFor` / `overlapShare`）；新窗口与冻结量程重叠 < 25% 时不钉、
+  退回自动适配（宁可跳一下也不能空图）。复位入口不变：小标「刻度已调 · 复位」只清纵向，双击两者都清。
+  ⚠️ 别把冻结值当「显示量程」直接反算 —— App 端第一版就栽在这，松手会变成自动适配。
+- 实测（`.workbuddy/tmp/verify-chart-pan-pin.mjs`，无头 Chrome + CDP 真拖动，**9/9**）：判据取**主图网格线行号**，
+  不哈希右轴刻度文字（那枚「最新价」牌会随实时行情跳字，与纵轴无关，第一版就被它污染成假失败）。
+  修复后拖动 13 帧行号恒定、松手同一哈希；`mm.chartView` 的 `rightOffset` 3 → -24、`visibleBars` 不变、
+  `priceZoom/pan` 已钉住；点小标只清纵向、双击回默认。旧行为对照（临时去掉冻结再跑）：14 帧出现 3 种行号
+  （`[76,193,310]` → `[75,195,314]` → `[68,135,202,269,336]`），证明用例有区分度。纯函数 30 条见
+  `check-chart-pan-pin.mjs`。
+
 ## 悬浮窗断联遮罩（2026-10-14 新增）
 - 用户需求原文：**「当 api 断联时，桌面端的悬浮窗的数字就卡住了，用户不知道，还以为价格没变；
   断联时遮罩层遮住整个悬浮窗，显示已断联」**。

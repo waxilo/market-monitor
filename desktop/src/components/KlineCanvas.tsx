@@ -13,12 +13,15 @@ import {
   initialViewport,
   needsOlder,
   overDataAt,
+  overlapShare,
   panPriceView,
   panViewport,
   plotRange,
   plotStart,
   priceAdjusted,
+  priceIntentFor,
   priceRange,
+  PRICE_MIN_VISIBLE_SHARE,
   timeAtIndex,
   timeIndexOf,
   timeLabelPlacements,
@@ -512,6 +515,15 @@ export function KlineCanvas({
   const vpRef = useRef<Viewport>(loadChartViewPrefs().viewport);
   const priceRef = useRef<PriceView>(loadChartViewPrefs().price);
   /**
+   * 拖拽期间冻结的纵向基准量程（手势开始那一刻按当前窗口算出来的 `mainRange`）。
+   *
+   * 拖动时可见窗口每帧都在变；基准若跟着重算，自动量程就会**逐帧重排** ——
+   * 画面上 K 线一边横移一边上下缩放，正是用户报的「拖到历史时 K 线跳动」。
+   * 冻结之后价格轴整场手势不动；横向平移松手时再把这段取景落成相对新窗口的意图
+   * （见 `repinPriceAfterPan`），松手瞬间也不会跳。与 App KlineChart 的 `priceBase` 同口径。
+   */
+  const panBaseRef = useRef<Range | null>(null);
+  /**
    * 纵轴重定的挂起标记：resetKey（标的|周期）一变就立起，等新序列带着有限现价落地
    * 才在 recenter effect 里清掉并重算 —— 序列空的时候现价还不存在，先算只会锚错
    * （与 App KlineChart.kt 里 snapshotFlow 等首个非空序列同一手法）。
@@ -662,8 +674,9 @@ export function KlineCanvas({
 
     const vp = clampViewport(vpRef.current, n);
     const [ws, we] = dataWindow(vpRef.current, n);
-    // 自动量程只由可见窗口决定，用户的纵向缩放/平移是叠在它之上的用户意图
-    const rangeBase = mainRange(s, ws, we);
+    // 纵向基准：手势期间取冻结值（见 panBaseRef），平时只由可见窗口决定 ——
+    // 用户的纵向缩放/平移是叠在它之上的用户意图
+    const rangeBase = panBaseRef.current ?? mainRange(s, ws, we);
     const mainR = priceRange(rangeBase, priceRef.current);
     const subRs = s.subPanes.map((pane) => subRange(pane, ws, we));
     const [rs, re] = plotRange(vpRef.current, n);
@@ -1122,6 +1135,27 @@ export function KlineCanvas({
   }, []);
 
   /**
+   * 横向平移松手：把**手势期间显示的绝对量程**落成相对新窗口的意图。
+   *
+   * 不这么做的话，`panBaseRef` 一清空纵向基准就切回新窗口的自动量程，松手瞬间
+   * 整张 K 线上下跳一下 —— 与 App 同一处修正（见 KlineChart.kt 的 `repinPriceRange`）。
+   * 落成意图之后取景与松手前逐像素一致；想回自动适配仍走「刻度已调 · 复位」小标。
+   */
+  const repinPriceAfterPan = useCallback((frozenBase: Range) => {
+    const s = modelRef.current.series;
+    const n = s.candles.length;
+    if (n <= 0) return;
+    const [ws, we] = dataWindow(vpRef.current, n);
+    const base = mainRange(s, ws, we);
+    const shown = priceRange(frozenBase, priceRef.current);
+    // 新窗口的数据基本滑出冻结量程（< 25% 可见，与纵向平移的收口同一条线）：
+    // 硬钉下去就是一张空图，退回自动适配 —— 宁可跳一下，也不能没 K 线。
+    if (overlapShare(base, shown) < PRICE_MIN_VISIBLE_SHARE) return;
+    const intent = priceIntentFor(shown, base);
+    if (intent) priceRef.current = intent;
+  }, []);
+
+  /**
    * 纵轴重定（换周期 / 换标的 / 首次进入后）：resetKey 变时挂起（见 resetKey effect），
    * 新序列一就绪就把纵向缩放/平移意图整体换成「最新价居中 + 量程对称外扩保全蜡烛」。
    *
@@ -1171,6 +1205,7 @@ export function KlineCanvas({
     recenterPendingRef.current = true;
     crossRef.current = null;
     pendingRef.current = null;
+    panBaseRef.current = null;
     draw();
   }, [resetKey, draw]);
 
@@ -1235,13 +1270,19 @@ export function KlineCanvas({
      * 当帧的自动量程（水平视窗算出来的那个基准量程）。
      * 纵向手势改的都是**相对它**的意图量，所以不必知道上一帧画到了哪。
      */
-    const currentBase = () => {
+    const autoBase = () => {
       const s = modelRef.current.series;
       const n = s.candles.length;
       if (n <= 0) return { low: 0, high: 1 };
       const [ws, we] = dataWindow(vpRef.current, n);
       return mainRange(s, ws, we);
     };
+
+    /**
+     * 纵向意图的换算基准：手势期间取冻结值，其余时候取自动量程（与 draw 同源）。
+     * 手势中若仍跟着窗口变，`pricePan` 会被反复重新钳，拖拽手感会逐帧漂。
+     */
+    const currentBase = () => panBaseRef.current ?? autoBase();
 
     /** 当帧**真正画出来**的价格量程：自动量程 + 用户的缩放/平移意图（与 draw 同源）。 */
     const currentMainRange = () => priceRange(currentBase(), priceRef.current);
@@ -1500,6 +1541,9 @@ export function KlineCanvas({
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       applyCursor(canvas, 'grabbing');
+      // 整场手势冻结纵向基准：可见窗口每帧都在变，不冻结的话自动量程会逐帧重排
+      // （K 线一边横移一边上下缩放）。松手时由 repinPriceAfterPan 把取景落成意图。
+      panBaseRef.current = autoBase();
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -1617,8 +1661,11 @@ export function KlineCanvas({
 
     const endDrag = () => {
       if (mode === 'none') return;
+      const pannedHorizontal = axis === 'H';
+      const frozenBase = panBaseRef.current;
       mode = 'none';
       axis = null;
+      panBaseRef.current = null;
       grabIndex = -1;
       if (pointerId !== null && canvas.hasPointerCapture(pointerId)) {
         canvas.releasePointerCapture(pointerId);
@@ -1627,8 +1674,13 @@ export function KlineCanvas({
       // 松手回到空闲指针（`on-line` 的类也在这里一并摘掉 —— 只清内联样式的话，
       // 那枚四角角标会顶替掉本该出现的圆环，直到下一次 pointermove 才纠正）
       applyCursor(canvas, '');
+      // 横向平移松手**不重新适配**纵向量程：把冻结取景落成相对新窗口的意图，
+      // 否则自动量程会按新窗口重算、K 线整块上下跳一下（用户报的「拖到历史时自动摆回中间」）。
+      // 极少数留不住的情况（新窗口的数据基本滑出冻结量程）会退回自动适配，那一下得重画。
+      if (pannedHorizontal && frozenBase) repinPriceAfterPan(frozenBase);
       // 一场拖拽结束时落盘一次：过程中每帧写没有意义，松手才是「我停在这儿」的意图
       persistView();
+      draw();
     };
 
     const onLeave = () => {
@@ -1705,7 +1757,7 @@ export function KlineCanvas({
       canvas.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [draw, persistView, reportOlder]);
+  }, [draw, persistView, reportOlder, repinPriceAfterPan]);
 
   return (
     <div className="chart-stage">
