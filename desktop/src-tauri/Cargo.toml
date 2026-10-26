@@ -61,6 +61,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
 ] }
+# 关掉 WebView2 的浏览器加速键（Alt 相关的那套会抢输入，见 src/browser_keys.rs）。
+# 版本与 wry 用的那份对齐，Cargo.lock 里已经有，不额外下载新版本。
+webview2-com = "0.39"
 
 # 前台不息屏（macOS）：IOKit 的 IOPM 断言。core-foundation 本来就在 tauri 的依赖树里
 # （0.10.1），这里只是直接用它 —— 不引入新版本、不新增下载。

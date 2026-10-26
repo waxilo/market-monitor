@@ -1,5 +1,6 @@
 mod alert;
 mod awake;
+mod browser_keys;
 mod frame;
 mod global_key;
 mod market;
@@ -110,6 +111,8 @@ fn create_mini(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     // 关掉 Win11 给前台焦点窗口描的那圈 1px DWM 边框（切过来那一刻描在胶囊外、
     // 失焦才消失的那圈黑边，见 `frame` 模块）。平台差异同样收在模块里。
     frame::clear_focus_border(&window);
+    // 浏览器加速键一并在出生时就关掉（Alt 那几条会抢输入，见 `browser_keys`）
+    browser_keys::disable_browser_accelerators(&window);
     Some(window)
 }
 
@@ -334,6 +337,11 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // 主窗的浏览器加速键同样关掉（Alt 那几条会抢输入，见 `browser_keys` 模块）
+            if let Some(main) = app.get_webview_window(MAIN) {
+                browser_keys::disable_browser_accelerators(&main);
+            }
 
             // 悬浮窗启动即预建（隐藏），从托盘/主窗按钮唤起
             let _ = create_mini(app.handle());
