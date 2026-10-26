@@ -263,9 +263,10 @@ data class ChartCornerAction(
 /**
  * 图表的整份「用户意图」：横向视窗（[viewport]）+ 纵向刻度（[priceZoom] / [pricePan]）。
  *
- * 这套视角是**全局一份**的看图习惯（与均线、周期条同口径）：切周期、换标的、重启
- * 都保持。图表自身不落盘 —— 实例首帧从 [KlineChart.initialView] 取值，之后每次
- * 变化经 `onViewChange` 交还调用方（详情页由 ViewModel 同步持有 + 防抖写 DataStore）。
+ * 在**本页内**跨周期、跨竖屏/全屏保持；跨会话只继承宽度与纵向刻度 ——
+ * 横向位置（回看历史）退出详情页即作废。图表自身不落盘：实例首帧从
+ * [KlineChart.initialView] 取值，之后每次变化经 `onViewChange` 交还调用方
+ * （详情页由 ViewModel 同步持有 + 防抖写 DataStore）。
  */
 data class ChartViewState(
     val viewport: ChartViewport = ChartViewport.initial(),
@@ -290,7 +291,7 @@ fun KlineChart(
     /**
      * 标的身份（如 `BTCUSDT`）。只用于复位**过程状态**（十字光标、手势中的价格基准，
      * 都挂在 `(symbolKey, interval)` 的 remember 上）：下标换到另一条序列后指向的
-     * 就是另一根蜡烛了。视角（[initialView]）不在此列 —— 它是全局看图习惯。
+     * 就是另一根蜡烛了。视角（[initialView]）不在此列 —— 它在本页内保持。
      */
     symbolKey: String = "",
     /**
@@ -411,11 +412,11 @@ fun KlineChart(
     /**
      * 视窗只存「用户意图」（看多宽、右端停哪儿）；序列长度每次查询时作为入参传入。
      *
-     * 这是**全局一份**的看图习惯：切周期、换标的都保持，初值来自 [initialView]，
-     * 变化经 [onViewChange] 交回调用方落盘 —— 重启不重置。因此 `remember` **不挂** key：
-     * 挂上就会在换标的/换周期时把视角弹回默认，正是这次要修掉的老行为。
-     * 序列长短不一没关系 —— 越界由 [ChartViewport.clamp] 在每次查询时兜底，
-     * 存进来的只是「意图」，不是「当前序列下的有效值」。
+     * 这是**本页内**的看图习惯：切周期、竖屏↔全屏都保持，初值来自 [initialView]，
+     * 变化经 [onViewChange] 交回调用方（横向位置不落盘，退出详情再进回到最新一根）。
+     * 因此 `remember` **不挂** key：挂上就会在换标的/换周期时把视角弹回默认，
+     * 正是这次要修掉的老行为。序列长短不一没关系 —— 越界由 [ChartViewport.clamp]
+     * 在每次查询时兜底，存进来的只是「意图」，不是「当前序列下的有效值」。
      */
     val barCount = series.size
     var viewport by remember { mutableStateOf(initialView.viewport) }
@@ -637,6 +638,39 @@ fun KlineChart(
         pricePan = base.panCenteringOn(close, priceZoom)
     }
 
+    /**
+     * 横向平移松手后，把**手势期间显示的绝对量程**落成相对当前窗口的意图。
+     *
+     * 不这么做的话，[priceBase] 一清空 `rangeBase` 就切回新窗口的自动量程，
+     * 量程与中心一起变 ⇒ 松手瞬间整张 K 线上下跳一下（用户报的「拖到历史时
+     * 自动把 K 线摆到画布中间」）。落成意图之后，取景与手指松开前逐像素一致；
+     * 想恢复自动适配仍由左下角「刻度已缩放 · 复位」一键完成。
+     *
+     * [frozenBase] 是手势开始时冻结的**基准**量程，屏幕上真正显示的是它叠加
+     * `priceZoom` / `pricePan` 之后的结果 —— 要保住的是后者，所以先回放一次。
+     * 基准按当前序列 + 当前视口现算（与 [autoRange] 同口径），不读 [liveAutoRange]：
+     * 松手这一帧的重组可能还没跑，读到的「实时值」仍是上一帧窗口的量程。
+     *
+     * 唯一的例外是**数据已经滑出冻结量程**（见 [ValueRange.overlapShare]）：那时留住取景
+     * 等于留一张空图，交给自动量程重排一次。
+     */
+    fun repinPriceRange(frozenBase: ValueRange) {
+        val current = liveSeriesForRecenter
+        if (current.size <= 0) return
+        val visible = viewport.window(current.size)
+        val base = current.mainRange(visible.first, visible.last)
+        val shown = frozenBase
+            .scaled(priceZoom, frozenBase)
+            .panned(pricePan, frozenBase)
+        // 新窗口的数据已经基本滑出冻结量程（< 25% 可见，与纵向平移的收口同一条线）：
+        // 硬钉下去就是一张空图，这时退回自动适配 —— 宁可跳一下，也不能没 K 线。
+        if (base.overlapShare(shown) < ValueRange.MIN_VISIBLE_SHARE) return
+        base.intentFor(shown)?.let { intent ->
+            priceZoom = intent.zoom
+            pricePan = intent.pan
+        }
+    }
+
     // 每帧重建 8 个 Color 引用代价极低，反而省掉一长串 remember key——key 里不能放 MaterialTheme 调用
     val scheme = MaterialTheme.colorScheme
     val palette = ChartPalette(
@@ -777,6 +811,13 @@ fun KlineChart(
                 // 捏合时价格基准冻结失效（量程逐帧抖）」。视窗与纵向刻度**不在此列**：
                 // 它们是全局视角偏好，不挂序列 key（见上），委托永远指向活的 state。
                 .pointerInput(drawTool, linesEditable, symbolKey, interval.storageKey) {
+                    /**
+                     * 本场手势有没有横向平移过 —— 松手时据此决定要不要保住纵向取景。
+                     *
+                     * 只活在协程里（不进 Compose 状态）：它只在 onPan / onGestureEnd 之间传递，
+                     * 每帧写 state 会让整张图跟着重组。
+                     */
+                    var pannedHorizontal = false
                     detectChartGestures(
                         longPressMs = viewConfiguration.longPressTimeoutMillis,
                         touchSlop = viewConfiguration.touchSlop,
@@ -870,9 +911,22 @@ fun KlineChart(
                         onTrendDelete = { id -> drawDelete(id) },
                         onGestureStart = {
                             // 冻结价格基准：整场手势里价格轴不再随可见区间重算（见 priceBase）
+                            pannedHorizontal = false
                             priceBase = liveAutoRange
                         },
-                        onGestureEnd = { priceBase = null },
+                        onGestureEnd = {
+                            val frozen = priceBase
+                            priceBase = null
+                            // 横向平移松手**不重新适配**纵向量程（2026-10-26 用户报）：
+                            // 冻结的量程若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下
+                            // —— 看着就像「拖到历史时自动把 K 线摆回画布中间」。
+                            // 把冻结量程反算成相对新窗口的意图，取景原样留住；
+                            // 想回到自动适配仍走左下角「刻度已缩放 · 复位」。
+                            if (pannedHorizontal && frozen != null) {
+                                repinPriceRange(frozen)
+                            }
+                            pannedHorizontal = false
+                        },
                         onPan = { deltaPx ->
                             val bars = liveBarCount
                             val slot = liveGeo.slot(viewport.clamp(bars).visibleBars)
@@ -881,6 +935,7 @@ fun KlineChart(
                             // 「拖动一格一格跳」的来源）。
                             val deltaBars = ChartGesture.barDelta(deltaPx, slot)
                             if (deltaBars != 0f) {
+                                pannedHorizontal = true
                                 val moved = viewport.pan(deltaBars, bars)
                                 viewport = moved
                                 // 视窗左端进了「提前量」就要更早的历史（PRD FR-2.2），

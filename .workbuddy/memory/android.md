@@ -24,6 +24,23 @@
 `remember(symbolKey, interval.storageKey)`，别用 `LaunchedEffect` 事后对齐。`window()` 管量程、`plotRange()` 管像素
 （含留白）；每帧位移不足一根要累积。Sparkline 别硬要求周期：读不到按 `cachedIntervalCounts` 挑最粗回退（表 `kline`）。
 
+**持久化口径（2026-10-26 起）**：跨会话只留 `visibleBars` + `priceZoom/pricePan`；**横向位置 `rightOffset` 不落盘** ——
+详情页 ViewModel 随 NavBackStackEntry 销毁，退出再进来必须回到最新一根（`restoreChartPreferences` 用
+`DEFAULT_RIGHT_BLANK`）。本页内（切周期、竖屏↔全屏、旋屏）仍靠 ViewModel 内存里的 `ChartViewState` 交接。
+
+## 横向平移松手不再重排纵轴（2026-10-26，用户报「拖到历史 K 线自动摆到画布中间、K 线跳」）
+- **症状 100% 在 Android**（桌面端没有冻结，价格轴逐帧跟随，松手无突变）：`priceBase` 在 `onGestureStart`
+  冻结、`onGestureEnd` 清空；松手那一帧 `rangeBase` 换回**新窗口**的自动量程 ⇒ 量程与中心一起变，
+  K 线整块上下跳一下（真机抓过 mid/after 两帧，纵向差 ~50px）。
+- **修法**：`onPan` 记 `pannedHorizontal`；松手时 `repinPriceRange(frozenBase)` 把手势期间**显示的量程**
+  `frozenBase.scaled(priceZoom).panned(pricePan)` 反算成相对新窗口的意图（`ValueRange.intentFor` → `PriceIntent`），
+  取景原地不动。注意要反算**显示量程**而不是冻结的基准量程 —— 只反算基准会把叠加的缩放抹掉。
+- 之后回到自动适配仍走左下角「刻度已缩放 · 复位」（只清纵向、保留横向视窗）。
+- **例外**：新窗口的数据与冻结量程重叠 < 25%（`ValueRange.overlapShare`，与纵向平移的收口同一条线）时**不钉** ——
+  否则是一张空图，这时按自动量程重排一次（宁可跳一下）。
+- 只对**横向平移**生效：捏合缩放仍走「手势冻结 + 松手一次性适配」的老口径（缩放后的适配是有用的）。
+- 测试：`ChartViewportTest` +4（意图回放逐值相等 / 基准不变时意图仍是 1,0 / 退化入参 null / 重叠比例四格）。
+
 ## 序列就绪 = (raw, rawBase) 这一对（2026-10-09）
 `ChartData` 里 `raw`（基础周期蜡烛）**必须**与 `rawBase: CandleInterval?`（它归属的基础周期）成对更新。
 三条推论，缺一条就出「一根柱子的图」或「假图」：

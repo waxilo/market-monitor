@@ -301,6 +301,12 @@ data class ChartViewport(
     }
 }
 
+/**
+ * 纵向刻度的「用户意图」：相对某个基准量程的缩放倍数与平移比例，
+ * 语义与 [ValueRange.scaled] / [ValueRange.panned] 完全一致（`zoom = 1, pan = 0` = 自动量程）。
+ */
+data class PriceIntent(val zoom: Float, val pan: Float)
+
 /** 一段数值的最小/最大值，图表纵轴与副图窗格共用。 */
 data class ValueRange(val low: Double, val high: Double) {
 
@@ -410,6 +416,45 @@ data class ValueRange(val low: Double, val high: Double) {
             max(abs(range.start), abs(range.endInclusive))
         }
         return wanted.coerceIn(-limit, limit)
+    }
+
+    /**
+     * 把一段**绝对量程** [target] 换算成相对本量程（当前的自动量程）的意图，
+     * 使 `this.scaled(zoom, this).panned(pan, this)` 仍落在 [target] 上。
+     *
+     * 用在**横向平移松手**的那一刻：手势期间量程被冻结（见 KlineChart 的 `priceBase`），
+     * 松手若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下 ——
+     * 用户报的「拖到历史 K 线时自动把 K 线摆到画布中间」。把这个冻结量程落成意图，
+     * 取景就原地不动；之后是否回到自动适配，交给「刻度已缩放 · 复位」小标。
+     *
+     * 量程退化（跨度非正 / 非有限）返回 null：调用方保持原意图即可。
+     */
+    fun intentFor(target: ValueRange): PriceIntent? {
+        val baseSpan = high - low
+        val targetSpan = target.high - target.low
+        if (!baseSpan.isFinite() || !targetSpan.isFinite()) return null
+        if (baseSpan <= EPSILON || targetSpan <= EPSILON) return null
+        val zoom = (targetSpan / baseSpan).toFloat()
+            .coerceIn(MIN_SPAN_RATIO.toFloat(), MAX_SPAN_RATIO.toFloat())
+        // [scaled] 以本量程的中心为不动点，[panned] 再按本量程跨度平移 —— 与回放式一一对应
+        val pan = ((target.center - center) / baseSpan).toFloat()
+        if (!pan.isFinite()) return null
+        return PriceIntent(zoom, pan)
+    }
+
+    /**
+     * 本量程与 [other] 的重叠占本量程跨度的比例（0..1）。
+     *
+     * 用来判「还要不要把取景钉在原地」：横向平移后新窗口的数据若基本落在冻结量程之外，
+     * 硬留就会得到一张空图 —— 这时宁可按自动量程重排一次。
+     * 跨度退化时返回 1（无从判断，按「看得见」处理，不去打断）。
+     */
+    fun overlapShare(other: ValueRange): Float {
+        val span = high - low
+        if (span <= EPSILON || !span.isFinite()) return 1f
+        val overlap = min(high, other.high) - max(low, other.low)
+        if (!overlap.isFinite()) return 1f
+        return (overlap / span).toFloat().coerceIn(0f, 1f)
     }
 
     /** 归一化纵向位置：0 为顶部、1 为底部（像素轴向下），未定义值原样返回 NaN。 */

@@ -19,6 +19,7 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   **MuMu 注入两条**：`input swipe` 起止同坐标会被当 tap 且不发 MOVE ⇒ 长按（十字光标）永远不触发，要带 1–2px 位移；
   直线只能靠拖动画（两次 tap 恒判「太近」→ 撤销并收起工具）、
   **翻页加载 loadMore 的两个坑（`atOldestEdge` 判据 + 去重标记生命周期）**、
+  **横向平移松手不再重排纵轴（`repinPriceRange` + `ValueRange.intentFor/overlapShare`，2026-10-26；只对平移，缩放走老口径）**、
   **Bitunix 下线（只回已收盘蜡烛）**、**方言周期码大小写白名单 + 粗档 utc 变体（Bitget）**、**均线目录（整份可编辑，五档不再写死）/ MA·EMA 双族 + 两级显隐（族 chip 总闸 + 逐条小眼睛分闸，2026-10-22）**、`LazyColumn` 锚定坑、
   **EMA 压力支撑分析面板（桌面端复刻，2026-10-24：回显只靠规则名 `8时EMA50`、不做 adopt、
   EMA 原值不对齐 tickSize；**入口 = 详情页顶栏右上角（全屏在周期条右端）的文字按钮，指标栏不再有 chip**；

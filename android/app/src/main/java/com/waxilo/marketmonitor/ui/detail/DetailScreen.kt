@@ -261,8 +261,9 @@ fun DetailScreen(
                     onRetry = viewModel::refresh,
                     onFullscreen = { fullscreen = true },
                     onCrosshairIndexChange = { crosshairIndex = it },
-                    // 视角全局一份：初值取 ViewModel 当前值（全屏那份的调整也在里面），
-                    // 变化交回去 —— 切周期、换标的、重启都不重置
+                    // 视角**本页一份**：初值取 ViewModel 当前值（全屏那份的调整也在里面），
+                    // 变化交回去 —— 切周期、竖屏↔全屏都不重置；横向位置不落盘，
+                    // 退出详情页再进来从最新一根开始。
                     initialView = viewModel.chartView.value,
                     onViewChange = viewModel::commitChartView,
                     // 小条不属于周期：它画进图表顶部、与指标读数带同一个容器，上下对读

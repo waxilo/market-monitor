@@ -123,4 +123,54 @@ class ChartViewportTest {
         // 空序列没有「更早」可翻
         assertFalse(ChartViewport(visibleBars = 60f, rightOffset = 0f).needsOlder(0))
     }
+
+    /* ── intentFor：横向平移松手后保住纵向取景，K 线不再跳 ─────────────── */
+
+    @Test
+    fun `把冻结量程还原成意图后重放的量程逐值相等——松手不跳`() {
+        // 新窗口的自动量程（base）与手势期间冻结的量程（frozen）不同：
+        // 旧行为松手即切回 base，K 线整块上下跳，正是用户报的现象
+        val base = ValueRange(80_000.0, 82_000.0)
+        val frozen = ValueRange(79_000.0, 83_000.0)
+
+        val intent = base.intentFor(frozen)
+        assertTrue("跨度合法时必须还原成功", intent != null)
+        val replay = base
+            .scaled(intent!!.zoom, base)
+            .panned(intent.pan, base)
+
+        assertEquals(frozen.low, replay.low, 1e-6)
+        assertEquals(frozen.high, replay.high, 1e-6)
+    }
+
+    @Test
+    fun `冻结量程就是自动量程时还原出的意图仍是默认值——不会平白标成「已缩放」`() {
+        // 没捏合、没竖拖过的图：松手前后量程本来就一样，意图必须留在自动量程上
+        val base = ValueRange(80_000.0, 82_000.0)
+        val intent = base.intentFor(base)!!
+
+        assertEquals(1f, intent.zoom, 1e-6f)
+        assertEquals(0f, intent.pan, 1e-6f)
+    }
+
+    @Test
+    fun `量程退化或非有限时还原失败——调用方保持原意图`() {
+        val base = ValueRange(80_000.0, 82_000.0)
+        assertEquals(null, base.intentFor(ValueRange(81_000.0, 81_000.0)))
+        assertEquals(null, ValueRange(1.0, 1.0).intentFor(base))
+        assertEquals(null, base.intentFor(ValueRange(Double.NaN, 82_000.0)))
+    }
+
+    @Test
+    fun `重叠比例决定还要不要把取景钉住`() {
+        val shown = ValueRange(80_000.0, 82_000.0)
+        // 数据完整落在冻结量程里：重叠 100%
+        assertEquals(1f, ValueRange(80_500.0, 81_500.0).overlapShare(shown), 1e-6f)
+        // 只剩一半：重叠 50%
+        assertEquals(0.5f, ValueRange(81_000.0, 83_000.0).overlapShare(shown), 1e-6f)
+        // 完全错开：重叠 0 —— 这时硬钉就是一张空图，调用方会退回自动适配
+        assertEquals(0f, ValueRange(83_000.0, 85_000.0).overlapShare(shown), 1e-6f)
+        // 本身退化：无从判断，按「看得见」处理，不打断
+        assertEquals(1f, ValueRange(81_000.0, 81_000.0).overlapShare(shown), 1e-6f)
+    }
 }

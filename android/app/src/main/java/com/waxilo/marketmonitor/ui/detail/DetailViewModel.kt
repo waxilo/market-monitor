@@ -340,11 +340,13 @@ class DetailViewModel(
     private val sourceVersion = MutableStateFlow(0)
 
     /**
-     * 全局视角偏好（横向视窗 + 纵向刻度）：跨标的、跨周期、跨会话。
+     * 视角状态（横向视窗 + 纵向刻度）：**本页内**跨周期、跨竖屏/全屏保持。
      *
      * 图表实例**首帧读一次**（`chartView.value`）；之后每次变化经 [commitChartView] 回来。
      * 放 ViewModel 而不是图表内部：竖屏与全屏是两个互斥的图表实例（旋屏还会重建
      * Activity），交接初值只能靠一个比它们活得久的地方。
+     *
+     * 跨会话只继承宽度与纵向刻度；横向位置退出详情即作废（再进来回到最新一根）。
      */
     private val chartViewState = MutableStateFlow(ChartViewState())
     val chartView: StateFlow<ChartViewState> = chartViewState.asStateFlow()
@@ -647,6 +649,8 @@ class DetailViewModel(
      * 状态**同步**更新 —— 竖屏↔全屏切换时，新图表实例的首帧初值读的就是它；
      * 落盘防抖：拖动时一帧写一次 DataStore 没有意义，停手
      * [CHART_VIEW_SAVE_DEBOUNCE_MS] 后写一次即可（与桌面端滚轮的 250ms 同口径）。
+     * **只落「看多宽 + 纵向刻度」**：横向位置是本页内的动作（回看历史），
+     * 退出详情页再进来必须回到最新一根 —— 见 [restoreChartPreferences]。
      *
      * 非有限值一律丢弃（视窗宽度还必须为正）：这是存储边界的最后一道闸，
      * 手抖出的一个 NaN 不该被写进持久化偏好。
@@ -662,7 +666,6 @@ class DetailViewModel(
             settings.edit {
                 it.copy(
                     chartVisibleBars = vp.visibleBars,
-                    chartRightOffset = vp.rightOffset,
                     chartPriceZoom = view.priceZoom,
                     chartPricePan = view.pricePan,
                 )
@@ -674,9 +677,14 @@ class DetailViewModel(
     private suspend fun restoreChartPreferences() {
         val saved = settings.current()
         CandleInterval.fromStorageKey(saved.lastIntervalKey)?.let { interval.value = it }
-        // 视角只按「意图」恢复：越界与否到用的时候由 ChartViewport.clamp 兜底
+        // 视角只按「意图」恢复：越界与否到用的时候由 ChartViewport.clamp 兜底。
+        // 横向位置**不恢复**（2026-10-26 用户：往前翻看历史后退出详情、再进应回到最新一根）：
+        // 只继承宽度与纵向刻度，右端固定在默认留白上。
         chartViewState.value = ChartViewState(
-            viewport = ChartViewport(saved.chartVisibleBars, saved.chartRightOffset),
+            viewport = ChartViewport(
+                visibleBars = saved.chartVisibleBars,
+                rightOffset = ChartViewport.DEFAULT_RIGHT_BLANK,
+            ),
             priceZoom = saved.chartPriceZoom,
             pricePan = saved.chartPricePan,
         )

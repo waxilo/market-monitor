@@ -76,11 +76,10 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
             autoUpdateCheck = this[Keys.AUTO_UPDATE] ?: d.autoUpdateCheck,
             dismissedVersion = this[Keys.DISMISSED] ?: d.dismissedVersion,
-            // 视角四数：非有限值（理论上写不进，防手改/旧版本）回默认；缩放倍数还必须为正
+            // 视角三数：非有限值（理论上写不进，防手改/旧版本）回默认；缩放倍数还必须为正。
+            // 横向位置不落盘（见 AppSettings 里那段说明），老装机的 chart_right_offset 直接忽略
             chartVisibleBars = this[Keys.CHART_BARS]?.takeIf { it.isFinite() && it > 0f }
                 ?: d.chartVisibleBars,
-            chartRightOffset = this[Keys.CHART_OFFSET]?.takeIf { it.isFinite() }
-                ?: d.chartRightOffset,
             chartPriceZoom = this[Keys.CHART_PZOOM]?.takeIf { it.isFinite() && it > 0f }
                 ?: d.chartPriceZoom,
             chartPricePan = this[Keys.CHART_PPAN]?.takeIf { it.isFinite() }
@@ -180,7 +179,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.AUTO_UPDATE] = autoUpdateCheck
         prefs[Keys.DISMISSED] = dismissedVersion
         prefs[Keys.CHART_BARS] = chartVisibleBars
-        prefs[Keys.CHART_OFFSET] = chartRightOffset
         prefs[Keys.CHART_PZOOM] = chartPriceZoom
         prefs[Keys.CHART_PPAN] = chartPricePan
     }
@@ -232,7 +230,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val AUTO_UPDATE = booleanPreferencesKey("auto_update_check")
             val DISMISSED = stringPreferencesKey("dismissed_version")
             val CHART_BARS = floatPreferencesKey("chart_visible_bars")
-            val CHART_OFFSET = floatPreferencesKey("chart_right_offset")
             val CHART_PZOOM = floatPreferencesKey("chart_price_zoom")
             val CHART_PPAN = floatPreferencesKey("chart_price_pan")
         }
