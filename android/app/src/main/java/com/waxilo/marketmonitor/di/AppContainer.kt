@@ -44,8 +44,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
 import okhttp3.OkHttpClient
 import java.io.File
+import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.ProxySelector
+import java.net.SocketAddress
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "AppContainer"
@@ -73,17 +77,24 @@ class AppContainer(private val context: Context) {
             .readTimeout(15, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .applySystemProxy()
+            .proxySelector(SystemProxySelector())
             .build()
     }
 
     /**
      * OkHttp 在 Android 上默认不读取系统（Wi-Fi）代理，导致全国性网络治理下走代理才能访问的
      * 交易所域名请求不到数据。这里把系统代理套用到客户端：系统未配置代理时保持直连不变。
+     *
+     * ❗走 `proxySelector` **每次连接都重读**，不能在构建客户端时读一次套死 ——
+     * 换网络、开关代理都发生在**同一个进程里**（真实反馈：断网或关掉代理后测速全是超时，
+     * 重启 App 才恢复）。套死的客户端会一直把请求发给那个已经不存在的代理，
+     * 而代理不可达的表现正是「全都超时」，与断网长得一模一样，重启才重新读一次。
      */
-    private fun OkHttpClient.Builder.applySystemProxy(): OkHttpClient.Builder {
-        systemProxy()?.let(::proxy)
-        return this
+    private inner class SystemProxySelector : ProxySelector() {
+        override fun select(uri: URI): List<Proxy> = listOf(systemProxy() ?: Proxy.NO_PROXY)
+
+        /** OkHttp 要求实现：一次连接失败后它自己会重新 [select]，这里无事可做。 */
+        override fun connectFailed(uri: URI, sa: SocketAddress, ioe: IOException) = Unit
     }
 
     private fun systemProxy(): Proxy? {

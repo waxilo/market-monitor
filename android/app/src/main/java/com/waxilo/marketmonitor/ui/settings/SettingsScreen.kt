@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -504,6 +505,16 @@ private fun FuturesSourcePickerDialog(
 }
 
 /**
+ * 结论胶囊的宽度上限。
+ *
+ * Row 先量非 weight 的子项：不封顶时一段超长的失败原因会把整行宽度吃光，
+ * 左侧标题列只剩几个像素，`币安合约 主域` 就被拆成一列单字、卡片被撑高一倍
+ * （真实截图：断网时 9 个候选全红，全部长成竖排）。封顶后标题列始终留得下，
+ * 超长结论在胶囊里内省略。
+ */
+private val ProbePillMaxWidth = 112.dp
+
+/**
  * 候选行：**一张圆角卡片**，名称 + 域名在左，检测结论与「重测」在右。
  *
  * 卡片化（2026-10-24 用户要求）：一排扁平行在 12 个候选里读不出「一条是一条」，
@@ -546,6 +557,8 @@ private fun FuturesSourceRow(
                 text = endpoint.label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
                 text = "${endpoint.baseUrl.removePrefix("https://")} · ${endpoint.note}",
@@ -567,9 +580,18 @@ private fun FuturesSourceRow(
                 is ProbeOutcome.Reachable -> StatusPill(
                     text = (if (isFastest) "最快 " else "") + "${outcome.latencyMs}ms",
                     tone = PillTone.Positive,
+                    modifier = Modifier.widthIn(max = ProbePillMaxWidth),
                 )
-                is ProbeOutcome.Failed -> StatusPill(outcome.reason, PillTone.Negative)
-                null -> StatusPill("未检测", PillTone.Neutral)
+                is ProbeOutcome.Failed -> StatusPill(
+                    text = outcome.reason,
+                    tone = PillTone.Negative,
+                    modifier = Modifier.widthIn(max = ProbePillMaxWidth),
+                )
+                null -> StatusPill(
+                    text = "未检测",
+                    tone = PillTone.Neutral,
+                    modifier = Modifier.widthIn(max = ProbePillMaxWidth),
+                )
             }
             TextAction("重测", onClick = onProbeOne, color = colors.muted)
         }

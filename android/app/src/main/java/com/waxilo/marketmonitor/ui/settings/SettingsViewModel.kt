@@ -22,8 +22,10 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 /** 单个合约行情接口的一键检测结果。 */
 sealed interface ProbeOutcome {
@@ -209,11 +211,19 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         persist { s -> s.copy(autoFuturesSource = v) }
     }
 
-    /** 网络异常的长文案（堆栈味）在手机上没意义，折成一行短结论。 */
+    /**
+     * 网络异常的长文案（堆栈味）在手机上没意义，折成一行短结论。
+     *
+     * 兜底不能落在 `message` 上：断网/被墙时各连接异常的原话是
+     * 「Failed to connect to /10.x.x.x:443」「Connection reset」这类英文，
+     * 一排候选全是同一句读不懂的洋文。所以 IOException 一律折成「连接失败」。
+     */
     private fun probeFailure(t: Throwable): String = when (t) {
         is MarketApiException -> "HTTP ${t.httpCode}"
         is SocketTimeoutException -> "连接超时"
         is UnknownHostException -> "域名解析失败"
+        is SSLException -> "TLS 握手失败"
+        is IOException -> "连接失败"
         else -> t.message?.takeIf { it.isNotBlank() } ?: "连不上"
     }
 

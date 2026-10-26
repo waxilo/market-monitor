@@ -437,6 +437,7 @@ fun StatusPill(
             style = MaterialTheme.typography.labelSmall,
             color = color,
             maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
