@@ -101,10 +101,10 @@ import java.util.Locale
  * 十几道时「下方支撑」被顶到了屏幕外——用户根本不知道下面还有内容。改成页签后一次只呈现
  * 一侧，两个页签各自带条数，切过去就知道另一侧有几道、不用翻。
  *
- * 页签内的排序改了：**两侧都按「离现价由近到远」**（压力从低到高、支撑从高到低）。原来
- * 单列那套「压力倒序」是为了与图的纵轴同向，页签化之后这个约束没了，第一条就该是最有用的
- * 那一条（最近的一道），也与表头写的「最近 X · EMA Y」对得上。横屏两列保持原序（贴在
- * 图旁边看，纵向对得上图更重要）。
+ * 排序：**两侧都按「离现价由近到远」**（压力从低到高、支撑从高到低），竖屏页签与横屏
+ * 两列一致。原来单列那套「压力倒序」是为了与图的纵轴同向，但表的第一行应当是最有用的
+ * 那一条（最近的一道），也与表头写的「最近 X · EMA Y」对得上。全屏（横屏两列）曾为了
+ * 「纵向对得上图」把压力倒过来，真机上反而要先滚到最底下才看见最近的一道，已改回原序。
  */
 @Composable
 fun EmaAnalysisSheet(
@@ -235,7 +235,6 @@ fun EmaAnalysisSheet(
                                 ColumnColumn(
                                     rows = buckets.resistance,
                                     side = Side.RESISTANCE,
-                                    reversed = true,
                                     modifier = Modifier.weight(1f),
                                     state = state,
                                     refOf = refOf,
@@ -251,7 +250,6 @@ fun EmaAnalysisSheet(
                                 ColumnColumn(
                                     rows = buckets.support,
                                     side = Side.SUPPORT,
-                                    reversed = false,
                                     modifier = Modifier.weight(1f),
                                     state = state,
                                     refOf = refOf,
@@ -460,7 +458,7 @@ private fun SideTabs(side: Side, buckets: EmaBuckets, onSelect: (Side) -> Unit) 
  *
  * 行序直接用 `buckets` 里的原序：压力升序、支撑降序，两者都是**离现价由近到远**，
  * 所以第一条就是最近的一道 —— 与表头「最近 X · EMA Y」说的就是同一行。
- * （横屏两列仍用 [ColumnColumn] 的「压力倒序」，那里贴着图看、纵向与图同向更好。）
+ * 横屏两列也是同一个顺序（[ColumnColumn]），两侧互相对称。
  */
 @Composable
 private fun TabbedColumn(
@@ -495,22 +493,20 @@ private fun TabbedColumn(
     }
 }
 
-/** 横屏：两列并排（各自的滚动条），与桌面端同版式。 */
+/** 横屏：两列并排（各自的滚动条），与桌面端同版式、同顺序。 */
 @Composable
 private fun ColumnColumn(
     rows: List<EmaLevelRow>,
     side: Side,
-    reversed: Boolean,
     modifier: Modifier,
     state: DetailUiState,
     refOf: (EmaLevelRow) -> EmaLineRef?,
     onToggleLine: (EmaLevelRow) -> Unit,
     onPickInterval: (CandleInterval) -> Unit,
 ) {
-    val ordered = if (reversed) rows.asReversed() else rows
     LazyColumn(modifier = modifier.fillMaxSize()) {
         item(key = "head") { ColumnHead(side = side, rows = rows, marked = rows.count { refOf(it) != null }) }
-        items(ordered, key = { lineKey(it.interval, it.period) }) { row ->
+        items(rows, key = { lineKey(it.interval, it.period) }) { row ->
             EmaRow(
                 row = row,
                 line = refOf(row),
