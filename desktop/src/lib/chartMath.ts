@@ -99,7 +99,7 @@ export function initialPriceView(): PriceView {
   return { zoom: 1, pan: 0 };
 }
 
-/** 是否已偏离自动量程（决定要不要显示「刻度已缩放 · 复位」小标）。 */
+/** 是否已偏离自动量程（决定要不要显示「复位」小标）。 */
 export function priceAdjusted(view: PriceView): boolean {
   return view.zoom !== 1 || view.pan !== 0;
 }
@@ -141,6 +141,27 @@ export function clampPriceView(view: PriceView, base: Range): PriceView {
   return { zoom, pan: clampNum(view.pan, -limit, limit) };
 }
 
+/**
+ * 重定视角时「把纵向中心对到 [value]（换周期 / 换标的后的现价）」所需的平移量。
+ *
+ * 缩放倍数 [zoom] 是用户意图，**原样保留** —— 换周期不重算倍数，否则「记住缩放」等于没记。
+ * 中心尽量落在 [value] 上，但不许把整段数据裁出画面：量程不比数据窄时可挪余量只有
+ * `(span - baseSpan) / 2`；量程比数据窄时退回 [pricePanLimit]（与手势同一条收口）。
+ * 推论：`zoom = 1`（自动量程）必然返回 0 —— 自动量程本来就把现价裹在里面。
+ * 与 App `ValueRange.panCenteringOn` 同口径。
+ */
+export function pricePanCenteringOn(base: Range, value: number, zoom: number): number {
+  const baseSpan = baseSpanOf(base);
+  if (!(baseSpan > EPSILON) || !Number.isFinite(value) || !Number.isFinite(zoom) || zoom <= 0) return 0;
+  const span = viewSpan(base, zoom);
+  const wanted = (value - rangeCenter(base)) / baseSpan;
+  if (!Number.isFinite(wanted)) return 0;
+  const limit = span >= baseSpan
+    ? (span - baseSpan) / 2 / baseSpan
+    : pricePanLimit(base, zoom) / baseSpan;
+  return clampNum(wanted, -limit, limit);
+}
+
 /** 由自动量程 + 用户意图算出真正要画的量程。 */
 export function priceRange(base: Range, view: PriceView): Range {
   const baseSpan = baseSpanOf(base);
@@ -162,7 +183,7 @@ function rangeCenter(range: Range): number {
  * 用在**横向平移松手**的那一刻：手势期间量程被冻结（见 KlineCanvas 的 `panBaseRef`），
  * 松手若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下 ——
  * 用户报的「拖到历史时自动把 K 线摆到画布中间」。把这个冻结量程落成意图，
- * 取景就原地不动；之后是否回到自动适配，交给「刻度已调 · 复位」小标。
+ * 取景就原地不动；之后是否回到自动适配，交给「复位」小标。
  *
  * 量程退化（跨度非正 / 非有限）返回 null：调用方保持原意图即可。
  * 与 App `ValueRange.intentFor` 同口径。
@@ -259,6 +280,18 @@ export const OLDER_MARGIN_MAX = 120;
 
 export function initialViewport(): Viewport {
   return { visibleBars: DEFAULT_VISIBLE, rightOffset: DEFAULT_RIGHT_BLANK };
+}
+
+/** 判「偏离默认取景」的容差（根）：浮点缩放/平移回不到精确整数，差这点肉眼看不出。 */
+const VIEWPORT_EPS = 1e-3;
+
+/**
+ * 横向视窗是否已偏离默认取景（缩放过宽度，或右端不在最新价的默认留白上）。
+ * 与 [priceAdjusted] 合起来决定「复位」小标亮不亮。与 App `ChartViewport.isInitial` 同口径。
+ */
+export function viewportAdjusted(v: Viewport): boolean {
+  return Math.abs(v.visibleBars - DEFAULT_VISIBLE) > VIEWPORT_EPS
+    || Math.abs(v.rightOffset - DEFAULT_RIGHT_BLANK) > VIEWPORT_EPS;
 }
 
 function minVisible(barCount: number): number {

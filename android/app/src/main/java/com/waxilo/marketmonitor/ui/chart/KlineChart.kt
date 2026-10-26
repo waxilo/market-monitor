@@ -465,7 +465,7 @@ fun KlineChart(
      * 初值来自 [initialView]，变化经 [onViewChange] 落盘。**切周期时只重定位置
      * （[pricePan]），不重算这个倍数** —— 重算等于把缩放手感抹掉（见下面 recenter 注释）。
      * 平移量按原始量程的比例折算，放到别的标的上本不是同一回事 —— 但用户选的就是全局口径，
-     * 真不合适时图上常驻的「刻度已缩放 · 复位」小标一键清掉。
+     * 真不合适时图上常驻的「复位」小标一键清掉。
      */
     var priceZoom by remember { mutableFloatStateOf(initialView.priceZoom) }
     /** 纵向平移（占主图高度的比例）。手指上滑看更低价区。 */
@@ -644,7 +644,7 @@ fun KlineChart(
      * 不这么做的话，[priceBase] 一清空 `rangeBase` 就切回新窗口的自动量程，
      * 量程与中心一起变 ⇒ 松手瞬间整张 K 线上下跳一下（用户报的「拖到历史时
      * 自动把 K 线摆到画布中间」）。落成意图之后，取景与手指松开前逐像素一致；
-     * 想恢复自动适配仍由左下角「刻度已缩放 · 复位」一键完成。
+     * 想恢复自动适配仍由左下角「复位」一键完成。
      *
      * [frozenBase] 是手势开始时冻结的**基准**量程，屏幕上真正显示的是它叠加
      * `priceZoom` / `pricePan` 之后的结果 —— 要保住的是后者，所以先回放一次。
@@ -921,7 +921,7 @@ fun KlineChart(
                             // 冻结的量程若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下
                             // —— 看着就像「拖到历史时自动把 K 线摆回画布中间」。
                             // 把冻结量程反算成相对新窗口的意图，取景原样留住；
-                            // 想回到自动适配仍走左下角「刻度已缩放 · 复位」。
+                            // 想回到自动适配仍走左下角「复位」。
                             if (pannedHorizontal && frozen != null) {
                                 repinPriceRange(frozen)
                             }
@@ -1221,15 +1221,16 @@ fun KlineChart(
                 }
             }
         }
-        // 纵向刻度被调过就提示一次并给一键复位：不然用户会以为「图怎么长这样」，
-        // 而且没有任何办法回去（视角是全局持久化的，重启也带着走）。
-        // 复位只清纵向、保留横向视窗，并同样经 onViewChange 落盘 —— 按一次就彻底忘掉。
+        // 视角一旦偏离默认取景就亮起「复位」：横纵缩放都是持久化的（切周期、重开详情都带着走），
+        // 不给出口用户就回不到默认。往前拖看历史后松手也会亮 —— 横向位置离开了最新价。
+        // 复位 = **横纵缩放全部回默认 + 回到最新价格的 K 线**（2026-10-26 用户拍板）；
+        // 与「重开详情」的区别：重开只回到最新价，缩放原样保留。按一次即经 onViewChange 落盘。
         // 位置选**绘图区左下角**：
         //   · 右侧不放 —— 最新/最该看的蜡烛就在右边，浮层压上去代价最大；
         //   · 顶部不放 —— 指标读数带占满左上，且绘图区顶端往往是近期高点；
         //   · 左下角是整块图里信息密度最低的地方（左侧是历史蜡烛、下沿是最低价影线），
         //     且天然离读数带与时间轴都足够远。
-        if (priceZoom != 1f || pricePan != 0f) {
+        if (priceZoom != 1f || pricePan != 0f || !viewport.isInitial()) {
             val badgeStyle = MaterialTheme.typography.labelSmall
             val badgeSize = remember(badgeStyle, density) {
                 measurer.measure(
@@ -1243,6 +1244,7 @@ fun KlineChart(
             }
             PriceScaleResetBadge(
                 onClick = {
+                    viewport = ChartViewport.initial()
                     priceZoom = 1f
                     pricePan = 0f
                 },
@@ -1370,12 +1372,12 @@ private fun ChartOverlayButton(
  * 划线显隐的「眼睛」见 `ui/common/EyeGlyph.kt`（均线面板每行的小眼睛与它同一套图形）。
  */
 
-/** 「价格刻度已缩放 · 复位」小标。 */
+/** 「复位」小标：横纵缩放回默认 + 回到最新价格的 K 线（[RESET_BADGE_TEXT]）。 */
 @Composable
 private fun PriceScaleResetBadge(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = MarketTheme.colors
     Text(
-        text = "刻度已缩放 · 复位",
+        text = RESET_BADGE_TEXT,
         modifier = modifier
             .clip(RoundedCornerShape(Radius.Full))
             .background(colors.wash)
@@ -3136,8 +3138,8 @@ internal fun List<HorizontalAnchor>.nearestHorizontal(
     .filter { it.second <= slopPx }
     .minByOrNull { it.second }
 
-/** 「刻度已缩放 · 复位」小标的文案与左右内边距（用于实测宽度）。 */
-private const val RESET_BADGE_TEXT = "刻度已缩放 · 复位"
+/** 「复位」小标的文案（用于实测宽度，与 [PriceScaleResetBadge] 共用一份）。 */
+private const val RESET_BADGE_TEXT = "复位"
 
 /** 徽标垂直内边距（上下各一份），用于把徽标高度算准后贴绘图区下沿。 */
 private const val RESET_BADGE_VERTICAL_PADDING_DP = 4f

@@ -767,7 +767,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
             </>
           ) : (
             <>
-              {/* 线型：点一次进入（图上左键 = 落点，光标变十字），再点一次退出。
+              {/* 线型：点一次进入（图上左键 = 落点，光标保持那枚空心圆环），再点一次退出。
                   画成一条自动收回，见 KlineCanvas 的 addPointAt。锁定时不给画。 */}
               <button
                 type="button"
@@ -893,7 +893,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           tickSize={instrument?.tickSize}
           theme={theme}
           loading={load.loading}
-          resetKey={`${item.market}|${item.symbol}|${interval}`}
+          symbolKey={`${item.market}|${item.symbol}`}
           // 眼睛隐藏 = 直接喂空数组：画、价格标、命中判定（选中/拖抓）自然全关，画布不用知道「隐藏」这回事
           priceLines={drawings.linesHidden ? [] : drawings.priceLines}
           trendLines={drawings.linesHidden ? [] : drawings.trendLines}

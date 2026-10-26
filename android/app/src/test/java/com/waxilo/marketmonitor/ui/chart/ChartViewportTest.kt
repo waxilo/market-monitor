@@ -173,4 +173,17 @@ class ChartViewportTest {
         // 本身退化：无从判断，按「看得见」处理，不打断
         assertEquals(1f, ValueRange(81_000.0, 81_000.0).overlapShare(shown), 1e-6f)
     }
+
+    @Test
+    fun `isInitial 只认默认宽度 + 默认留白（复位小标的横向判据）`() {
+        assertTrue(ChartViewport.initial().isInitial())
+        // 浮点缩放回不到精确整数：容差内仍算默认
+        assertTrue(ChartViewport(60.0004f, 3f).isInitial())
+        // 缩放过宽度
+        assertFalse(ChartViewport(80f, ChartViewport.DEFAULT_RIGHT_BLANK).isInitial())
+        // 往前拖看历史
+        assertFalse(ChartViewport(ChartViewport.DEFAULT_VISIBLE, -24f).isInitial())
+        // 重开详情的取景：宽度保留、右端回默认 ⇒ 缩放过就仍亮复位
+        assertFalse(ChartViewport(80f, -24f).copy(rightOffset = ChartViewport.DEFAULT_RIGHT_BLANK).isInitial())
+    }
 }

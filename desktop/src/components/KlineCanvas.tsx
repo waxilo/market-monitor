@@ -6,6 +6,7 @@ import {
   clampPriceView,
   clampViewport,
   dataWindow,
+  DEFAULT_RIGHT_BLANK,
   fromFraction,
   gridLines,
   indexAt,
@@ -20,12 +21,14 @@ import {
   plotStart,
   priceAdjusted,
   priceIntentFor,
+  pricePanCenteringOn,
   priceRange,
   PRICE_MIN_VISIBLE_SHARE,
   timeAtIndex,
   timeIndexOf,
   timeLabelPlacements,
   toFraction,
+  viewportAdjusted,
   zoomPriceView,
   zoomViewport,
   type DragAxis,
@@ -93,8 +96,8 @@ const NOTE_FONT = '11px ui-monospace, SFMono-Regular, Consolas, "Courier New", m
 
 /** 拖拽方向定性所需的累积位移（App 用触摸的 touchSlop，网页鼠标取固定值）。 */
 const DRAG_LOCK_PX = 6;
-/** 价格刻度偏离自动量程时的复位小标（缩放或平移都会出现）。 */
-const RESET_BADGE_TEXT = '刻度已调 · 复位';
+/** 视角偏离默认取景时的复位小标（刻度被调、或往前拖看历史都会出现）。 */
+const RESET_BADGE_TEXT = '复位';
 const RESET_BADGE_H = 16;
 /** 两点直线：起笔之后，第二次落点的最短距离。太近就当这一下还没落定，别画出退化的线。 */
 const TREND_MIN_DRAW_PX = 8;
@@ -231,10 +234,10 @@ function roundRect(
 
 /**
  * 画布指针的取值。`''` = 不设内联样式，回落到 CSS 里 `.chart-canvas` 的那枚空心圆环；
- * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）；
- * `'crosshair'` = 划线工具已就位（这一下点下去是落点，不是拖拽）。
+ * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）。
+ * **没有 `crosshair`**：划线工具就位时也用圆环，理由见 `onPointerMove` 里的注释。
  */
-type CursorKind = '' | 'pointer' | 'on-line' | 'crosshair' | 'grabbing' | 'move' | 'ns-resize';
+type CursorKind = '' | 'pointer' | 'on-line' | 'grabbing' | 'move' | 'ns-resize';
 
 /**
  * 画布指针的**唯一出口**：`on-line` 靠 CSS 类，其余走内联 `style.cursor`。
@@ -429,11 +432,11 @@ interface Props {
    */
   loading: boolean;
   /**
-   * 换标的或换周期时作废**过程状态**（十字光标、画了一半的直线）。
-   * 视窗（横向）与价格刻度不在此列 —— 但纵向刻度在 key 变后会重定到最新价居中
-   * （见 `recenterPendingRef`），横向视窗才是全局记住的偏好（mm.chartView）。
+   * 标的身份（`market|symbol`）。它与 [interval] 任一变化都作废**过程状态**（十字光标、
+   * 画了一半的直线）并把纵向位置重定到最新价（缩放倍数不动）；
+   * 只有它变（换标的 = 重开详情）才把横向位置拉回最新价（缩放同样不动）。
    */
-  resetKey: string;
+  symbolKey: string;
   /**
    * 用户画的水平线（价格 + 告警标记）与两点直线。状态与落盘都在 ChartView 侧（`useDrawings`），
    * 这里只负责画、命中判定与拖动 —— 画布不做持久化。
@@ -482,7 +485,7 @@ export function KlineCanvas({
   tickSize,
   theme,
   loading,
-  resetKey,
+  symbolKey,
   priceLines,
   trendLines,
   tool,
@@ -506,13 +509,16 @@ export function KlineCanvas({
   /**
    * 时间轴视窗与价格量程（缩放倍数 + 平移量，1 / 0 = 自动量程）—— 两枚「用户意图」。
    *
-   * 视窗**全局记住**（mm.chartView，见 lib/chartViewPrefs）：切周期、换标的、重启都原样回来。
-   * 价格量程的意图在换 (标的, 周期) / 首次进入后会被**重定**成「最新价居中」
-   * （见 recenter effect）—— 旧意图套到新序列上可能把现价顶出量程，现价虚线与
-   * 价格标整个消失，而切周期后第一眼要看的就是现价；之后手势照常可再调，落盘照旧。
-   * 越界（存量视角碰上根数不够的新标的）由 chartMath 的钳制在用时兜底，存储里保留原始意图。
+   * 横纵**缩放**全局记住（mm.chartView，见 lib/chartViewPrefs）：切周期、换标的、重启都带着走。
+   * 横向**位置**（rightOffset）不落盘：首帧与换标的（= 重开详情）都回到最新价；切周期保持。
+   * 纵向**位置**（pan）在换 (标的, 周期) / 首次进入后重定到「最新价居中」、倍数不动
+   * （见 recenter effect）—— 旧位置套到新序列上可能把现价顶出量程。
+   * 越界由 chartMath 的钳制在用时兜底，存储里保留原始意图。
    */
-  const vpRef = useRef<Viewport>(loadChartViewPrefs().viewport);
+  const vpRef = useRef<Viewport>({
+    visibleBars: loadChartViewPrefs().visibleBars,
+    rightOffset: DEFAULT_RIGHT_BLANK,
+  });
   const priceRef = useRef<PriceView>(loadChartViewPrefs().price);
   /**
    * 拖拽期间冻结的纵向基准量程（手势开始那一刻按当前窗口算出来的 `mainRange`）。
@@ -524,7 +530,7 @@ export function KlineCanvas({
    */
   const panBaseRef = useRef<Range | null>(null);
   /**
-   * 纵轴重定的挂起标记：resetKey（标的|周期）一变就立起，等新序列带着有限现价落地
+   * 纵轴重定的挂起标记：symbolKey / interval 一变就立起，等新序列带着有限现价落地
    * 才在 recenter effect 里清掉并重算 —— 序列空的时候现价还不存在，先算只会锚错
    * （与 App KlineChart.kt 里 snapshotFlow 等首个非空序列同一手法）。
    */
@@ -1101,10 +1107,11 @@ export function KlineCanvas({
       );
     });
 
-    // ── 「刻度已缩放 · 复位」小标 ──
-    // 刻度一旦被拖离自动量程就没法从图上看出来，也没有别的路回去（双击复位不显眼）。
+    // ── 「复位」小标 ──
+    // 视角一旦被调离默认取景就没法从图上看出来（刻度拖远了 / 往前翻到历史里），
+    // 也没有别的路回去（双击复位不显眼）。点它 = `resetView`：横纵缩放回默认 + 回到最新价。
     // 放绘图区**左下角**：右侧压着最新一根蜡烛、顶部压着读数带，左下角信息密度最低。
-    if (priceAdjusted(priceRef.current)) {
+    if (priceAdjusted(priceRef.current) || viewportAdjusted(vpRef.current)) {
       const w = ctx.measureText(RESET_BADGE_TEXT).width + 12;
       const x = 6;
       const y = mainBottom - RESET_BADGE_H - 6;
@@ -1139,7 +1146,7 @@ export function KlineCanvas({
    *
    * 不这么做的话，`panBaseRef` 一清空纵向基准就切回新窗口的自动量程，松手瞬间
    * 整张 K 线上下跳一下 —— 与 App 同一处修正（见 KlineChart.kt 的 `repinPriceRange`）。
-   * 落成意图之后取景与松手前逐像素一致；想回自动适配仍走「刻度已调 · 复位」小标。
+   * 落成意图之后取景与松手前逐像素一致；想回自动适配仍走「复位」小标。
    */
   const repinPriceAfterPan = useCallback((frozenBase: Range) => {
     const s = modelRef.current.series;
@@ -1156,17 +1163,15 @@ export function KlineCanvas({
   }, []);
 
   /**
-   * 纵轴重定（换周期 / 换标的 / 首次进入后）：resetKey 变时挂起（见 resetKey effect），
-   * 新序列一就绪就把纵向缩放/平移意图整体换成「最新价居中 + 量程对称外扩保全蜡烛」。
+   * 纵轴重定（换周期 / 换标的 / 首次进入后）：key 变时挂起（见下方 key effect），
+   * 新序列一就绪就把纵向**位置**对到最新价，**缩放倍数原样保留**（2026-10-26 用户：
+   * 切周期、重开详情要记住纵向缩放）。旧实现把倍数也重算成「罩住全部蜡烛」，
+   * 等于每次切周期都把纵向缩放抹掉。钳制口径见 `pricePanCenteringOn`（同 App
+   * `ValueRange.panCenteringOn`）：`zoom = 1` 时恒为 0，不会裁掉半屏蜡烛。
    *
-   * 公式与 App KlineChart.kt 的 `LaunchedEffect(symbolKey, interval.storageKey)` 一致：
-   * 半程 = 现价到较远那侧极值的距离（上下两侧都罩住），zoom = 2·半程 / 基准跨度，
-   * pan 把现价挪到中心；平移上限由 `clampPriceView` 收口（与 App 的 panLimit 同规则）。
    * 量程按当前序列+视口现算（`mainRange`），不读绘制帧缓存 —— 序列从空变满的那一刻
    * 读缓存会拿到空序列的 (0,1) 兜底，居中会锚错。
-   *
-   * 不调 draw：本 effect 声明在绘制 effect 之前，同一轮渲染里紧随其后的 draw()
-   * 自然用上新量程。横向视窗不在此列，照旧跨切换全局保留。
+   * 不调 draw：本 effect 声明在绘制 effect 之前，同一轮渲染里紧随其后的 draw() 自然用上。
    */
   useEffect(() => {
     if (!recenterPendingRef.current) return;
@@ -1175,14 +1180,10 @@ export function KlineCanvas({
     if (close === undefined || !Number.isFinite(close)) return;
     const [ws, we] = dataWindow(vpRef.current, list.length);
     const base = mainRange(series, ws, we);
-    const baseSpan = base.high - base.low;
-    if (!(baseSpan > 0)) return;
+    if (!(base.high - base.low > 0)) return;
     recenterPendingRef.current = false;
-    const halfSpan = Math.max(close - base.low, base.high - close);
-    priceRef.current = clampPriceView(
-      { zoom: (2 * halfSpan) / baseSpan, pan: (close - (base.low + base.high) / 2) / baseSpan },
-      base,
-    );
+    const zoom = priceRef.current.zoom;
+    priceRef.current = clampPriceView({ zoom, pan: pricePanCenteringOn(base, close, zoom) }, base);
     persistView();
   }, [series, persistView]);
 
@@ -1197,17 +1198,27 @@ export function KlineCanvas({
     return () => cancelAnimationFrame(id);
   }, [theme, draw]);
 
+  /**
+   * 换标的 = 「重开详情」：横向位置回到最新价（缩放不动）。首帧初值已是默认留白，
+   * 这里只处理之后的切换；切周期不走这里 —— 本标的内的横向位置照旧保留。
+   */
+  const lastSymbolRef = useRef(symbolKey);
   useEffect(() => {
-    // 横向视窗仍跨标的/周期全局保留；纵向刻度改为重定 —— 这里只把挂起标记立起，
-    // 等新序列落地后由 recenter effect 把最新价摆到纵向正中（上面有公式与出处）。
-    // 十字光标与画了一半的直线仍是过程状态，跨数据一律作废：下标会越界，
+    if (lastSymbolRef.current === symbolKey) return;
+    lastSymbolRef.current = symbolKey;
+    vpRef.current = { ...vpRef.current, rightOffset: DEFAULT_RIGHT_BLANK };
+  }, [symbolKey]);
+
+  useEffect(() => {
+    // 纵向位置重定 —— 这里只把挂起标记立起，等新序列落地后由 recenter effect 对到最新价。
+    // 十字光标与画了一半的直线是过程状态，跨数据一律作废：下标会越界，
     // 半截直线的锚点（虽是时间戳）也没有跨标的的意义。
     recenterPendingRef.current = true;
     crossRef.current = null;
     pendingRef.current = null;
     panBaseRef.current = null;
     draw();
-  }, [resetKey, draw]);
+  }, [symbolKey, interval, draw]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -1400,7 +1411,7 @@ export function KlineCanvas({
       draw();
     };
 
-    /** 复位小标被点到就回自动量程，不进入拖拽。 */
+    /** 复位小标被点到就走 [resetView]，不进入拖拽。 */
     const hitBadge = (e: PointerEvent): boolean => {
       const hit = badgeRef.current;
       if (!hit) return false;
@@ -1408,6 +1419,19 @@ export function KlineCanvas({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       return x >= hit.x && x <= hit.x + hit.w && y >= hit.y && y <= hit.y + hit.h;
+    };
+
+    /**
+     * 复位：**横纵缩放全部回默认 + 回到最新价格的 K 线**（2026-10-26 用户拍板，与 App 同口径）。
+     *
+     * 与「重开详情」的区别：重开只回到最新价、缩放原样保留；复位连缩放一起清掉。
+     * 改完立即落盘 —— 缩放是持久化偏好，不写回的话切个周期旧缩放又被带回来。
+     */
+    const resetView = () => {
+      vpRef.current = initialViewport();
+      priceRef.current = initialPriceView();
+      persistView();
+      draw();
     };
 
     /**
@@ -1455,10 +1479,7 @@ export function KlineCanvas({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       if (hitBadge(e)) {
-        // 小标只复位**纵向**（用户调的是刻度，不是看多宽）——横向意图原样保留并落盘
-        priceRef.current = initialPriceView();
-        persistView();
-        draw();
+        resetView();
         return;
       }
       const { top, bottom } = mainBounds();
@@ -1620,13 +1641,15 @@ export function KlineCanvas({
       }
       // 空闲态的指针形状，按「这一下按下去会发生什么」给：
       // · 复位小标 → pointer；
-      // · 工具就位 → 十字（这一下是落点）；
       // · 压在**已选中**的那条线上 → 抓手/上下箭头（按住就能拖）；
       // · 压在别的线上 → 四角内向的直角（`on-line`，语义是「点一下选中它」）；
       // · 其余回落到默认的空心圆环。
+      //
+      // 工具就位时**一律圆环**（2026-10-26 用户）：那两下是落点，系统十字的两根短线
+      // 正好压在环心那颗蜡烛上 —— 而落点最需要看清的就是那里。工具态也不再做画线命中，
+      // 因为 `onPointerDown` 里工具态直接短路掉了选线/拖线，`on-line`/`move` 只会骗人。
       let cursor: CursorKind = hitBadge(e) ? 'pointer' : '';
-      if (!cursor && modelRef.current.tool !== 'none') cursor = 'crosshair';
-      if (!cursor && !modelRef.current.linesLocked) {
+      if (!cursor && modelRef.current.tool === 'none' && !modelRef.current.linesLocked) {
         const { top, bottom } = mainBounds();
         if (x <= plotW && y >= top && y <= bottom) {
           const sel = modelRef.current.selection;
@@ -1691,9 +1714,8 @@ export function KlineCanvas({
     };
 
     /**
-     * 双击复位：视窗与价格刻度一起回默认（App 的「双击复位」同理），并**写回存档** ——
-     * 它也是「忘掉调过的视角」的出口：不写回的话，换个周期旧视角又被带回来，
-     * 复位就只是当下的假象。副图不参与。
+     * 双击复位：与左下角「复位」小标 [resetView] 同一个动作 —— 横纵缩放回默认 +
+     * 回到最新价格的 K 线，并写回存档。副图不参与。
      */
     const onDblClick = (e: MouseEvent) => {
       const { rect } = geom();
@@ -1702,11 +1724,8 @@ export function KlineCanvas({
       if (pendingRef.current) return;
       // 工具就位时也不复位：那两下是「点了两下落点」，不是「双击看全景」
       if (modelRef.current.tool !== 'none') return;
-      vpRef.current = initialViewport();
-      priceRef.current = initialPriceView();
       crossRef.current = null;
-      persistView();
-      draw();
+      resetView();
     };
 
     /**

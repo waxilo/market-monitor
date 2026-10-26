@@ -27,6 +27,7 @@
 **持久化口径（2026-10-26 起）**：跨会话只留 `visibleBars` + `priceZoom/pricePan`；**横向位置 `rightOffset` 不落盘** ——
 详情页 ViewModel 随 NavBackStackEntry 销毁，退出再进来必须回到最新一根（`restoreChartPreferences` 用
 `DEFAULT_RIGHT_BLANK`）。本页内（切周期、竖屏↔全屏、旋屏）仍靠 ViewModel 内存里的 `ChartViewState` 交接。
+复位（左下角小标）= 横纵缩放全回默认 + 回最新价（`ChartViewport.initial()`），亮起条件 = 纵向调过 || `!viewport.isInitial()`；重开详情只回最新价、缩放保留（2026-10-26 第四次）。
 
 ## 横向平移松手不再重排纵轴（2026-10-26，用户报「拖到历史 K 线自动摆到画布中间、K 线跳」）
 - **症状 100% 在 Android**（桌面端没有冻结，价格轴逐帧跟随，松手无突变）：`priceBase` 在 `onGestureStart`
@@ -35,7 +36,7 @@
 - **修法**：`onPan` 记 `pannedHorizontal`；松手时 `repinPriceRange(frozenBase)` 把手势期间**显示的量程**
   `frozenBase.scaled(priceZoom).panned(pricePan)` 反算成相对新窗口的意图（`ValueRange.intentFor` → `PriceIntent`），
   取景原地不动。注意要反算**显示量程**而不是冻结的基准量程 —— 只反算基准会把叠加的缩放抹掉。
-- 之后回到自动适配仍走左下角「刻度已缩放 · 复位」（只清纵向、保留横向视窗）。
+- 之后回到自动适配走左下角「复位」（现口径：横纵缩放全清 + 回最新价）。
 - **例外**：新窗口的数据与冻结量程重叠 < 25%（`ValueRange.overlapShare`，与纵向平移的收口同一条线）时**不钉** ——
   否则是一张空图，这时按自动量程重排一次（宁可跳一下）。
 - 只对**横向平移**生效：捏合缩放仍走「手势冻结 + 松手一次性适配」的老口径（缩放后的适配是有用的）。

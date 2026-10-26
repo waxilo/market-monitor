@@ -298,7 +298,19 @@ data class ChartViewport(
          * 序列停在右端、左侧留空（见 [maxVisible]）。
          */
         fun initial(): ChartViewport = ChartViewport(DEFAULT_VISIBLE, DEFAULT_RIGHT_BLANK)
+
+        /** 判「偏离默认取景」的容差（根）：浮点缩放/平移回不到精确整数，差这点肉眼看不出。 */
+        private const val INITIAL_EPS = 1e-3f
     }
+
+    /**
+     * 是否仍是默认取景（宽度没缩放过、右端停在最新价的默认留白上）。
+     * 与纵向的 `priceZoom/pricePan` 合起来决定「复位」小标亮不亮。
+     * 与桌面端 `chartMath.viewportAdjusted` 互为取反、同口径。
+     */
+    fun isInitial(): Boolean =
+        abs(visibleBars - DEFAULT_VISIBLE) <= INITIAL_EPS &&
+            abs(rightOffset - DEFAULT_RIGHT_BLANK) <= INITIAL_EPS
 }
 
 /**
@@ -425,7 +437,7 @@ data class ValueRange(val low: Double, val high: Double) {
      * 用在**横向平移松手**的那一刻：手势期间量程被冻结（见 KlineChart 的 `priceBase`），
      * 松手若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下 ——
      * 用户报的「拖到历史 K 线时自动把 K 线摆到画布中间」。把这个冻结量程落成意图，
-     * 取景就原地不动；之后是否回到自动适配，交给「刻度已缩放 · 复位」小标。
+     * 取景就原地不动；之后是否回到自动适配，交给「复位」小标。
      *
      * 量程退化（跨度非正 / 非有限）返回 null：调用方保持原意图即可。
      */
