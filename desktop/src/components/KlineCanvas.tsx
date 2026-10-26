@@ -233,11 +233,12 @@ function roundRect(
 }
 
 /**
- * 画布指针的取值。`''` = 不设内联样式，回落到 CSS 里 `.chart-canvas` 的那枚空心圆环；
- * `'on-line'` = 压在画线上（四角内向的直角，见 theme.css 的 `.chart-canvas.is-on-line`）。
- * **没有 `crosshair`**：划线工具就位时也用圆环，理由见 `onPointerMove` 里的注释。
+ * 画布指针**只有两种形态**（2026-10-26 用户）：
+ * `''` = 空心圆环（CSS 里 `.chart-canvas` 的默认指针）；
+ * `'on-line'` = 四个直角拼成的十字（压在画线上 / 拖线时，见 theme.css 的 `.chart-canvas.is-on-line`）。
+ * 复位小标、拖画布、拖线都不再切系统的 pointer / grabbing / move / ns-resize。
  */
-type CursorKind = '' | 'pointer' | 'on-line' | 'grabbing' | 'move' | 'ns-resize';
+type CursorKind = '' | 'on-line';
 
 /**
  * 画布指针的**唯一出口**：`on-line` 靠 CSS 类，其余走内联 `style.cursor`。
@@ -249,7 +250,7 @@ type CursorKind = '' | 'pointer' | 'on-line' | 'grabbing' | 'move' | 'ns-resize'
  */
 function applyCursor(canvas: HTMLCanvasElement, kind: CursorKind) {
   canvas.classList.toggle('is-on-line', kind === 'on-line');
-  canvas.style.cursor = kind === 'on-line' ? '' : kind;
+  canvas.style.cursor = '';
 }
 
 /**
@@ -1518,7 +1519,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          applyCursor(canvas, 'grabbing');
+          applyCursor(canvas, 'on-line');
           draw();
           return;
         }
@@ -1532,7 +1533,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          applyCursor(canvas, 'move');
+          applyCursor(canvas, 'on-line');
           draw();
           return;
         }
@@ -1544,7 +1545,7 @@ export function KlineCanvas({
           crossRef.current = null;
           pointerId = e.pointerId;
           canvas.setPointerCapture(e.pointerId);
-          applyCursor(canvas, 'ns-resize');
+          applyCursor(canvas, 'on-line');
           draw();
           return;
         }
@@ -1561,7 +1562,7 @@ export function KlineCanvas({
       lastY = e.clientY;
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
-      applyCursor(canvas, 'grabbing');
+      applyCursor(canvas, '');
       // 整场手势冻结纵向基准：可见窗口每帧都在变，不冻结的话自动量程会逐帧重排
       // （K 线一边横移一边上下缩放）。松手时由 repinPriceAfterPan 把取景落成意图。
       panBaseRef.current = autoBase();
@@ -1639,35 +1640,22 @@ export function KlineCanvas({
         const anchor = anchorAt(x, y, plotW);
         if (anchor) pendingRef.current = { a: pending.a, to: anchor };
       }
-      // 空闲态的指针形状，按「这一下按下去会发生什么」给：
-      // · 复位小标 → pointer；
-      // · 压在**已选中**的那条线上 → 抓手/上下箭头（按住就能拖）；
-      // · 压在别的线上 → 四角内向的直角（`on-line`，语义是「点一下选中它」）；
-      // · 其余回落到默认的空心圆环。
+      // 空闲态的指针形状只有两种（2026-10-26 用户）：
+      // · 压在任意一条画线上（**选没选中都一样**）→ 四个直角拼成的十字（`on-line`），
+      //   拖线过程中也保持这枚十字；
+      // · 其余（含复位小标、拖画布）一律空心圆环。
       //
       // 工具就位时**一律圆环**（2026-10-26 用户）：那两下是落点，系统十字的两根短线
       // 正好压在环心那颗蜡烛上 —— 而落点最需要看清的就是那里。工具态也不再做画线命中，
       // 因为 `onPointerDown` 里工具态直接短路掉了选线/拖线，`on-line`/`move` 只会骗人。
-      let cursor: CursorKind = hitBadge(e) ? 'pointer' : '';
-      if (!cursor && modelRef.current.tool === 'none' && !modelRef.current.linesLocked) {
+      let cursor: CursorKind = '';
+      if (modelRef.current.tool === 'none' && !modelRef.current.linesLocked) {
         const { top, bottom } = mainBounds();
         if (x <= plotW && y >= top && y <= bottom) {
-          const sel = modelRef.current.selection;
-          const onTrend = (index: number) => sel?.kind === 'trend' && sel.index === index;
-          const handle = nearestTrendHandle(trendHandles(plotW), x, y);
-          if (handle) {
-            cursor = onTrend(handle.index) ? 'move' : 'on-line';
-          } else {
-            const body = nearestTrendBody(trendBodies(plotW), x, y);
-            if (body >= 0) {
-              cursor = onTrend(body) ? 'move' : 'on-line';
-            } else {
-              const line = hitLine(y);
-              if (line >= 0) {
-                cursor = sel?.kind === 'price' && sel.index === line ? 'ns-resize' : 'on-line';
-              }
-            }
-          }
+          const onAnyLine = nearestTrendHandle(trendHandles(plotW), x, y) != null
+            || nearestTrendBody(trendBodies(plotW), x, y) >= 0
+            || hitLine(y) >= 0;
+          if (onAnyLine) cursor = 'on-line';
         }
       }
       applyCursor(canvas, cursor);

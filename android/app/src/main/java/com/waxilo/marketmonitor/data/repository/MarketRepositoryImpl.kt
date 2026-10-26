@@ -8,6 +8,7 @@ import com.waxilo.marketmonitor.data.local.room.toEntity
 import com.waxilo.marketmonitor.data.remote.BinanceMarketApi
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
+import com.waxilo.marketmonitor.domain.kline.KlinePaging
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
@@ -241,11 +242,20 @@ class MarketRepositoryImpl(
         endTime: Long?,
     ): KlinePage {
         val plan = planKline(id.market, interval.minutes)
-        // 聚合需要整数倍根数，多取一点避免最后一桶总是不够；上限按当前接口的单次根数封顶
+        val pageSize = api.maxKlineLimit(id.market)
+        // 超过单次上限就往前多翻几页（见 KlinePaging）；翻不了页的来源（HTX）、
+        // 以及按起点取数（startTime）的请求仍只取一页、按单次上限封顶
+        val pageable = startTime == null && api.supportsOlderKlines(id.market)
         val rawLimit = (limit.toLong() * plan.ratio)
-            .coerceAtMost(api.maxKlineLimit(id.market).toLong())
+            .coerceAtMost(if (pageable) pageSize.toLong() * KlinePaging.MAX_PAGES else pageSize.toLong())
             .toInt()
-        val raw = api.klines(id.market, id.symbol, plan.fetchMinutes, rawLimit, startTime, endTime)
+        val raw = if (pageable && rawLimit > pageSize) {
+            KlinePaging.pageBackwards(rawLimit, pageSize, endTime) { size, end ->
+                api.klines(id.market, id.symbol, plan.fetchMinutes, size, null, end)
+            }
+        } else {
+            api.klines(id.market, id.symbol, plan.fetchMinutes, rawLimit, startTime, endTime)
+        }
         val now = System.currentTimeMillis()
         val stamped = raw.map { if (it.closeTime > now) it.copy(closed = false) else it }
         val aggregated = KlineAggregator.dedupeByOpenTime(

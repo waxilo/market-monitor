@@ -45,19 +45,21 @@ class EmaAnalysisTest {
     /* ── 取数根数 ───────────────────────────────────────────── */
 
     @Test
-    fun `window 默认与图上一段历史同长`() {
-        assertEquals(300, EmaAnalysis.window(emptyList()))
-        assertEquals(300, EmaAnalysis.window(listOf(12, 26, 50)))
-        // EMA200 只要 220 根就够，但下限 300 更高 —— 取 300
-        assertEquals(300, EmaAnalysis.window(listOf(200)))
+    fun `window 短档位取下限 500`() {
+        assertEquals(500, EmaAnalysis.window(emptyList()))
+        // 50 × 4 = 200，低于下限
+        assertEquals(500, EmaAnalysis.window(listOf(12, 26, 50)))
     }
 
     @Test
-    fun `window 长档位往上加 20 根余量，并夹在上下限之间`() {
-        assertEquals(520, EmaAnalysis.window(listOf(50, 500)))
-        assertEquals(1000, EmaAnalysis.window(listOf(2000)))
+    fun `window 按最长档位 4 倍预热，并夹在上下限之间`() {
+        assertEquals(600, EmaAnalysis.window(listOf(150)))
+        // EMA200 要 800 根：旧口径 300 根时种子残留 37%
+        assertEquals(800, EmaAnalysis.window(listOf(20, 200)))
+        assertEquals(1000, EmaAnalysis.window(listOf(50, 500)))
+        assertEquals(1000, EmaAnalysis.window(listOf(Int.MAX_VALUE)))
         // 非法期数不参与：负数 / 0 不该把窗口拉到下限以下
-        assertEquals(300, EmaAnalysis.window(listOf(0, -5)))
+        assertEquals(500, EmaAnalysis.window(listOf(0, -5)))
     }
 
     /* ── 末值 ──────────────────────────────────────────────── */

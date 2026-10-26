@@ -4,10 +4,10 @@
  *
  * 两条口径值得写死在这里：
  *
- *  1. **取数根数**与图上的每段历史（`ChartView.HISTORY_BARS = 300`）对齐 ——
+ *  1. **取数根数**由 `emaWindow` 一处决定（最长档位 × 4，夹在 500~1000），图表首屏也按它取 ——
  *     同一档 EMA 在表里的值必须与图上那条线右端的值一致，否则用户会看到
- *     「表里 68,900、图上 68,850」这种没法解释的差。所以下限就是 300；
- *     只有用户配了比 300 更长的档位（如 EMA200 之上）才往上加，上限 1000（各家单次取数的硬顶）。
+ *     「表里 68,900、图上 68,850」这种没法解释的差；而根数太少时长档 EMA 的值会被
+ *     SMA 种子拖偏（周线 EMA200 取 300 根时种子残留 37%，见 `EMA_WARMUP_FACTOR`）。
  *
  *  2. **算不出来的一律不进表**（取数不足 / 返回值坏），由调用方另外报「哪几档缺数据」。
  *     把 NaN 混进排序里会让「最近的一道压力」整个失真 —— 排序里 NaN 的比较永远为假，
@@ -131,21 +131,31 @@ export function mergeEmaScan(prev: EmaScan | null, next: EmaScan): EmaScan {
   };
 }
 
-/** 取数根数下限：与图上一段历史同口径（见文件头注）。 */
-export const EMA_WINDOW_MIN = 300;
-/** 取数根数上限：各家单次 K 线请求的硬顶（超过会被方言层夹掉，不如自己先夹）。 */
-export const EMA_WINDOW_MAX = 1000;
-
+/** 取数根数下限（短档位也至少取这么多，图上首屏的历史长度也由它兜底）。 */
+export const EMA_WINDOW_MIN = 500;
 /**
- * 一次取多少根：至少 `EMA_WINDOW_MIN`，最长的那一档再留 20 根余量。
- * 300 根时 EMA50 已经跑到 6 倍长度，收敛得很干净；EMA200 这类长档才会往上加。
+ * 取数根数上限。单次上限更低的源（OKX 300 / Hyperliquid 500）由取数层往前多翻几页凑齐
+ * （见 `lib/klinePaging`），所以这里不按各家单次上限夹。
  */
+export const EMA_WINDOW_MAX = 1000;
+/**
+ * 预热倍数：取「最长档位 × 4」根。
+ *
+ * EMA 以前 N 根的 SMA 作种子，种子在末值里的残留权重 ≈ `(1 − 2/(N+1))^(根数 − N)`：
+ * 4 倍长度时约 0.25%，与「从上市第一根算起」的 TradingView 等平台基本对得上；
+ * 旧口径「最长档 + 20、下限 300」下周线 EMA200 的残留高达 37%，值随取数起点漂移几百美元。
+ * 历史不足 1000 根的粗周期（币安 BTC 周线只有 ~480 根）因此等于取全量历史。
+ */
+export const EMA_WARMUP_FACTOR = 4;
+
+/** 一次取多少根：`最长档位 × EMA_WARMUP_FACTOR`，夹在 [`EMA_WINDOW_MIN`, `EMA_WINDOW_MAX`]。 */
 export function emaWindow(periods: readonly number[]): number {
   let longest = 0;
   for (const period of periods) {
     if (Number.isFinite(period) && period > longest) longest = period;
   }
-  return Math.min(EMA_WINDOW_MAX, Math.max(EMA_WINDOW_MIN, Math.floor(longest) + 20));
+  const wanted = Math.floor(longest) * EMA_WARMUP_FACTOR;
+  return Math.min(EMA_WINDOW_MAX, Math.max(EMA_WINDOW_MIN, wanted));
 }
 
 /** 一段收盘价在最后一根上的 EMA 值；根数不足 `period`（或参数非法）给 NaN。 */

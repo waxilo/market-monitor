@@ -19,6 +19,7 @@ import {
   type TickerSnapshot,
 } from './dialects';
 import { httpRequest } from './http';
+import { pageBackwards } from './klinePaging';
 import { coarsestBaseFor, minutesOf } from './intervals';
 import { currentFuturesUrl, endpointOf, onFuturesSourceChange } from './sources';
 
@@ -229,8 +230,35 @@ export function supportsOlderKlines(market: MarketType): boolean {
   return market !== 'FUTURES' || currentFutures().dialect.supportsTimeWindow !== false;
 }
 
-/** 单一原生周期的取数（`minutes` 必须真的在该源的表里）；`endMs` = 只要此时刻之前的（翻旧页用）。 */
+/** Gate 现货单次 K 线根数上限。 */
+const SPOT_KLINE_MAX = 1000;
+
+/**
+ * 单一原生周期的取数（`minutes` 必须真的在该源的表里）；`endMs` = 只要此时刻之前的（翻旧页用）。
+ *
+ * `limit` 超过该源单次上限时**往前多翻几页**拼起来（见 `lib/klinePaging`）；
+ * 不支持时间窗的来源（HTX）翻不了页，只取一页。
+ */
 async function fetchNativeKlines(
+  market: MarketType,
+  symbol: string,
+  ladder: Record<number, string>,
+  minutes: number,
+  limit: number,
+  endMs?: number,
+): Promise<Bar[]> {
+  if (ladder[minutes] == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
+  const pageSize = market === 'FUTURES' ? currentFutures().dialect.maxKlineLimit : SPOT_KLINE_MAX;
+  if (limit <= pageSize || !supportsOlderKlines(market)) {
+    return fetchNativePage(market, symbol, ladder, minutes, limit, endMs);
+  }
+  return pageBackwards(limit, pageSize, endMs, (size, end) =>
+    fetchNativePage(market, symbol, ladder, minutes, size, end),
+  );
+}
+
+/** 一次 HTTP 请求取一页（根数由方言自己夹到单次上限）。 */
+async function fetchNativePage(
   market: MarketType,
   symbol: string,
   ladder: Record<number, string>,
@@ -247,7 +275,7 @@ async function fetchNativeKlines(
       minutes,
     );
   }
-  const limitClamped = Math.max(1, Math.min(limit, 1000));
+  const limitClamped = Math.max(1, Math.min(limit, SPOT_KLINE_MAX));
   const toQuery = endMs == null ? '' : `&to=${Math.floor(endMs / 1000)}`;
   const rows = await spotJson<string[][]>(
     `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${code}&limit=${limitClamped}${toQuery}`,

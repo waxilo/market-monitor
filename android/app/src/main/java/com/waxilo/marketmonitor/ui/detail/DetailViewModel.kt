@@ -576,12 +576,15 @@ class DetailViewModel(
         viewModelScope.launch {
             // 先恢复上次使用的周期与指标开关，再开始加载：顺序反了会被首次加载的 copy 覆盖
             restoreChartPreferences()
-            combine(interval, reloadToken) { selected, token -> selected to token }
+            // 首屏根数与 EMA 面板同一口径（EmaAnalysis.window，按整个 EMA 目录算）：
+            // 只在最长档位变化时才变 ⇒ 改颜色 / 开关小眼睛不会触发重拉
+            val emaBars = chart.map { EmaAnalysis.window(it.emaCatalog) }.distinctUntilChanged()
+            combine(interval, reloadToken, emaBars) { selected, _, bars -> selected to bars }
                 // 「正在取」这条标志由取数的链**独占**：实时增量不再顺手把它清掉
                 // （那会让手上的重载被误判成已就绪），换周期的那一瞬也要先立起来 ——
                 // 此刻 ChartData.rawBase 还指着旧周期，新的那一段得有个状态可落。
                 .onEach { chart.update { data -> data.copy(loading = true) } }
-                .flatMapLatest { (selected, _) -> flow { emit(loadBase(selected)) } }
+                .flatMapLatest { (selected, bars) -> flow { emit(loadBase(selected, bars)) } }
                 .collect { loaded -> chart.value = loaded }
         }
         viewModelScope.launch {
@@ -1390,7 +1393,8 @@ class DetailViewModel(
     }
 
     /**
-     * 取一段完整的序列（[BASE_PAGE] 根基础周期蜡烛）+ 它归属的基础周期。
+     * 取一段完整的序列（至少 [BASE_PAGE] 根基础周期蜡烛，长档 EMA 需要时按
+     * [EmaAnalysis.window] 加长）+ 它归属的基础周期。
      *
      * **`rawBase` 与 `raw` 必须同时更新**：这一对就是「哪一段序列是就绪的」的答案。
      * 取失败时两者一起作废（不能只清 raw 留着 rawBase，也不能反过来）。
@@ -1399,11 +1403,14 @@ class DetailViewModel(
      * 「为上面这一段序列请过哪一页」，序列一换它就没有意义了 —— 留着不放的后果正是
      * 换周期之后再也翻不动（见该字段的说明）。
      */
-    private suspend fun loadBase(selected: CandleInterval): ChartData {
+    private suspend fun loadBase(selected: CandleInterval, emaBars: Int): ChartData {
         val base = baseOf(selected)
         val previous = chart.value
+        // 展示周期要有 emaBars 根 ⇒ 基础周期按聚合倍率放大（自定义 10m 由 5m 拼，要 2 倍）；
+        // 单次上限由仓库层按当前方言夹掉，EMA 面板走的也是同一道夹，两边仍对得上
+        val baseCount = maxOf(BASE_PAGE, emaBars * selected.aggregateRatio)
         return try {
-            val page = repository.klines(id, base, BASE_PAGE)
+            val page = repository.klines(id, base, baseCount)
             previous.copy(
                 raw = page.klines,
                 rawBase = base,

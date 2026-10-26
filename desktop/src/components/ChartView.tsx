@@ -50,7 +50,7 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
-import { alignEmaLines, applyEmaLine } from '../lib/emaAnalysis';
+import { alignEmaLines, applyEmaLine, emaWindow } from '../lib/emaAnalysis';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
@@ -63,7 +63,11 @@ import { LineNoteDialog } from './LineNoteDialog';
 import { KlineCanvas } from './KlineCanvas';
 
 const RT_POLL_MS = 2000;
-const HISTORY_BARS = 300;
+/**
+ * 往更早翻一页、持仓量整段重拉的根数。首屏**不用它**：首屏根数交给 `emaWindow`
+ * （与 EMA 面板同一口径），否则图上长档 EMA 的右端会与面板里的值对不上。
+ */
+const PAGE_BARS = 300;
 
 /** 指标栏小眼睛的图形见 `./EyeIcon`（均线面板里每条均线也用它，两处必须一致）。 */
 /**
@@ -246,7 +250,13 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     setInterval_(firstSupported(intervals));
   }, [interval, intervals]);
 
-  // 切换标的/周期：全量拉 300 根（`reloadSeq` 只为「重新加载」按钮服务）
+  /**
+   * 首屏根数：与 EMA 面板同一口径（按**整个** EMA 目录算，藏起来的档位面板里也在），
+   * 只在最长档位变化时才变 ⇒ 改颜色 / 开关小眼睛不会触发重拉。
+   */
+  const initialBars = emaWindow(families.EMA.catalog);
+
+  // 切换标的/周期：全量拉 initialBars 根（`reloadSeq` 只为「重新加载」按钮服务）
   useEffect(() => {
     if (!market || !symbol) {
       setCandles([]);
@@ -264,7 +274,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     older.requestedOldest = 0;
     older.failedAt = 0;
     older.epoch += 1;
-    fetchKlines(market, symbol, interval, HISTORY_BARS)
+    fetchKlines(market, symbol, interval, initialBars)
       .then((bars) => {
         if (!alive) return;
         setCandles(bars);
@@ -279,7 +289,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     return () => {
       alive = false;
     };
-  }, [market, symbol, interval, source, reloadSeq]);
+  }, [market, symbol, interval, source, reloadSeq, initialBars]);
 
   /**
    * 「时间轴快够到已加载的最老一根了」→ 往前补一页（画布逐帧上报，这里同步去重）。
@@ -305,12 +315,12 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     older.inFlight = true;
     older.requestedOldest = oldest;
     const epoch = older.epoch;
-    fetchKlinesBefore(market, symbol, interval, oldest, HISTORY_BARS)
+    fetchKlinesBefore(market, symbol, interval, oldest, PAGE_BARS)
       .then((bars) => {
         if (olderRef.current.epoch !== epoch) return;
         // 取回不足一页 = 这一端真的到头了（各家的 time-window 取数都是「尽量填满」，
         // 有空洞也会往前补数，所以短页只可能发生在历史起点）
-        if (bars.length < HISTORY_BARS) older.exhausted = true;
+        if (bars.length < PAGE_BARS) older.exhausted = true;
         if (bars.length === 0) return;
         setCandles((prev) => {
           // 以 prev 的老端为准再滤一次：请求在飞时实时轮询换过数组也不打紧
@@ -362,7 +372,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
     // 换标的 / 换周期时先清掉旧序列：上一段的持仓量画在新 K 线上就是一坨错线
     setOi(null);
     const load = () => {
-      fetchOpenInterest(market, symbol, interval, HISTORY_BARS)
+      fetchOpenInterest(market, symbol, interval, PAGE_BARS)
         .then((series) => {
           if (alive) setOi(series);
         })
