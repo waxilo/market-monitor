@@ -541,7 +541,8 @@ Release run **40256230411** 绿 `01:51:18 → 01:54:40Z`（3m22s）；main CI ru
   无 0.1.41 残留、latest.json 0.1.42（pub_date `2026-10-26T06:47:38.392Z`）、两平台 URL 指向本版、
   两平台 keyid `226b03192e5df60b` == 发版前基线；exe **2791327** 字节 sha256
   `3f2d03a77be03d5d4ced32ee0a9cc7032ed89a83d0c3e16923d8abb52c33fefb` == 边车、内嵌 `0.1.42`
-  utf-16le 命中 2 / `0.1.41` 命中 0；mac app.tar.gz 4365660、dmg 4440436；
+  utf-16le 命中 2 / `0.1.41` 命中 0；mac app.tar.gz 4365660（sha256 `49400c5c…`）、dmg 4440436
+  （sha256 `ee0b17af…` == 边车）；
   CI vite 指纹 `index-CQrlH82n.css 35.83` / `index-DVLAlg9X.js 317.68`（99 modules）== 本地 `npm run build` 逐字一致。
 - ⚠️ `.sig` 比对要**解两层**：`.sig` 文件本身就是 base64 文本，manifest 里的 `signature` 是 base64(**解一层后的
   minisign 文本**)；直接拿 manifest 去比 `.sig` 文件必然不等（本轮先踩了一次）。
