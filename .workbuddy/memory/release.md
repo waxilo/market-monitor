@@ -553,3 +553,25 @@ Release run **40256230411** 绿 `01:51:18 → 01:54:40Z`（3m22s）；main CI ru
   checkout，不受影响。**之后的 docs(memory) 提交要基于新 remote head 再推**，别拿旧树覆盖别人的改动。
 - ⚠️ 本地 `README.md` 的桌面 version 行此前停在 **0.1.34**（0.1.35–0.1.41 的发版提交只改了 `tauri.conf.json`）；
   本轮一并补成 0.1.42。
+
+## 0.9.56（**只发 Android**，2026-10-26 下午）
+
+「全屏（横屏两列）EMA 分析的上方压力改回由低到高」—— 用户口径一句话，改动只有
+`EmaAnalysisSheet` 删掉 `ColumnColumn(reversed = true)` 的 `asReversed()`（桌面端与竖屏页签本来就是升序）。
+桌面端无改动，不碰桌面通道。
+两个 commit：fix(chart/ema) `0a664b9` → chore(release) `9626626`；API 推成远端 `27d72a6` → `ec8b9f6`；
+tag `0.9.56`（annotated `3deb00d4fed5`）→ 远端 main `ec8b9f60`。
+Release run **40281807425** 绿 `06:46:40 → 06:49:06Z`（2m26s，含 CI 内 pinned-key 断言）；main CI
+run **40281775439 / 40282384941** 均绿。
+
+- `android-latest` id/created_at 原地不变（`398798258` / `2026-09-29T03:22:14Z`）、只有
+  `market-monitor-0.9.56.apk`（**11186820**）+ `.sha256`，无 0.9.55 残留。
+- 自算 sha256 `216c434c13df593f3c06f2ca6b3aec8bb01f242f379f986d6c27373b53e64697` == 边车；
+  apksigner `cf2e20c7…52f034` == 基线（DN 仍 `CN=Waxilo, …`）；aapt2 `versionCode=68 / versionName=0.9.56`
+  与产物名自洽；CI 日志 `apk cert sha256: cf2e20c7…` + `本次版本号：0.9.56`。
+- ✅ 打 tag 前本地 `:app:testDebugUnitTest` **394 例全绿**（2m12s）。
+- ⚠️ 本改动**不含任何新增字符串/标识符**（只删一次 `asReversed()`），dex 取证无从下手 ——
+  包内证据以 aapt2 版本 + 签名 + tag→commit 为准；「确实是新代码」靠 `ec8b9f6` 的 tree 与本地一致。
+- ⚠️ `api-push-0948.py --parent` 必须给**完整 40 位 SHA**：脚本用 `remote_head not in parents` 比较，
+  缩写会被判成「parent 不在远端分支上」（本轮先踩了一次）。
+- push 仍走 API（本地 `git push` 照旧 `not a git repository`）；推完 `git fetch` + `update-ref`（没 reset）。
