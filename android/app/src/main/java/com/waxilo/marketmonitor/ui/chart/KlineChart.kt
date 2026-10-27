@@ -1029,6 +1029,14 @@ fun KlineChart(
                         ?: trendSeed?.let(::anchorPx)
                         ?: Offset(geo.plotWidthPx / 2f, geo.mainTopPx + geo.mainHeightPx / 2f)
                     drawTrendCrosshair(crosshairPos, geo, palette)
+                    // 已落种子：预览线从种子连到准星（2026-10-27 起由绘制端按两者实时画，
+                    // 手势侧不再逐帧发草稿 —— 移动只调位置，轻点那一刻才发草稿并成交）
+                    trendSeed?.let { seed ->
+                        val p1 = anchorPx(seed)
+                        if (p1.x.isFinite() && p1.y.isFinite() && (crosshairPos - p1).getDistance() > 0.5f) {
+                            drawLine(palette.mark, p1, crosshairPos, 3f)
+                        }
+                    }
                 }
                 // 直线落第一下的种子点：第一次敲完先亮这个点，第二次按下拖出线、抬手成交
                 trendSeed
@@ -2646,6 +2654,14 @@ private suspend fun PointerInputScope.detectChartGestures(
         var trendCrosshairBase = Offset.Zero
         var trendDragFrom = Offset.Zero
         /**
+         * 直线场这一下是不是「移动」（手指离按下处超过 slop，或落过第二根手指）。
+         *
+         * 2026-10-27 口径：**移动只调准星位置，轻点才落点** —— 松手时它为 true 就什么都不落，
+         * 准星（与第二点的预览线）留在原地；为 false 才按准星当前位置定种子 / 成交。
+         * 不能复用下面的 `travelled`：划线场在循环里 `continue` 得早，那个累加根本走不到。
+         */
+        var trendMoved = false
+        /**
          * 本场单击命中的那条**尚未选中**的线：松手时（没滑走、没长按）才选中它。
          *
          * 为什么不在 down 就选中：这样「按住线横向平移画布」会顺手把线选走 ——
@@ -2718,17 +2734,9 @@ private suspend fun PointerInputScope.detectChartGestures(
                 trendCrosshairBase = cur
                 trendDragFrom = first.position
                 trendLast = cur
-                trendMode = if (onTrendSeedGet() != null) {
-                    // 第二敲当场用**准星当前位置**出一帧预览：轻点同样没有后续 pressed 帧，
-                    // 而成交回调拿的是「最后一帧预览」落库 —— 一帧不发就等于白敲。
-                    // 轻点第二敲 = 准星没动 = 与种子重合 → 收尾判「太近」撤销，正好。
-                    val a1 = onTrendSeedGet()
-                    val a2 = trendAnchorAt(cur.x, cur.y)
-                    if (a1 != null && a2 != null) onTrendDrag(0L, a1, a2)
-                    TrendMode.PLACE2
-                } else {
-                    TrendMode.SEED
-                }
+                // 预览线（种子 → 准星）由绘制端按两者实时画，手势侧不再逐帧发草稿；
+                // 草稿只在「轻点成交」那一刻发一帧（见收尾），移动松手后不会留下悬空草稿。
+                trendMode = if (onTrendSeedGet() != null) TrendMode.PLACE2 else TrendMode.SEED
             }
         }
         /**
@@ -2825,6 +2833,8 @@ private suspend fun PointerInputScope.detectChartGestures(
                 pendingSelect = null
                 tapOnBlank = false
             }
+            // 直线工具下落第二根手指（缩放）同样不是「轻点」：松手不许落点
+            if (pressed.size >= 2) trendMoved = true
 
             // 划线 / 拖线分支必须排在十字光标判定之前：这两类手势里都不出十字光标。
             // `owned` 只在 down 那一刻定性（划线工具 / 命中已选中的线），
@@ -2839,27 +2849,17 @@ private suspend fun PointerInputScope.detectChartGestures(
                 // （趋势线整体平移与直线工具下的平移是同一件事，没有第二套实现）
                 if (trendMode != null) {
                     when (trendMode) {
-                        // 抓住准星拖（down 已记基准，见定性处）：准星 = down 时准星 + 手指位移，
-                        // 按下不传送、松手才定点（种子在收尾 SEED 分支按 trendLast 落）。
-                        TrendMode.SEED -> {
+                        // 抓住准星拖（down 已记基准，见定性处）：准星 = down 时准星 + 手指位移。
+                        // 移动**只调位置**（2026-10-27）：超过 slop 即记 trendMoved，松手不落点；
+                        // 落点交给下一次轻点（见收尾）。两敲共用这一段，区别只在收尾。
+                        TrendMode.SEED, TrendMode.PLACE2 -> {
+                            if ((raw - trendDragFrom).getDistance() > touchSlop) trendMoved = true
                             val cx = (trendCrosshairBase.x + (raw.x - trendDragFrom.x))
                                 .coerceIn(0f, plot.plotWidthPx)
                             val cy = (trendCrosshairBase.y + (raw.y - trendDragFrom.y))
                                 .coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
                             trendLast = Offset(cx, cy)
                             onTrendCrosshair(trendLast)
-                        }
-                        TrendMode.PLACE2 -> {
-                            val cx = (trendCrosshairBase.x + (raw.x - trendDragFrom.x))
-                                .coerceIn(0f, plot.plotWidthPx)
-                            val cy = (trendCrosshairBase.y + (raw.y - trendDragFrom.y))
-                                .coerceIn(plot.mainTopPx, plot.mainTopPx + plot.mainHeightPx)
-                            trendLast = Offset(cx, cy)
-                            onTrendCrosshair(trendLast)
-                            // 预览线从种子点连到十字交点，松手才定下第二点
-                            val a1 = onTrendSeedGet()
-                            val a2 = trendAnchorAt(cx, cy)
-                            if (a1 != null && a2 != null) onTrendDrag(0L, a1, a2)
                         }
                         TrendMode.MOVE -> {
                             val base = trendBase
@@ -2984,22 +2984,29 @@ private suspend fun PointerInputScope.detectChartGestures(
         if (dragActive) {
             onHorizontalCommit(horizontalGrab)
         }
+        // 直线工具两敲（2026-10-27 口径）：**移动只调准星，轻点才落点**。
+        // 这一场是移动（trendMoved）⇒ 什么都不落，准星留在原地等下一次轻点确认；
+        // 轻点 ⇒ 按准星当前位置（trendLast，down 已就位）定种子 / 成交第二点。
+        if (trendMoved && (trendMode == TrendMode.SEED || trendMode == TrendMode.PLACE2)) {
+            trendMode = null
+        }
         when (trendMode) {
-            // 第一敲在这里才「定点」：种子 = 准星停下的位置（松手前的拖动都只是瞄准）。
-            // 轻点也走这条路 —— down 已把准星就位（trendLast 同步），收尾照落。
             TrendMode.SEED -> trendAnchorAt(trendLast.x, trendLast.y)?.let(onTrendSeed)
             null -> Unit
             TrendMode.PLACE2 -> {
                 val seed = onTrendSeedGet()
                 val seedPx = seed?.let(trendAnchorPx)
-                if (seed == null || seedPx == null) {
-                    onTrendDelete(0L) // 种子半路没了：把预览收回去，别留一根悬空的新线
+                val end = trendAnchorAt(trendLast.x, trendLast.y)
+                if (seed == null || seedPx == null || end == null) {
+                    onTrendSeed(null)
+                    onTrendDelete(0L)
                 } else if ((trendLast - seedPx).getDistance() < grabPx) {
-                    // 第二敲离第一下太近 = 两点定不出一条线：判「撤销这一笔」，
-                    // 清种子并撤回预览 —— 与种子半路没了同一条回调
+                    // 准星还压在种子上就点了 = 两点定不出一条线：撤销这一笔（清种子并收起工具）
                     onTrendSeed(null)
                     onTrendDelete(0L)
                 } else {
+                    // 成交回调拿「最后一帧草稿」落库：轻点这一刻补发一帧再提交
+                    onTrendDrag(0L, seed, end)
                     onTrendCommit(0L)
                     onTrendSeed(null)
                 }
@@ -3073,9 +3080,9 @@ internal data class HorizontalAnchor(val ref: LineRef, val yPx: Float)
 
 /** 直线工具下单指这场的定性。 */
 private enum class TrendMode {
-    /** 第一敲：拖十字准星瞄准，**松手才落**种子锚点（落点 = 准星停下的位置）。 */
+    /** 还没种子：拖动只挪准星；**轻点**才在准星处落种子锚点。 */
     SEED,
-    /** 已有种子时的第二敲：拖动出预览，抬手成交（落点太近则撤销）。 */
+    /** 已有种子：拖动只挪准星（预览线跟着走）；**轻点**才成交（准星压在种子上则撤销）。 */
     PLACE2,
     /** 就近抓到已有直线：整根随手指平移。 */
     MOVE,
