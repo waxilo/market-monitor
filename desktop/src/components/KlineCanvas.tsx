@@ -1110,7 +1110,7 @@ export function KlineCanvas({
 
     // ── 「复位」小标 ──
     // 视角一旦被调离默认取景就没法从图上看出来（刻度拖远了 / 往前翻到历史里），
-    // 也没有别的路回去（双击复位不显眼）。点它 = `resetView`：横纵缩放回默认 + 回到最新价。
+    // 点它 = `resetView`：横纵缩放回默认 + 回到最新价。
     // 放绘图区**左下角**：右侧压着最新一根蜡烛、顶部压着读数带，左下角信息密度最低。
     if (priceAdjusted(priceRef.current) || viewportAdjusted(vpRef.current)) {
       const w = ctx.measureText(RESET_BADGE_TEXT).width + 12;
@@ -1127,7 +1127,7 @@ export function KlineCanvas({
 
     // ── 视窗落定 → 判一次要不要更早的历史 ──
     // 挂在重画的尾巴而不是散在 wheel / pointermove 里：所有改变视窗的路径最终都会走到
-    // 这里（滚轮缩放、拖动平移、双击复位、容器尺寸变化、恢复上次视角），
+    // 这里（滚轮缩放、拖动平移、点「复位」小标、容器尺寸变化、恢复上次视角），
     // 少一处就少一条补页入口 —— 「一直缩小不刷新」正是漏在这类入口上。
     // 判据本身很便宜（几次浮点比较），真发不发请求由 ChartView 的门闸决定。
     reportOlder();
@@ -1702,21 +1702,6 @@ export function KlineCanvas({
     };
 
     /**
-     * 双击复位：与左下角「复位」小标 [resetView] 同一个动作 —— 横纵缩放回默认 +
-     * 回到最新价格的 K 线，并写回存档。副图不参与。
-     */
-    const onDblClick = (e: MouseEvent) => {
-      const { rect } = geom();
-      if (belowMain(e.clientY - rect.top)) return;
-      // 画了一半的直线时不复位：这两下点击里有一半是「落第二点」，顺手把视窗弹回自动量程会很意外
-      if (pendingRef.current) return;
-      // 工具就位时也不复位：那两下是「点了两下落点」，不是「双击看全景」
-      if (modelRef.current.tool !== 'none') return;
-      crossRef.current = null;
-      resetView();
-    };
-
-    /**
      * Esc = 撤掉画了一半的那条直线（待定的第一下），顺手取消选中。
      * 挂 document 而不是 canvas：canvas 不可聚焦，焦点多半在别处，挂它自己一条都收不到。
      */
@@ -1750,7 +1735,6 @@ export function KlineCanvas({
     canvas.addEventListener('pointerup', endDrag);
     canvas.addEventListener('pointercancel', endDrag);
     canvas.addEventListener('pointerleave', onLeave);
-    canvas.addEventListener('dblclick', onDblClick);
     canvas.addEventListener('contextmenu', onContextMenu);
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -1760,7 +1744,6 @@ export function KlineCanvas({
       canvas.removeEventListener('pointerup', endDrag);
       canvas.removeEventListener('pointercancel', endDrag);
       canvas.removeEventListener('pointerleave', onLeave);
-      canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('keydown', onKeyDown);
     };
