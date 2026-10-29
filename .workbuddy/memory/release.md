@@ -591,3 +591,12 @@ tag `0.9.59`（annotated `721b487c4dce`）→ 远端 main `964013bf`。Release r
 小栏、图表读数改悬浮且仅悬停 K 线时出现、BOLL 去填充且三线同色、光标改单枚中性灰圆环）。详见 `2026-10-29.md`。
 本地 feature commit → chore(release) 两个 commit；tag `desktop-v0.1.47`。发版时按 API 推（`git push` 仍报
 `not a git repository`），推完 `git fetch` + `update-ref`（不 reset）。构建前 `npm run build` 通过。
+- 两个 commit：feat `c8ea122` → chore(release) `25f388b`；API 推成远端 `dd15e76` → `d4b6af6`（tree 一致，
+  本地 `fetch` + `update-ref` 对齐，没 reset）。tag `desktop-v0.1.47`（annotated `27ef2552`）→ 远端 main `d4b6af6`。
+  Desktop Release run **40832459249** 三 job 全绿（06:58:26Z → 07:04:25Z，约 6 分钟）。
+- 通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.47、无 0.1.46 残留
+  （exe 2799609 / dmg 4443483 / app.tar.gz 4370500，各带 `.sig` 或 `.sha256`）；`latest.json` 版本 `0.1.47`，
+  pub_date `2026-10-29T07:04:15.804Z`，两平台 URL 都指向本版。
+- ⚠️ Windows 本机跑 `api-push-0948.py` 会在打印 `✓` 时 `UnicodeEncodeError`（GBK 控制台）中断 ——
+  blob 已传、重跑幂等；加 `PYTHONIOENCODING=utf-8` 即可。
+- ⚠️ 首次 `gh api` 报 TLS handshake timeout，直接重跑即过；本机 `127.0.0.1:7897` 代理**没开**，走直连。
