@@ -575,3 +575,19 @@ run **40281775439 / 40282384941** 均绿。
 - ⚠️ `api-push-0948.py --parent` 必须给**完整 40 位 SHA**：脚本用 `remote_head not in parents` 比较，
   缩写会被判成「parent 不在远端分支上」（本轮先踩了一次）。
 - push 仍走 API（本地 `git push` 照旧 `not a git repository`）；推完 `git fetch` + `update-ref`（没 reset）。
+
+## 0.9.59（**只发 Android**，2026-10-27 上午）
+
+直线工具「拖动只调准星、轻点才落点」。桌面端无改动，不碰桌面通道。
+两个 commit：feat(android/chart) `5aa64c0` → chore(release) `7ee31ab`；API 推成远端 `30cb315` → `964013b`；
+tag `0.9.59`（annotated `721b487c4dce`）→ 远端 main `964013bf`。Release run **40435555770** 已触发，发版时未等结果、通道验收待补。
+- ✅ 打 tag 前本地 `:app:testDebugUnitTest` 全绿。
+- push 照旧走 API（`api-push-0948.py`，第二个 commit 带 `--parent` 完整 40 位 SHA）；推完 `git fetch` + `update-ref`。
+- 用掉的 tag 追加：`0.9.59`。
+
+## desktop 0.1.47（**只发桌面端**，2026-10-29 下午）
+
+「桌面端页面 UI 重构」：现代卡片化改版（顶栏去底板三区、设置改整页、指标栏 ＋ 收组末、EMA 分析入口移到左侧
+小栏、图表读数改悬浮且仅悬停 K 线时出现、BOLL 去填充且三线同色、光标改单枚中性灰圆环）。详见 `2026-10-29.md`。
+本地 feature commit → chore(release) 两个 commit；tag `desktop-v0.1.47`。发版时按 API 推（`git push` 仍报
+`not a git repository`），推完 `git fetch` + `update-ref`（不 reset）。构建前 `npm run build` 通过。
