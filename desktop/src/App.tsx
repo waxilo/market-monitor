@@ -19,7 +19,7 @@ import { SourcePanel } from './components/SourcePanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ChartView } from './components/ChartView';
 import { WindowChrome } from './components/WindowChrome';
-import { MiniWindowIcon, SidebarIcon } from './components/icons';
+import { MiniWindowIcon, SearchIcon, SidebarIcon } from './components/icons';
 import { UpdateReady } from './components/UpdateReady';
 import { useUpdate } from './hooks/useUpdate';
 
@@ -90,6 +90,12 @@ export default function App() {
   const sourceLabel = market === 'FUTURES' ? endpointOf(futuresSource).label : 'Gate';
   /** 数据源弹窗的显隐（弹窗自己负责探测与切换，见 SourcePanel）。 */
   const [sourceOpen, setSourceOpen] = useState(false);
+  /**
+   * EMA 分析面板的显隐。入口在左侧栏底部（2026-10-29 从指标栏搬走），
+   * 面板本体由 ChartView 渲染（它要读图表自己的周期 / 均线 / 划线状态），
+   * 所以这个开关提到 App 这一层，两边共用同一个布尔。
+   */
+  const [emaOpen, setEmaOpen] = useState(false);
   const [selected, setSelected] = useState<WatchItem | null>(() => items[0] ?? null);
   /**
    * 轮询哪些标的 = 当前市场自选 + 「正在看但不是自选」的那一条。
@@ -126,9 +132,10 @@ export default function App() {
     localStorage.setItem(LIST_OPEN_KEY, listOpen ? '1' : '0');
   }, [listOpen]);
 
-  // Ctrl/Cmd+K 聚焦搜索：桌面端的肌肉记忆
+  // Ctrl/Cmd+K 聚焦搜索：桌面端的肌肉记忆（设置页盖住顶栏时不抢焦点）
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (settingsOpen) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         searchRef.current?.focus();
@@ -137,7 +144,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [settingsOpen]);
 
   // 悬浮窗里点了某个标的：切到那个市场并选中它
   useEffect(() => {
@@ -192,8 +199,13 @@ export default function App() {
             两组各占一半余量，搜索框自然落在整条顶栏的正中（见 theme.css 的 .toolbar）。 */}
         <div className="tb-side">
           <div className="brand">
-            <span className="brand-name">Market Monitor</span>
-            <span className="overline">行情总览</span>
+            <span className="brand-mark" aria-hidden="true">
+              M
+            </span>
+            <div className="brand-text">
+              <span className="brand-name">Market Monitor</span>
+              <span className="overline">行情总览</span>
+            </div>
           </div>
 
           {/* 侧栏开关：收起后图表整行铺开（列宽动画见 theme.css 的 .main）。
@@ -216,6 +228,7 @@ export default function App() {
             字母直接进，见该组件的头注与 README 的搜索框条目。 */}
         <div className="search-wrap">
           <div className="search-field">
+            <SearchIcon />
             <EnglishField
               ref={searchRef}
               value={query}
@@ -311,7 +324,9 @@ export default function App() {
           >
             <MiniWindowIcon />
           </button>
-          <WindowChrome />
+          {/* 设置页是整页视图，自带一份窗口控件与拉伸热区；这里让位，避免两套
+              `.rz` 热区叠在同一个窗口边缘上。 */}
+          {!settingsOpen && <WindowChrome />}
         </div>
       </header>
 
@@ -326,6 +341,8 @@ export default function App() {
           onRemove={remove}
           onReorder={reorderWithinMarket}
           onMarket={setMarket}
+          emaOpen={emaOpen}
+          onEmaAnalysis={() => setEmaOpen(true)}
         />
         <ChartView
           item={selected}
@@ -335,6 +352,8 @@ export default function App() {
           theme={theme}
           watched={watched}
           onToggleWatch={toggleWatch}
+          emaOpen={emaOpen}
+          onEmaClose={() => setEmaOpen(false)}
         />
       </main>
 

@@ -21,6 +21,9 @@ interface Props {
   onReorder: (next: WatchItem[]) => void;
   /** 换市场（现货/永续）。切换按钮就长在这一列的顶上。 */
   onMarket: (market: MarketType) => void;
+  /** EMA 分析面板是否开着（入口在这一列底部，面板本身由 ChartView 渲染）。 */
+  emaOpen: boolean;
+  onEmaAnalysis: () => void;
 }
 
 /**
@@ -52,6 +55,8 @@ export function MarketList({
   onRemove,
   onReorder,
   onMarket,
+  emaOpen,
+  onEmaAnalysis,
 }: Props) {
   const instrumentMap = useMemo(
     () => new Map(instruments.map((i) => [i.symbol, i])),
@@ -158,6 +163,21 @@ export function MarketList({
             自选为空 —— 顶部搜索框搜{MARKET_LABEL[market]}全市场，点结果行的 ＋ 加入
           </div>
         )}
+      </div>
+
+      {/* 底部小栏：EMA 分析入口（2026-10-29 从图表指标栏搬到左侧）。
+          它是**动作**不是开关 —— 点开把「所有已配置 EMA 档位 × 所有已配置周期」汇总成
+          压力 / 支撑两栏，所以只在面板开着时给个 .on 表示当前落点。 */}
+      <div className="list-foot">
+        <button
+          type="button"
+          className={`chip${emaOpen ? ' on' : ''}`}
+          aria-pressed={emaOpen}
+          title="EMA 指标分析：把所有已配置的 EMA 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
+          onClick={onEmaAnalysis}
+        >
+          EMA分析
+        </button>
       </div>
 
       {ghost &&

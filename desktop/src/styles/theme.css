@@ -1,60 +1,93 @@
-/* 设计 token：与 App ui/theme/Color.kt / Tokens.kt / Type.kt 一一对应。
-   极简杂志风：墨黑/纸白两级中性色撑结构，饱和度只留给涨跌信号与图上画线；
-   1px 发丝线代替阴影；等宽体承载数字与小标题，无衬线承载自然语言。 */
+/* 设计 token：现代卡片风（2026-10-29 重构）。
+   深色是「深空灰」底 + 抬起的卡片面；浅色是「雾白」底 + 纯白卡片。
+   圆角、分层阴影、柔和描边负责层级；饱和度只留给涨跌信号、主色与图上画线。
+   等宽体承载数字与小标题，无衬线承载自然语言。图表从 CSS 变量读色（KlineCanvas），
+   所以 --paper / --wash / --hairline / --up / --down / --accent 的名字必须保留。 */
 
 :root,
 [data-theme='dark'] {
-  --paper: #0c0d0f;
-  --surface: #141619;
-  --wash: #1b1e22;
-  --wash-strong: #23272c;
-  --ink: #ecedef;
-  --muted: #8c939e;
-  --flat: #8c939e;
-  --hairline: #2a2e34;
-  --hairline-strong: #3a3f47;
-  --up: #00a96e;
-  --down: #e5384b;
-  --flash-up: rgba(0, 169, 110, 0.06);
-  --flash-down: rgba(229, 56, 75, 0.06);
-  --accent: #f0b90b;
-  --on-accent: #1b1200;
+  --paper: #0a0c11;
+  --surface: #12151c;
+  --surface-2: #171b23;
+  /* 设置左栏：比内容面再沉一档，选中项才抬得起来 */
+  --nav-bg: #0e1117;
+  --nav-on: #1d222c;
+  --wash: #1a1e27;
+  --wash-strong: #242a35;
+  /* 无底板的扁平输入区（顶栏搜索）：比 --wash 明显一档，浅色下才看得出是个框 */
+  --field: #1b2029;
+  --field-hover: #222834;
+  --ink: #edf0f5;
+  --muted: #9099a8;
+  --flat: #9099a8;
+  --hairline: #232833;
+  --hairline-strong: #353c49;
+  --up: #17c98a;
+  --down: #f0435a;
+  --flash-up: rgba(23, 201, 138, 0.1);
+  --flash-down: rgba(240, 67, 90, 0.1);
+  --accent: #f7b90c;
+  --on-accent: #241a00;
   /* 用户画线（水平线 / 两点直线）：黄。告警线借 --down 的红、现价线借 --muted 的灰，
      三种线色互不串；不给它们单开 token —— 借的两个 token 本来就有语义色可用。
      三条线**一律实线**，语义只在颜色上（红 = 会响的告警 / 黄 = 只是记号的画线）。 */
-  --line-mark: #f0b90b;
+  --line-mark: #f7b90c;
   /* 自绘输入框的选中底色（.ef-sel）：保持中性 —— 饱和度只留给涨跌信号 */
-  --sel: rgba(236, 237, 239, 0.22);
+  --sel: rgba(237, 240, 245, 0.24);
   /* 图表加载遮罩（.chart-loading）：**纸色的半透明**而不是纯黑 —— 底下的骨架网格要透出来，
      否则就退回「白底上一个转圈」了。两套主题各写各的，跟 --flash-* 同一写法。 */
-  --scrim-chart: rgba(12, 13, 15, 0.5);
+  --scrim-chart: rgba(10, 12, 17, 0.55);
   /* 悬浮窗断联遮罩（.mini-offline）：**近乎实底**，与 --scrim-chart 的半透明有意不同 ——
      图表底下是骨架（该透出来），悬浮窗底下是**冻住的旧价格**（必须看不清，
      否则还是会被当成现价读）。实测 0.94 时旧价仍留着可辨的鬼影（`.workbuddy/tmp/mini-offline-2-offline.png`），
      所以抬到 0.96 并在 `.mini-offline` 上加一层 blur 把它彻底糊掉。两套主题各写各的。 */
-  --scrim-mini: rgba(20, 22, 25, 0.96);
+  --scrim-mini: rgba(18, 21, 28, 0.97);
+
+  /* 卡片层级：三级阴影 + 一圈内高光（深色下靠它把卡片从底上「抬」起来） */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.45), 0 40px 90px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 4px 12px rgba(0, 0, 0, 0.3), 0 18px 44px rgba(0, 0, 0, 0.28);
+  --ring: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  --glow: rgba(96, 132, 255, 0.08);
+  --accent-soft: rgba(247, 185, 12, 0.12);
+  --scrim: rgba(4, 6, 10, 0.55);
+  --field-focus: rgba(247, 185, 12, 0.32);
 }
 
 [data-theme='light'] {
-  --paper: #fafaf8;
+  --paper: #f4f5f8;
   --surface: #ffffff;
-  --wash: #f2f2ef;
-  --wash-strong: #e8e8e4;
-  --ink: #14161a;
-  --muted: #6e7480;
-  --flat: #6e7480;
-  --hairline: #e4e4e0;
-  --hairline-strong: #d3d3ce;
-  --up: #0ea06e;
-  --down: #dc2f45;
-  --flash-up: rgba(0, 169, 110, 0.06);
-  --flash-down: rgba(229, 56, 75, 0.06);
+  --surface-2: #fbfbfd;
+  --nav-bg: #f6f7fa;
+  --nav-on: #ffffff;
+  --wash: #f1f3f7;
+  --wash-strong: #e7eaf0;
+  --field: #eceef3;
+  --field-hover: #e3e7ee;
+  --ink: #11131a;
+  --muted: #6b7383;
+  --flat: #6b7383;
+  --hairline: #e7e9ef;
+  --hairline-strong: #d5d9e2;
+  --up: #0ea472;
+  --down: #e02f45;
+  --flash-up: rgba(14, 164, 114, 0.08);
+  --flash-down: rgba(224, 47, 69, 0.08);
   --accent: #f0b90b;
-  --on-accent: #1b1200;
+  --on-accent: #241a00;
   --line-mark: #f0b90b;
-  --sel: rgba(20, 22, 26, 0.16);
-  --scrim-chart: rgba(250, 250, 248, 0.5);
-  --scrim-mini: rgba(255, 255, 255, 0.96);
+  --sel: rgba(17, 19, 26, 0.14);
+  --scrim-chart: rgba(244, 245, 248, 0.55);
+  --scrim-mini: rgba(255, 255, 255, 0.97);
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
+  --shadow-2: 0 18px 48px rgba(16, 24, 40, 0.16), 0 40px 100px rgba(16, 24, 40, 0.12);
+  --shadow-3: 0 4px 12px rgba(16, 24, 40, 0.08), 0 16px 40px rgba(16, 24, 40, 0.1);
+  --ring: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --glow: rgba(96, 132, 255, 0.05);
+  --accent-soft: rgba(240, 185, 11, 0.14);
+  --scrim: rgba(18, 22, 32, 0.35);
+  --field-focus: rgba(240, 185, 11, 0.45);
 }
 
 :root {
@@ -72,15 +105,19 @@
   --sp-xl: 32px;
   --gutter: 20px;
 
-  --r-xs: 4px;
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
-  --r-full: 100px;
+  /* 圆角阶梯：卡片 18 / 弹窗 22 / 控件 10~12 / 胶囊满圆 */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
+  --r-xl: 22px;
+  --r-full: 999px;
 
-  --fast: 120ms;
-  --base: 220ms;
-  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --fast: 140ms;
+  --base: 240ms;
+  --slow: 420ms;
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
 * {
@@ -102,6 +139,35 @@ body {
   font-size: 14px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--field-focus);
+  outline-offset: 1px;
+}
+
+/* 弹窗里的滚动条：细、无轨道、只有半透明圆角滑块（列表/图表各自另有隐藏规则） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--hairline-strong);
+  border: 2px solid transparent;
+  border-radius: var(--r-full);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--muted);
 }
 
 /* ── 文字层次 ─────────────────────────────────────────── */
@@ -157,17 +223,22 @@ body {
 .app {
   height: 100%;
   display: grid;
-  grid-template-rows: auto 1fr;
-  /* 主窗无系统边框（decorations: false），发丝线自己画 */
-  border: 1px solid var(--hairline-strong);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--sp-sm);
+  padding: var(--sp-sm);
+  /* 卡片之间的「桌面」：一层极淡的冷色辉光，深色下卡片才浮得起来 */
+  background:
+    radial-gradient(1100px 520px at 18% -12%, var(--glow), transparent 62%),
+    var(--paper);
 }
 .toolbar {
-  display: flex;
+  /* 顶栏不铺底板：控件直接落在页面背景上，只有搜索框有一层极淡的底。
+     左右两列等分余量，搜索框落在整条顶栏的正中。 */
+  display: grid;
+  grid-template-columns: minmax(max-content, 1fr) auto minmax(max-content, 1fr);
   align-items: center;
-  gap: var(--sp-md);
-  padding: var(--sp-xs) var(--sp-md);
-  border-bottom: 1px solid var(--hairline);
-  background: var(--surface);
+  gap: 8px;
+  min-height: 34px;
   /* 双击顶栏是为了最大化，不是为了选字：不关掉选择，那两下会划出一段蓝条。
      搜索框要能选词，单独开回来。 */
   user-select: none;
@@ -182,70 +253,106 @@ body {
 .tb-side {
   display: flex;
   align-items: center;
-  gap: var(--sp-md);
-  flex: 1 1 0;
+  gap: 6px;
+  min-width: 0;
+  justify-self: start;
 }
 .tb-side.right {
+  justify-self: end;
   justify-content: flex-end;
+  gap: 4px;
+}
+/* 顶栏行高收到 34px，控件跟着收一档 —— 通用 .icon-btn 是 32px，会把行高又顶回去 */
+.toolbar .icon-btn {
+  height: 28px;
+  padding: 0 9px;
+}
+.toolbar .icon-btn.icon-only {
+  width: 28px;
+  height: 28px;
+}
+.toolbar .winbtn {
+  width: 30px;
+  height: 26px;
 }
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-xs);
+  align-items: center;
+  gap: 10px;
   padding-right: var(--sp-xs);
   white-space: nowrap;
 }
+/* 品牌标记：渐变圆角方块。它是整条顶栏唯一的高饱和色块，用来当视觉锚点。 */
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #ffd75e 0%, #f5a300 100%);
+  box-shadow:
+    0 3px 10px rgba(240, 185, 11, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  color: #231700;
+  font-family: var(--mono);
+  font-weight: 800;
+  font-size: 12px;
+  line-height: 1;
+}
+.brand-text {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-xs);
+}
 .brand-name {
   font-weight: 700;
-  font-size: 15px;
+  font-size: 14px;
   letter-spacing: -0.2px;
 }
 .main {
   display: grid;
-  /* 侧边栏是窄导航栏（交易对名 + 现价 + 24h 涨跌幅），宽度按最长一行算：
-     「1000 类九字符名」≈ 65px + 计价币 25px + 现价列 66px + 涨跌列 53px
-     + 两个 4px 间隙 + 行尾 6px + 左右 12px 内边距 ≈ 247，252 留一点余量；
-     更长的名字（1000000MOG 类）按设计走省略号。宽度账见
-     `.workbuddy/tmp/probe-sidebar-width.mjs`（候选宽度 × 截断名单）。
-     minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动。
-     收起 = 这一列收到 0（`.list-collapsed`），侧栏内容靠 .panel-list 的 overflow 裁掉，
-     列表本身不卸载 —— 状态/行情格子留着，展开回来不用重拉。 */
-  --list-w: 252px;
+  /* 侧边栏是窄导航栏（交易对名 + 现价 + 24h 涨跌幅），宽度按最长一行算。
+     两张卡片之间留 12px 桌面，收起时 gap 一起收到 0（否则图表会凭空左移一截）。
+     minmax(0,1fr)：否则图表列的 min-content 会把整页撑出横向滚动。 */
+  --list-w: 264px;
   grid-template-columns: var(--list-w) minmax(0, 1fr);
+  gap: var(--sp-sm);
   min-height: 0;
-  transition: grid-template-columns var(--base) var(--ease-standard);
+  transition:
+    grid-template-columns var(--base) var(--ease-standard),
+    gap var(--base) var(--ease-standard);
 }
 .main.list-collapsed {
   --list-w: 0px;
+  gap: 0;
 }
-/* 收到 0 之后侧栏那一列还剩一条 1px 的边框（border-box 的最小宽度是边框本身）
-   —— 它在窗口最左边画出一条没来由的发丝线，一起收掉。 */
+/* 收到 0 之后侧栏那一列还剩边框与阴影：整个隐掉，别在窗口最左边留一条空壳 */
 .main.list-collapsed .panel-list {
-  border-right: 0;
-  border-bottom: 0;
+  opacity: 0;
+  border-color: transparent;
+  box-shadow: none;
 }
 @media (max-width: 900px) {
   .main {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(160px, 38%) minmax(0, 1fr);
+    gap: var(--sp-sm);
   }
   /* 横过来时侧栏是顶部条，收起就是这一行收到 0 */
   .main.list-collapsed {
     grid-template-rows: 0 minmax(0, 1fr);
-  }
-  .panel-list {
-    border-right: 0;
-    border-bottom: 1px solid var(--hairline);
+    gap: 0;
   }
   /* 横过来时侧栏变身顶部条：一行一个标的，多列排开 */
   .list-scroll {
     display: flex;
     flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 2px;
   }
   .row {
     width: auto;
-    border-bottom: 0;
-    border-right: 1px solid var(--hairline);
   }
 }
 .panel {
@@ -254,23 +361,34 @@ body {
   display: flex;
   flex-direction: column;
 }
-.panel-list {
-  border-right: 1px solid var(--hairline);
+/* 侧栏与图表都是「一张卡片」：纯色面 + 发丝边 + 一层柔和阴影 */
+.panel-list,
+.panel-chart {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
   background: var(--surface);
-  /* 收起时这一列的宽度是 0：内容（行/表头）靠这里裁掉，而不是靠条件渲染卸载
-     —— 卸载了 React 状态就没了，展开回来会重新拉一遍行情 */
+  box-shadow: var(--shadow-1), var(--ring);
   overflow: hidden;
 }
+.panel-list {
+  transition:
+    opacity var(--base) var(--ease-standard),
+    border-color var(--base) var(--ease-standard),
+    box-shadow var(--base) var(--ease-standard);
+}
+.panel-chart {
+  /* 图表面板要接住 canvas 的四角，别让方格纸从圆角里漏出去 */
+  position: relative;
+}
 .panel-head {
-  padding: var(--sp-xs) var(--sp-sm);
+  padding: 12px 12px 8px;
   border-bottom: 1px solid var(--hairline);
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-xs);
 }
-/* 侧栏顶部（市场切换 + 自选计数）：竖着两行 —— 胶囊平摊整行宽，像个分段控件。
-   252px 的侧栏放不下「胶囊 + 计数」并排（永续合约那枚就 76px），所以不给它并排的机会。 */
+/* 侧栏顶部（市场切换 + 自选计数）：竖着两行 —— 胶囊平摊整行宽，像个分段控件。 */
 .panel-head.list-head {
   flex-direction: column;
   align-items: stretch;
@@ -278,32 +396,41 @@ body {
 }
 .list-head .market-pill {
   flex: 1;
-  padding: 4px 0;
+  padding: 5px 0;
 }
-/* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、SettingsPanel 共用）。
-   放在这里而不是某个具体面板的段落里 —— 它跨面板复用；改名前叫 `.mini-x`，
-   悬浮窗遮罩撤掉之后就彻底名不副实了。 */
+/* 浮层/面板标题栏右侧的关闭「×」（SourcePanel、SettingsPanel 共用）。 */
 .panel-close {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   display: grid;
   place-items: center;
   border: 0;
   background: none;
-  color: var(--ink);
-  border-radius: var(--r-xs);
+  color: var(--muted);
+  border-radius: 9px;
+  font-size: 16px;
+  line-height: 1;
   cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
 }
 .panel-close:hover {
   background: var(--wash-strong);
+  color: var(--ink);
+}
+.panel-close:active {
+  transform: scale(0.92);
 }
 
 /* ── 自选列表行（窄导航栏：币名 + 计价币 + 现价 + 涨跌幅） ─────────────── */
 .list-scroll {
   overflow-y: auto;
   flex: 1;
+  padding: 6px 0 8px;
 }
-/* 滚动条也是「版面上的线」，极简风里不该出现：隐藏轨道与滑块，滚动照旧 */
+/* 滚动条也是「版面上的线」，数据区里不出现：隐藏轨道与滑块，滚动照旧 */
 .list-scroll,
 .chart-scroll {
   scrollbar-width: none;
@@ -314,23 +441,29 @@ body {
   height: 0;
   display: none;
 }
-/* 桌面端行密度：鼠标点选不需要 64px 触摸热区，30px 一屏能放十几行 */
+/* 桌面端行密度：鼠标点选不需要 64px 触摸热区。行做成悬浮在卡片里的小胶囊：
+   圆角 + 透明边框（hover/选中只换色，不挪位置）。 */
 .row {
   display: flex;
   align-items: center;
   gap: var(--sp-xxs);
-  min-height: 30px;
-  padding: 3px var(--sp-sm);
-  border-bottom: 1px solid var(--hairline);
+  min-height: 38px;
+  padding: 0 10px;
+  margin: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background var(--fast) var(--ease-standard);
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard);
 }
 .row:hover {
   background: var(--wash);
 }
-/* 选中项没有涨跌胶囊可依赖了，靠底色 + 币名变色标出来 */
+/* 选中项：主色极淡底 + 主色描边，币名跟着亮起 */
 .row.selected {
-  background: var(--wash-strong);
+  background: var(--accent-soft);
+  border-color: rgba(247, 185, 12, 0.22);
 }
 .row.selected .row-name {
   color: var(--accent);
@@ -356,17 +489,16 @@ body {
   align-items: center;
   gap: 6px;
 }
-/* 现价列：定宽 + 右对齐 + tabular-nums（`.num` 已带），三样合起来数字才竖着对齐。
+/* 现价列：定宽 + 右对齐 + tabular-nums，三样合起来数字才竖着对齐。
    定宽同时兜住「拿不到行情」时那个 `--` 占位，行不会因为价格出现/消失而抖动。 */
 .row-price {
   min-width: 66px;
   text-align: right;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: -0.2px;
 }
 /* 涨跌列：与现价列同款（定宽 + 右对齐 + tabular），数字竖着对齐；
-   定宽按三位数涨跌幅算（`+245.10%` 八字符 ≈ 51px），比现价列窄一档，
-   同样兜住拿不到行情时的 `--` 占位。`white-space: nowrap`：极端值宁可撑列不可换行。 */
+   定宽按三位数涨跌幅算（`+245.10%` 八字符 ≈ 51px），比现价列窄一档。 */
 .row-chg {
   min-width: 53px;
   text-align: right;
@@ -374,45 +506,71 @@ body {
   letter-spacing: -0.2px;
   white-space: nowrap;
 }
-/* 搜索结果里的「加入自选」常驻可见：未加入才用强调色。
-   （侧栏行上原来有个常显的 ×，0.1.11 用户要求撤掉、改右键菜单「从自选移除」—— 行不再是按钮的落点。） */
+/* 搜索结果里的「加入自选」常驻可见：未加入才用强调色。 */
 .row-add {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border: 0;
   background: none;
-  border-radius: var(--r-xs);
+  border-radius: 7px;
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
   color: var(--accent);
+  transition:
+    background var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
 }
 .row-add:hover {
   background: var(--wash-strong);
+}
+.row-add:active {
+  transform: scale(0.9);
 }
 .row-add.on {
   color: var(--muted);
 }
 .list-hint {
-  padding: var(--sp-md) var(--sp-sm);
+  padding: var(--sp-md) var(--sp-md);
   font-family: var(--mono);
   font-size: 11px;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--muted);
+  text-align: center;
+}
+/* 侧栏底部小栏（EMA 分析入口）：一条发丝线隔开，按钮铺满整行 ——
+   它是这一列的「分析」出口，和其他自选行不是一类东西，所以用底色不同的 chip。 */
+.list-foot {
+  flex: none;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--hairline);
+}
+.list-foot .chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 6px 11px;
+}
+/* 拖动幽灵带着行类（含 margin）：portal 出去的 fixed 元素不能再吃这层外缩进 */
+.drag-ghost.row {
+  margin: 0;
+  border-radius: 10px;
 }
 
 /* 涨跌胶囊 */
 .pill {
   font-family: var(--mono);
-  font-weight: 500;
+  font-weight: 600;
   font-size: 12px;
   letter-spacing: 0.2px;
-  padding: 2px 8px;
+  padding: 3px 9px;
   border-radius: var(--r-full);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .pill.up {
   background: var(--flash-up);
@@ -445,27 +603,37 @@ body {
 /* ── 控件 ─────────────────────────────────────────────── */
 .chip {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 11px;
   letter-spacing: 0.2px;
   color: var(--muted);
-  background: none;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 4px 10px;
+  background: var(--wash);
+  border: 1px solid transparent;
+  border-radius: var(--r-full);
+  padding: 5px 11px;
   cursor: pointer;
-  transition: all var(--fast) var(--ease-standard);
+  white-space: nowrap;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
-.chip:hover {
-  border-color: var(--hairline-strong);
+.chip:hover:not(:disabled) {
+  background: var(--wash-strong);
   color: var(--ink);
+}
+.chip:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .chip.on {
   color: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(247, 185, 12, 0.28);
 }
 .chip.selected {
-  background: var(--wash-strong);
-  color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
   border-color: transparent;
 }
 /* 置灰的 chip = 当前数据源不支持这个周期（周期是用户自己配的，换源后可能就用不上了）。
@@ -474,24 +642,23 @@ body {
 .chip:disabled:hover {
   opacity: 0.35;
   color: var(--muted);
-  border-color: var(--hairline);
+  background: var(--wash);
+  border-color: transparent;
   cursor: default;
 }
 .chip.selected:disabled {
   color: var(--muted);
 }
-/* 只有一枚图标的 chip（指标栏里画线显隐的小眼睛）：收成小方块、图标居中，
-   文字 chip 的左右内边距会把它撑成长条 */
+/* 只有一枚图标的 chip（指标栏里画线显隐的小眼睛）：收成小方块、图标居中 */
 .chip.icon-only {
   display: inline-grid;
   place-items: center;
-  padding: 3px 5px;
+  padding: 4px 6px;
 }
 .chip.icon-only svg {
   display: block;
 }
-/* 眼睛 + 字样的显隐 chip（MA）：两枚一样的眼睛并排，靠这行字样分清谁管谁。
-   横排要 flex —— icon-only 的 inline-grid 会把文字压到图标下面。 */
+/* 眼睛 + 字样的显隐 chip（MA）：横排要 flex */
 .chip.eye-label {
   display: inline-flex;
   align-items: center;
@@ -503,20 +670,32 @@ body {
 }
 
 .icon-btn {
-  border: 1px solid var(--hairline);
+  border: 1px solid transparent;
   background: none;
   color: var(--muted);
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   font-family: var(--mono);
   font-size: 12px;
-  padding: 4px 10px;
+  padding: 0 11px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   cursor: pointer;
-  /* 文字按钮不许折行：CJK 随处可断，空间一紧「数据源」会先折成两行把顶栏顶高一倍
-     （0.1.11 顶栏改成左右等宽的组之后实测到过 43px → 61px）。 */
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
+  /* 文字按钮不许折行：CJK 随处可断，空间一紧「数据源」会先折成两行把顶栏顶高一倍 */
   white-space: nowrap;
 }
 .icon-btn:hover:not(:disabled) {
   color: var(--ink);
+  background: var(--wash);
+}
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.96);
 }
 .icon-btn:disabled {
   opacity: 0.5;
@@ -524,29 +703,33 @@ body {
 }
 /* 只有一个图标的按钮：方形，不然文字按钮的左右内边距会把图标撑偏 */
 .icon-btn.icon-only {
-  width: 26px;
-  height: 22px;
-  display: grid;
-  place-items: center;
+  width: 32px;
+  height: 32px;
   padding: 0;
 }
 
-/* 市场切换胶囊（现货 / 永续合约），与 App MarketSwitcher 同款：选中才给底色 */
+/* 市场切换胶囊（现货 / 永续合约），选中才给底色 */
 .market-switch {
   display: flex;
-  gap: var(--sp-xxs);
+  gap: 4px;
+  padding: 3px;
+  background: var(--wash);
+  border-radius: var(--r-full);
 }
 .market-pill {
   font-family: var(--mono);
   font-size: 12px;
   letter-spacing: 0.2px;
   color: var(--muted);
-  background: var(--wash);
+  background: transparent;
   border: 0;
   border-radius: var(--r-full);
-  padding: 4px 14px;
+  padding: 5px 14px;
   cursor: pointer;
-  transition: all var(--fast) var(--ease-standard);
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .market-pill:hover {
   color: var(--ink);
@@ -554,6 +737,7 @@ body {
 .market-pill.on {
   background: var(--ink);
   color: var(--paper);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
 }
 
 /* ── 自绘英文输入框 EnglishField（顶栏搜索 / 悬浮窗搜索共用）──
@@ -619,34 +803,83 @@ body {
 /* 顶部工具条里的全市场搜索：**定宽居中**（左右两组 `.tb-side` 等分余量把它顶到正中）。
    `.search-wrap` 只负责定位（结果浮层贴它的下沿），宽度约束挂在这一层；
    `.search-field` 自己撑满 wrap —— 搜索框与「清空」按钮仍是同一行的两个元素。
-   380 是「右侧那组（状态 + 三个按钮 + 窗口控件 ≈ 415）仍然摊得开、两组还等宽」的上限：
-   实测 1280/1440/1600 下搜索框都落在正中（组内项 valign 都是 nowrap，不会挤到折行）。
-   工具条是 nowrap，窄窗口（1024）先收缩搜索框自己（`min-width: 120px` 兜底，绝不重叠）。 */
+   顶栏不铺卡片，搜索框自己也只是**一层淡底**（无描边、无阴影），高度收到控件级 34px，
+   整条顶栏因此读作一排控件而不是三块板。聚焦时才浮起来：实底 + 强调色描边 + 外环。 */
 .search-wrap {
   position: relative;
-  flex: 0 1 380px;
-  min-width: 120px;
+  width: 400px;
+  max-width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 5px 0 4px;
+  background: var(--field);
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.search-wrap:hover {
+  background: var(--field-hover);
+}
+/* 焦点画在整张搜索框上，而不是里面那个透明输入区 */
+.search-wrap:focus-within,
+.search-wrap:focus-within:hover {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* 窄一档的窗口先收搜索框，左右两组保持完整 */
+@media (max-width: 1300px) {
+  .search-wrap {
+    width: 360px;
+  }
+}
+@media (max-width: 1100px) {
+  .search-wrap {
+    width: 310px;
+  }
 }
 .search-field {
   display: flex;
   align-items: center;
-  gap: var(--sp-xs);
+  gap: 4px;
   width: 100%;
+}
+.search-field > svg {
+  flex: none;
+  margin: 0 0 0 4px;
+  color: var(--muted);
 }
 .search-field .ef-box {
   flex: 1;
   min-width: 0;
-  background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
   color: var(--ink);
   font-family: var(--mono);
   font-size: 12px;
   line-height: 14px;
-  padding: 5px 10px;
+  padding: 4px 6px;
 }
-.search-field .ef-box:focus {
-  border-color: var(--hairline-strong);
+.search-field .ef-box:hover {
+  background: transparent;
+}
+.search-field .ef-box:focus,
+.search-field .ef-box[data-focus='1'] {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+/* 「清空」是框内的小按钮，别按 32px 的通用高度把 30px 的框撑满 */
+.search-field .icon-btn {
+  flex: none;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11px;
 }
 
 /* ── 搜索结果下拉框 ──────────────────────────────────────
@@ -655,7 +888,7 @@ body {
    z-index 取 40 —— 低于弹窗(50)与拉伸把手(55)：弹窗开着时它就该被盖住。 */
 .search-drop {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   left: 0;
   right: 0;
   z-index: 40;
@@ -664,7 +897,10 @@ body {
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-md);
+  box-shadow: var(--shadow-2), var(--ring);
   overflow: hidden;
+  transform-origin: top center;
+  animation: drop-in 180ms var(--ease-standard) both;
 }
 .sr-head {
   display: flex;
@@ -680,8 +916,9 @@ body {
 }
 /* 结果区封顶后内部滚动：拉到全市场 80 条也不会把浮层撑到屏幕外 */
 .sr-scroll {
-  max-height: 320px;
+  max-height: 340px;
   overflow-y: auto;
+  padding: 4px;
   scrollbar-width: none;
 }
 .sr-scroll::-webkit-scrollbar {
@@ -691,17 +928,15 @@ body {
   display: flex;
   align-items: center;
   gap: var(--sp-xxs);
-  min-height: 30px;
-  padding: 3px var(--sp-sm);
-  border-bottom: 1px solid var(--hairline);
+  min-height: 38px;
+  padding: 0 8px;
+  border-radius: 9px;
   cursor: pointer;
-}
-.sr-row:last-child {
-  border-bottom: 0;
+  transition: background var(--fast) var(--ease-standard);
 }
 /* 高亮：键盘 ↑↓ 与鼠标悬停走同一个下标，所以两种操作的观感一致 */
 .sr-row.active {
-  background: var(--wash-strong);
+  background: var(--accent-soft);
 }
 .sr-row.active .sr-name {
   color: var(--accent);
@@ -729,8 +964,9 @@ body {
   display: flex;
   align-items: center;
   gap: var(--sp-sm);
-  padding: 4px var(--sp-sm);
+  padding: 7px var(--sp-sm);
   border-top: 1px solid var(--hairline);
+  background: var(--surface-2);
   font-family: var(--mono);
   font-size: 10px;
   letter-spacing: 0.2px;
@@ -739,17 +975,18 @@ body {
 
 /* ── 图表面板 ─────────────────────────────────────────── */
 .chart-head {
-  padding: var(--sp-md) var(--gutter);
+  padding: 18px var(--gutter) 14px;
   border-bottom: 1px solid var(--hairline);
   display: flex;
-  align-items: flex-end;
-  gap: var(--sp-lg);
+  align-items: center;
+  gap: var(--sp-md);
   flex-wrap: wrap;
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
 }
 .chart-title .base {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.4px;
 }
 .chart-title .sym {
   font-family: var(--mono);
@@ -758,26 +995,30 @@ body {
   letter-spacing: 0.2px;
   margin-left: var(--sp-xs);
 }
-/* 详情页的「自选」标记（★ 实心 = 在左侧列表里 / ☆ 空心 = 只是搜来看看）。
-   小一号、贴着 20px 的币名基线 —— 它是标题的附注，不是主按钮。 */
+/* 详情页的「自选」标记（★ 实心 = 在左侧列表里 / ☆ 空心 = 只是搜来看看）。 */
 .star-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   vertical-align: middle;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   margin-left: var(--sp-xs);
   border: 0;
   background: none;
-  border-radius: var(--r-xs);
-  font-size: 14px;
+  border-radius: 8px;
+  font-size: 15px;
   line-height: 1;
   color: var(--muted);
   cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-spring);
 }
 .star-btn:hover {
   background: var(--wash-strong);
+  transform: scale(1.08);
 }
 .star-btn.on {
   color: var(--accent);
@@ -793,33 +1034,77 @@ body {
   color: var(--muted);
 }
 .chart-empty-hint {
+  max-width: 380px;
+  text-align: center;
   font-size: 13px;
+  line-height: 1.7;
   color: var(--muted);
 }
 .chart-metrics {
   display: flex;
-  gap: var(--sp-lg);
-  align-items: baseline;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+/* 24h 四项读数做成一组小卡片：wash 底 + 圆角 + 发丝边，hover 轻轻抬起 */
+.metric-block {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 108px;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--wash);
+  transition:
+    border-color var(--fast) var(--ease-standard),
+    background var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.metric-block:hover {
+  background: var(--surface);
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-3);
 }
 .metric-block .overline {
-  margin-bottom: 2px;
+  margin-bottom: 0;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+.metric-block .metric {
+  font-size: 15px;
+}
+/* 窄一档时四项读数整行下移、左对齐 —— 比「孤零零挂在右边」稳 */
+@media (max-width: 1180px) {
+  .chart-metrics {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
 }
 /* 工具条两行：第一行周期，第二行指标 / 副图 两组常驻铺开（不再单选切格）。
-   外框只管一根下边框，行内上下内边距收小一档 —— 两行合计比原来单行高约 28px，
-   换来的是改个 MA、开块副图都不用先点格子。 */
+   外框只管一根下边框，行内上下内边距收小一档。 */
 .bar-stack {
   border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  padding: 0 var(--sp-md) 8px;
 }
 .bar-stack .interval-bar {
   border-bottom: 0;
-  padding-top: 5px;
-  padding-bottom: 5px;
+  padding-top: 8px;
+  padding-bottom: 0;
 }
 .bar-stack .interval-bar + .interval-bar {
   border-top: 1px solid var(--hairline);
+  margin-top: 8px;
+  padding-top: 8px;
 }
 .interval-bar {
   display: flex;
+  align-items: center;
   gap: 6px;
   padding: var(--sp-sm) var(--gutter);
   /* 宽度不够时靠 wrap 兜底；1280 的桌面两行都是单行 */
@@ -828,8 +1113,16 @@ body {
 }
 .interval-bar .sep {
   width: 1px;
+  height: 16px;
   background: var(--hairline);
   margin: 0 var(--sp-xxs);
+}
+/* 一组「组名 + 按钮」：整组一起换行，别让「划线」两个字留在上一行、按钮掉到下一行 */
+.interval-bar .bar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .interval-bar .bar-label {
   font-family: var(--mono);
@@ -841,6 +1134,8 @@ body {
 /* 组名（周期 / 指标 / 副图）压一手实色，和同排那些手势提示小字分得开 */
 .interval-bar .bar-label.grp {
   color: var(--ink);
+  font-weight: 600;
+  letter-spacing: 0.4px;
   flex-shrink: 0;
 }
 /* 告警条数：用告警红（--down），和图上那些红色告警线同一个信号 */
@@ -848,43 +1143,38 @@ body {
   color: var(--down);
   flex-shrink: 0;
 }
-/* 分段选择器（周期条）：它不许被压窄，
-   宁可让右边的选项组按 wrap 换行。flex-wrap 之外再禁掉 shrink，
-   中文标签（2 字 ≈ 20px + padding 14px）才不会被挤成竖排。
-   造型走分段选择器：共享一根外框、内部只留分隔线（与主题选择器 `.set-seg`、
-   周期弹窗的「分/时/天」同一套），选中那格填 accent —— 一眼看出它和右边
-   那些独立 chip（可多选）不是一类控件。 */
+/* 分段选择器（周期条）：共享一个 wash 底槽，选中那格填 accent ——
+   一眼看出它和右边那些独立 chip（可多选）不是一类控件。 */
 .interval-bar .bar-tabs {
   display: flex;
   flex-shrink: 0;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  overflow: hidden;
+  gap: 2px;
+  padding: 3px;
+  background: var(--wash);
+  border-radius: 11px;
+  overflow: visible;
 }
 .interval-bar .bar-tabs .chip {
   border: 0;
-  border-left: 1px solid var(--hairline);
-  border-radius: 0;
-  padding: 3px 9px;
-}
-.interval-bar .bar-tabs .chip:first-child {
-  border-left: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: transparent;
 }
 .interval-bar .bar-tabs .chip:hover:not(.selected) {
-  background: var(--wash);
+  background: var(--wash-strong);
   color: var(--ink);
 }
 .interval-bar .bar-tabs .chip.selected {
   background: var(--accent);
   color: var(--on-accent);
+  box-shadow: 0 2px 10px rgba(240, 185, 11, 0.32);
 }
-/* 指标条里的控件比通用 .chip 收一档（10px 与 App IndicatorBar 的 compact FilterChip 同号）：
-   加了 BOLL 后整行需要 871px，收档前是 1103px —— 1280 宽的桌面（面板 940）也能单行放下。 */
+/* 指标条里的控件比通用 .chip 收一档，1280 宽的桌面也能单行放下。 */
 .interval-bar .chip {
   font-size: 10px;
-  padding: 3px 7px;
+  padding: 4px 9px;
 }
-/* 图标 + 文字并排的 chip（划线区的「水平线 / 直线」）：inline-grid 会把文字压到图标下面 */
+/* 图标 + 文字并排的 chip（划线区的「水平线 / 直线」） */
 .interval-bar .chip.with-icon {
   display: inline-flex;
   align-items: center;
@@ -894,16 +1184,15 @@ body {
   display: block;
   flex-shrink: 0;
 }
-/* 破坏性动作（清空 / 删除）：平时压着不动声色，hover 才亮成告警红 —— 与图上告警线同一个信号 */
+/* 破坏性动作（清空 / 删除）：平时压着不动声色，hover 才亮成告警红 */
 .interval-bar .chip.danger {
   color: var(--muted);
 }
 .interval-bar .chip.danger:hover:not(:disabled) {
   color: var(--down);
-  border-color: var(--down);
+  background: var(--flash-down);
 }
-/* 划线区选中态的那枚身份字（价位 / 直线 N）：
-   比组名再重一档，它是这一整行按钮「在对谁动手」的唯一答案。 */
+/* 划线区选中态的那枚身份字（价位 / 直线 N） */
 .interval-bar .bar-label.draw-target {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
@@ -920,14 +1209,17 @@ body {
 .chart-menu {
   position: fixed;
   z-index: 62;
-  min-width: 176px;
+  min-width: 180px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 3px;
+  padding: 5px;
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2), var(--ring);
+  transform-origin: top left;
+  animation: pop-in 150ms var(--ease-standard) both;
 }
 .chart-menu-item {
   display: flex;
@@ -939,10 +1231,11 @@ body {
   font-family: var(--mono);
   font-size: 12px;
   text-align: left;
-  padding: 6px 8px;
-  border-radius: var(--r-xs);
+  padding: 8px 9px;
+  border-radius: 8px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--fast) var(--ease-standard);
 }
 .chart-menu-item:hover {
   background: var(--wash-strong);
@@ -985,13 +1278,12 @@ body {
   /* 指针 = **空心圆环**，不是系统那个实心十字（2026-10-23 用户）：十字的两根短线正好压在
      鼠标下的蜡烛上，看 K 线时最想看清的那 10px 被它挡着。圆环中间是空的，环心那根蜡烛
      一根线都不遮，而环心就是热点（`10 10`）⇒ 瞄准精度不变。
-     ❗环用**两枚同心环**，不是一枚描边套双色：光标位图吃不到 CSS 变量（url() 里没有 var()），
-     而项目有明暗两套主题 —— 里枚浅色环在墨黑底上显影（外枚深色环与纸同色，看不见），
-     外枚深色环在纸白上显影（里枚浅色环与底同色，看不见）。所以任何主题下看见的**始终是一枚圆环**，
-     不会变成双圈。两枚不重叠（留 0.3 空隙）是为了 1x 栅格下边界干净，叠着画会有半透明糊边。
-     环心空腔直径 9.2px：蜡烛实体（默认 4~8px）能整个露出来。
+     ❗只有**一枚**环。早先靠「浅色环＋深色环各与一种底色同色」来兼顾明暗主题，结果那枚
+     本该隐形的环在蜡烛 / 网格上照样显影，看起来就是双圈（2026-10-29 用户两次反馈）。
+     现在用一枚中性灰（`--muted` 同色域）：白底与深底上都看得见，且只看见一圈。
+     环心空腔直径 12px：蜡烛实体（默认 4~8px）能整个露出来。
      `crosshair` 是**兜底**：位图（SVG data URI）解码失败时退回系统十字，而不是掉成箭头。 */
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Ccircle cx='10' cy='10' r='7.9' fill='none' stroke='rgba(12,13,15,0.62)' stroke-width='2'/%3E%3Ccircle cx='10' cy='10' r='5.6' fill='none' stroke='rgba(238,240,243,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Ccircle cx='10' cy='10' r='7' fill='none' stroke='rgba(107,115,131,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, crosshair;
   touch-action: pan-y;
   user-select: none;
 }
@@ -1000,13 +1292,13 @@ body {
    **四个直角拼成的十字**（2026-10-26 用户：画布指针只许两种形态 —— 圆环与这枚十字，
    原来的「四角向内的方框」改成十字；拖动时也不再切系统的 grabbing / move / ns-resize）。
    四个 L 的拐角都朝向中心，臂沿十字的四条边往外伸 ⇒ 拼出一个空心十字的轮廓，
-   中间那条约 4px 宽的十字通道（浅色内沿 8~12）是空的，线和环心的蜡烛照样看得见。
-   ❗与圆环同一套双色思路：位图吃不到 CSS 变量，而项目有明暗两套主题 ⇒ 画两重同形的 L，
-   外重深色（纸白底显影）、里重浅色（墨黑底显影），互不重叠 ⇒ 任何主题下看见的都是**一重十字**。
-   两重的线心都落在整数格上（深色 5/15、浅色 7/13，2px 宽 ⇒ 边落在整数格），1x 下才是实心的。
+   中间那条约 4px 宽的十字通道（内沿 7~13）是空的，线和环心的蜡烛照样看得见。
+   ❗与圆环一样只用**一重**笔画（中性灰，白底 / 深底都看得见）；早先叠了两重同形的 L
+   靠「各自与一种底色同色」隐形，实际会看到浅色内沿。
+   线心落在 5/15 上、2px 宽 ⇒ 边落在整数格，1x 下才是实心的。
    热点在正中（`10 10`）。类由 `KlineCanvas` 的 `applyCursor` 切；`crosshair` 只是位图解码失败时的兜底。 */
 .chart-canvas.is-on-line {
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Cpath d='M5 1V5H1M15 1V5H19M19 15H15V19M1 15H5V19' fill='none' stroke='rgba(12,13,15,0.72)' stroke-width='2'/%3E%3Cpath d='M7 2V7H2M13 2V7H18M18 13H13V18M2 13H7V18' fill='none' stroke='rgba(238,240,243,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, crosshair;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='21' height='21'%3E%3Cpath d='M5 1V5H1M15 1V5H19M19 15H15V19M1 15H5V19' fill='none' stroke='rgba(107,115,131,0.95)' stroke-width='2'/%3E%3C/svg%3E") 10 10, crosshair;
 }
 
 /* 加载遮罩（换标的 / 换周期 / 换数据源时，数据回来之前一直挂着）。
@@ -1022,13 +1314,15 @@ body {
   justify-content: center;
   gap: var(--sp-xs);
   background: var(--scrim-chart);
+  backdrop-filter: blur(2px);
   cursor: default;
+  animation: fade-in 160ms linear both;
 }
 .chart-loading-spin {
-  width: 20px;
-  height: 20px;
-  border: 2px solid var(--hairline-strong);
-  border-top-color: var(--muted);
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--wash-strong);
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: chart-spin 0.8s linear infinite;
 }
@@ -1080,9 +1374,12 @@ body {
   /* 断联遮罩（.mini-offline）的定位上下文；下面的 `overflow: hidden` 顺手把遮罩四角
      裁成面板自己的圆角，所以遮罩不必再写 border-radius。 */
   position: relative;
-  background: var(--surface);
+  /* 窗口尺寸被 Rust 钉死（行数 × 行高 + 2px 边框），所以这里**不能加外阴影/外边距**：
+     超出窗口的部分会被裁掉。层级只靠渐变面 + 内高光 + 一圈亮发丝边。 */
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-md);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   overflow: hidden;
   cursor: default;
   user-select: none;
@@ -1217,15 +1514,20 @@ body {
   /* 一根发丝线不许被 flex 挤没（0.1.11 顶栏分组后窄窗口实测被压到 0 宽） */
   flex: none;
 }
-/* 悬浮窗开关（顶栏最右、窗口控件组左边）：顶栏的 flex gap 是 --sp-md，
-   这里抵掉它，让 ◫ 与「最小化」的间距跟组内按钮一致（见 .winops 的 2px），
-   视觉上读作同一组「把窗口收起来」的操作。 */
-.toolbar .mini-entry {
-  margin-right: calc(2px - var(--sp-md));
+/* 顶栏里分隔线不撑满行高：14px 刚好和按钮的视觉中心对齐 */
+.tb-side .winops-divider {
+  align-self: center;
+  height: 14px;
+  margin: 0 2px;
+}
+/* 悬浮窗开关与窗口控件同属「把窗口收起来」的一组，间距收到 2px（见 .winops）。
+   右侧组本身 gap 就是 2px，这里只需把左侧的「设置」拉开一档。 */
+.tb-side .mini-entry {
+  margin-left: 6px;
 }
 .winbtn {
-  width: 30px;
-  height: 22px;
+  width: 32px;
+  height: 28px;
   display: grid;
   place-items: center;
   border: 0;
@@ -1234,13 +1536,22 @@ body {
   font-family: var(--mono);
   font-size: 12px;
   line-height: 1;
-  border-radius: var(--r-xs);
+  border-radius: 8px;
   cursor: pointer;
-  transition: background var(--fast) var(--ease-standard), color var(--fast) var(--ease-standard);
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
+}
+.winbtn svg {
+  display: block;
 }
 .winbtn:hover {
   background: var(--wash-strong);
   color: var(--ink);
+}
+.winbtn:active {
+  transform: scale(0.94);
 }
 .winbtn.close:hover {
   background: var(--down);
@@ -1340,35 +1651,51 @@ body {
   z-index: 50;
   display: grid;
   place-items: center;
-  background: rgba(0, 0, 0, 0.45);
+  padding: var(--sp-lg);
+  background: var(--scrim);
+  /* 背景整体退成一层磨砂：弹窗是「浮起来的一张卡」，不是贴在内容上的一层纸 */
+  backdrop-filter: blur(10px) saturate(1.15);
+  animation: fade-in 180ms var(--ease-standard) both;
 }
 .up-panel {
-  width: min(560px, calc(100vw - 48px));
-  max-height: calc(100vh - 72px);
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-2), var(--ring);
   overflow: hidden;
+  animation: modal-in 260ms var(--ease-spring) both;
 }
 .up-head {
   display: flex;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 6px 6px 6px 16px;
+  padding: 8px 8px 8px var(--gutter);
   border-bottom: 1px solid var(--hairline);
-  background: var(--wash);
+  background: var(--surface);
   user-select: none;
 }
 .up-head .grow {
   flex: 1;
 }
+/* 弹窗标题：正文无衬线、比 overline 大一号 —— 11px 的全大写等宽体当标题太弱 */
+.up-head > .overline {
+  font-family: var(--sans);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  letter-spacing: -0.1px;
+  text-transform: none;
+  color: var(--ink);
+}
 .up-body {
-  padding: var(--sp-md);
+  padding: var(--sp-md) var(--gutter) var(--gutter);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-sm);
+  gap: 14px;
   overflow-y: auto;
 }
 .up-meta-row {
@@ -1378,7 +1705,10 @@ body {
   gap: var(--sp-sm);
 }
 .up-label {
-  font-size: 12px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 1px;
   color: var(--muted);
 }
 .up-select {
@@ -1386,11 +1716,24 @@ body {
   font-size: 12px;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  height: 34px;
+  padding: 0 10px;
   min-width: 180px;
   cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.up-select:hover:not(:disabled) {
+  background: var(--wash-strong);
+}
+.up-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .up-select:disabled {
   color: var(--muted);
@@ -1412,19 +1755,32 @@ body {
   letter-spacing: 0.2px;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  height: 32px;
+  padding: 0 14px;
   cursor: pointer;
-  transition: all var(--fast) var(--ease-standard);
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .up-btn:hover:not(:disabled) {
-  border-color: var(--hairline-strong);
+  background: var(--wash-strong);
+}
+.up-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 .up-btn.primary {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: none;
+  color: var(--on-accent);
+  background: linear-gradient(135deg, #ffd75e, #f0a800);
+  box-shadow: 0 4px 14px rgba(240, 185, 11, 0.3);
+}
+.up-btn.primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #ffdf7d, #f5b60c);
+  box-shadow: 0 6px 20px rgba(240, 185, 11, 0.4);
 }
 .up-btn:disabled {
   opacity: 0.5;
@@ -1447,14 +1803,15 @@ body {
 }
 .up-bar {
   flex: 1;
-  height: 6px;
+  height: 8px;
   border-radius: var(--r-full);
   background: var(--wash-strong);
   overflow: hidden;
 }
 .up-bar-fill {
   height: 100%;
-  background: var(--accent);
+  border-radius: var(--r-full);
+  background: linear-gradient(90deg, #ffd75e, #f0a800);
   transition: width var(--fast) linear;
 }
 .up-bar-fill[data-indeterminate='true'] {
@@ -1502,10 +1859,10 @@ body {
   word-break: break-word;
   max-height: 220px;
   overflow-y: auto;
-  background: var(--paper);
+  background: var(--wash);
   border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: var(--sp-xs);
+  border-radius: 10px;
+  padding: 10px 12px;
 }
 .up-link {
   align-self: flex-start;
@@ -1532,7 +1889,7 @@ body {
    勾号位 12px **常驻**（未选中留白），选中只换配色与左侧竖条，
    所以点选时卡片内文字不会横向跳动。 */
 .up-panel.up-wide {
-  width: min(720px, calc(100vw - 48px));
+  width: min(720px, 100%);
 }
 .src-grid {
   display: grid;
@@ -1551,12 +1908,42 @@ body {
   cursor: pointer;
   user-select: none;
 }
+/* 开关做成滑块：它是一枚「状态」而不是一次「动作」，滑块比勾选框更像偏好设置 */
 .src-auto input {
-  width: 13px;
-  height: 13px;
+  appearance: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
   margin: 0;
-  accent-color: var(--accent);
+  flex: none;
+  border-radius: var(--r-full);
+  background: var(--wash-strong);
   cursor: pointer;
+  transition:
+    background var(--base) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.src-auto input::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+  transition: transform var(--base) var(--ease-spring);
+}
+.src-auto input:checked {
+  background: var(--accent);
+}
+.src-auto input:checked::after {
+  transform: translateX(16px);
+}
+.src-auto input:focus-visible {
+  outline: 2px solid var(--field-focus);
+  outline-offset: 2px;
 }
 /* 右侧的「开 / 关」：开着用 accent，关着用 muted —— 与 chip 的选中态同色系 */
 .src-auto-state {
@@ -1576,21 +1963,27 @@ body {
   align-items: center;
   column-gap: 6px;
   row-gap: 2px;
-  padding: 5px var(--sp-xs) 6px;
+  padding: 8px 10px 9px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
+  border-radius: 12px;
+  background: var(--surface-2);
   cursor: pointer;
   transition:
     background var(--fast) var(--ease-standard),
-    border-color var(--fast) var(--ease-standard);
+    border-color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .src-row:hover {
   background: var(--wash);
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-3);
 }
 .src-row.on {
-  background: var(--wash-strong);
-  border-color: var(--hairline-strong);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(247, 185, 12, 0.45);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .src-mark {
   grid-area: mark;
@@ -1662,14 +2055,16 @@ body {
   right: var(--sp-md);
   bottom: var(--sp-md);
   z-index: 40;
-  width: 268px;
+  width: 280px;
   display: flex;
   flex-direction: column;
   gap: var(--sp-xs);
-  padding: var(--sp-sm);
+  padding: 14px;
   background: var(--surface);
   border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2), var(--ring);
+  animation: rise-in 300ms var(--ease-standard) both;
 }
 .up-ready-head {
   display: flex;
@@ -1706,30 +2101,34 @@ body {
 .iv-group {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 4px var(--sp-xs);
+  gap: 8px;
 }
-/* 整行都能拖：`cursor: grab` 是唯一的「可拖」暗示（原来左侧还有点阵把手，
-   2026-09-29 去掉 —— 它只是个装饰，而「拖哪儿都行」这件事把手说不出）。
+/* 整行都能拖：`cursor: grab` 是唯一的「可拖」暗示。
    `user-select: none` + `touch-action: none` 在 `.drag-row` 里（三处列表共用），
    少了它们拖动会变成选文字 / 滚面板。 */
 .iv-row {
   display: flex;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 5px var(--sp-xs);
+  padding: 8px 10px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
+  border-radius: 12px;
+  background: var(--surface-2);
   cursor: grab;
   transition:
     border-color var(--fast) var(--ease-standard),
-    background var(--fast) var(--ease-standard);
+    background var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
 }
 .iv-row:hover {
   border-color: var(--hairline-strong);
   background: var(--wash);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-3);
 }
 .iv-row:focus-visible {
-  outline: 1px solid var(--accent);
+  outline: 2px solid var(--field-focus);
   outline-offset: 1px;
 }
 /* ── 拖动排序的公用外观（周期条 / 悬浮窗配置 / 侧栏自选 共用） ──────────
@@ -1746,9 +2145,9 @@ body {
    而「把抓住的那一点钉在指针下」是按左上角算的，加了就会偏。 */
 .drag-row.dragging {
   cursor: grabbing;
-  border-color: var(--accent);
-  background: var(--wash-strong);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 32%);
+  border-color: rgba(247, 185, 12, 0.55);
+  background: var(--surface);
+  box-shadow: var(--shadow-2), 0 0 0 1px var(--accent-soft);
 }
 /* 幽灵本体：portal 到 body 的 fixed 元素 —— 只有脱离滚动容器（`.up-body`、`.list-scroll`），
    才不会被它的 overflow 裁掉（行和容器一样宽，贴在指针下必然探出右边缘一大截，
@@ -1793,16 +2192,19 @@ body {
 }
 /* 行内小动作（× / 添加）：无边框 —— 密度本来就高，再加 15 个方框会花掉版面 */
 .iv-act {
-  min-width: 20px;
-  height: 20px;
-  padding: 0 4px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
   border: 0;
-  border-radius: var(--r-xs);
+  border-radius: 7px;
   background: none;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
   cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
 }
 .iv-act:hover:not(:disabled) {
   color: var(--ink);
@@ -1813,7 +2215,17 @@ body {
   cursor: default;
 }
 .iv-act.iv-add {
-  padding: 0 8px;
+  height: 28px;
+  padding: 0 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(240, 185, 11, 0.28);
+}
+.iv-act.iv-add:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--on-accent);
+  filter: brightness(1.06);
 }
 /* ── 均线族分页（MA / EMA，MaPanel） ──────────────────────────────────
    指标栏上「一族一枚 chip」，配置却在面板里分成两页：页签做成一条分段控件，
@@ -1823,8 +2235,8 @@ body {
   gap: 3px;
   margin: var(--sp-xs) 0 var(--sp-sm);
   padding: 3px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
+  border: 0;
+  border-radius: 12px;
   background: var(--wash);
 }
 .ma-tab {
@@ -1833,9 +2245,9 @@ body {
   align-items: baseline;
   justify-content: center;
   gap: 6px;
-  padding: 5px 8px;
+  padding: 7px 10px;
   border: 0;
-  border-radius: var(--r-xs);
+  border-radius: 9px;
   background: none;
   color: var(--muted);
   font-family: var(--mono);
@@ -1843,16 +2255,17 @@ body {
   cursor: pointer;
   transition:
     background var(--fast) var(--ease-standard),
-    color var(--fast) var(--ease-standard);
+    color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .ma-tab:hover {
   color: var(--ink);
 }
-/* 当前页：抬成纸色 + 一道发丝边（与 .chip.on 的语义一致：亮着 = 这一页是你在看的） */
+/* 当前页：抬成纸色 + 一道柔和阴影，与 wash 底槽一起读作「分段控件」 */
 .ma-tab.on {
-  background: var(--paper);
+  background: var(--surface);
   color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  box-shadow: var(--shadow-3);
 }
 .ma-tab-note {
   font-family: var(--sans);
@@ -1943,7 +2356,10 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 1px var(--sp-xs) 5px;
+  margin: 0 0 4px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--wash);
 }
 .ma-picker-label {
   font-size: 11px;
@@ -1972,42 +2388,108 @@ body {
   opacity: 0.45;
 }
 
-/* ── 设置面板（SettingsPanel）：90% 固定画布 + 左栏分类 / 右栏内容 ──────
-   2026-09-29 把顶栏的「浅色|深色」与「更新」两个按钮收进这里 —— 它们都是
-   「偶尔改一次」的东西，占着顶栏两个位置不值当；更新的进度与「下好了」
-   由设置按钮上的圆点 + 右下角提示条报信。
-   2026-10-07 类别涨到五个（外观 / 悬浮窗 / 快捷键 / 告警通知 / 更新），一列竖着摆
-   摆不下了，改成 90% 的固定画布：左栏只管「在哪一类」，右栏内容独立滚动，
-   换分类时框不动。固定尺寸的另一个好处是各页内容多少不一也不会跳大小。
+/* ── 设置页（SettingsPanel）：整页视图 ─────────────────────────────
+   2026-10-29 起设置不再是弹窗：铺满整个窗口（自己的顶栏 + 左栏分类 + 右栏内容），
+   顶栏带返回、拖窗口与窗口控件；行情在底下保持挂载，返回不重拉。
+   左栏只管「在哪一类」，右栏内容独立滚动；换分类时外框不动。
    每段 = 一个小标题（.up-label）+ 若干行；行是**四列**（名称 / 组合键 / 修改 / 恢复默认），
    所以名称列要给下限宽，长说明才不会被挤成好几行。 */
-.up-panel.up-settings {
-  width: 90vw;
-  height: 90vh;
-  /* 盖掉 .up-panel 的 calc(100vh - 72px)：90vh 本来就不到屏高，再压一道会矮一截 */
-  max-height: none;
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-sm);
+  padding: var(--sp-sm);
+  background:
+    radial-gradient(1100px 520px at 18% -12%, var(--glow), transparent 62%),
+    var(--paper);
+  animation: page-in 260ms var(--ease-standard) both;
 }
-.set-split {
+/* 设置页自己的顶栏：与主顶栏同样不铺底板（同一排控件直接落在页面背景上），
+   右边挂窗口控件（主顶栏此时被盖住） */
+.settings-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  user-select: none;
+}
+.settings-head .grow {
+  flex: 1;
+}
+/* 设置页顶栏与主顶栏同高，窗口控件也收成同一档尺寸 */
+.settings-head .winbtn {
+  width: 30px;
+  height: 26px;
+}
+.settings-back {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
+}
+.settings-back:hover {
+  background: var(--wash);
+  color: var(--ink);
+}
+.settings-back:active {
+  transform: scale(0.94);
+}
+.settings-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+.settings-path {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+  color: var(--muted);
+}
+/* 内容外框：一整张卡片铺满剩余高度，左栏 + 右栏都在卡片里 */
+.settings-body {
   flex: 1;
   min-height: 0;
   display: flex;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1), var(--ring);
+  overflow: hidden;
 }
 .set-nav {
   flex: none;
-  width: 184px;
+  width: 208px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--sp-sm) var(--sp-xs);
+  gap: 4px;
+  padding: var(--sp-md) var(--sp-sm);
   border-right: 1px solid var(--hairline);
-  background: var(--wash);
+  background: var(--nav-bg);
   overflow-y: auto;
+  scrollbar-width: none;
   user-select: none;
 }
+.set-nav::-webkit-scrollbar {
+  display: none;
+}
 .set-nav button {
-  padding: 7px 10px;
+  padding: 9px 12px;
   border: 0;
-  border-radius: var(--r-xs);
+  border-radius: 10px;
   background: none;
   color: var(--muted);
   font-family: var(--sans);
@@ -2016,22 +2498,29 @@ body {
   cursor: pointer;
   transition:
     background var(--fast) var(--ease-standard),
-    color var(--fast) var(--ease-standard);
+    color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard);
 }
 .set-nav button:hover:not(.on) {
   color: var(--ink);
   background: var(--wash-strong);
 }
-/* 选中态与数据源卡片同一套语法：底色抬一档 + 左侧主色竖条（文字别用主色 —— 黄色
-   落在浅底上读不清，深浅两版主题要同一套判据） */
+/* 选中态与数据源卡片同一套语法：抬成卡片面 + 左侧主色竖条（文字别用主色 ——
+   黄色落在浅底上读不清，深浅两版主题要同一套判据） */
 .set-nav button.on {
   color: var(--ink);
-  background: var(--wash-strong);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--nav-on);
+  box-shadow: var(--shadow-3), inset 2px 0 0 var(--accent);
 }
 .set-pane {
   flex: 1;
   min-width: 0;
+}
+/* 整页里右栏更宽裕：内边距抬一档，内容与卡片边缘拉开呼吸感 */
+.settings-body .set-pane {
+  padding: 28px 32px var(--sp-lg);
+  gap: 18px;
 }
 .set-block {
   display: flex;
@@ -2076,53 +2565,56 @@ body {
 /* 当前的组合键：做成一个键帽（等宽 + 描边 + 底色），一眼能看出「这是个键」 */
 .set-key {
   flex: none;
-  min-width: 96px;
+  min-width: 100px;
   text-align: center;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--ink);
   background: var(--wash);
   border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-xs);
-  padding: 4px 10px;
+  border-radius: 8px;
+  padding: 6px 10px;
+  box-shadow: 0 2px 0 var(--hairline);
 }
 /* 录制中：描边用主色，与「按下新的组合键」那句提示呼应 */
 .set-key.on {
   color: var(--accent);
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-/* 主题分段选择器：与周期弹窗的「分/时/天」同一套（共享外框、内部只用分隔线） */
+/* 主题分段选择器：与其他分段控件同一套（wash 底槽 + 内部圆角段） */
 .set-seg {
   flex: none;
   display: flex;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  overflow: hidden;
+  gap: 2px;
+  padding: 3px;
+  background: var(--wash);
+  border-radius: var(--r-sm);
 }
 .set-seg button {
-  min-width: 52px;
-  padding: 4px 10px;
+  min-width: 54px;
+  height: 28px;
+  padding: 0 10px;
   border: 0;
-  border-left: 1px solid var(--hairline);
-  background: none;
+  border-radius: 7px;
+  background: transparent;
   color: var(--muted);
   font-family: var(--sans);
   font-size: 12px;
   cursor: pointer;
   transition:
     background var(--fast) var(--ease-standard),
-    color var(--fast) var(--ease-standard);
-}
-.set-seg button:first-child {
-  border-left: 0;
+    color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .set-seg button:hover:not(.on) {
   color: var(--ink);
-  background: var(--wash);
+  background: var(--wash-strong);
 }
 .set-seg button.on {
   color: var(--on-accent);
   background: var(--accent);
+  box-shadow: 0 2px 8px rgba(240, 185, 11, 0.3);
 }
 
 /* ── 告警通知（WebhookSection）：一行一条地址 ─────────────────
@@ -2132,9 +2624,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: var(--sp-xs);
+  padding: 10px 12px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
+  border-radius: 12px;
+  background: var(--surface-2);
 }
 .wh-main {
   display: flex;
@@ -2146,13 +2639,23 @@ body {
   font-size: 12px;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  height: 34px;
+  padding: 0 10px;
   outline: none;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.wh-input:hover {
+  background: var(--wash-strong);
 }
 .wh-input:focus {
-  border-color: var(--hairline-strong);
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .wh-input::placeholder {
   color: var(--muted);
@@ -2203,28 +2706,33 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px var(--sp-xs);
+  padding: 7px 10px;
   border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
+  border-radius: 10px;
+  background: var(--surface-2);
   font-size: 12px;
   cursor: grab;
   transition:
     background var(--fast) var(--ease-standard),
-    border-color var(--fast) var(--ease-standard);
+    border-color var(--fast) var(--ease-standard),
+    transform var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .mw-row:hover {
   background: var(--wash);
+  border-color: var(--hairline-strong);
 }
 .mw-row.pick {
   cursor: pointer;
 }
-/* 已在悬浮窗列表里的搜索结果：压暗一档（右侧那颗 ✓ 是主要信号，这里只是让整行离开「可加」的观感） */
+/* 已在悬浮窗列表里的搜索结果：压暗一档（右侧那颗 ✓ 是主要信号） */
 .mw-row.pick.on {
   color: var(--muted);
 }
-/* 键盘 ↑↓ 高亮的那条：与主窗搜索下拉的 .sr-row.active 同一套底色（比悬停的 wash 重一档） */
+/* 键盘 ↑↓ 高亮的那条：与主窗搜索下拉的 .sr-row.active 同一套底色 */
 .mw-row.pick.active {
-  background: var(--wash-strong);
+  background: var(--accent-soft);
+  border-color: rgba(247, 185, 12, 0.28);
 }
 .mw-name {
   font-weight: 600;
@@ -2284,12 +2792,22 @@ body {
   line-height: 14px;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  padding: 9px 11px;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
-.ms-input:focus {
-  border-color: var(--hairline-strong);
+.ms-input:hover {
+  background: var(--wash-strong);
+}
+.ms-input:focus,
+.ms-input[data-focus='1'] {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* ── 自定义周期：数值 + 单位（分 / 时 / 天 / 月 / 年） ───────────────────── */
@@ -2304,51 +2822,62 @@ body {
   gap: var(--sp-xs);
 }
 .iv-num {
-  width: 76px;
+  width: 80px;
+  height: 34px;
   font-family: var(--mono);
   font-size: 12px;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: 0 10px;
   text-align: right;
+  outline: none;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
+}
+.iv-num:hover {
+  background: var(--wash-strong);
 }
 .iv-num:focus {
-  outline: none;
+  background: var(--surface);
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-/* 单位分段选择器：一个整体（共享外框 + 内部只用分隔线），比 5 个独立小方框更像一件事 */
+/* 单位分段选择器：一个整体（wash 底槽 + 内部分段），比 5 个独立小方框更像一件事 */
 .iv-units {
   display: flex;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  overflow: hidden;
+  gap: 2px;
+  padding: 3px;
+  background: var(--wash);
+  border-radius: var(--r-sm);
 }
 .iv-unit {
-  min-width: 34px;
-  padding: 4px 0;
+  min-width: 36px;
+  height: 28px;
+  padding: 0 8px;
   border: 0;
-  border-left: 1px solid var(--hairline);
-  background: none;
+  border-radius: 7px;
+  background: transparent;
   color: var(--muted);
   font-family: var(--sans);
   font-size: 12px;
   cursor: pointer;
   transition:
     background var(--fast) var(--ease-standard),
-    color var(--fast) var(--ease-standard);
-}
-.iv-unit:first-child {
-  border-left: 0;
+    color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .iv-unit:hover:not(.on) {
   color: var(--ink);
-  background: var(--wash);
+  background: var(--wash-strong);
 }
 .iv-unit.on {
   color: var(--on-accent);
   background: var(--accent);
+  box-shadow: 0 2px 8px rgba(240, 185, 11, 0.3);
 }
 /* 反馈行：不换行（换行会把弹窗顶高），超长就省略号，全文进 title */
 .iv-msg {
@@ -2464,9 +2993,9 @@ body {
   grid-template-columns: 7px auto auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 4px 6px;
+  padding: 5px 7px;
   border: 0;
-  border-radius: var(--r-xs);
+  border-radius: 8px;
   background: none;
   color: var(--ink);
   font-family: var(--mono);
@@ -2597,7 +3126,7 @@ body {
    备注是**一行字**：textarea 只是为了让长句在窄窗里自动折行看得见，
    `normalizeLineNote` 会把换行压成空格，所以 Enter 不该是换行。 */
 .note-panel {
-  width: min(380px, calc(100vw - 48px));
+  width: min(400px, 100%);
 }
 .note-input {
   width: 100%;
@@ -2608,14 +3137,19 @@ body {
   line-height: 1.6;
   color: var(--ink);
   background: var(--wash);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-xs);
-  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 9px 11px;
   outline: none;
-  transition: border-color var(--fast) var(--ease-standard);
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard),
+    box-shadow var(--fast) var(--ease-standard);
 }
 .note-input:focus {
+  background: var(--surface);
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .note-input::placeholder {
   color: var(--muted);
@@ -2641,4 +3175,84 @@ body {
 .ema-refresh {
   min-width: 62px;
   text-align: center;
+}
+
+/* ── 动效 ─────────────────────────────────────────────────
+   统一在这里定义：入场（弹窗/浮层/菜单）、遮罩淡入、提示条上浮。
+   全部只动 opacity / transform，不触发布局；prefers-reduced-motion 时统一关掉。 */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes drop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* 整页视图（设置）的入场：轻微上浮，不做缩放 —— 它是一页，不是一张弹窗 */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 品牌副标题在窄窗先隐去，把位置让给搜索卡与右侧功能；名称一直保留 */
+@media (max-width: 1300px) {
+  .brand-text .overline {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

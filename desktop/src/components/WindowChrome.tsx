@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { IS_TAURI } from '../lib/tauri';
+import { CloseIcon, MaximizeIcon, MinimizeIcon } from './icons';
 
 /** 与 `Window.startResizeDragging` 的入参一致（该类型未从 @tauri-apps/api 导出）。 */
 type ResizeDirection =
@@ -58,21 +59,21 @@ export function WindowChrome() {
           title="最小化"
           onClick={() => run((win) => void win.minimize())}
         >
-          –
+          <MinimizeIcon />
         </button>
         <button
           className="winbtn"
           title={maximized ? '还原' : '最大化'}
           onClick={() => run((win) => void win.toggleMaximize())}
         >
-          {maximized ? '❐' : '□'}
+          <MaximizeIcon restore={maximized} />
         </button>
         <button
           className="winbtn close"
           title="关闭（收进托盘，行情继续刷新）"
           onClick={() => run((win) => void win.close())}
         >
-          ×
+          <CloseIcon />
         </button>
       </div>
 

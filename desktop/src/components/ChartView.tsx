@@ -108,9 +108,22 @@ interface Props {
   watched: boolean;
   /** 切换自选：★ = 加进左侧列表、☆ = 从左侧列表删掉（行内 × 是同一件事的另一个入口）。 */
   onToggleWatch: (item: WatchItem) => void;
+  /** EMA 分析面板的开关 —— 入口在左侧栏底部（2026-10-29 从指标栏搬走），状态由 App 持有。 */
+  emaOpen: boolean;
+  onEmaClose: () => void;
 }
 
-export function ChartView({ item, ticker, instrument, spark, theme, watched, onToggleWatch }: Props) {
+export function ChartView({
+  item,
+  ticker,
+  instrument,
+  spark,
+  theme,
+  watched,
+  onToggleWatch,
+  emaOpen,
+  onEmaClose,
+}: Props) {
   /** 周期条上放哪些周期、按什么顺序 —— 用户在「周期」弹窗里改，存 localStorage。 */
   const [intervals, setIntervals] = useState<string[]>(() =>
     parseIntervals(localStorage.getItem(INTERVALS_KEY)),
@@ -135,8 +148,6 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   const { families, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
-  /** EMA 指标分析弹窗（汇总所有已配置档位 × 所有已配置周期的 EMA，按现价分压力/支撑）。 */
-  const [emaPanelOpen, setEmaPanelOpen] = useState(false);
   /**
    * 交给画布的均线族：把「藏起来」的族折算成空目录，**族内再减去眼睛闭上的那几条** ——
    * 画布只画给它的东西，不知道显隐开关这回事（与画线小眼睛同口径）。
@@ -528,7 +539,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
 
   if (!item) {
     return (
-      <section className="panel">
+      <section className="panel panel-chart">
         <div className="chart-empty">
           <span className="overline">K 线</span>
           <span className="chart-empty-hint">从顶部搜索现货或永续合约全市场，搜到就能看图（入不入自选都行）</span>
@@ -538,7 +549,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
   }
 
   return (
-    <section className="panel">
+    <section className="panel panel-chart">
       <div className="chart-head">
         <div className="chart-title">
           <div className="base">
@@ -625,89 +636,84 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
         </div>
 
         <div className="interval-bar">
-          <span className="bar-label grp">指标</span>
-          {/* 均线**收敛成两枚 chip**：MA 一枚、EMA 一枚，点了就是整族显隐。
-              具体画哪几档、各是什么线色，全在末尾「＋」的配置面板里定 ——
-              指标栏不再按档位铺开（MA5/MA10/… 一排下去，档位一多就挤成一条长龙）。 */}
-          {MA_KINDS.map((kind) => {
-            const family = families[kind];
-            // 族开着也只是「参与绘图」：真正落笔的是没被小眼睛藏起来的那几条
-            const drawn = drawnPeriods(family).map((period) => lineLabel(kind, period));
-            const mutedCount = family.catalog.length - drawn.length;
-            return (
-              <button
-                key={kind}
-                type="button"
-                className={`chip${family.hidden ? '' : ' on'}`}
-                aria-pressed={!family.hidden}
-                title={
-                  family.catalog.length === 0
-                    ? `${MA_KIND_NAME[kind]}：还没配置档位，点「＋」去加`
-                    : drawn.length === 0
-                      ? `${MA_KIND_NAME[kind]}：${family.catalog.length} 条都被小眼睛藏起来了（点「＋」去开）`
-                      : `${MA_KIND_NAME[kind]}：${drawn.join(' / ')}` +
-                        `${mutedCount > 0 ? ` · 另 ${mutedCount} 条被小眼睛藏起` : ''}` +
-                        '（点一下整族显示 / 隐藏）'
-                }
-                onClick={() => toggleFamily(kind)}
-              >
-                {MA_KIND_LABEL[kind]}
-              </button>
-            );
-          })}
-          {/* 末尾这一枚「＋」是均线配置面板：MA / EMA 各一页，增删、排序、线色都在里面 */}
-          <button
-            type="button"
-            className="chip"
-            title="自定义 MA / EMA 均线（每族有哪些档位、什么线色）"
-            onClick={() => setMaPanelOpen(true)}
-          >
-            ＋
-          </button>
-          {/* EMA 分析：一次点击把「所有已配置的 EMA 档位 × 所有已配置的周期」汇总成
-              压力 / 支撑两栏（与实盘价实时比较）。它是**动作**不是开关，所以不带 .on 态。 */}
-          <button
-            type="button"
-            className="chip"
-            title="EMA 指标分析：把所有已配置的 EMA 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
-            onClick={() => setEmaPanelOpen(true)}
-          >
-            EMA分析
-          </button>
-          <button
-            type="button"
-            className={`chip${showBoll ? ' on' : ''}`}
-            title="布林带：主图叠加开关（周期 20、倍数 2）"
-            onClick={() => setPrefs((prev) => ({ ...prev, boll: !prev.boll }))}
-          >
-            BOLL
-          </button>
+          <div className="bar-group">
+            <span className="bar-label grp">指标</span>
+            {/* 均线**收敛成两枚 chip**：MA 一枚、EMA 一枚，点了就是整族显隐。
+                具体画哪几档、各是什么线色，全在末尾「＋」的配置面板里定 ——
+                指标栏不再按档位铺开（MA5/MA10/… 一排下去，档位一多就挤成一条长龙）。 */}
+            {MA_KINDS.map((kind) => {
+              const family = families[kind];
+              // 族开着也只是「参与绘图」：真正落笔的是没被小眼睛藏起来的那几条
+              const drawn = drawnPeriods(family).map((period) => lineLabel(kind, period));
+              const mutedCount = family.catalog.length - drawn.length;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  className={`chip${family.hidden ? '' : ' on'}`}
+                  aria-pressed={!family.hidden}
+                  title={
+                    family.catalog.length === 0
+                      ? `${MA_KIND_NAME[kind]}：还没配置档位，点「＋」去加`
+                      : drawn.length === 0
+                        ? `${MA_KIND_NAME[kind]}：${family.catalog.length} 条都被小眼睛藏起来了（点「＋」去开）`
+                        : `${MA_KIND_NAME[kind]}：${drawn.join(' / ')}` +
+                          `${mutedCount > 0 ? ` · 另 ${mutedCount} 条被小眼睛藏起` : ''}` +
+                          '（点一下整族显示 / 隐藏）'
+                  }
+                  onClick={() => toggleFamily(kind)}
+                >
+                  {MA_KIND_LABEL[kind]}
+                </button>
+              );
+            })}
+            <button
+              type="button"
+              className={`chip${showBoll ? ' on' : ''}`}
+              title="布林带：主图叠加开关（周期 20、倍数 2）"
+              onClick={() => setPrefs((prev) => ({ ...prev, boll: !prev.boll }))}
+            >
+              BOLL
+            </button>
+            {/* 指标组的最后一枚「＋」是均线配置面板：MA / EMA 各一页，增删、排序、线色都在里面。
+                放在组末 —— 它是「配置」，不是又一个指标开关。 */}
+            <button
+              type="button"
+              className="chip"
+              title="自定义 MA / EMA 均线（每族有哪些档位、什么线色）"
+              onClick={() => setMaPanelOpen(true)}
+            >
+              ＋
+            </button>
+          </div>
 
           <div className="sep" />
 
-          <span className="bar-label grp">副图</span>
-          {SUB_PANE_KINDS.map((kind) => {
-            // 持仓量是永续专属、且只有四家数据源提供；不满足就置灰（原因写在 title 里）
-            const unsupported = kind === 'OI' && !oiSupported;
-            return (
-              <button
-                key={kind}
-                type="button"
-                className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
-                disabled={unsupported}
-                title={
-                  unsupported
-                    ? market === 'SPOT'
-                      ? '现货没有持仓量（永续专属）'
-                      : `${sourceLabel} 没有持仓量历史（Gate / 币安系 / OKX / Bybit 有）`
-                    : `${SUB_PANE_LABEL[kind]} 副图（可多选，一个都不点亮 = 不显示副图）`
-                }
-                onClick={() => toggleSubPane(kind)}
-              >
-                {SUB_PANE_LABEL[kind]}
-              </button>
-            );
-          })}
+          <div className="bar-group">
+            <span className="bar-label grp">副图</span>
+            {SUB_PANE_KINDS.map((kind) => {
+              // 持仓量是永续专属、且只有四家数据源提供；不满足就置灰（原因写在 title 里）
+              const unsupported = kind === 'OI' && !oiSupported;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  className={`chip${subPanes.includes(kind) ? ' on' : ''}`}
+                  disabled={unsupported}
+                  title={
+                    unsupported
+                      ? market === 'SPOT'
+                        ? '现货没有持仓量（永续专属）'
+                        : `${sourceLabel} 没有持仓量历史（Gate / 币安系 / OKX / Bybit 有）`
+                      : `${SUB_PANE_LABEL[kind]} 副图（可多选，一个都不点亮 = 不显示副图）`
+                  }
+                  onClick={() => toggleSubPane(kind)}
+                >
+                  {SUB_PANE_LABEL[kind]}
+                </button>
+              );
+            })}
+          </div>
 
           {/* ── 划线区 ────────────────────────────────────────────────
               从「划线」这个组名到本行末尾，整块就是**划线区**（2026-10-24 定名）：
@@ -720,160 +726,163 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
                 整块换掉而不是并排，是因为这两组动作天生冲突：一边在画新线、一边在改旧线，
                 并排放只会让人在同一行里同时看到两件不相干的事。 */}
           <div className="sep" />
-          <span className="bar-label grp">划线</span>
 
-          {selection ? (
-            <>
-              {/* 先报清是哪条：水平线读价位（那是它唯一的身份），直线报序号 */}
-              <span className="bar-label draw-target" title="当前选中的线（在图上单击另一条可换）">
-                {selectedLineLabel}
-              </span>
-              <button
-                type="button"
-                className="chip icon-only"
-                title={selectedLine?.note ? `改备注：${selectedLine.note}` : '给这条线加备注'}
-                aria-label="备注"
-                onClick={() => openNote(selection)}
-              >
-                <NoteIcon />
-              </button>
-              {selection.kind === 'price' && (
+          <div className="bar-group">
+            <span className="bar-label grp">划线</span>
+
+            {selection ? (
+              <>
+                {/* 先报清是哪条：水平线读价位（那是它唯一的身份），直线报序号 */}
+                <span className="bar-label draw-target" title="当前选中的线（在图上单击另一条可换）">
+                  {selectedLineLabel}
+                </span>
                 <button
                   type="button"
-                  className={`chip${selectedLine?.alert ? ' on' : ''}`}
-                  aria-pressed={selectedLine?.alert === true}
-                  title={
-                    selectedLine?.alert
-                      ? '取消这条线的价格告警（不再弹通知）'
-                      : '设成告警线：价格穿越时弹系统通知'
-                  }
-                  onClick={() => drawings.setPriceLineAlert(selection.index, !selectedLine?.alert)}
+                  className="chip icon-only"
+                  title={selectedLine?.note ? `改备注：${selectedLine.note}` : '给这条线加备注'}
+                  aria-label="备注"
+                  onClick={() => openNote(selection)}
                 >
-                  {selectedLine?.alert ? '取消告警' : '告警'}
+                  <NoteIcon />
                 </button>
-              )}
-              <button
-                type="button"
-                className="chip icon-only danger"
-                title="删除这条线"
-                aria-label="删除"
-                onClick={() => {
-                  if (selection.kind === 'price') drawings.removePriceLine(selection.index);
-                  else drawings.removeTrendLine(selection.index);
-                  setSelection(null);
-                }}
-              >
-                <TrashIcon />
-              </button>
-              <button
-                type="button"
-                className="chip icon-only"
-                title="取消选中（Esc）"
-                aria-label="取消选中"
-                onClick={() => setSelection(null)}
-              >
-                ✕
-              </button>
-            </>
-          ) : (
-            <>
-              {/* 线型：点一次进入（图上左键 = 落点，光标保持那枚空心圆环），再点一次退出。
-                  画成一条自动收回，见 KlineCanvas 的 addPointAt。锁定时不给画。 */}
-              <button
-                type="button"
-                className={`chip with-icon${tool === 'hline' ? ' on' : ''}`}
-                aria-pressed={tool === 'hline'}
-                disabled={drawings.linesLocked}
-                title={
-                  drawings.linesLocked
-                    ? '画线已锁定：先解锁才能画（点右边「锁定」）'
-                    : tool === 'hline'
-                      ? '正在画水平线：在图上点一下就是它的价位；再点这里退出'
-                      : '画水平线：点这里，然后在图上点一下落点'
-                }
-                onClick={() => setTool(tool === 'hline' ? 'none' : 'hline')}
-              >
-                <HLineIcon />
-                水平线
-              </button>
-              <button
-                type="button"
-                className={`chip with-icon${tool === 'trend' ? ' on' : ''}`}
-                aria-pressed={tool === 'trend'}
-                disabled={drawings.linesLocked}
-                title={
-                  drawings.linesLocked
-                    ? '画线已锁定：先解锁才能画（点右边「锁定」）'
-                    : tool === 'trend'
-                      ? '正在画直线：点两下成线（第二点离第一点太近不算）；Esc 撤掉起点'
-                      : '画两点直线：点这里，然后在图上点两下成线'
-                }
-                onClick={() => setTool(tool === 'trend' ? 'none' : 'trend')}
-              >
-                <TrendIcon />
-                直线
-              </button>
-              {/* 清空是破坏性动作，与画新线同门：锁定时一并收掉（锁 = 线一根都不许动） */}
-              <button
-                type="button"
-                className="chip icon-only danger"
-                disabled={drawingCount === 0 || drawings.linesLocked}
-                title={
-                  drawingCount === 0
-                    ? '当前标的还没有画线'
-                    : `清空当前标的的全部画线（${drawingCount} 条，画线会一起没）`
-                }
-                aria-label="清空全部画线"
-                onClick={() => {
-                  drawings.clear();
-                  setSelection(null);
-                }}
-              >
-                <TrashIcon />
-              </button>
-              {/* 锁定管「线能不能动 / 能不能画」，眼睛管「图上看不看得到」 */}
-              <button
-                type="button"
-                className={`chip${drawings.linesLocked ? ' on' : ''}`}
-                aria-pressed={drawings.linesLocked}
-                title={
-                  drawings.linesLocked
-                    ? '画线已锁定：不能选线、不能拖、不能画新线；点一下解锁'
-                    : '锁定全部画线：不能选线、不能拖、不能画新线'
-                }
-                onClick={() => {
-                  const next = !drawings.linesLocked;
-                  drawings.setLinesLocked(next);
-                  // 锁上的一瞬间把选中与工具都收掉：锁定的语义就是「一根都不许动」，
-                  // 留着选中态等于留着一个随时会动的入口。
-                  if (next) {
+                {selection.kind === 'price' && (
+                  <button
+                    type="button"
+                    className={`chip${selectedLine?.alert ? ' on' : ''}`}
+                    aria-pressed={selectedLine?.alert === true}
+                    title={
+                      selectedLine?.alert
+                        ? '取消这条线的价格告警（不再弹通知）'
+                        : '设成告警线：价格穿越时弹系统通知'
+                    }
+                    onClick={() => drawings.setPriceLineAlert(selection.index, !selectedLine?.alert)}
+                  >
+                    {selectedLine?.alert ? '取消告警' : '告警'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="chip icon-only danger"
+                  title="删除这条线"
+                  aria-label="删除"
+                  onClick={() => {
+                    if (selection.kind === 'price') drawings.removePriceLine(selection.index);
+                    else drawings.removeTrendLine(selection.index);
                     setSelection(null);
-                    setTool('none');
+                  }}
+                >
+                  <TrashIcon />
+                </button>
+                <button
+                  type="button"
+                  className="chip icon-only"
+                  title="取消选中（Esc）"
+                  aria-label="取消选中"
+                  onClick={() => setSelection(null)}
+                >
+                  ✕
+                </button>
+              </>
+            ) : (
+              <>
+                {/* 线型：点一次进入（图上左键 = 落点，光标保持那枚空心圆环），再点一次退出。
+                    画成一条自动收回，见 KlineCanvas 的 addPointAt。锁定时不给画。 */}
+                <button
+                  type="button"
+                  className={`chip with-icon${tool === 'hline' ? ' on' : ''}`}
+                  aria-pressed={tool === 'hline'}
+                  disabled={drawings.linesLocked}
+                  title={
+                    drawings.linesLocked
+                      ? '画线已锁定：先解锁才能画（点右边「锁定」）'
+                      : tool === 'hline'
+                        ? '正在画水平线：在图上点一下就是它的价位；再点这里退出'
+                        : '画水平线：点这里，然后在图上点一下落点'
                   }
-                }}
-              >
-                锁定
-              </button>
-              <button
-                type="button"
-                className={`chip icon-only${drawings.linesHidden ? ' on' : ''}`}
-                aria-pressed={drawings.linesHidden}
-                title={
-                  drawings.linesHidden
-                    ? '显示全部画线（隐藏期间线没删，告警照常）'
-                    : '隐藏全部画线（只藏不删，告警照常）'
-                }
-                onClick={() => drawings.setLinesHidden(!drawings.linesHidden)}
-              >
-                <EyeIcon off={drawings.linesHidden} />
-              </button>
-              {alertCount > 0 && (
-                <span className="bar-label alert" title="价格穿越这些红色告警线时弹系统通知（主窗收进托盘也照弹）">
-                  告警 {alertCount}
-                </span>
-              )}
-            </>
-          )}
+                  onClick={() => setTool(tool === 'hline' ? 'none' : 'hline')}
+                >
+                  <HLineIcon />
+                  水平线
+                </button>
+                <button
+                  type="button"
+                  className={`chip with-icon${tool === 'trend' ? ' on' : ''}`}
+                  aria-pressed={tool === 'trend'}
+                  disabled={drawings.linesLocked}
+                  title={
+                    drawings.linesLocked
+                      ? '画线已锁定：先解锁才能画（点右边「锁定」）'
+                      : tool === 'trend'
+                        ? '正在画直线：点两下成线（第二点离第一点太近不算）；Esc 撤掉起点'
+                        : '画两点直线：点这里，然后在图上点两下成线'
+                  }
+                  onClick={() => setTool(tool === 'trend' ? 'none' : 'trend')}
+                >
+                  <TrendIcon />
+                  直线
+                </button>
+                {/* 清空是破坏性动作，与画新线同门：锁定时一并收掉（锁 = 线一根都不许动） */}
+                <button
+                  type="button"
+                  className="chip icon-only danger"
+                  disabled={drawingCount === 0 || drawings.linesLocked}
+                  title={
+                    drawingCount === 0
+                      ? '当前标的还没有画线'
+                      : `清空当前标的的全部画线（${drawingCount} 条，画线会一起没）`
+                  }
+                  aria-label="清空全部画线"
+                  onClick={() => {
+                    drawings.clear();
+                    setSelection(null);
+                  }}
+                >
+                  <TrashIcon />
+                </button>
+                {/* 锁定管「线能不能动 / 能不能画」，眼睛管「图上看不看得到」 */}
+                <button
+                  type="button"
+                  className={`chip${drawings.linesLocked ? ' on' : ''}`}
+                  aria-pressed={drawings.linesLocked}
+                  title={
+                    drawings.linesLocked
+                      ? '画线已锁定：不能选线、不能拖、不能画新线；点一下解锁'
+                      : '锁定全部画线：不能选线、不能拖、不能画新线'
+                  }
+                  onClick={() => {
+                    const next = !drawings.linesLocked;
+                    drawings.setLinesLocked(next);
+                    // 锁上的一瞬间把选中与工具都收掉：锁定的语义就是「一根都不许动」，
+                    // 留着选中态等于留着一个随时会动的入口。
+                    if (next) {
+                      setSelection(null);
+                      setTool('none');
+                    }
+                  }}
+                >
+                  锁定
+                </button>
+                <button
+                  type="button"
+                  className={`chip icon-only${drawings.linesHidden ? ' on' : ''}`}
+                  aria-pressed={drawings.linesHidden}
+                  title={
+                    drawings.linesHidden
+                      ? '显示全部画线（隐藏期间线没删，告警照常）'
+                      : '隐藏全部画线（只藏不删，告警照常）'
+                  }
+                  onClick={() => drawings.setLinesHidden(!drawings.linesHidden)}
+                >
+                  <EyeIcon off={drawings.linesHidden} />
+                </button>
+                {alertCount > 0 && (
+                  <span className="bar-label alert" title="价格穿越这些红色告警线时弹系统通知（主窗收进托盘也照弹）">
+                    告警 {alertCount}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -967,7 +976,7 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           每一轮取数回来（手动刷新 + 每分钟自动）都把系统划线拉到新值：EMA 是活的，
           线得跟着走。手画的线一概不动。
           点行内周期小方框才切周期 —— 切完把面板关掉，不挡着图。 */}
-      {emaPanelOpen && (
+      {emaOpen && (
         <EmaAnalysisPanel
           market={item.market}
           symbol={item.symbol}
@@ -996,9 +1005,9 @@ export function ChartView({ item, ticker, instrument, spark, theme, watched, onT
           }}
           onPickInterval={(iv) => {
             setInterval_(iv);
-            setEmaPanelOpen(false);
+            onEmaClose();
           }}
-          onClose={() => setEmaPanelOpen(false)}
+          onClose={onEmaClose}
         />
       )}
     </section>

@@ -100,3 +100,60 @@ export function TrashIcon() {
   );
 }
 
+/* 自绘窗口控件（WindowChrome）的图标：比字符字形更细、更居中 */
+const WIN_ICON = { ...BASE, width: 12, height: 12, strokeWidth: 1.2 };
+
+/** 最小化：一条横线。 */
+export function MinimizeIcon() {
+  return (
+    <svg {...WIN_ICON}>
+      <line x1="3" y1="8" x2="13" y2="8" />
+    </svg>
+  );
+}
+
+/** 最大化 / 还原：单方框 / 两层错开的方框。 */
+export function MaximizeIcon({ restore }: { restore: boolean }) {
+  return (
+    <svg {...WIN_ICON}>
+      {restore ? (
+        <>
+          <rect x="3" y="5" width="8" height="8" rx="1" />
+          <path d="M5 5V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-1" />
+        </>
+      ) : (
+        <rect x="3" y="3" width="10" height="10" rx="1.4" />
+      )}
+    </svg>
+  );
+}
+
+/** 关闭：×。 */
+export function CloseIcon() {
+  return (
+    <svg {...WIN_ICON}>
+      <line x1="3.6" y1="3.6" x2="12.4" y2="12.4" />
+      <line x1="12.4" y1="3.6" x2="3.6" y2="12.4" />
+    </svg>
+  );
+}
+
+/** 返回：左向折角（设置页返回行情）。 */
+export function BackIcon() {
+  return (
+    <svg {...BASE} width={16} height={16}>
+      <path d="M9.8 3.4 5.2 8l4.6 4.6" />
+    </svg>
+  );
+}
+
+/** 搜索：放大镜（顶栏搜索卡左侧）。 */
+export function SearchIcon() {
+  return (
+    <svg {...BASE} width={15} height={15}>
+      <circle cx="7.2" cy="7.2" r="4.4" />
+      <line x1="10.5" y1="10.5" x2="13.6" y2="13.6" />
+    </svg>
+  );
+}
+

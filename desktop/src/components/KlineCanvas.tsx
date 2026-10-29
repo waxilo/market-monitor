@@ -79,13 +79,15 @@ import {
 
 /**
  * 纵向几何（各段高度分配、刻度带宽度）在 `lib/chartLayout.ts` —— 那里是唯一出处，
- * `chartHeights()` 负责把可视区高度分给 读数带 / 主图 / 副图 / 时间轴。这里只留纯**绘制**用的。
+ * `chartHeights()` 负责把可视区高度分给 主图 / 副图 / 时间轴（读数悬浮在图上、不占版面）。这里只留纯**绘制**用的。
  *
  * 与 App ui/chart/KlineChart.kt 的 ChartGeo 对齐（dp → px）：价格刻度固定右侧、时间刻度固定底部、
  * 副图每块固定高。**唯一不同的是主图会把剩余空间吃满**（有副图则让位、没副图则自己占满）
  * —— App 在手机上靠页面滚动，桌面端窗口高度固定、滚动条又被隐藏，见 chartLayout.ts 里 chartHeights 的注释。
  */
 const READOUT_X = 8;
+/** 悬浮读数里段与段之间的间距（与 App 的读数带同口径）。 */
+const READOUT_GAP = 10;
 const BODY_SHARE = 0.66;
 const MAX_TIME_LABELS = 6;
 const TIME_LABEL_GAP = 12;
@@ -120,8 +122,6 @@ interface Palette {
   paper: string;
   wash: string;
   edge: string;
-  /** 主色：布林带的填充色（App 用 scheme.primary 8% 透明度）。 */
-  accent: string;
   /** 金/黄色徽标上的字（--on-accent）：黄底配纸色字在浅色主题下读不出来。 */
   onAccent: string;
   /**
@@ -144,7 +144,6 @@ function readPalette(): Palette {
     paper: v('--paper') || '#0c0d0f',
     wash: v('--wash') || '#1b1e22',
     edge: v('--hairline-strong') || '#3a3f47',
-    accent: v('--accent') || '#f0b90b',
     onAccent: v('--on-accent') || '#1b1200',
     line: v('--line-mark') || '#f0b90b',
   };
@@ -256,13 +255,13 @@ function applyCursor(canvas: HTMLCanvasElement, kind: CursorKind) {
 /**
  * 骨架：**还没有数据时先摆好的那张空图**，只有网格与副图分隔线。
  *
- * 与真实图共用 `chartHeights` 的那套几何（读数带多高、主图占多少、每块副图落在哪），
+ * 与真实图共用 `chartHeights` 的那套几何（主图占多少、每块副图落在哪），
  * 所以它是「这一张图还没填上蜡烛」，而不是另开一张图 —— 数据到位的瞬间只有蜡烛浮现，
  * 版面本身不重排（App 的 ChartSkeleton 是同一思路）。
  *
  * 三条刻意的「不画」：
  * - **不画刻度数字**：还不知道任何价位，画出来只能是编的；
- * - **不画蜡烛 / 均线 / 读数带**：没有数据时读数带那几行全是 `--`，比留白更吵；
+ * - **不画蜡烛 / 均线 / 读数**：没有数据时读数那几行全是 `--`，比留白更吵；
  * - **不画最新价与时间刻度**：没有数据就没有「最新」。
  *
  * 网格量程固定用 `SKELETON_RANGE`，**不吃用户的缩放 / 平移意图** —— 那两个意图是相对量，
@@ -538,7 +537,7 @@ export function KlineCanvas({
   const recenterPendingRef = useRef(false);
   /**
    * 十字光标。`index` 是**夹回序列内**的下标（读数带、横线与价格标都按它走），
-   * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线只看这一个开关，
+   * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线与顶部读数带只看这一个开关，
    * 因为视窗右侧还有一段没有蜡烛的留白（默认 3 根）。
    */
   const crossRef = useRef<{ index: number; y: number; onBar: boolean } | null>(null);
@@ -559,14 +558,13 @@ export function KlineCanvas({
    */
   const [box, setBox] = useState({ w: 0, h: 0 });
 
-  // 读数带：K 线一条 + 每个叠加线族（MA / EMA / BOLL）各一行
-  const readoutRows = 1 + overlayFamilies(series).length;
   /**
    * 纵向几何一律由 chartLayout 分配 —— 副图占的高度在那里被一起减掉了。
+   * 读数不参与分配（悬浮在主图上），所以主图从画布顶端开始画。
    * 之前这里手写 `clamp(avail - readout - TIME_AXIS_H)` 漏掉副图，导致第三块副图
    * 被挤出可视区（见 chartLayout.ts 的 chartHeights 注释）。
    */
-  const heights = chartHeights(box.h, readoutRows, series.subPanes.length);
+  const heights = chartHeights(box.h, series.subPanes.length);
   const { totalH } = heights;
 
   /**
@@ -677,7 +675,6 @@ export function KlineCanvas({
     const mainTop = gh.mainTop;
     const mainBottom = gh.mainBottom;
     const plotBottom = mainBottom + gh.subPanesH;
-    const rowY = (row: number) => READOUT_PAD / 2 + READOUT_LINE * row + READOUT_LINE / 2;
 
     const vp = clampViewport(vpRef.current, n);
     const [ws, we] = dataWindow(vpRef.current, n);
@@ -752,34 +749,6 @@ export function KlineCanvas({
         Math.max(1, Math.round(bodyW)),
         Math.max(1, Math.abs(closeY - openY)),
       );
-    }
-
-    // 布林带填充：上轨正走、下轨倒走闭合成带（与 App bandPath 同），
-    // 压在三条轨线下面先画，否则 8% 的浅色会把线蒙上一层。
-    if (s.bandFill) {
-      const { upper, lower } = s.bandFill;
-      const bandIdx: number[] = [];
-      for (let i = rs; i <= re; i++) {
-        if (Number.isFinite(upper[i]) && Number.isFinite(lower[i])) bandIdx.push(i);
-      }
-      if (bandIdx.length >= 2) {
-        ctx.beginPath();
-        bandIdx.forEach((i, order) => {
-          const x = xOf(i);
-          const y = yOf(toFraction(mainR, upper[i]), mainTop, mh);
-          if (order === 0) ctx.moveTo(x, y);
-          else ctx.lineTo(x, y);
-        });
-        for (let k = bandIdx.length - 1; k >= 0; k--) {
-          const i = bandIdx[k];
-          ctx.lineTo(xOf(i), yOf(toFraction(mainR, lower[i]), mainTop, mh));
-        }
-        ctx.closePath();
-        ctx.globalAlpha = 0.08;
-        ctx.fillStyle = p.accent;
-        ctx.fill();
-        ctx.globalAlpha = 1;
-      }
     }
 
     ctx.lineWidth = 1.5;
@@ -1083,21 +1052,44 @@ export function KlineCanvas({
       }
     }
 
-    // ── 指标读数带（币安式：数值与它所属的线同色）──
+    // ── 悬浮读数（主图左上角）──
+    // 不占版面：主图从画布顶端开始画，读数叠在图上；只在指针压在某根蜡烛上时出现
+    // （与竖线同一个 `onBar` 判据）。底下垫一层 86% 纸色的圆角薄垫，压在蜡烛 /
+    // 布林线上也读得清 —— 无描边、无阴影，它是浮在图上的一块读数，不是卡片。
     const idx = cross ? clampNum(cross.index, 0, n - 1) : n - 1;
-    drawCandleRow(ctx, list, idx, dec, minutes, p, rowY(0));
-    families.forEach((family, k) => {
-      drawSegments(
-        ctx,
-        family.map((line) => ({
-          text: `${line.label}: ${readoutNumber(line.values[idx], dec)}`,
-          role: line.role,
-        })),
-        READOUT_X,
-        rowY(1 + k),
-        p,
+    if (cross && cross.onBar && cross.index >= rs && cross.index <= re) {
+      const rows: TextSegment[][] = [candleRowSegments(list[idx], list[idx - 1], dec, minutes, p)];
+      for (const family of families) {
+        rows.push(
+          family.map((line) => ({
+            text: `${line.label}: ${readoutNumber(line.values[idx], dec)}`,
+            color: roleColor(line.role, p),
+          })),
+        );
+      }
+      const padX = 6;
+      const padY = READOUT_PAD / 2;
+      const plateX = READOUT_X - padX;
+      const plateY = mainTop + 4;
+      const plateW = Math.min(
+        Math.max(...rows.map((row) => textSegmentsWidth(ctx, row))) + padX * 2,
+        plotW - plateX,
       );
-    });
+      const plateH = padY * 2 + READOUT_LINE * rows.length;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, plateY, plateX + plateW, plateH);
+      ctx.clip();
+      ctx.globalAlpha = 0.86;
+      ctx.fillStyle = p.paper;
+      roundRect(ctx, plateX, plateY, plateW, plateH, 6);
+      ctx.globalAlpha = 1;
+      rows.forEach((row, r) => {
+        drawTextSegments(ctx, row, READOUT_X, plateY + padY + READOUT_LINE * r + READOUT_LINE / 2);
+      });
+      ctx.restore();
+    }
     s.subPanes.forEach((pane, k) => {
       drawSegments(
         ctx,
@@ -1660,7 +1652,7 @@ export function KlineCanvas({
       }
       applyCursor(canvas, cursor);
       // 十字光标照常贯穿副图：竖线跨窗格、副图读数带要能读值，那不属于「拖拽/缩放」
-      // `onBar` 只关竖线（右侧留白里没有蜡烛），横线与读数带照旧。
+      // `onBar` 管竖线与顶部读数带（右侧留白里没有蜡烛，就不读数），横线与价格标照旧。
       const px = e.clientX - rect.left;
       const fraction = px / plotW;
       const index = indexAt(vpRef.current, fraction, n);
@@ -1796,34 +1788,60 @@ function readoutNumber(value: number | undefined, decimals: number): string {
   });
 }
 
-/** K 线详情小条：读单根 K 线（长按/悬停跟着手指，平时读最新一根）。 */
-function drawCandleRow(
-  ctx: CanvasRenderingContext2D,
-  candles: Bar[],
-  index: number,
+/** 读数里的一段：文本 + 已解析好的颜色（悬浮读数绘制与量宽共用同一份）。 */
+interface TextSegment {
+  text: string;
+  color: string;
+}
+
+/** K 线读数一行的各段：时间 / 开高低收 / 较上根（读数与它所属的线同色）。 */
+function candleRowSegments(
+  candle: Bar | undefined,
+  prev: Bar | undefined,
   decimals: number,
   intervalMinutes: number,
   p: Palette,
-  y: number,
-) {
-  const candle = candles[index];
-  if (!candle) return;
+): TextSegment[] {
+  if (!candle) return [];
   const fmt = (v: number) => readoutNumber(v, decimals);
-  let cursor = READOUT_X;
-  const put = (text: string, color: string) => {
-    ctx.fillStyle = color;
-    ctx.fillText(text, cursor, y);
-    cursor += ctx.measureText(text).width + 10;
-  };
-  put(formatCandleTime(candle.timestamp, intervalMinutes), p.label);
-  put(`开 ${fmt(candle.open)}`, p.ink);
-  put(`高 ${fmt(candle.high)}`, p.ink);
-  put(`低 ${fmt(candle.low)}`, p.ink);
-  put(`收 ${fmt(candle.close)}`, p.ink);
-  const prev = candles[index - 1];
+  const segments: TextSegment[] = [
+    { text: formatCandleTime(candle.timestamp, intervalMinutes), color: p.label },
+    { text: `开 ${fmt(candle.open)}`, color: p.ink },
+    { text: `高 ${fmt(candle.high)}`, color: p.ink },
+    { text: `低 ${fmt(candle.low)}`, color: p.ink },
+    { text: `收 ${fmt(candle.close)}`, color: p.ink },
+  ];
   if (prev && prev.close !== 0) {
     const change = ((candle.close - prev.close) / prev.close) * 100;
     const sign = change >= 0 ? '+' : '';
-    put(`较上根 ${sign}${change.toFixed(2)}%`, change >= 0 ? p.up : p.down);
+    segments.push({
+      text: `较上根 ${sign}${change.toFixed(2)}%`,
+      color: change >= 0 ? p.up : p.down,
+    });
   }
+  return segments;
+}
+
+/** 一行读数的宽度（段间留 `READOUT_GAP`）：悬浮底板按它定宽。 */
+function textSegmentsWidth(ctx: CanvasRenderingContext2D, segments: TextSegment[]): number {
+  return segments.reduce(
+    (w, seg, i) => w + ctx.measureText(seg.text).width + (i > 0 ? READOUT_GAP : 0),
+    0,
+  );
+}
+
+/** 画一行读数，返回行尾 x。 */
+function drawTextSegments(
+  ctx: CanvasRenderingContext2D,
+  segments: TextSegment[],
+  x: number,
+  y: number,
+): number {
+  let cursor = x;
+  for (const seg of segments) {
+    ctx.fillStyle = seg.color;
+    ctx.fillText(seg.text, cursor, y);
+    cursor += ctx.measureText(seg.text).width + READOUT_GAP;
+  }
+  return cursor - READOUT_GAP;
 }

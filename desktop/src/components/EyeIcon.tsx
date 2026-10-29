@@ -19,7 +19,12 @@ export function EyeIcon({ off, size = 13 }: { off: boolean; size?: number }) {
       aria-hidden="true"
     >
       <path d="M1.6 8C3.2 5.2 5.4 3.8 8 3.8s4.8 1.4 6.4 4.2c-1.6 2.8-3.8 4.2-6.4 4.2S3.2 10.8 1.6 8Z" />
-      {off ? <path d="M2.9 13.1 13.1 2.9" /> : <circle cx="8" cy="8" r="1.9" />}
+      {/* 瞳孔实心：描边圆在 12~13px 下只剩一圈细环，中间的空心会被读成一个白点 */}
+      {off ? (
+        <path d="M2.9 13.1 13.1 2.9" />
+      ) : (
+        <circle cx="8" cy="8" r="1.9" fill="currentColor" stroke="none" />
+      )}
     </svg>
   );
 }

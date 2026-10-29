@@ -25,9 +25,9 @@
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（窄侧栏导航 + 现价、搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 | 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
-| 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置弹窗「告警通知」页管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
-| 桌面端悬浮窗列表（设置弹窗「悬浮窗」页：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
-| 桌面端 EMA 指标分析（指标栏点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
+| 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
+| 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
+| 桌面端 EMA 指标分析（**入口在左侧自选栏底部的小栏**，点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
 | App 端 EMA 指标分析（同一条口径，**入口在详情页顶栏右上角**的「EMA分析」，全屏则在顶部周期条右端；**竖屏「上方压力 / 下方支撑」页签切换**，各带条数、各记各的滚动位置，页签内与横屏两列都按「离现价由近到远」排（压力低→高、支撑高→低）；横屏两列并排各滚各的） | `ui/detail/EmaAnalysisSheet.kt`、`domain/indicator/EmaAnalysis.kt` | 已实现并真机验收；**回显靠规则名**（`1时EMA50`，自动名是 (周期, 档位) 的双射 —— App 的线由 `alert_rule` 派生，规则表没有结构化身份字段），行尾「已画 / 待对齐」、点行＝画 / 对齐 / 取消、点周期小方框＝切周期并关面板；EMA 原值不对齐刻度（对齐了「已对齐」判据就永远不成立）；**周期短名与桌面端同源（`1h → 1时`、`1w → 1周`），升级前画的 `1hEMA50` 老线仍按旧名认领，对齐时顺手迁移成新名** |
 | 桌面端画线备注（右键水平线 / 直线 →「加个备注」，图上在**线的左端把一块与右轴价签同款的实色牌串在线上**——黄底＝普通画线、红底＝告警，牌心压在线 y 上、线从牌底下穿过，压在 K 线/网格上也读得清；菜单文案随有没有备注变「改一下备注」，弹窗里可一键删掉） | `desktop/src/components/LineNoteDialog.tsx`、`lib/lineNote.ts`、`KlineCanvas` 的 `drawLineNote` | 已实现；备注就存在线对象里（`mm.priceLines` / `mm.trendLines` 的 `note`，空 = 不落字段），上限 60 字、换行压成一个空格，删线即删备注 |
 
@@ -176,7 +176,7 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
 - **换标的 / 换周期 / 换数据源的那一段是「骨架 + 遮罩」，不是空白、也不是上一张图**（0.1.16 起；
   `ChartView` 的 `load` 状态 + `KlineCanvas` 的 `drawSkeleton` / `.chart-loading`）：`setCandles([])`
-  之后画布**先画出骨架**（只有网格与副图分隔线，不画刻度数字 / 蜡烛 / 读数带 —— 骨架与真实图共用
+  之后画布**先画出骨架**（只有网格与副图分隔线，不画刻度数字 / 蜡烛 / 悬浮读数 —— 骨架与真实图共用
   `chartHeights` 的几何，所以数据到位只有蜡烛浮现、版面不跳），上面再盖一层半透明遮罩（转圈 +
   「加载中…」）。三条别踩：① 旧的 `if (n === 0) return` 是**提前返回、没有清画布**
   ⇒ 换周期时屏幕上留着上一张图，这就是「看着像没反应」的来源；② 骨架的网格色要用 `--hairline-strong`，
@@ -211,8 +211,9 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   （桌面：`lib/sources.ts` 的 `PROBE_TIMEOUT_MS` → `httpRequest(…)` 第四参 → 宿主 `market_request`
   的 `timeout_ms`（reqwest 请求级覆盖）；App：`probeFutures` 的 `withTimeoutOrNull`），到点那一行
   直接落「连接超时」，不再挂到数据请求的时限上。K 线这类数据请求不吃这个口径（桌面仍 20s、App 仍 30s）。
-- **设置弹窗 = 90% 固定画布 + 左栏分类 / 右栏内容**（`components/SettingsPanel.tsx`）：类别只会越挂越多
-  （外观 / 悬浮窗 / 快捷键 / 告警通知 / 更新），一列竖着摆摆不下；固定尺寸顺带保证换分类时框不跳大小。
+- **设置 = 整页视图（不是弹窗）**（`components/SettingsPanel.tsx`）：铺满整个窗口，自带顶栏
+  （返回 / 拖窗口 / 窗口控件）+ 左栏分类 / 右栏内容；行情在底下保持挂载，返回时不用重拉。
+  类别只会越挂越多（外观 / 悬浮窗 / 快捷键 / 告警通知 / 更新），左栏竖排、右栏独立滚动。
   更新包已下好时默认落在「更新」页 —— 顶栏那枚圆点写着「点这里进去安装」。告警通知页的 webhook
   是**火忘式**发送（`lib/webhooks.ts` 的 `sendAlertWebhook`）：告警线穿越时同步调用、不 await，
   对端慢或挂掉不许拖住 5s 的判定节拍；**不做补发**（隔夜补发一串过时的穿越比少一条更糟），

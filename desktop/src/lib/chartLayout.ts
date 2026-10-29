@@ -13,9 +13,9 @@
 export const AXIS_W = 58;
 /** 底部时间刻度带高度。 */
 export const TIME_AXIS_H = 18;
-/** 读数带每行行高。 */
+/** 悬浮读数（画在主图左上角、叠在蜡烛之上）的每行行高。 */
 export const READOUT_LINE = 12;
-/** 读数带上下内边距合计。 */
+/** 悬浮读数的上下内边距合计。 */
 export const READOUT_PAD = 6;
 /** 每块副图的总高（含它自己的读数行）。 */
 export const SUB_PANE_H = 110;
@@ -24,14 +24,8 @@ export const SUB_READOUT_H = 16;
 /** 主图高度下限：再矮就数不清 K 线了。 */
 export const MAIN_MIN = 240;
 
-/** 读数带高度：K 线一行 + 每个叠加线族（MA / BOLL）各一行。 */
-export function readoutHeight(rows: number): number {
-  return READOUT_PAD + READOUT_LINE * rows;
-}
-
 export interface ChartHeights {
-  /** 顶部读数带高度。 */
-  readoutH: number;
+  /** 主图顶端 = 画布顶端：读数悬浮在图上，不再单独占一条带。 */
   mainTop: number;
   mainH: number;
   mainBottom: number;
@@ -44,7 +38,8 @@ export interface ChartHeights {
 }
 
 /**
- * 把可视区高度分给 读数带 / 主图 / 副图 / 时间轴。
+ * 把可视区高度分给 主图 / 副图 / 时间轴。**读数不参与分配**：它悬浮在主图左上角，
+ * 不占版面，主图因此从画布顶端开始画。
  *
  * 分配规则：**主图吃掉所有剩余空间**（只保留下限 `MAIN_MIN`），副图区刚性、
  * 每块固定 `SUB_PANE_H`。曾经的规则是主图在 [`MAIN_MIN`, 420] 内收放，两个坑：
@@ -60,16 +55,13 @@ export interface ChartHeights {
  *
  * `availH <= 0` 表示还没量到容器（首帧），按主图下限给一个稳定值。
  */
-export function chartHeights(availH: number, readoutRows: number, subPaneCount: number): ChartHeights {
-  const readoutH = readoutHeight(readoutRows);
+export function chartHeights(availH: number, subPaneCount: number): ChartHeights {
   const subPanesH = subPaneCount * SUB_PANE_H;
-  const mainH =
-    availH > 0 ? Math.max(MAIN_MIN, availH - readoutH - subPanesH - TIME_AXIS_H) : MAIN_MIN;
-  const mainTop = readoutH;
+  const mainH = availH > 0 ? Math.max(MAIN_MIN, availH - subPanesH - TIME_AXIS_H) : MAIN_MIN;
+  const mainTop = 0;
   const mainBottom = mainTop + mainH;
   const totalH = mainBottom + subPanesH + TIME_AXIS_H;
   return {
-    readoutH,
     mainTop,
     mainH,
     mainBottom,

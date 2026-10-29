@@ -8,7 +8,7 @@ import { padded, rangeOf, type Range } from './chartMath';
 
 /** 线条配色只给语义角色，具体颜色由绘制层解析。
  *  PRIMARY~UNDENARY 是十一个老色位：MA 取 `[0,1,2,3,4,8,9,10]`（8 色，见 `MA_ROLES`），
- *  BOLL 继续用 `[5,6,7]`（QUINARY/SENARY/OCTONARY）；
+ *  BOLL 三条统一取 `[7]`（OCTONARY 的中性灰蓝，不属于 MA / EMA 任何一族的色位）；
  *  `EMA1~EMA8` 是 EMA 一族自己的八个色位（`[11..18]`，见 `EMA_ROLES`）——
  *  MA 与 EMA 各自八条、各占各的色位，同时画满也不会撞色。 */
 export type LineRole =
@@ -93,7 +93,7 @@ export const MA_LIMIT = 8;
  * 绘制层按角色取色，配置面板直接拿它画色点/色板。
  */
 export const LINE_COLORS = [
-  // 0~10：老色位（MA 八位 + BOLL 三位）
+  // 0~10：老色位（MA 八位 + BOLL 一位）
   '#5C8AC6',
   '#F09A3E',
   '#E8C547',
@@ -117,7 +117,7 @@ export const LINE_COLORS = [
 ];
 
 /**
- * MA 一族可用的色位（8 个），与 BOLL 的 `[5,6,7]` 不重叠。
+ * MA 一族可用的色位（8 个），与 BOLL 的 OCTONARY 不重叠。
  * 顺序即配置面板里色板的顺序，槽位号 0~7 就存在偏好里 —— 期数 → 槽位，
  * 因此拖动排序、增删别的均线都不会改已有均线的颜色。
  */
@@ -204,8 +204,6 @@ export interface SubPaneData {
 export interface ChartSeries {
   candles: Bar[];
   overlayLines: ChartLine[];
-  /** 布林带的填充区间（上轨/下轨），关闭时为 null。 */
-  bandFill: { upper: number[]; lower: number[] } | null;
   subPanes: SubPaneData[];
 }
 
@@ -375,17 +373,17 @@ export function buildSeries(
   }
   const bollData = showBoll ? boll(closes, BOLL_PERIOD, BOLL_MULTIPLIER) : null;
   if (bollData) {
-    // 三条都要画：只加上下轨的话中轨（SMA）就没了；三线各占一个色位，与均线族不同色
+    // 三条都要画：只加上下轨的话中轨（SMA）就没了。
+    // 三线同色：BOLL 读作「一条通道」，不像 MA 那样按线分色；OCTONARY 是 MA / EMA 都不用的中性色。
     overlayLines.push(
-      { label: 'BOLL.MB', role: 'QUINARY', values: bollData.middle },
-      { label: 'BOLL.UP', role: 'SENARY', values: bollData.upper },
+      { label: 'BOLL.MB', role: 'OCTONARY', values: bollData.middle },
+      { label: 'BOLL.UP', role: 'OCTONARY', values: bollData.upper },
       { label: 'BOLL.DN', role: 'OCTONARY', values: bollData.lower },
     );
   }
   return {
     candles,
     overlayLines,
-    bandFill: bollData ? { upper: bollData.upper, lower: bollData.lower } : null,
     // 按枚举声明顺序输出，多选后副图自上而下的次序不随点击先后跳；
     // OI 没有数据时 buildSubPane 给 null，就地滤掉（它只是「暂时没得画」）
     subPanes: SUB_PANE_KINDS.filter((k) => kinds.includes(k))

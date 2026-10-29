@@ -20,6 +20,9 @@ import {
 import { UpdateSection } from './UpdateSection';
 import { WebhookSection } from './WebhookSection';
 import { MiniListSection } from './MiniListSection';
+import { WindowChrome } from './WindowChrome';
+import { BackIcon } from './icons';
+import { useWindowDrag } from '../lib/windowDrag';
 import type { UpdateController } from '../hooks/useUpdate';
 
 type Theme = 'dark' | 'light';
@@ -45,12 +48,13 @@ interface Props {
 /**
  * 设置：外观、悬浮窗、快捷键、告警通知、更新。
  *
+ * 2026-10-29 起是**整页视图**而不是弹窗：铺满整个窗口，自己的顶栏（返回 / 拖窗口 /
+ * 窗口控件）+ 左侧分类 + 右侧内容。行情在底下保持挂载，返回时不用重拉。
+ * 顶栏用 `useWindowDrag` 自己判落点 —— 按钮上按下不拖窗口，双击空白最大化。
+ *
  * 这些事的共同点是**偶尔改一次**，所以从顶栏收进来，顶栏只留一个「设置」按钮
  * （它同时是更新的报信口：圆点表示正在下 / 下好了，见 App 的 `.up-badge`）。
- * 类别只会越挂越多，所以弹窗是 90% 的固定画布 + 左栏分类 / 右栏内容：
- * 换分类时框不动、右栏自己滚（见 theme.css 的 `.up-settings` / `.set-split`）。
- * 更新包已下好时直接落在「更新」——顶栏那枚圆点写着「点这里进去安装」，
- * 进来还停在「外观」就辜负了这句话。
+ * 更新包已下好时直接落在「更新」——顶栏那枚圆点写着「点这里进去安装」。
  *
  * 悬浮窗列表（0.1.16 起）也在这里配：它是一份**独立于自选**的列表，
  * 搜索添加、拖动排序，见 `MiniListSection`；顶栏只留「切到悬浮窗」那枚图标。
@@ -74,6 +78,9 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
   );
   /** 当前分类（记住本次会话里点的那个；关掉重开回到默认）。 */
   const [section, setSection] = useState<SectionId>(() => (update.ready ? 'update' : 'appearance'));
+  /** 顶栏拖窗口 / 双击最大化：整页视图没有主顶栏了，拖拽区跟着设置页走。 */
+  const drag = useWindowDrag({ dblClickMaximize: true });
+  const currentLabel = SECTIONS.find((s) => s.id === section)?.label ?? '';
 
   useEffect(() => {
     void readGlobalShortcutStatus().then(setGlobal);
@@ -123,131 +130,138 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
   }, [recording]);
 
   return (
-    <div className="up-backdrop" onMouseDown={onClose}>
-      <section className="up-panel up-settings" onMouseDown={(e) => e.stopPropagation()}>
-        <header className="up-head">
-          <span className="overline">设置</span>
-          <span className="grow" />
-          <button className="panel-close" title="关闭" onClick={onClose}>
-            ×
-          </button>
-        </header>
+    <div className="settings-page">
+      <header className="settings-head" {...drag}>
+        <button
+          className="settings-back"
+          title="返回行情（Esc）"
+          aria-label="返回行情"
+          onClick={onClose}
+        >
+          <BackIcon />
+        </button>
+        <span className="settings-title">设置</span>
+        <span className="settings-path">{currentLabel}</span>
+        <span className="grow" />
+        {/* 设置页盖住了主顶栏，窗口控件与拉伸热区得在这里再挂一份；
+            主窗那份在有设置页时会被 App 收起，避免两套热区叠在一起 */}
+        <WindowChrome />
+      </header>
 
-        <div className="set-split">
-          <nav className="set-nav">
-            {SECTIONS.map((item) => (
-              <button
-                key={item.id}
-                className={section === item.id ? 'on' : ''}
-                onClick={() => setSection(item.id)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
+      <div className="settings-body">
+        <nav className="set-nav">
+          {SECTIONS.map((item) => (
+            <button
+              key={item.id}
+              className={section === item.id ? 'on' : ''}
+              onClick={() => setSection(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
 
-          <div className="up-body set-pane">
-            {section === 'appearance' && (
-              <div className="set-block">
-                <div className="up-label">外观</div>
-                <div className="set-row">
-                  <div className="set-name">
-                    主题
-                    <span className="set-sub">深色适合盯盘，浅色适合截图/投屏</span>
-                  </div>
-                  <div className="set-seg" role="radiogroup" aria-label="主题">
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={theme === 'dark'}
-                      className={theme === 'dark' ? 'on' : ''}
-                      onClick={() => onTheme('dark')}
-                    >
-                      深色
-                    </button>
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={theme === 'light'}
-                      className={theme === 'light' ? 'on' : ''}
-                      onClick={() => onTheme('light')}
-                    >
-                      浅色
-                    </button>
-                  </div>
+        <div className="up-body set-pane">
+          {section === 'appearance' && (
+            <div className="set-block">
+              <div className="up-label">外观</div>
+              <div className="set-row">
+                <div className="set-name">
+                  主题
+                  <span className="set-sub">深色适合盯盘，浅色适合截图/投屏</span>
+                </div>
+                <div className="set-seg" role="radiogroup" aria-label="主题">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === 'dark'}
+                    className={theme === 'dark' ? 'on' : ''}
+                    onClick={() => onTheme('dark')}
+                  >
+                    深色
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === 'light'}
+                    className={theme === 'light' ? 'on' : ''}
+                    onClick={() => onTheme('light')}
+                  >
+                    浅色
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
+          )}
 
-            {section === 'mini' && (
-              <div className="set-block">
-                <div className="up-label">悬浮窗</div>
-                <MiniListSection />
-              </div>
-            )}
+          {section === 'mini' && (
+            <div className="set-block">
+              <div className="up-label">悬浮窗</div>
+              <MiniListSection />
+            </div>
+          )}
 
-            {section === 'shortcuts' && (
-              <div className="set-block">
-                <div className="up-label">快捷键</div>
-                {SHORTCUTS.map((def) => {
-                  const live = recording === def.id;
-                  const state = globalHint(global);
-                  return (
-                    <div className="set-row" key={def.id}>
-                      <div className="set-name">
-                        {def.label}
-                        <span className="set-sub">{live ? '按下新的组合键（Esc 取消）' : def.hint}</span>
-                        {!live && state && (
-                          <span className={`set-sub${global?.error ? ' bad' : ''}`}>{state}</span>
-                        )}
-                      </div>
-                      <kbd className={`set-key${live ? ' on' : ''}`}>
-                        {live ? '按键…' : formatChord(chords[def.id])}
-                      </kbd>
-                      <button
-                        className="up-btn"
-                        onClick={() => {
-                          setError(null);
-                          setRecording(live ? null : def.id);
-                        }}
-                      >
-                        {live ? '取消' : '修改'}
-                      </button>
-                      <button
-                        className="up-btn"
-                        disabled={isDefaultChord(def.id, chords[def.id] ?? '')}
-                        title="恢复成默认组合键"
-                        onClick={() => {
-                          resetChord(def.id);
-                          setChords((prev) => ({ ...prev, [def.id]: readChord(def.id) }));
-                          void applyGlobalShortcut(def.id).then(setGlobal);
-                        }}
-                      >
-                        恢复默认
-                      </button>
+          {section === 'shortcuts' && (
+            <div className="set-block">
+              <div className="up-label">快捷键</div>
+              {SHORTCUTS.map((def) => {
+                const live = recording === def.id;
+                const state = globalHint(global);
+                return (
+                  <div className="set-row" key={def.id}>
+                    <div className="set-name">
+                      {def.label}
+                      <span className="set-sub">{live ? '按下新的组合键（Esc 取消）' : def.hint}</span>
+                      {!live && state && (
+                        <span className={`set-sub${global?.error ? ' bad' : ''}`}>{state}</span>
+                      )}
                     </div>
-                  );
-                })}
-                {error && <p className="up-error">{error}</p>}
-              </div>
-            )}
+                    <kbd className={`set-key${live ? ' on' : ''}`}>
+                      {live ? '按键…' : formatChord(chords[def.id])}
+                    </kbd>
+                    <button
+                      className="up-btn"
+                      onClick={() => {
+                        setError(null);
+                        setRecording(live ? null : def.id);
+                      }}
+                    >
+                      {live ? '取消' : '修改'}
+                    </button>
+                    <button
+                      className="up-btn"
+                      disabled={isDefaultChord(def.id, chords[def.id] ?? '')}
+                      title="恢复成默认组合键"
+                      onClick={() => {
+                        resetChord(def.id);
+                        setChords((prev) => ({ ...prev, [def.id]: readChord(def.id) }));
+                        void applyGlobalShortcut(def.id).then(setGlobal);
+                      }}
+                    >
+                      恢复默认
+                    </button>
+                  </div>
+                );
+              })}
+              {error && <p className="up-error">{error}</p>}
+            </div>
+          )}
 
-            {section === 'webhook' && (
-              <div className="set-block">
-                <div className="up-label">告警通知</div>
-                <WebhookSection />
-              </div>
-            )}
+          {section === 'webhook' && (
+            <div className="set-block">
+              <div className="up-label">告警通知</div>
+              <WebhookSection />
+            </div>
+          )}
 
-            {section === 'update' && (
-              <div className="set-block">
-                <div className="up-label">更新</div>
-                <UpdateSection controller={update} />
-              </div>
-            )}
+          {section === 'update' && (
+            <div className="set-block">
+              <div className="up-label">更新</div>
+              <UpdateSection controller={update} />
+            </div>
+          )}
           </div>
         </div>
-      </section>
     </div>
   );
 }
