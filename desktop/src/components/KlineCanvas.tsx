@@ -1413,7 +1413,7 @@ export function KlineCanvas({
     };
 
     /** 复位小标被点到就走 [resetView]，不进入拖拽。 */
-    const hitBadge = (e: PointerEvent): boolean => {
+    const hitBadge = (e: MouseEvent): boolean => {
       const hit = badgeRef.current;
       if (!hit) return false;
       const rect = canvas.getBoundingClientRect();
@@ -1702,6 +1702,25 @@ export function KlineCanvas({
     };
 
     /**
+     * 双击 = 在落点画一条水平线（与划线区的「水平线」工具同一个动作，普通画线、不告警）。
+     * 只认主图：副图的双击没有价位含义，复位小标与工具态的双击各有各的意思。
+     * 同价已有线时 `addPriceLine` 自己会挡掉，不会两根重合。
+     */
+    const onDblClick = (e: MouseEvent) => {
+      const { rect, plotW } = geom();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      const { top, bottom } = mainBounds();
+      if (x > plotW || y < top || y > bottom) return;
+      if (modelRef.current.tool !== 'none') return;
+      if (hitBadge(e)) return;
+      const price = priceOfY(y);
+      if (!Number.isFinite(price)) return;
+      modelRef.current.onAddPriceLine(price);
+      draw();
+    };
+
+    /**
      * Esc = 撤掉画了一半的那条直线（待定的第一下），顺手取消选中。
      * 挂 document 而不是 canvas：canvas 不可聚焦，焦点多半在别处，挂它自己一条都收不到。
      */
@@ -1735,6 +1754,7 @@ export function KlineCanvas({
     canvas.addEventListener('pointerup', endDrag);
     canvas.addEventListener('pointercancel', endDrag);
     canvas.addEventListener('pointerleave', onLeave);
+    canvas.addEventListener('dblclick', onDblClick);
     canvas.addEventListener('contextmenu', onContextMenu);
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -1744,6 +1764,7 @@ export function KlineCanvas({
       canvas.removeEventListener('pointerup', endDrag);
       canvas.removeEventListener('pointercancel', endDrag);
       canvas.removeEventListener('pointerleave', onLeave);
+      canvas.removeEventListener('dblclick', onDblClick);
       canvas.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('keydown', onKeyDown);
     };
