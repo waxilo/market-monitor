@@ -552,7 +552,7 @@ export function KlineCanvas({
   /**
    * 画布容器（`.chart-scroll`）的**实测**尺寸。
    *
-   * 高度决定纵向分配；宽度只用于「宽度变了也要重画」—— 收起/展开侧栏只改宽度、
+   * 高度决定纵向分配；宽度只用于「宽度变了也要重画」—— 窗口横向缩放只改宽度、
    * 高度不变，只存高度的话 setState 会因新旧值相同而 bail out，画布不会重画，
    * 于是 canvas 的位图被 CSS 拉伸（糊）。
    */
@@ -1218,7 +1218,7 @@ export function KlineCanvas({
     if (!el) return;
     const measure = () => {
       const next = { w: el.clientWidth, h: el.clientHeight };
-      // 没变就返回同一个对象：否则每轮观察都触发一次重渲染（取消侧栏的列宽动画时尤其频繁）
+      // 没变就返回同一个对象：否则每轮观察都触发一次重渲染（窗口拖宽时尤其频繁）
       setBox((prev) => (prev.w === next.w && prev.h === next.h ? prev : next));
     };
     const observer = new ResizeObserver(measure);

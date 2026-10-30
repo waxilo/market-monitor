@@ -40,6 +40,17 @@ export function changeClass(changePercent?: number | null): 'up' | 'down' | 'fla
 }
 
 /** 大额缩写 K/M/B/T，固定 2 位，避免列宽跳动。 */
+/** 毫秒 → 粗粒度时长（`6h12m` / `3m20s` / `45s`）：限频冷却的剩余时间用。 */
+export function formatSpan(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1_000));
+  const h = Math.floor(total / 3_600);
+  const m = Math.floor((total % 3_600) / 60);
+  const s = total % 60;
+  if (h > 0) return `${h}h${m}m`;
+  if (m > 0) return `${m}m${s}s`;
+  return `${s}s`;
+}
+
 export function formatCompact(value?: number | null): string {
   if (value == null || Number.isNaN(value)) return NO_DATA;
   const abs = Math.abs(value);

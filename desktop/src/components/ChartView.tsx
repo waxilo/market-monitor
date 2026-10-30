@@ -3,6 +3,7 @@ import {
   fetchKlines,
   fetchKlinesBefore,
   fetchOpenInterest,
+  nativeLadder,
   nativeMinutes,
   supportsOlderKlines,
   supportsOpenInterest,
@@ -37,9 +38,11 @@ import {
   parseIntervals,
   serializeIntervals,
   synthesisOf,
+  minutesOf,
 } from '../lib/intervals';
 import type { DrawTool, LineSelection } from '../lib/lineSelection';
 import { useSourceKey, endpointOf } from '../lib/sources';
+import { openBinanceStream, streamSymbolOf } from '../lib/stream';
 import {
   assignMaColor,
   defaultCatalog,
@@ -104,26 +107,9 @@ interface Props {
   instrument?: Instrument;
   spark: number[] | undefined;
   theme: string;
-  /** 当前标的在不在自选里（详情页那枚 ☆/★ 的状态）。 */
-  watched: boolean;
-  /** 切换自选：★ = 加进左侧列表、☆ = 从左侧列表删掉（行内 × 是同一件事的另一个入口）。 */
-  onToggleWatch: (item: WatchItem) => void;
-  /** EMA 分析面板的开关 —— 入口在左侧栏底部（2026-10-29 从指标栏搬走），状态由 App 持有。 */
-  emaOpen: boolean;
-  onEmaClose: () => void;
 }
 
-export function ChartView({
-  item,
-  ticker,
-  instrument,
-  spark,
-  theme,
-  watched,
-  onToggleWatch,
-  emaOpen,
-  onEmaClose,
-}: Props) {
+export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   /** 周期条上放哪些周期、按什么顺序 —— 用户在「周期」弹窗里改，存 localStorage。 */
   const [intervals, setIntervals] = useState<string[]>(() =>
     parseIntervals(localStorage.getItem(INTERVALS_KEY)),
@@ -148,6 +134,11 @@ export function ChartView({
   const { families, boll: showBoll, panes: subPanes } = prefs;
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
+  /**
+   * EMA 分析面板的显隐。入口在**周期条右端**（2026-10-30 从指标组挪过去）；
+   * 面板本体也在本组件里渲染，它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。
+   */
+  const [emaOpen, setEmaOpen] = useState(false);
   /**
    * 交给画布的均线族：把「藏起来」的族折算成空目录，**族内再减去眼睛闭上的那几条** ——
    * 画布只画给它的东西，不知道显隐开关这回事（与画线小眼睛同口径）。
@@ -176,7 +167,7 @@ export function ChartView({
   const market = item?.market;
   const symbol = item?.symbol;
   /**
-   * 画线（水平线 + 两点直线）。按标的存（与自选同键）—— 线画在「这段行情」上，
+   * 画线（水平线 + 两点直线）。按标的存（与标签页同键）—— 线画在「这段行情」上，
    * 换周期不该丢，换标的必须分开。
    */
   const drawings = useDrawings(item ? watchKey(item) : null);
@@ -348,30 +339,60 @@ export function ChartView({
       });
   }, [market, symbol, interval, candles]);
 
-  // 增量轮询：只取末根更新实时数据（App 的 K 线增量节奏是 2s）
+  /**
+   * 实时的那一根：币安系走 WS 推 `@kline_<周期>`，省掉 2s 一次的 REST 权重。
+   * WS 不是免封金牌 —— 受限 IP 上币安会接受握手但不推任何数据，所以只有收到
+   * **首帧**才停 REST 兜底；其余来源或 WS 没数据时仍按 2s 取末根（App 的增量节奏也是 2s）。
+   * 聚合周期没有原生流（如 45m），只能继续走 REST —— 那边本来就是拼出来的。
+   */
   useEffect(() => {
     if (!market || !symbol) return;
     let alive = true;
+
+    const applyLive = (update: Bar) => {
+      setCandles((prev) => {
+        if (prev.length === 0) return prev;
+        const last = prev[prev.length - 1];
+        if (update.timestamp === last.timestamp) return [...prev.slice(0, -1), update];
+        if (update.timestamp > last.timestamp) return [...prev, update];
+        return prev;
+      });
+    };
+
+    const minutes = minutesOf(interval);
+    const code = minutes != null && natives.has(minutes) ? nativeLadder(market)[minutes] : undefined;
+    const wsBase = market === 'FUTURES' && endpointOf(source).dialect === 'BINANCE' ? source : null;
+    let wsLive = false;
+    let stopStream = () => {};
+    if (wsBase != null && code != null) {
+      stopStream = openBinanceStream(wsBase, [`${streamSymbolOf(symbol)}@kline_${code}`], {
+        onClose: () => {
+          wsLive = false;
+        },
+        onKline: (streamSymbol, bar) => {
+          if (!alive || streamSymbol !== symbol) return;
+          // 收到第一帧才停 REST 兜底：受限 IP 上币安会接受握手但不推任何数据
+          wsLive = true;
+          applyLive(bar);
+        },
+      });
+    }
+
     const timer = setInterval(() => {
+      if (wsLive) return;
       fetchKlines(market, symbol, interval, 1)
         .then((bars) => {
           if (!alive || bars.length === 0) return;
-          const update = bars[0];
-          setCandles((prev) => {
-            if (prev.length === 0) return prev;
-            const last = prev[prev.length - 1];
-            if (update.timestamp === last.timestamp) return [...prev.slice(0, -1), update];
-            if (update.timestamp > last.timestamp) return [...prev, update];
-            return prev;
-          });
+          applyLive(bars[0]);
         })
         .catch(() => {});
     }, RT_POLL_MS);
     return () => {
       alive = false;
       clearInterval(timer);
+      stopStream();
     };
-  }, [market, symbol, interval, source]);
+  }, [market, symbol, interval, source, natives]);
 
   // 持仓量：选了 OI 副图且当前源支持才取；10s 整段重拉（见 OI_POLL_MS 的注释）
   useEffect(() => {
@@ -542,7 +563,9 @@ export function ChartView({
       <section className="panel panel-chart">
         <div className="chart-empty">
           <span className="overline">K 线</span>
-          <span className="chart-empty-hint">从顶部搜索现货或永续合约全市场，搜到就能看图（入不入自选都行）</span>
+          <span className="chart-empty-hint">
+            没有打开的图表 —— 顶部搜索框搜现货或永续全市场，点一条结果就开一个标签页
+          </span>
         </div>
       </section>
     );
@@ -557,17 +580,6 @@ export function ChartView({
             <span className="sym">
               {displaySymbol(item.symbol)} · {item.market === 'FUTURES' ? '永续' : '现货'}
             </span>
-            {/* 详情页的「自选」标记：★ = 在左侧列表里、☆ = 只是搜来看看。
-                点一下就是加/删 —— 与行内 × 、搜索结果行内的 ＋ 同一件事。 */}
-            <button
-              type="button"
-              className={`star-btn${watched ? ' on' : ''}`}
-              aria-pressed={watched}
-              title={watched ? `从自选移除 ${displaySymbol(item.symbol)}` : `把 ${displaySymbol(item.symbol)} 加入自选`}
-              onClick={() => onToggleWatch(item)}
-            >
-              {watched ? '★' : '☆'}
-            </button>
           </div>
         </div>
         <div className="hero num" key={ticker?.lastPrice}>
@@ -632,6 +644,18 @@ export function ChartView({
             onClick={() => setIntervalPanelOpen(true)}
           >
             ＋
+          </button>
+          {/* EMA 分析钉在周期条**右端**（2026-10-30 用户指定）：它是「换个视角看这段行情」的
+              **动作**，不是又一个指标开关 —— 放在指标组里会被读成 BOLL 的邻居。点开把
+              所有已配置 EMA 档位 × 所有已配置周期的当前值汇总成压力 / 支撑两栏。 */}
+          <button
+            type="button"
+            className={`chip ema-entry${emaOpen ? ' on' : ''}`}
+            aria-pressed={emaOpen}
+            title="EMA 指标分析：把所有已配置的 EMA 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
+            onClick={() => setEmaOpen((v) => !v)}
+          >
+            EMA分析
           </button>
         </div>
 
@@ -1005,9 +1029,9 @@ export function ChartView({
           }}
           onPickInterval={(iv) => {
             setInterval_(iv);
-            onEmaClose();
+            setEmaOpen(false);
           }}
-          onClose={onEmaClose}
+          onClose={() => setEmaOpen(false)}
         />
       )}
     </section>

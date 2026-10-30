@@ -4,6 +4,13 @@ import { IS_TAURI } from './tauri';
 export interface HttpResult {
   status: number;
   body: string;
+  /**
+   * 429/418 时服务端声明的冷却秒数（币安会给 `retry-after`）。
+   * 字段名保持 snake_case：宿主侧是 serde 原样序列化，Tauri 只转换入参、不转换返回值。
+   */
+  retry_after_secs?: number | null;
+  /** 币安系的分钟已用权重（`x-mbx-used-weight-1m`）。其他盘口没有这个头。 */
+  used_weight_1m?: number | null;
 }
 
 /**
@@ -38,7 +45,17 @@ export async function httpRequest(
       body,
       signal: timeoutMs == null ? undefined : AbortSignal.timeout(timeoutMs),
     });
-    return { status: res.status, body: await res.text() };
+    const numberHeader = (name: string): number | null => {
+      const raw = res.headers.get(name);
+      const value = raw == null ? Number.NaN : Number(raw);
+      return Number.isFinite(value) ? value : null;
+    };
+    return {
+      status: res.status,
+      body: await res.text(),
+      retry_after_secs: numberHeader('retry-after'),
+      used_weight_1m: numberHeader('x-mbx-used-weight-1m'),
+    };
   } catch (error) {
     // 浏览器回退没有宿主侧的短结论，超时在这里折成同一句（与 market.rs 的 short_error 同口径）
     if (error instanceof DOMException && error.name === 'TimeoutError') throw new Error('连接超时');

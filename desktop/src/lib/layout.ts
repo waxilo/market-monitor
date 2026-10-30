@@ -1,7 +1,7 @@
 /**
  * 悬浮窗几何的**单一来源**。
  *
- * 面板高度只由自选条数决定：`min(条数, miniMaxRows) × miniRowHeight + 2px 边框`，
+ * 面板高度只由悬浮窗条数决定：`min(条数, miniMaxRows) × miniRowHeight + 2px 边框`，
  * 超过封顶条数时行区内部滚动（窗口高度不再增长）。
  *
  * 这里是前端侧的权威定义；另外两处必须跟它对齐：
@@ -31,7 +31,7 @@ export const MINI_WIDTH = 236;
 /** 面板的上下边框合计（Rust 的 `MINI_CHROME_H` 同值）。 */
 export const MINI_CHROME_HEIGHT = 2;
 
-/** 按自选条数算出面板高度（逻辑像素）—— 与 Rust `mini_height_for_rows` 同一式子。 */
+/** 按悬浮窗条数算出面板高度（逻辑像素）—— 与 Rust `mini_height_for_rows` 同一式子。 */
 export function miniHeightForRows(rows: number): number {
   const clamped = Math.min(Math.max(rows, 1), MINI_MAX_ROWS);
   return clamped * MINI_ROW_HEIGHT + MINI_CHROME_HEIGHT;

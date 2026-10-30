@@ -7,7 +7,7 @@ import { IS_TAURI } from '../lib/tauri';
  * 「指针是否真的落在面板上」，**默认不在**。
  *
  * 为什么不用 CSS `:hover`：`:hover` 只在浏览器真的收到鼠标消息时才更新，而这个窗口会
- * 自己动 —— 拖拽会搬走它，按自选条数改高度时「下边缘不动」会让上边缘跑，收起时整个隐藏。
+ * 自己动 —— 拖拽会搬走它，按条数改高度时「下边缘不动」会让上边缘跑，收起时整个隐藏。
  * 鼠标位置一旦在这种变化里落到了窗口外，Chromium 就再也收不到 `mouseleave`，
  * `:hover` 于是永久卡在「亮着」：鼠标早就不在上面了，行的 hover 底色却一直赖着 ——
  * 这种静态痕迹比整层遮罩卡住更难发现（曾经的表现就是「某一行一直亮」）。
@@ -51,7 +51,7 @@ export function usePointerInside<T extends HTMLElement>(panel: RefObject<T | nul
   }, [panel]);
 
   // 还有两种「指针位置已失效」只有窗口自己知道：被搬走（onMoved）与被改尺寸
-  // （onResized，自选条数变化时触发）。浏览器里没有对应事件，故只在壳内挂。
+  // （onResized，悬浮窗条数变化时触发）。浏览器里没有对应事件，故只在壳内挂。
   useEffect(() => {
     if (!IS_TAURI) return;
     const leave = () => setInside(false);

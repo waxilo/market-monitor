@@ -11,9 +11,10 @@ import type { Instrument } from './lib/api';
 import { readMiniWatchlist, watchKey, type WatchItem } from './hooks/useWatchlist';
 import { useTickers } from './hooks/useTickers';
 import { useInstruments } from './hooks/useMarketData';
-import { changeClass, displaySymbol, formatChange, formatPrice } from './lib/format';
+import { changeClass, displaySymbol, formatChange, formatPrice, formatSpan } from './lib/format';
 import { openMiniMenu, resizeMiniRows, showMainWindow, switchToMainWindow } from './lib/tauri';
-import { syncFuturesSource } from './lib/sources';
+import { syncFuturesSource, syncSpotSource, useFuturesSourceUrl } from './lib/sources';
+import { useCooldownMs } from './lib/rateGate';
 import { MINI_MAX_ROWS, MINI_ROW_HEIGHT } from './lib/layout';
 import { usePointerInside } from './hooks/usePointerInside';
 import { useShortcut } from './hooks/useShortcut';
@@ -24,7 +25,7 @@ import { useWindowDrag } from './lib/windowDrag';
  * 行数不在这儿截断：≤6 条时面板按条数撑高，>6 条时高度封顶、行区内部滚动
  * （行高与封顶行数由 `lib/layout.ts` 注入成 CSS 变量，窗口高度侧对齐 Rust 的
  * `MINI_ROW_H` / `MINI_MAX_ROWS`）。
- * 按封顶行数截断会让「固定高度」失去意义 —— 第 7 条之后的自选会直接看不到。
+ * 按封顶行数截断会让「固定高度」失去意义 —— 第 7 条之后的条目会直接看不到。
  */
 /** 悬浮窗与主窗是两套 React 实例：显示哪几条靠轮询 localStorage 同步，主窗改动最迟 4s 反映过来。 */
 const SYNC_MS = 4000;
@@ -50,7 +51,7 @@ const POLL_MS = 3000;
 export function MiniApp() {
   /**
    * 显示哪几条由主窗「设置 → 悬浮窗」那份**独立列表**决定（搜索添加、可单独排序，
-   * 0.1.16 起不再挂在自选下面）；也不跟主窗的市场切换联动 —— 合约和现货同屏混着看。
+   * 0.1.16 起不再挂在主窗名单下面）；也不跟主窗看哪个标签页联动 —— 合约和现货同屏混着看。
    */
   const [rows, setRows] = useState<WatchItem[]>(readMiniWatchlist);
   /**
@@ -87,8 +88,9 @@ export function MiniApp() {
     document.documentElement.dataset.window = 'mini';
     const timer = setInterval(() => {
       setRows(readMiniWatchlist());
-      // 主窗里可能刚换了合约数据源：跟进后 useSourceKey 变化会带动取数重来
+      // 主窗里可能刚换了数据源（现货或合约）：跟进后 useSourceKey 变化会带动取数重来
       syncFuturesSource();
+      syncSpotSource();
     }, SYNC_MS);
     return () => clearInterval(timer);
   }, []);
@@ -108,14 +110,14 @@ export function MiniApp() {
     };
   }, []);
 
-  // 窗口高度跟着自选条数走（Rust 按「下边缘不动」调）。只报条数不报高度：
+  // 窗口高度跟着条数走（Rust 按「下边缘不动」调）。只报条数不报高度：
   // 这个窗口启动时是隐藏的，量不到真实高度，条数却是现成的。
   useEffect(() => {
     resizeMiniRows(rows.length);
   }, [rows.length]);
 
-  // 面板上可能混着两个市场的条目：币名与价格精度要从各自那份清单里查，
-  // 只有一份市场时就不拉另一份（useInstruments 传 undefined 连请求都不发）
+  // 面板上可能混着两个市场的条目：**价格精度**要从各自那份清单里查
+  // （名字直接取符号，不依赖清单）；只有一份市场时就不拉另一份（传 undefined 连请求都不发）
   const needFutures = rows.some((r) => r.market === 'FUTURES');
   const needSpot = rows.some((r) => r.market === 'SPOT');
   const futuresList = useInstruments(needFutures ? 'FUTURES' : undefined);
@@ -129,6 +131,9 @@ export function MiniApp() {
   const { cells, online } = useTickers(rows, POLL_MS);
   /** 已确认断联（`online === null` = 还没结论 / 悬浮窗列表为空，那种情况不该盖遮罩）。 */
   const offline = online === false;
+  /** 合约 REST 的限频冷却：和断联一样要盖遮罩，但文案不同 —— 实时价还在走 WS。 */
+  const futuresUrl = useFuturesSourceUrl();
+  const cooldownMs = useCooldownMs(needFutures ? futuresUrl : null);
 
   return (
     // 行高与封顶行数由 lib/layout.ts 注入（`--mini-row-h` / `--mini-max-rows`）：
@@ -159,9 +164,10 @@ export function MiniApp() {
               onClick={() => showMainWindow(item)}
               title={`在主窗口里打开 ${displaySymbol(item.symbol)}`}
             >
-              {/* 币名优先取清单里的 baseAsset；清单还没到手时按 symbol 的下划线切一段，
-                  与主窗侧栏同一个回退（原来这里用 displaySymbol，会闪过整串 ETHUSDT）。 */}
-              <span className="mini-sym">{inst?.baseAsset ?? item.symbol.split('_')[0]}</span>
+              {/* 交易对整串（BTCUSDT / BTCUSDC）——2026-10-30 用户指定：只给币名时
+                  同一币的不同计价币（BTC/USDT 与 BTC/USDC）在两行里读起来一模一样。
+                  名字直接由规范符号去掉下划线得来，不等标的清单 —— 也就不会先闪一下币名。 */}
+              <span className="mini-sym">{displaySymbol(item.symbol)}</span>
               <span className={`mini-price num ${cls}`}>
                 {formatPrice(t?.lastPrice, inst?.tickSize)}
               </span>
@@ -180,7 +186,11 @@ export function MiniApp() {
       {offline && (
         <div className="mini-offline" role="status">
           <span className="mini-offline-dot" />
-          <span className="mini-offline-text">已断联</span>
+          {/* 限频与断联分开说：前者是币安 REST 被封（WS 也断了才会走到这层遮罩），
+              用户看到「限频 6h」比「已断联」更容易判断该换数据源还是等。 */}
+          <span className="mini-offline-text">
+            {cooldownMs > 0 ? `限频 ${formatSpan(cooldownMs)}` : '已断联'}
+          </span>
         </div>
       )}
     </div>

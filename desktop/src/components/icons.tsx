@@ -29,24 +29,6 @@ export function MiniWindowIcon() {
   );
 }
 
-/**
- * 侧栏开关：左边一列表示侧边栏，`open` 时空心（收起态）、收起时实心且收窄。
- * 状态画在图标里而不是加个 `.on` 类 —— 顶栏按钮的「亮着」在这一版里意味着
- * 别的东西（选中态），这里要表达的是**布局**，靠图形本身说话最不容易误读。
- */
-export function SidebarIcon({ open }: { open: boolean }) {
-  return (
-    <svg {...BASE}>
-      <rect x="1.7" y="2.7" width="12.6" height="10.6" rx="1.5" />
-      {open ? (
-        <line x1="6.5" y1="2.7" x2="6.5" y2="13.3" />
-      ) : (
-        <rect x="2.6" y="3.6" width="2.1" height="8.8" rx="0.6" fill="currentColor" stroke="none" />
-      )}
-    </svg>
-  );
-}
-
 /*
  * 划线区用的一组图标（2026-10-24）。
  *
@@ -153,6 +135,19 @@ export function SearchIcon() {
     <svg {...BASE} width={15} height={15}>
       <circle cx="7.2" cy="7.2" r="4.4" />
       <line x1="10.5" y1="10.5" x2="13.6" y2="13.6" />
+    </svg>
+  );
+}
+
+/**
+ * 标签页的锁：`open` = 没锁（锁梁只搭一半，随时能关）。
+ * 锁住时点它会解锁 —— 图形本身就是那个状态开关，不再另配文字。
+ */
+export function LockIcon({ open }: { open: boolean }) {
+  return (
+    <svg {...BASE} width={12} height={12}>
+      <rect x="3.5" y="7.2" width="9" height="6.2" rx="1.4" />
+      {open ? <path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0" /> : <path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0v1.8" />}
     </svg>
   );
 }

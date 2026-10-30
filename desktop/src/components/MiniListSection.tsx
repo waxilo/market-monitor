@@ -12,8 +12,8 @@ import { useDragSort } from '../hooks/useDragSort';
  * 「悬浮窗」这一整段：悬浮窗里显示哪几条、按什么顺序。
  *
  * **左右两栏**（0.1.16 起）：左边 = 「显示中」列表（顺序即面板顺序），右边 = 搜索添加。
- * 列表**独立于自选** —— 增删/排序都不动左侧自选；升级上来的机器第一次读会拷一份
- * 当前自选当出厂值（见 `readMiniWatchlist`）。
+ * 列表**独立**（主窗 0.1.48 起连自选都没有了，这里是唯一一份名单）；没存过的机器
+ * 第一次读会落一份出厂名单 BTC / ETH（见 `readMiniWatchlist`）。
  *
  * 搜索是**两个市场混搜**：悬浮窗面板本来就现货/合约混排，每次只搜一边还得先想
  * 「它在哪个市场」；结果行带现货/合约胶囊区分同名标的（BTC_USDT 两边都有）。
@@ -75,7 +75,7 @@ export function MiniListSection() {
     <div className="set-block-body">
       <p className="up-hint">
         悬浮窗上显示哪几条、按什么顺序都在这里定（顺序就是面板从上到下），
-        和左侧自选互不影响。超过 {MINI_MAX_ROWS} 条窗口高度封顶，多出的在面板里滚动。
+        和主窗标签页互不影响。超过 {MINI_MAX_ROWS} 条窗口高度封顶，多出的在面板里滚动。
       </p>
 
       <div className="mini-split">

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FUTURES_ENDPOINTS,
+  SPOT_ENDPOINTS,
   probeEndpoint,
   setFuturesSource,
+  setSpotSource,
   useFuturesSourceUrl,
+  useSpotSource,
   type FuturesEndpoint,
   type ProbeOutcome,
+  type SpotEndpoint,
 } from '../lib/sources';
 import { isAutoSourceEnabled, setAutoSourceEnabled } from '../lib/autoSource';
 
@@ -32,6 +36,7 @@ const domainOf = (baseUrl: string) => baseUrl.replace('https://', '');
  */
 export function SourcePanel({ onClose }: { onClose: () => void }) {
   const selectedUrl = useFuturesSourceUrl();
+  const spotSource = useSpotSource();
   const [states, setStates] = useState<Record<string, RowState>>({});
   /** 自动选择开关：初值取存档（缺省关），改动即时落盘 —— 关掉弹窗再开不会回弹。 */
   const [auto, setAuto] = useState(isAutoSourceEnabled);
@@ -85,6 +90,30 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
       states[endpoint.baseUrl]?.outcome?.latencyMs ?? Number.POSITIVE_INFINITY;
     return [...FUTURES_ENDPOINTS].sort((a, b) => rank(a) - rank(b) || latency(a) - latency(b));
   }, [states]);
+
+  /** 现货行：只有两家、不测速 —— 区别是「大陆能否直连」，用户自己判断即可。 */
+  const renderSpotRow = (endpoint: SpotEndpoint) => {
+    const isSelected = endpoint.id === spotSource;
+    const title = `${isSelected ? '使用中' : '切换到'} ${endpoint.label} · ${endpoint.hosts.join(' → ')}`;
+    return (
+      <div
+        key={endpoint.id}
+        className={`src-row${isSelected ? ' on' : ''}`}
+        title={title}
+        onClick={() => {
+          setSpotSource(endpoint.id);
+          onClose();
+        }}
+      >
+        {/* 与合约行同一套列位：勾号位宽固定，切换时文字不横跳 */}
+        <span className="src-mark">{isSelected ? '✓' : ''}</span>
+        <span className="src-label">{endpoint.label}</span>
+        <span className="src-sub" title={title}>
+          {endpoint.note}
+        </span>
+      </div>
+    );
+  };
 
   const renderRow = (endpoint: FuturesEndpoint) => {
     const state = states[endpoint.baseUrl];
@@ -142,7 +171,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
     <div className="up-backdrop" onMouseDown={onClose}>
       <section className="up-panel up-wide" onMouseDown={(e) => e.stopPropagation()}>
         <header className="up-head">
-          <span className="overline">合约数据源</span>
+          <span className="overline">数据源</span>
           <span className="grow" />
           <button
             className="icon-btn"
@@ -151,7 +180,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
               for (const endpoint of FUTURES_ENDPOINTS) void probeOne(endpoint);
             }}
           >
-            {probing ? '检测中…' : '全部重新检测'}
+            {probing ? '检测中…' : '重新检测合约'}
           </button>
           <button className="panel-close" title="关闭" onClick={onClose}>
             ×
@@ -159,12 +188,20 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
         </header>
 
         <div className="up-body">
+          <p className="src-group">现货</p>
+          <div className="src-grid">{SPOT_ENDPOINTS.map(renderSpotRow)}</div>
+          <p className="up-hint">
+            想要 USDC 现货或想避开合约封禁时选币安：现货与合约是两条独立的限频/封禁线。
+            币安现货优先走 <span className="num">data-api.binance.vision</span>（大陆通常可直连），
+            其余镜像域名依次兜底。
+          </p>
+
+          <p className="src-group">永续合约</p>
           <p className="up-hint">
             检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。
           </p>
           <p className="up-hint">
-            只影响永续合约：K 线与 24h 行情都取自选定的这一家，现货固定走 Gate。
-            切换后清空合约缓存并重新同步交易对。
+            K 线与 24h 行情取自选定的这一家。切换后清空合约缓存并重新同步交易对。
           </p>
           <label
             className="src-auto"

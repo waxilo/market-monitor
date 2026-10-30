@@ -54,7 +54,7 @@ export interface DragSortRowProps {
  * 3. `ghost` 非空时把它 portal 到 body、用 `ghostRef` 挂那个浮起来的路基行
  *    （见 `styles/theme.css` 的 `.drag-ghost`）。
  *
- * 一行只摆一格的列表（配置弹窗、侧栏）要把 `flow` 传 `'column'`。
+ * 一行只摆一格的列表（配置弹窗、悬浮窗名单）要把 `flow` 传 `'column'`。
  */
 export function useDragSort(opts: {
   list: readonly string[];
@@ -157,7 +157,7 @@ export function useDragSort(opts: {
   }, [ghost]);
 
   /**
-   * 「刚拖完」的旗标：拖完浏览器还会补一下 click，能点行的列表（侧栏）要靠它认出那一下。
+   * 「刚拖完」的旗标：拖完浏览器还会补一下 click，能点行的列表（悬浮窗名单）要靠它认出那一下。
    *
    * ⚠️ **读一次就清**：只在 pointerdown 复位的话，「没有 pointerdown 的 click」
    * （脚本合成的点击、以后可能加的键盘激活）会被一直当成拖后的那一下而吞掉。
@@ -247,7 +247,7 @@ export function useDragSort(opts: {
     const d = dragRef.current;
     if (!d || d.pointerId !== e.pointerId) return;
     dragRef.current = null;
-    // 拖起来之后浏览器还会补一下 click：侧栏那种「点行 = 选标的」的行要靠它识别并吃掉
+    // 拖起来之后浏览器还会补一下 click：那种「点行 = 选中」的行要靠它识别并吃掉
     movedRef.current = d.moved;
     const el = rowsRef.current.get(d.id);
     if (el?.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);

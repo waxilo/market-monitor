@@ -23,11 +23,12 @@
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
 | Webhook 推送（端点加密存储 + 模板 + 补发） | `data/remote/WebhookSender`、`ui/webhook` | 已实现，待真机验证 |
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
-| 桌面端（窄侧栏导航 + 现价、搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
-| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；现货固定走 Gate，选中项存 `mm.futuresSource` |
+| 桌面端（**浏览器式标签页**（一标签 = 一个市场+标的的图，可锁定 / 一键关闭全部）、跨市场搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
+| 桌面端标签页（浏览器的样子：点搜索结果/悬浮窗即开一个，切市场 = 切标签；**用户不关就一直留着**，重启也在；每枚可锁定（锁定后连「关闭全部」都动不了），右侧「关闭全部」一次收掉未锁定的） | `desktop/src/hooks/useTabs.ts`、`components/TabStrip.tsx` | 已实现；存 `mm.tabs` / `mm.tabActive` / `mm.tabLocked`；主窗**没有自选**了（0.1.48 起），图表的去留由标签页自己决定 |
+| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有 Gate / 币安两个候选（存 `mm.spotSource`，默认 Gate） |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
-| 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于自选） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会拷贝一份当前自选当出厂值 |
-| 桌面端 EMA 指标分析（**入口在左侧自选栏底部的小栏**，点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
+| 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于主窗标签页） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会落一份出厂名单（BTC / ETH × 现货/永续） |
+| 桌面端 EMA 指标分析（**入口在周期条右端的「EMA分析」chip**，点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
 | App 端 EMA 指标分析（同一条口径，**入口在详情页顶栏右上角**的「EMA分析」，全屏则在顶部周期条右端；**竖屏「上方压力 / 下方支撑」页签切换**，各带条数、各记各的滚动位置，页签内与横屏两列都按「离现价由近到远」排（压力低→高、支撑高→低）；横屏两列并排各滚各的） | `ui/detail/EmaAnalysisSheet.kt`、`domain/indicator/EmaAnalysis.kt` | 已实现并真机验收；**回显靠规则名**（`1时EMA50`，自动名是 (周期, 档位) 的双射 —— App 的线由 `alert_rule` 派生，规则表没有结构化身份字段），行尾「已画 / 待对齐」、点行＝画 / 对齐 / 取消、点周期小方框＝切周期并关面板；EMA 原值不对齐刻度（对齐了「已对齐」判据就永远不成立）；**周期短名与桌面端同源（`1h → 1时`、`1w → 1周`），升级前画的 `1hEMA50` 老线仍按旧名认领，对齐时顺手迁移成新名** |
 | 桌面端画线备注（右键水平线 / 直线 →「加个备注」，图上在**线的左端把一块与右轴价签同款的实色牌串在线上**——黄底＝普通画线、红底＝告警，牌心压在线 y 上、线从牌底下穿过，压在 K 线/网格上也读得清；菜单文案随有没有备注变「改一下备注」，弹窗里可一键删掉） | `desktop/src/components/LineNoteDialog.tsx`、`lib/lineNote.ts`、`KlineCanvas` 的 `drawLineNote` | 已实现；备注就存在线对象里（`mm.priceLines` / `mm.trendLines` 的 `note`，空 = 不落字段），上限 60 字、换行压成一个空格，删线即删备注 |
 
@@ -66,7 +67,7 @@ cd android
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-桌面端（Tauri v2 + Vite/React，现货走 Gate，合约在 9 个候选接口里测速点选）：
+桌面端（Tauri v2 + Vite/React，现货在 Gate / 币安里选（默认 Gate），合约在 9 个候选接口里测速点选）：
 
 ```bash
 cd desktop
@@ -93,7 +94,7 @@ npx tauri build                     # 本机出安装包（macOS 需要签名身
 （Rust 包名是 `market-monitor`，所以 dev 二进制永远是 `market-monitor.exe`；安装版的名字来自
 `tauri.conf.json` 的 `productName: MarketMonitor`。）
 
-两条线互不干扰：数据目录不同（自选列表因此**不是**同一份），**dev 构建也不参与更新通道**
+两条线互不干扰：数据目录不同（标签页、悬浮窗列表因此**不是**同一份），**dev 构建也不参与更新通道**
 （`update.rs` 的 `check_update` 在 debug 下直接返回「开发版不检查更新」）——否则装上一次更新，
 调试实例就被换成正式安装版了。`npm run tauri dev` 仍然可用，但它走生产身份，日常别用。
 
@@ -137,12 +138,18 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   悬浮窗出生即隐藏，隐藏窗口量不到排版、`getComputedStyle` 也读不到那两个字面量，
   上报会静默退化成「没变化」。Rust 调窗口时**保持下边缘与 x 不动**（右下角是它的锚点）。
 - **悬浮窗列表 = 设置里的独立一份**（设置 → 悬浮窗，`components/MiniListSection.tsx`）：0.1.16 起
-  不再挂在自选下面 —— 页面是**左右两栏**（左「显示中」列表、右「搜索添加」）；搜索是现货/永续
+  不再挂在主窗名单下面 —— 页面是**左右两栏**（左「显示中」列表、右「搜索添加」）；搜索是现货/永续
   **混搜**（结果行带市场胶囊；排序口径是 `lib/search.ts` 的 `rankAcrossMarkets`），键盘 ↑↓ 高亮、
   Enter 加高亮那条（没高亮时加第一条未加入的）、拖动排序，存 `mm.miniWatchlist`。没存过的机器
-  第一次读会把当前自选**拷一份**当出厂值（`readMiniWatchlist`），拷完两边各自增删、互不影响；
-  主窗轮询会把「正在看但不是自选」的那一条加进来（App 的 `tickItems`）—— 悬浮窗点行切过来时
-  得能看到实时价。
+  第一次读会落一份出厂名单 BTC / ETH（`readMiniWatchlist`）；主窗 0.1.48 起连自选都没有了，
+  这里是**唯一一份**名单，两边互不影响。
+- **主窗 = 浏览器式标签页**（`hooks/useTabs.ts` + `components/TabStrip.tsx`，0.1.48 起取代左侧
+  现货/永续自选栏）：一个标签 = 一个「市场 + 标的」的图，搜索或悬浮窗点一下就开一个；**用户不关
+  就一直留着**（存 `mm.tabs`，重启也在），切市场 = 切标签。每枚标签可**锁定**（锁住就没有 ×，
+  「关闭全部」也跳过它，存 `mm.tabLocked`）；右侧「关闭全部」一次收掉未锁定的。关掉的正是当前
+  那枚时，接着看原位置的下一个（没有就退回上一个），与浏览器一致。轮询的标的 = 打开着的标签页
+  （App 的 `tickItems`），关一个就少一条 —— 这也是「关掉」唯一该有的副作用。
+  主窗**没有自选**了：想在悬浮窗里常看某几条，去设置 → 悬浮窗里配。
 - **悬浮窗要压在任务栏之上**（`lib.rs` 的 `watch_mini_above_taskbar` + `taskbar` 模块）：
   任务栏与悬浮窗同为 topmost 窗口，任务栏被点击/激活时会被 shell 提到 topmost 组最前、盖住悬浮窗；
   而这件事**不会给应用发任何事件**（用户点的是任务栏，我们连 `Focused(false)` 都收不到），
@@ -153,11 +160,13 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   `SetWindowPos`，所以这里直接调 Win32；② 对已经是 topmost 的窗口直接提 `HWND_TOPMOST`
   也可能是 no-op，**验证脚本复现现象时要先降级再升级**（`.workbuddy/tmp/verify-mini-taskbar.py`），
   不然时灵时不灵，验证就成了掷骰子。
-- **搜索结果是浮层，不进侧栏**（`components/SearchDropdown.tsx`）：侧栏只管自选（它是常驻的，
-  内容要稳定），搜索结果是**临时态**、由输入驱动 —— 塞进侧栏会在输入时把自选冲掉，清空才恢复。
+- **搜索结果是浮层，现货与永续分左右两栏**（`components/SearchDropdown.tsx`，0.1.48 起不再分
+  市场搜索）：先选市场再搜等于让用户在搜索前先做个与搜索无关的决定，两边的清单本来也都常备着；
+  分栏之后同名标的（`BTC_USDT`）各在各栏，「看哪个市场」变成看列。两栏各排各的（`rankMarket`，
+  排序尺子同一条），栏间一条发丝线、**各滚各的**。点一行 = **打开（或切到）它的标签页**，不收藏。
+  键盘：↑↓ 在栏内上下（循环）、←→ 换栏（行号夹回该栏长度）、Enter 打开、Esc 收起 —— 全部挂在
+  **document** 上而不是浮层根节点：焦点一直在顶部搜索框里，事件不经过浮层的 DOM，挂根节点一条都收不到。
   浮层锚在 `.search-wrap`（搜索框 +「清空」按钮那一整块），不是锚在框体上。
-  键盘 ↑↓/Enter/Esc 挂在 **document** 上而不是浮层根节点：焦点一直在顶部搜索框里，
-  事件不经过浮层的 DOM，挂根节点一条都收不到。排序口径在 `lib/search.ts` 的 `rankInstruments`（纯函数）。
 - **两个搜索框都只收英文，选着中文输入法也不弹候选词**（顶栏全市场搜索、设置 → 悬浮窗的搜索添加，
   0.1.16 起）：框体不是 `<input>`，而是自绘的 `components/EnglishField.tsx`（非编辑的
   `div[role="textbox"]`）—— **焦点在非编辑元素上，输入法不会启动**：敲拼音不弹候选词、字母直接进
@@ -168,9 +177,9 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   拖选 / 点击定位；粘贴走隐藏 sink 接原生 `paste`（不依赖剪贴板权限）。几何照旧输入框抄：
   高 26px、两处同位同宽。浮层开着时 ↑↓ 归列表翻高亮、光标不动（App 的 onKeyDown 抢先
   preventDefault，见上面那条）。改一处别忘另一处（两框同一套）。
-- **侧栏行 = 名称 + 现价**（`MarketList.tsx`）：现价直接取 `useTickers` 的格子 —— 那份轮询本来
-  就在为图表跑，显示它是零额外代价。搜索结果那档**不给价格**：它没有现成的逐标的轮询源，
-  硬要显示就得把主窗的全量快照扩成常开，得不偿失。
+- **搜索结果不给价格**：它没有现成的逐标的轮询源，硬要显示就得把全量快照扩成常开
+  （两家盘口各拉一次全量）—— 与限频治理背道而驰。同理，排序也不按成交额，只按匹配质量 +
+  计价币主流度 + 字母序（`rankMarket` / 悬浮窗混搜用的 `rankAcrossMarkets`，两者同一把尺子）。
 - **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
   就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
@@ -205,7 +214,7 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 - **换合约数据源 = 换盘口，缓存与视图一起作废**：弹窗里的 `setFuturesSource` 只改选择并广播，
   清缓存与重取靠两条线 —— `api.ts` 在模块加载时注册的 `onFuturesSourceChange`（清 `instrumentCache`），
   以及各取数 hook 的 `useSourceKey(market)` 依赖（现货恒为 `''`）。别把源写进 symbol：
-  自选/搜索/图表一律用 Gate 形态的 `BTC_USDT`，`BTCUSDT`、`BTC-USDT-SWAP`、`BTC` 这些只出现在方言层内部。
+  标签页/搜索/图表一律用 Gate 形态的 `BTC_USDT`，`BTCUSDT`、`BTC-USDT-SWAP`、`BTC` 这些只出现在方言层内部。
   悬浮窗是另一套 React 实例，只在它那 4s 的 localStorage 轮询里跟进（记得保留 `syncFuturesSource()`）。
 - **数据源测速 5 秒不响应即判超时**（两端同口径，0.1.16 起）：只掐探测 —— 探测请求自带 5s 时限
   （桌面：`lib/sources.ts` 的 `PROBE_TIMEOUT_MS` → `httpRequest(…)` 第四参 → 宿主 `market_request`
@@ -380,7 +389,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.47`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.48`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |

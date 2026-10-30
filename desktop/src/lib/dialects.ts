@@ -7,8 +7,9 @@
  * 错误码（OKX/Bybit/Bitget/MEXC）先查、非 0 就抛。
  *
  * 符号约定：桌面端内部一律用 Gate 形（`BTC_USDT`），进适配器时换算成各家原生写法
- * （`BTCUSDT` / `BTC-USDT-SWAP` / `BTC` …），解析结果再换回来 —— 自选、搜索、图表
- * 这些下游因此完全不感知数据源。与 App 一样只做 USDT 本位永续。
+ * （`BTCUSDT` / `BTC-USDT-SWAP` / `BTC` …），解析结果再换回来 —— 标签页、搜索、图表
+ * 这些下游因此完全不感知数据源。永续以 USDT 本位为主；**只有币安同构方言额外支持
+ * USDC 永续**（同一套 `/fapi/v1` 端点，符号里带计价币），其余几家仍只做 USDT。
  */
 
 import type { Bar, Instrument } from './api';
@@ -84,8 +85,6 @@ export interface FuturesDialect {
   ): HttpCall;
   /** 单标的 24h 快照。 */
   ticker(baseUrl: string, symbol: string): HttpCall;
-  /** 全量 24h 快照：搜索结果要按成交额排序、给未自选的标的也显示价格。 */
-  allTickers(baseUrl: string): HttpCall;
   exchangeInfo(baseUrl: string): HttpCall;
   /**
    * 历史持仓量（副图用）。先接了四家：币安同构 / OKX / Bybit / Gate。
@@ -94,8 +93,6 @@ export interface FuturesDialect {
   openInterest: OpenInterestSpec | null;
   parseKlines(text: string, minutes: number): Bar[];
   parseTicker(text: string): TickerSnapshot | null;
-  /** 全量快照 → [规范符号, 快照]。 */
-  parseAllTickers(text: string): [string, TickerSnapshot][];
   parseExchangeInfo(text: string): Instrument[];
 }
 
@@ -142,8 +139,13 @@ function coinOf(symbol: string): string {
   return symbol.split('_')[0];
 }
 
-function canonical(coin: string): string {
-  return `${coin}_USDT`;
+function canonical(coin: string, quote = 'USDT'): string {
+  return `${coin}_${quote}`;
+}
+
+/** 规范符号的计价币（`BTC_USDC` → `USDC`）；老数据只有 `BTC_USDT` 形态，缺省按 USDT。 */
+function quoteAssetOf(symbol: string): string {
+  return symbol.split('_')[1] ?? 'USDT';
 }
 
 /** 各家原生符号（`BTCUSDT`）→ 规范符号；非 USDT 本位返回 null。 */
@@ -280,7 +282,12 @@ const post = (url: string, body: unknown): HttpCall => ({
 
 // —————————————————————————— 币安同构（Aster / 币安主域与镜像） ——————————————————————————
 
-/** 与 fapi.binance.com `/fapi/v1` 完全同构（Aster 即此列）：路径、参数、K 线行序都照币安。 */
+/**
+ * 与 fapi.binance.com `/fapi/v1` 完全同构（Aster 即此列）：路径、参数、K 线行序都照币安。
+ *
+ * USDT 与 USDC 永续都在同一套端点、同一份 `/exchangeInfo` 里，只是符号不同
+ * （`BTCUSDT` / `BTCUSDC`），所以原生符号按规范符号自带的计价币拼。Aster 目前只有 USDT。
+ */
 const binance: FuturesDialect = (() => {
   /**
    * 实测白名单（用 Aster 同构端点打的，`.workbuddy/tmp/probe-intervals.log`）：
@@ -295,6 +302,8 @@ const binance: FuturesDialect = (() => {
   };
   const max = 1000;
   const url = (base: string, path: string) => `${trimBase(base)}/fapi/v1${path}`;
+  /** 规范符号 → 币安原生写法；**计价币跟着符号走**，USDC 永续（`BTCUSDC`）与 USDT 同一套端点。 */
+  const native = (symbol: string) => `${coinOf(symbol)}${quoteAssetOf(symbol)}`;
 
   /**
    * 历史持仓量：`/futures/data/openInterestHist`（与 fapi 同域、不同前缀）。
@@ -308,7 +317,7 @@ const binance: FuturesDialect = (() => {
     ladder: oiLadder,
     call: (base, symbol, minutes, limit) =>
       get(
-        `${trimBase(base)}/futures/data/openInterestHist?symbol=${coinOf(symbol)}USDT&period=${ladderCode(oiLadder, minutes, '币安同构持仓量')}&limit=${cap(limit, 500)}`,
+        `${trimBase(base)}/futures/data/openInterestHist?symbol=${native(symbol)}&period=${ladderCode(oiLadder, minutes, '币安同构持仓量')}&limit=${cap(limit, 500)}`,
       ),
     parse: (text) =>
       compact(
@@ -344,11 +353,10 @@ const binance: FuturesDialect = (() => {
       get(
         url(
           base,
-          `/klines?symbol=${coinOf(symbol)}USDT&interval=${ladderCode(ladder, minutes, '币安同构')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'startTime', 'endTime')}`,
+          `/klines?symbol=${native(symbol)}&interval=${ladderCode(ladder, minutes, '币安同构')}&limit=${cap(limit, max)}${windowQuery(startMs, endMs, 'startTime', 'endTime')}`,
         ),
       ),
-    ticker: (base, symbol) => get(url(base, `/ticker/24hr?symbol=${coinOf(symbol)}USDT`)),
-    allTickers: (base) => get(url(base, '/ticker/24hr')),
+    ticker: (base, symbol) => get(url(base, `/ticker/24hr?symbol=${native(symbol)}`)),
     exchangeInfo: (base) => get(url(base, '/exchangeInfo')),
     openInterest: oi,
 
@@ -364,24 +372,16 @@ const binance: FuturesDialect = (() => {
 
     parseTicker: (text) => rowTicker(obj(parse(text))),
 
-    parseAllTickers: (text) =>
-      compact(
-        arr(parse(text)).map((row) => {
-          const o = obj(row);
-          const symbol = usdtSymbol(str(o.symbol));
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
-
     parseExchangeInfo: (text) =>
       compact(
         arr(obj(parse(text)).symbols).map((row) => {
           const o = obj(row);
           const base = str(o.baseAsset);
+          const quote = str(o.quoteAsset);
           const tick = tickOf(o);
-          if (str(o.quoteAsset) !== 'USDT' || base == null || tick == null) return null;
-          return { symbol: canonical(base), baseAsset: base, quoteAsset: 'USDT', tickSize: tick };
+          if (base == null || tick == null) return null;
+          if (quote !== 'USDT' && quote !== 'USDC') return null;
+          return { symbol: canonical(base, quote), baseAsset: base, quoteAsset: quote, tickSize: tick };
         }),
       ),
   };
@@ -472,7 +472,6 @@ const okx: FuturesDialect = (() => {
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/market/ticker?instId=${native(symbol)}`)),
-    allTickers: (base) => get(url(base, '/market/tickers?instType=SWAP')),
     exchangeInfo: (base) => get(url(base, '/public/instruments?instType=SWAP')),
     openInterest: oi,
 
@@ -488,16 +487,6 @@ const okx: FuturesDialect = (() => {
       const row = obj(data(text)[0]);
       return rowTicker(row);
     },
-
-    parseAllTickers: (text) =>
-      compact(
-        data(text).map((row) => {
-          const o = obj(row);
-          const symbol = instSymbol(str(o.instId));
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
 
     parseExchangeInfo: (text) =>
       compact(
@@ -591,7 +580,6 @@ const bybit: FuturesDialect = (() => {
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/market/tickers?category=linear&symbol=${coinOf(symbol)}USDT`)),
-    allTickers: (base) => get(url(base, '/market/tickers?category=linear')),
     exchangeInfo: (base) => get(url(base, '/market/instruments-info?category=linear&limit=1000')),
     openInterest: oi,
 
@@ -604,16 +592,6 @@ const bybit: FuturesDialect = (() => {
       ).sort(byTime),
 
     parseTicker: (text) => rowTicker(obj(rows(text)[0])),
-
-    parseAllTickers: (text) =>
-      compact(
-        rows(text).map((row) => {
-          const o = obj(row);
-          const symbol = usdtSymbol(str(o.symbol));
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
 
     parseExchangeInfo: (text) =>
       compact(
@@ -693,7 +671,6 @@ const bitget: FuturesDialect = (() => {
       ),
     ticker: (base, symbol) =>
       get(url(base, `/mix/market/ticker?symbol=${coinOf(symbol)}USDT&productType=usdt-futures`)),
-    allTickers: (base) => get(url(base, '/mix/market/tickers?productType=usdt-futures')),
     exchangeInfo: (base) => get(url(base, '/mix/market/contracts?productType=usdt-futures')),
     openInterest: null,
 
@@ -706,16 +683,6 @@ const bitget: FuturesDialect = (() => {
       ).sort(byTime),
 
     parseTicker: (text) => rowTicker(singleRow(text)),
-
-    parseAllTickers: (text) =>
-      compact(
-        rows(text).map((row) => {
-          const o = obj(row);
-          const symbol = usdtSymbol(str(o.symbol));
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
 
     parseExchangeInfo: (text) =>
       compact(
@@ -805,12 +772,6 @@ const gate: FuturesDialect = (() => {
     );
   };
 
-  /** 合约名即规范符号（`BTC_USDT`）。 */
-  const rowSymbol = (row: Record<string, unknown>): string | null => {
-    const name = str(row.contract) ?? str(row.name);
-    return name != null && name.endsWith('_USDT') ? name : null;
-  };
-
   return {
     intervalLadder: ladder,
     maxKlineLimit: max,
@@ -823,7 +784,6 @@ const gate: FuturesDialect = (() => {
         ),
       ),
     ticker: (base, symbol) => get(url(base, `/tickers?contract=${native(symbol)}`)),
-    allTickers: (base) => get(url(base, '/tickers')),
     exchangeInfo: (base) => get(url(base, '/contracts')),
     openInterest: oi,
 
@@ -844,16 +804,6 @@ const gate: FuturesDialect = (() => {
       ).sort(byTime),
 
     parseTicker: (text) => rowTicker(obj(rows(text)[0])),
-
-    parseAllTickers: (text) =>
-      compact(
-        rows(text).map((row) => {
-          const o = obj(row);
-          const symbol = rowSymbol(o);
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
 
     parseExchangeInfo: (text) =>
       compact(
@@ -936,7 +886,6 @@ const mexc: FuturesDialect = (() => {
       );
     },
     ticker: (base, symbol) => get(url(base, `/ticker?symbol=${native(symbol)}`)),
-    allTickers: (base) => get(url(base, '/ticker')),
     exchangeInfo: (base) => get(url(base, '/detail')),
     openInterest: null,
 
@@ -964,16 +913,6 @@ const mexc: FuturesDialect = (() => {
     },
 
     parseTicker: (text) => rowTicker(singleRow(text)),
-
-    parseAllTickers: (text) =>
-      compact(
-        rows(text).map((row) => {
-          const o = obj(row);
-          const symbol = rowSymbol(o);
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
 
     parseExchangeInfo: (text) =>
       compact(
@@ -1052,7 +991,6 @@ const hyperliquid: FuturesDialect = (() => {
         req: { coin: coinOf(symbol), interval: '1h', startTime: end - 26 * 3_600_000, endTime: end },
       });
     },
-    allTickers: (base) => info(base, { type: 'metaAndAssetCtxs' }),
     exchangeInfo: (base) => info(base, { type: 'meta' }),
     // metaAndAssetCtxs 里有当前 openInterest，但没有历史序列
     openInterest: null,
@@ -1074,24 +1012,6 @@ const hyperliquid: FuturesDialect = (() => {
       return snapshotOf(last.close, bars[0].open, high, low, quote);
     },
 
-    parseAllTickers: (text) => {
-      // [meta, ctxs]：ctxs 与 universe 同序，markPx 当现价、dayNtlVlm 当 24h 成交额；
-      // 无 24h 高低价，用现价代位（搜索结果只用到价格与成交额）
-      const root = arr(parse(text));
-      const universe = arr(obj(root[0]).universe);
-      const ctxs = arr(root[1]);
-      return compact(
-        universe.map((row, i) => {
-          const name = str(obj(row).name);
-          const ctx = ctxs[i];
-          if (!name || ctx == null) return null;
-          const c = obj(ctx);
-          const last = numOrNull(c.markPx) ?? numOrNull(c.midPx) ?? numOrNull(c.oraclePx);
-          const snapshot = snapshotOf(last, numOrNull(c.prevDayPx), null, null, numOrNull(c.dayNtlVlm));
-          return snapshot != null ? ([canonical(name), snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      );
-    },
 
     parseExchangeInfo: (text) =>
       compact(
@@ -1181,7 +1101,6 @@ const htx: FuturesDialect = (() => {
         ),
       ),
     ticker: (base, symbol) => get(ex(base, `/market/detail/merged?contract_code=${native(symbol)}`)),
-    allTickers: (base) => get(ex(base, '/market/detail/batch_merged')),
     exchangeInfo: (base) => get(api(base, '/swap_contract_info')),
     openInterest: null,
 
@@ -1209,17 +1128,6 @@ const htx: FuturesDialect = (() => {
       return rowTicker(obj(obj(root).tick));
     },
 
-    parseAllTickers: (text) =>
-      compact(
-        rows(text, 'ticks').map((row) => {
-          const o = obj(row);
-          const symbol = rowSymbol(str(o.contract_code));
-          const snapshot = rowTicker(o);
-          return symbol != null && snapshot != null ? ([symbol, snapshot] as [string, TickerSnapshot]) : null;
-        }),
-      ),
-
-    /** 元数据行的合约名在 `contract_code`，币名另有 `symbol`（如 `BTC`）。 */
     parseExchangeInfo: (text) =>
       compact(
         rows(text, 'data').map((row) => {

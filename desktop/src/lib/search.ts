@@ -4,10 +4,10 @@
  * 上面——用户翻半天找不到比特币。所以先按**匹配位置**分层，再按计价币、成交额。
  */
 
-import type { Instrument, MarketType, Ticker24h } from './api';
+import type { Instrument, MarketType } from './api';
 import { displaySymbol } from './format';
 
-/** 空关键词（刚进搜索）时所有标的同分：不过滤，排序交给自选置顶/计价币/成交额。 */
+/** 空关键词（刚进搜索）时所有标的同分：不过滤，排序交给计价币。 */
 export const EMPTY_QUERY_RANK = 4;
 
 /**
@@ -79,78 +79,53 @@ export function quotePriority(quoteAsset: string): number {
 /** 搜索结果上限，与 App SearchViewModel.MAX_RESULTS 一致。 */
 export const MAX_RESULTS = 80;
 
-/**
- * 排序权重（越小越靠前），**自选恒在最前**：`0` 已自选 / `1` 未自选。
- *
- * 自选置顶与「匹配质量」是两把尺子，分开算再比 —— 否则搜 `btc` 时
- * 一个恰好叫 BTC 的未自选标的（rank 0）会压住用户自己加的 BTCUSDT（rank 2）。
- */
-const WATCHED_WEIGHT = 0;
-const UNWATCHED_WEIGHT = 1;
-
-export interface RankContext {
-  market: MarketType;
-  /** 当前市场的自选条目键（`market:symbol`）。 */
-  watched: ReadonlySet<string>;
-  /** 全量行情快照：只有成交额这一档排序用它，缺了按 0 处理。 */
-  snapshot: Readonly<Record<string, Ticker24h>>;
-}
-
-/**
- * 搜索一个关键词命中的标的，按 App 的排序口径排好序返回。
- *
- * 排序链（逐级兜底，前一级相同才看后一级）：
- * 自选置顶 → 匹配分层（见 `rankSymbol`）→ 计价币主流度 → 成交额降序 → 交易对名字母序。
- *
- * 最后那两级的顺序不能反：成交额是给「同一匹配档、同一计价币」内部排的，
- * 冷启动时快照还没到、全是 0，此时字母序是唯一的确定性来源 —— 反过来写会让
- * 冷启动的结果顺序随机（依赖 `Array.prototype.sort` 对等值元素的处理）。
- *
- * **纯函数**：不请求、不读 storage，只把「命中哪些、怎么排」这条策略收在一处，
- * 供搜索下拉框调用，也便于用核对脚本直接断言。
- */
-export function rankInstruments(
-  instruments: readonly Instrument[],
-  keyword: string,
-  ctx: RankContext,
-  limit: number = MAX_RESULTS,
-): Instrument[] {
-  if (!keyword) return [];
-  return instruments
-    .map((inst) => ({ inst, rank: rankSymbol(inst.symbol, inst.baseAsset, keyword) }))
-    .filter((r): r is { inst: Instrument; rank: number } => r.rank != null)
-    .sort((a, b) => {
-      const aw = ctx.watched.has(`${ctx.market}:${a.inst.symbol}`) ? WATCHED_WEIGHT : UNWATCHED_WEIGHT;
-      const bw = ctx.watched.has(`${ctx.market}:${b.inst.symbol}`) ? WATCHED_WEIGHT : UNWATCHED_WEIGHT;
-      return (
-        aw - bw ||
-        a.rank - b.rank ||
-        quotePriority(a.inst.quoteAsset) - quotePriority(b.inst.quoteAsset) ||
-        (ctx.snapshot[b.inst.symbol]?.quoteVolume ?? 0) -
-          (ctx.snapshot[a.inst.symbol]?.quoteVolume ?? 0) ||
-        a.inst.symbol.localeCompare(b.inst.symbol)
-      );
-    })
-    .slice(0, limit)
-    .map((r) => r.inst);
-}
-
-/** 混搜的一条命中：标的 + 它是哪个市场的（加进悬浮窗要连同市场一起带）。 */
+/** 混搜的一条命中：标的 + 它是哪个市场的（主窗要按它开标签页，悬浮窗要连同市场一起带）。 */
 export interface MarketHit {
   market: MarketType;
   inst: Instrument;
 }
 
 /**
- * 把多个市场的清单**混在一起搜**（设置 → 悬浮窗的搜索框；悬浮窗列表本来就现货/合约混排）。
+ * 同一市场内的排序键：匹配分层（见 `rankSymbol`）→ 计价币主流度 → 交易对名字母序。
+ * 主窗下拉的两栏与悬浮窗的混搜共用这一把尺子，两边不会排出两种偏好。
+ */
+function compareRelevance(
+  a: { inst: Instrument; rank: number },
+  b: { inst: Instrument; rank: number },
+): number {
+  return (
+    a.rank - b.rank ||
+    quotePriority(a.inst.quoteAsset) - quotePriority(b.inst.quoteAsset) ||
+    a.inst.symbol.localeCompare(b.inst.symbol)
+  );
+}
+
+/**
+ * 单市场搜索：主窗下拉的「现货 / 永续」两栏各用一次。
  *
- * 排序链与 `rankInstruments` 同一套，只是去掉了「自选置顶」（那边是给侧栏搜索用的：
- * 悬浮窗列表独立于自选，没有「已自选」这个概念）和成交额档（这里是偶发的一次搜索，
- * 不值得为它常开一份全量快照）：
- * 匹配分层 → 计价币主流度 → 交易对名字母序 → 市场（`lists` 的给定顺序，合约在前）。
+ * 不做「按成交额排」：那要常开一份全量行情快照，而两家盘口各拉一次全量
+ * 正是限频治理要避开的。搜索是偶发动作，匹配质量 + 计价币已经够用。
+ */
+export function rankMarket(
+  instruments: readonly Instrument[],
+  keyword: string,
+  limit: number = MAX_RESULTS,
+): Instrument[] {
+  if (!keyword) return [];
+  return instruments
+    .map((inst) => ({ inst, rank: rankSymbol(inst.symbol, inst.baseAsset, keyword) }))
+    .filter((r): r is { inst: Instrument; rank: number } => r.rank != null)
+    .sort(compareRelevance)
+    .slice(0, limit)
+    .map((r) => r.inst);
+}
+
+/**
+ * 把多个市场的清单**混在一起搜**（设置 → 悬浮窗的搜索框：那份列表本来就现货/合约混排）。
  *
- * 同名的 `BTC_USDT` 在现货与合约各有一条，字母序打平后由市场顺序兜底 ——
- * 排序结果必须**确定**，不然同名两条会在两次输入之间互换位置。
+ * 排序链与 `rankMarket` 同一套，末尾再补一级「市场顺序」（`lists` 的给定顺序）：
+ * 同名标的（`BTC_USDT`）两边各有一条，字母序打平后由它兜底 —— 排序结果必须**确定**，
+ * 不然同名两条会在两次输入之间互换位置。
  */
 export function rankAcrossMarkets(
   lists: readonly { market: MarketType; instruments: readonly Instrument[] }[],
@@ -170,9 +145,7 @@ export function rankAcrossMarkets(
     .filter((r): r is { market: MarketType; inst: Instrument; rank: number } => r.rank != null)
     .sort(
       (a, b) =>
-        a.rank - b.rank ||
-        quotePriority(a.inst.quoteAsset) - quotePriority(b.inst.quoteAsset) ||
-        a.inst.symbol.localeCompare(b.inst.symbol) ||
+        compareRelevance(a, b) ||
         (marketOrder.get(a.market) ?? 0) - (marketOrder.get(b.market) ?? 0),
     )
     .slice(0, limit)

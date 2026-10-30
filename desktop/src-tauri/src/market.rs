@@ -26,6 +26,11 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct MarketResponse {
     status: u16,
     body: String,
+    /// 429/418 时服务端给的冷却秒数（币安会带这个头）。前端据此决定冷却多久，
+    /// 而不是自己猜一个 —— 猜短了会在封禁期继续发请求，币安会把封禁一路往后推。
+    retry_after_secs: Option<u64>,
+    /// 币安系的分钟已用权重（`x-mbx-used-weight-1m`）。接近上限时前端主动收手。
+    used_weight_1m: Option<u32>,
 }
 
 fn client() -> &'static reqwest::Client {
@@ -91,8 +96,28 @@ pub async fn market_request(
     }
     let response = request.send().await.map_err(|e| short_error(&e))?;
     let status = response.status().as_u16();
+    let retry_after_secs = header_u64(response.headers(), "retry-after");
+    let used_weight_1m = header_u64(response.headers(), "x-mbx-used-weight-1m")
+        .and_then(|v| u32::try_from(v).ok());
     let body = response.text().await.map_err(|e| short_error(&e))?;
-    Ok(MarketResponse { status, body })
+    Ok(MarketResponse {
+        status,
+        body,
+        retry_after_secs,
+        used_weight_1m,
+    })
+}
+
+/// 只认纯数字（币安给的是秒数）；`retry-after` 允许 HTTP-date 写法，那种格式在这里
+/// 折成 None，由前端用保底时长 —— 宁可保守多等一会儿，也不要在封禁期继续打。
+fn header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
+    headers
+        .get(name)?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
  * 传输统一走宿主侧（lib/http.ts）：webview 的 fetch 只有 Gate 等少数盘口能读响应体
  * （CORS），而各家的 URL 构造与响应解析在 lib/dialects.ts（对应 App 的 dialect 层）。
  *
- * 符号一律用 Gate 形（`BTC_USDT`）—— 方言层在边界换算成各家原生写法，所以自选、
+ * 符号一律用 Gate 形（`BTC_USDT`）—— 方言层在边界换算成各家原生写法，所以标签页、
  * 搜索、图表这些下游不感知数据源。
  */
 
@@ -13,15 +13,27 @@ import { aggregateCandles } from './aggregate';
 import { isSourceFailureStatus, noteFuturesRequest } from './autoSource';
 import {
   DIALECTS,
+  type DialectId,
   type FuturesDialect,
   type HttpCall,
   type OpenInterestPoint,
   type TickerSnapshot,
 } from './dialects';
+import { displaySymbol } from './format';
 import { httpRequest } from './http';
 import { pageBackwards } from './klinePaging';
+import { assertFuturesAllowed, noteRateLimited, noteRateOk, noteUsedWeight } from './rateGate';
 import { coarsestBaseFor, minutesOf } from './intervals';
-import { currentFuturesUrl, endpointOf, onFuturesSourceChange } from './sources';
+import {
+  currentFuturesUrl,
+  currentSpotDialect,
+  currentSpotSource,
+  endpointOf,
+  onFuturesSourceChange,
+  onSpotSourceChange,
+  spotEndpointOf,
+} from './sources';
+import type { SpotCall } from './spotDialects';
 
 export type MarketType = 'SPOT' | 'FUTURES';
 
@@ -69,28 +81,31 @@ async function fetchText(call: HttpCall, market?: MarketType): Promise<string> {
     if (res.status < 200 || res.status >= 300) throw new Error(`HTTP ${res.status}`);
     return res.body;
   }
+  const origin = currentFutures().baseUrl;
   const started = performance.now();
   let res;
   try {
+    // 冷却期不再碰网络：被封着还继续发，币安会把封禁一路往后推（见 rateGate）
+    assertFuturesAllowed(origin);
     res = await httpRequest(call.method, call.url, call.body);
   } catch (error) {
+    // 冷却拦截也算「这个源现在用不了」：自动选源开着时才可能因此换到独立盘口
     noteFuturesRequest(performance.now() - started, true);
     throw error;
   }
+  noteUsedWeight(origin, res.used_weight_1m);
   if (res.status < 200 || res.status >= 300) {
+    if (res.status === 418 || res.status === 429) {
+      noteRateLimited(origin, res.status, res.retry_after_secs);
+    }
     if (isSourceFailureStatus(res.status)) {
       noteFuturesRequest(performance.now() - started, true);
     }
     throw new Error(`HTTP ${res.status}`);
   }
+  noteRateOk(origin);
   noteFuturesRequest(performance.now() - started, false);
   return res.body;
-}
-
-/** Gate 的数字字段都是字符串，空串/null 按 0 兜（与 App 的容错一致）。 */
-function num(v: unknown): number {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
 }
 
 /** 快照 → 展示形：涨跌幅按 (现价 − 24h 开盘) / 开盘 算，各路盘口统一在这个出口换算。 */
@@ -106,35 +121,48 @@ function toTicker(symbol: string, snapshot: TickerSnapshot): Ticker24h {
   };
 }
 
-function currentFutures(): { baseUrl: string; dialect: FuturesDialect; label: string } {
+function currentFutures(): {
+  baseUrl: string;
+  dialectId: DialectId;
+  dialect: FuturesDialect;
+  label: string;
+} {
   const endpoint = endpointOf(currentFuturesUrl());
-  return { baseUrl: endpoint.baseUrl, dialect: DIALECTS[endpoint.dialect], label: endpoint.label };
+  return {
+    baseUrl: endpoint.baseUrl,
+    dialectId: endpoint.dialect,
+    dialect: DIALECTS[endpoint.dialect],
+    label: endpoint.label,
+  };
+}
+
+/**
+ * 只有币安系（含 Aster）的方言按符号自带计价币拼请求；其余几家是「币名 + 固定 USDT」
+ * （`BTC-USDT-SWAP` / `BTCUSDT` / `BTC_USDT`）。拿 USDC 标的一问，它们会把 `BTC_USDC`
+ * 悄悄读成 BTC 的 USDT 合约 —— **价格看起来正常，盘口却是错的**。宁可明确报错。
+ */
+function assertQuoteSupported(market: MarketType, symbol: string): void {
+  if (market !== 'FUTURES') return;
+  const { dialectId, label } = currentFutures();
+  if (dialectId !== 'BINANCE' && !symbol.endsWith('_USDT')) {
+    throw new Error(`${label} 只提供 USDT 交易对；${displaySymbol(symbol)} 请切到币安系接口`);
+  }
 }
 
 // —————————————————————————— 单个标的的 24h 行情 ——————————————————————————
 
 export async function fetchTicker(market: MarketType, symbol: string): Promise<Ticker24h> {
   if (market === 'FUTURES') {
+    assertQuoteSupported(market, symbol);
     const { baseUrl, dialect } = currentFutures();
     const snapshot = dialect.parseTicker(await fetchText(dialect.ticker(baseUrl, symbol), 'FUTURES'));
     if (!snapshot) throw new Error(`无此合约：${symbol}`);
     return toTicker(symbol, snapshot);
   }
-  const rows = await spotJson<GateSpotTicker[]>(`/tickers?currency_pair=${encodeURIComponent(symbol)}`);
-  const d = rows[0];
-  if (!d) throw new Error(`无此交易对：${symbol}`);
-  return spotTicker(d);
-}
-
-/** 该市场全量行情一次拉齐（搜索结果需要给未自选的标的也显示价格与成交额）。 */
-export async function fetchAllTickers(market: MarketType): Promise<Ticker24h[]> {
-  if (market === 'FUTURES') {
-    const { baseUrl, dialect } = currentFutures();
-    const rows = dialect.parseAllTickers(await fetchText(dialect.allTickers(baseUrl), 'FUTURES'));
-    return rows.map(([symbol, snapshot]) => toTicker(symbol, snapshot));
-  }
-  const rows = await spotJson<GateSpotTicker[]>('/tickers');
-  return rows.map(spotTicker);
+  const dialect = currentSpotDialect();
+  const ticker = dialect.parseTicker(await spotFetch(dialect.ticker(symbol)), symbol);
+  if (!ticker) throw new Error(`无此交易对：${symbol}`);
+  return ticker;
 }
 
 // —————————————————————————— K 线 ——————————————————————————
@@ -142,11 +170,13 @@ export async function fetchAllTickers(market: MarketType): Promise<Ticker24h[]> 
 /**
  * 当前数据源的**原生周期表**（分钟 → 原生码）。
  *
- * 现货固定 Gate（唯一盘口）；永续看当前方言的 `intervalLadder` —— 它本来就是各家的原生码表，
+ * 两个市场都看**当前源的方言**：`intervalLadder` 本来就是各家的原生码表，
  * 所以不另立一份支持清单（两处清单必然会分叉）。**这是唯一的「原生」真出处。**
  */
 export function nativeLadder(market: MarketType): Record<number, string> {
-  return market === 'FUTURES' ? currentFutures().dialect.intervalLadder : SPOT_LADDER;
+  return market === 'FUTURES'
+    ? currentFutures().dialect.intervalLadder
+    : currentSpotDialect().intervalLadder;
 }
 
 /** 原生支持的周期分钟数（表外的周期不是不能用，而是要**聚合**出来 —— 见 `fetchKlines`）。 */
@@ -230,9 +260,6 @@ export function supportsOlderKlines(market: MarketType): boolean {
   return market !== 'FUTURES' || currentFutures().dialect.supportsTimeWindow !== false;
 }
 
-/** Gate 现货单次 K 线根数上限。 */
-const SPOT_KLINE_MAX = 1000;
-
 /**
  * 单一原生周期的取数（`minutes` 必须真的在该源的表里）；`endMs` = 只要此时刻之前的（翻旧页用）。
  *
@@ -248,7 +275,8 @@ async function fetchNativeKlines(
   endMs?: number,
 ): Promise<Bar[]> {
   if (ladder[minutes] == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
-  const pageSize = market === 'FUTURES' ? currentFutures().dialect.maxKlineLimit : SPOT_KLINE_MAX;
+  const pageSize =
+    market === 'FUTURES' ? currentFutures().dialect.maxKlineLimit : currentSpotDialect().maxKlineLimit;
   if (limit <= pageSize || !supportsOlderKlines(market)) {
     return fetchNativePage(market, symbol, ladder, minutes, limit, endMs);
   }
@@ -266,34 +294,24 @@ async function fetchNativePage(
   limit: number,
   endMs?: number,
 ): Promise<Bar[]> {
-  const code = ladder[minutes];
-  if (code == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
+  if (ladder[minutes] == null) throw new Error(`${sourceLabelOf(market)} 不支持 ${minutes} 分钟周期`);
   if (market === 'FUTURES') {
+    assertQuoteSupported(market, symbol);
     const { baseUrl, dialect } = currentFutures();
     return dialect.parseKlines(
       await fetchText(dialect.klines(baseUrl, symbol, minutes, limit, null, endMs ?? null), 'FUTURES'),
       minutes,
     );
   }
-  const limitClamped = Math.max(1, Math.min(limit, SPOT_KLINE_MAX));
-  const toQuery = endMs == null ? '' : `&to=${Math.floor(endMs / 1000)}`;
-  const rows = await spotJson<string[][]>(
-    `/candlesticks?currency_pair=${encodeURIComponent(symbol)}&interval=${code}&limit=${limitClamped}${toQuery}`,
-  );
-  // 现货蜡烛是**数组**且字段顺序与币安不同：[秒级时间, 成交额, 收, 高, 低, 开, 成交量, 是否收线]
-  return rows.map((r) => ({
-    timestamp: Number(r[0]) * 1000,
-    open: num(r[5]),
-    high: num(r[3]),
-    low: num(r[4]),
-    close: num(r[2]),
-    volume: num(r[6]),
-  }));
+  const dialect = currentSpotDialect();
+  return dialect.parseKlines(await spotFetch(dialect.klines(symbol, minutes, limit, endMs ?? null)));
 }
 
 /** 报错文案里点名的数据源。 */
 function sourceLabelOf(market: MarketType): string {
-  return market === 'FUTURES' ? currentFutures().label : 'Gate 现货';
+  return market === 'FUTURES'
+    ? currentFutures().label
+    : spotEndpointOf(currentSpotSource()).label;
 }
 
 // —————————————————————————— 持仓量（永续副图） ——————————————————————————
@@ -330,6 +348,7 @@ export async function fetchOpenInterest(
   limit = 300,
 ): Promise<OpenInterestSeries> {
   if (market !== 'FUTURES') throw new Error('现货没有持仓量');
+  assertQuoteSupported(market, symbol);
   const { baseUrl, dialect, label } = currentFutures();
   const spec = dialect.openInterest;
   if (!spec) throw new Error(`${label} 没有持仓量历史`);
@@ -388,91 +407,55 @@ async function futuresInstruments(): Promise<Instrument[]> {
  * （与 App 的 clearMarketCache 同）。改选择的入口只有 sources.ts，挂上去就覆盖全部路径。
  */
 onFuturesSourceChange(() => {
-  instrumentCache.clear();
-  instrumentResolved.clear();
-  // 合约清单来自选定的那一家，换源后要重拉；现货恒走 Gate，跟选择无关，留着继续用
+  // 只动作合约那一份：现货清单属于另一个源，换合约源不该让它失效
+  instrumentCache.delete('FUTURES');
+  instrumentResolved.delete('FUTURES');
   if (currentFuturesUrl()) void fetchInstruments('FUTURES').catch(() => {});
 });
 
-// —————————————————————————— Gate 现货（唯一固定盘口） ——————————————————————————
-
-const GATE_ORIGIN = 'https://api.gateio.ws';
-const SPOT = `${GATE_ORIGIN}/api/v4/spot`;
-
-async function spotJson<T>(path: string): Promise<T> {
-  return JSON.parse(await fetchText({ url: `${SPOT}${path}`, method: 'GET' })) as T;
-}
+// —————————————————————————— 现货（Gate / 币安，可选） ——————————————————————————
 
 /**
- * Gate **现货**的原生周期表（分钟 → 原生码）。
+ * 现货请求：按当前源的**主机链**依次试，前一个失败（网络层 / 5xx / 网关类状态）才试下一个。
+ * 链见 `sources.ts` 的 `SPOT_ENDPOINTS` —— 币安那几条共享同一个 IP 限频池，
+ * 这层只解决可达性（`data-api.binance.vision` 大陆通常可直连）。
  *
- * 现货与永续是两张不同的白名单，所以必须分开列：粗周期上现货只有 `7d`/`30d` 这两个名字，
- * 而**没有** `2d`/`5d`。逐周期实测（`.workbuddy/tmp/probe-intervals-2.log`）：
- *   ✓ `1m 3m 5m 15m 30m 1h 2h 4h 6h 8h 12h 1d 3d 7d 30d`（`1w` 也认，与 `7d` 同）
- *   ✗ `2m` `45m` `7h` `2d` `5d` `1M` `bogus` —— 一律报错
- * ⚠️ `30d` 是**按日历月**走的（相邻间隔实测 28/31/30 天），不是固定 30 天；
- * 界面 id `1M` 映射到它就是既有的近似，别拿它当聚合基底去拼更粗的周期。
+ * 业务性 4xx（参数/标的错误）换域也是同样的答案，直接上抛。
  */
-const SPOT_LADDER: Record<number, string> = {
-  1: '1m',
-  3: '3m',
-  5: '5m',
-  15: '15m',
-  30: '30m',
-  60: '1h',
-  120: '2h',
-  240: '4h',
-  360: '6h',
-  480: '8h',
-  720: '12h',
-  1_440: '1d',
-  4_320: '3d',
-  10_080: '7d',
-  43_200: '30d',
-};
-
-interface GateSpotTicker {
-  currency_pair: string;
-  last: string;
-  change_percentage: string;
-  high_24h: string;
-  low_24h: string;
-  quote_volume: string;
+async function spotFetch(call: SpotCall): Promise<string> {
+  const endpoint = spotEndpointOf(currentSpotSource());
+  let last: unknown = null;
+  for (const host of endpoint.hosts) {
+    try {
+      const res = await httpRequest(call.method, `${host}${call.url}`, call.body);
+      if (res.status >= 200 && res.status < 300) return res.body;
+      last = new Error(`HTTP ${res.status}`);
+      if (
+        !(
+          res.status >= 500 ||
+          res.status === 403 ||
+          res.status === 404 ||
+          res.status === 418 ||
+          res.status === 429
+        )
+      ) {
+        throw last;
+      }
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last instanceof Error ? last : new Error('现货接口不可用');
 }
 
-function spotTicker(d: GateSpotTicker): Ticker24h {
-  return {
-    symbol: d.currency_pair,
-    lastPrice: num(d.last),
-    priceChangePercent: num(d.change_percentage),
-    highPrice: num(d.high_24h),
-    lowPrice: num(d.low_24h),
-    quoteVolume: num(d.quote_volume),
-  };
-}
-
-interface GateSpotPair {
-  id: string;
-  base: string;
-  quote: string;
-  precision: number;
-  trade_status: string;
-}
-
-/** 现货的 precision 是小数位数；tickSize 换算成 App 那套「最小价位字符串」。 */
-function tickFromPrecision(precision: number): string {
-  const p = Number.isFinite(precision) ? Math.max(0, Math.min(12, precision)) : 2;
-  return p === 0 ? '1' : (10 ** -p).toFixed(p);
-}
+/** 换现货源必须清掉清单缓存：两家可选标的完全不同，混在一起会搜出「点进去没行情」的名字。 */
+onSpotSourceChange(() => {
+  instrumentCache.delete('SPOT');
+  instrumentResolved.delete('SPOT');
+  void fetchInstruments('SPOT').catch(() => {});
+});
 
 async function spotInstruments(): Promise<Instrument[]> {
-  const rows = await spotJson<GateSpotPair[]>('/currency_pairs');
-  return rows
-    .filter((p) => p.trade_status === 'tradable')
-    .map((p) => ({
-      symbol: p.id,
-      baseAsset: p.base,
-      quoteAsset: p.quote,
-      tickSize: tickFromPrecision(p.precision),
-    }));
+  const dialect = currentSpotDialect();
+  return dialect.parseExchangeInfo(await spotFetch(dialect.exchangeInfo()));
 }

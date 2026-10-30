@@ -14,6 +14,7 @@ import { useSyncExternalStore } from 'react';
 import type { MarketType } from './api';
 import { DIALECTS, type DialectId, type FuturesDialect } from './dialects';
 import { httpRequest } from './http';
+import { spotDialectOf, type SpotDialect, type SpotSourceId } from './spotDialects';
 
 export interface FuturesEndpoint {
   /** 展示名。 */
@@ -38,12 +39,12 @@ export interface FuturesEndpoint {
  * 永远不含进行中那一根，表象是「价格一致但 K 线图最后一根落后一个周期」。
  */
 export const FUTURES_ENDPOINTS: FuturesEndpoint[] = [
-  { label: 'Aster 官方', baseUrl: 'https://fapi.asterdex.com', note: 'Aster 盘口 · 大陆通常可直连', dialect: 'BINANCE' },
-  { label: '币安合约 主域', baseUrl: 'https://fapi.binance.com', note: '币安盘口 · 大陆通常需代理', dialect: 'BINANCE' },
+  { label: 'Aster 官方', baseUrl: 'https://fapi.asterdex.com', note: 'Aster 盘口 · 大陆通常可直连 · 只有 USDT 合约', dialect: 'BINANCE' },
+  { label: '币安合约 主域', baseUrl: 'https://fapi.binance.com', note: '币安盘口 · 大陆通常需代理 · 含 USDC 永续', dialect: 'BINANCE' },
   { label: 'OKX', baseUrl: 'https://www.okx.com', note: '独立盘口 · 大陆通常需代理', dialect: 'OKX' },
   { label: 'Bybit', baseUrl: 'https://api.bybit.com', note: '独立盘口 · 大陆通常需代理', dialect: 'BYBIT' },
   { label: 'Bitget', baseUrl: 'https://api.bitget.com', note: '独立盘口', dialect: 'BITGET' },
-  { label: 'Gate', baseUrl: 'https://api.gateio.ws', note: '独立盘口 · 大陆通常可直连', dialect: 'GATE' },
+  { label: 'Gate', baseUrl: 'https://api.gateio.ws', note: '独立盘口 · 大陆通常可直连 · 永续无公开 USDC', dialect: 'GATE' },
   { label: 'MEXC', baseUrl: 'https://contract.mexc.com', note: '独立盘口', dialect: 'MEXC' },
   { label: 'Hyperliquid', baseUrl: 'https://api.hyperliquid.xyz', note: '独立盘口 · 链上永续', dialect: 'HYPERLIQUID' },
   { label: 'HTX 火币', baseUrl: 'https://api.hbdm.com', note: '独立盘口 · 域名偶有污染', dialect: 'HTX' },
@@ -71,6 +72,11 @@ export function endpointOf(url: string): FuturesEndpoint {
 
 export function dialectOf(id: DialectId): FuturesDialect {
   return DIALECTS[id];
+}
+
+/** 当前合约源的方言 id：要不要开实时通道、开哪种，都看它。 */
+export function currentFuturesDialectId(): DialectId {
+  return endpointOf(currentFuturesUrl()).dialect;
 }
 
 // —————————————————————————— 选择与广播 ——————————————————————————
@@ -132,13 +138,118 @@ export function useFuturesSourceUrl(): string {
   return useSyncExternalStore(subscribe, () => current, () => current);
 }
 
+// —————————————————————————— 现货源（可选，默认 Gate） ——————————————————————————
+
 /**
- * 取数 effect 的依赖键：现货固定走 Gate（与所选无关，恒为空串），永续跟着选择走。
+ * 现货候选。与合约不同，这里**不做本机测速**：两家真正的区别只有「大陆能不能直连」，
+ * 用户按自己的网络常识点一下即可，没必要为两个选项再打一轮探测。
+ *
+ * 币安那条是**域名链**：`data-api.binance.vision` 优先（实测大陆可直连），再退到
+ * api1~4 与主域。这些域共享同一个 IP 限频池，所以这层只解决可达性，不解决限频。
+ */
+export interface SpotEndpoint {
+  id: SpotSourceId;
+  label: string;
+  /** 依次尝试的 REST 主机：当前一个失败（网络/5xx/网关类状态）才试下一个。 */
+  hosts: string[];
+  note: string;
+}
+
+export const SPOT_ENDPOINTS: SpotEndpoint[] = [
+  {
+    id: 'GATE',
+    label: 'Gate 现货',
+    hosts: ['https://api.gateio.ws'],
+    note: '大陆通常可直连 · 有 USDC 现货',
+  },
+  {
+    id: 'BINANCE',
+    label: '币安现货',
+    hosts: [
+      'https://data-api.binance.vision',
+      'https://api1.binance.com',
+      'https://api2.binance.com',
+      'https://api3.binance.com',
+      'https://api4.binance.com',
+      'https://api.binance.com',
+    ],
+    note: 'data-api 镜像优先 · 与合约限频/封禁分开计',
+  },
+];
+
+export const DEFAULT_SPOT_SOURCE: SpotSourceId = 'GATE';
+
+const SPOT_KEY = 'mm.spotSource';
+
+export function normalizeSpotSource(raw: string | null): SpotSourceId {
+  return SPOT_ENDPOINTS.some((e) => e.id === raw) ? (raw as SpotSourceId) : DEFAULT_SPOT_SOURCE;
+}
+
+export function spotEndpointOf(id: SpotSourceId): SpotEndpoint {
+  return SPOT_ENDPOINTS.find((e) => e.id === id) ?? SPOT_ENDPOINTS[0];
+}
+
+let currentSpot: SpotSourceId = normalizeSpotSource(localStorage.getItem(SPOT_KEY));
+const spotListeners = new Set<() => void>();
+
+function emitSpot(): void {
+  for (const listener of spotListeners) listener();
+}
+
+/** 现货换源广播：api.ts 在模块加载时挂上「清现货缓存」。 */
+export function onSpotSourceChange(listener: () => void): void {
+  spotListeners.add(listener);
+}
+
+function applySpot(next: SpotSourceId): void {
+  currentSpot = next;
+  localStorage.setItem(SPOT_KEY, next);
+  emitSpot();
+}
+
+export function setSpotSource(id: SpotSourceId): void {
+  const next = normalizeSpotSource(id);
+  if (next !== currentSpot) applySpot(next);
+}
+
+/** 另一个窗口（主窗 ⇄ 悬浮窗）可能改过选择：读一次，变了就跟进。 */
+export function syncSpotSource(): void {
+  const stored = normalizeSpotSource(localStorage.getItem(SPOT_KEY));
+  if (stored !== currentSpot) applySpot(stored);
+}
+
+/** 当前现货源（非 React 取数用）。 */
+export function currentSpotSource(): SpotSourceId {
+  syncSpotSource();
+  return currentSpot;
+}
+
+function subscribeSpot(listener: () => void): () => void {
+  spotListeners.add(listener);
+  return () => {
+    spotListeners.delete(listener);
+  };
+}
+
+export function useSpotSource(): SpotSourceId {
+  return useSyncExternalStore(subscribeSpot, () => currentSpot, () => currentSpot);
+}
+
+/** 当前现货方言（取数用）。 */
+export function currentSpotDialect(): SpotDialect {
+  return spotDialectOf(currentSpotSource());
+}
+
+/**
+ * 取数 effect 的依赖键：两个市场各跟着自己的选择走。
  * 换源后所有按 (market, symbol) 缓存的取数都得重来，否则两个盘口的数据会混在一起。
  */
 export function useSourceKey(market: MarketType | undefined): string {
-  const url = useFuturesSourceUrl();
-  return market === 'FUTURES' ? url : '';
+  const futures = useFuturesSourceUrl();
+  const spot = useSpotSource();
+  if (market === 'FUTURES') return futures;
+  if (market === 'SPOT') return spot;
+  return '';
 }
 
 // —————————————————————————— 探测 ——————————————————————————
