@@ -600,3 +600,22 @@ tag `0.9.59`（annotated `721b487c4dce`）→ 远端 main `964013bf`。Release r
 - ⚠️ Windows 本机跑 `api-push-0948.py` 会在打印 `✓` 时 `UnicodeEncodeError`（GBK 控制台）中断 ——
   blob 已传、重跑幂等；加 `PYTHONIOENCODING=utf-8` 即可。
 - ⚠️ 首次 `gh api` 报 TLS handshake timeout，直接重跑即过；本机 `127.0.0.1:7897` 代理**没开**，走直连。
+
+## 0.9.60（**只发 Android**，2026-10-30 下午）
+
+「BOLL 三线同色 + 去掉布林带填充」—— 与桌面端 0.1.47 同口径：`ChartSeries` 三条轨统一 `OCTONARY`
+（冷灰，读数带 `BOLL.MB/UP/DN` 随之同色）、`OverlayData` 删 `bandFill`、`KlineChart` 删 `bandPath`
+与调色板 `band`；`ChartLineColors` 的 5/6 两位空置只为保持与桌面端色位下标对齐。
+两个 commit：feat `184c18e` → chore(release) `9cbdec4`；API 推成远端 `52ecefb` → `80f2b27`
+（`api-push-0948.py`，第二个 `--parent 52ecefb…` 完整 40 位），推完 `git fetch` + `update-ref`（没 reset）。
+tag `0.9.60`（annotated `8d98421ce2f6`）→ 远端 main `80f2b27`；Release run **41024385525** 绿
+`08:07:52 → 08:10:10Z`（2m18s，含 CI 内 pinned-key 断言）。
+
+- `android-latest` id/created_at 原地不变（`398798258` / `2026-09-29T03:22:14Z`）、只有
+  `market-monitor-0.9.60.apk`（**11186824**）+ `.sha256`（65），无 0.9.59 残留。
+- CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥指纹、`本次版本号：0.9.60`；
+  `verify-channel.mjs 0.9.60` → **34/34 PASS**；README「当前版本」表已同步 0.9.60 / 72。
+- ✅ 打 tag 前本地 `:app:testDebugUnitTest` 全绿（47s）。
+- 真机验收用 debug 包（MuMu 竖屏详情页开 BOLL 截图：三条灰线、带内无填充，关掉后回到原开关状态）；
+  release 包 `isMinifyEnabled = false`，与 debug 同观感 ⇒ 未在设备装 release 包。
+- ✅ 本轮 `git fetch origin --tags` 正常，remote 只有到 `0.9.59`（0.9.57/0.9.58 是别的会话发的）。
