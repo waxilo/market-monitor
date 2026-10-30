@@ -619,3 +619,26 @@ tag `0.9.60`（annotated `8d98421ce2f6`）→ 远端 main `80f2b27`；Release ru
 - 真机验收用 debug 包（MuMu 竖屏详情页开 BOLL 截图：三条灰线、带内无填充，关掉后回到原开关状态）；
   release 包 `isMinifyEnabled = false`，与 debug 同观感 ⇒ 未在设备装 release 包。
 - ✅ 本轮 `git fetch origin --tags` 正常，remote 只有到 `0.9.59`（0.9.57/0.9.58 是别的会话发的）。
+
+## desktop 0.1.51（**只发桌面端**，2026-10-30 下午）
+
+「K 线影线与柱体同中心取整，修复平移左右偏」——用户截图报「影线和柱体没居中、移动画布左右偏」。
+根因：柱体对 `x - bodyW/2` 与 `bodyW` 各自 `Math.round`，与影线的 `Math.round(x)+0.5` 各丢各的小数，
+柱心偏 ±1px 且平移时两处跳变方向不一致。修复为 `bodyRect(x)`：从影线圆整中心反推左缘、宽度取奇数
+（偶数宽中心落不到半像素上），主图蜡烛与副图量柱共用；Android 全浮点绘制无此问题，未动。
+像素级验收：Chrome CDP 读 canvas `getImageData`，放大 6 档 + 横拖各断言一次，20 根蜡烛
+「影线中心 vs 柱体最宽行中心」全部 ≤0.5px（脚本 `.workbuddy/tmp/verify-candle-align.mjs` 可复用）。
+
+- 两个 commit：fix `829a06d`（只 add KlineCanvas.tsx —— 工作区还有他人在研的 ChartView.tsx 改动与
+  未跟踪 `klineCache.ts`，**没带**）→ chore(release) `5d50b8f`（tauri.conf.json + README 版本行 0.1.50→0.1.51）。
+  tag `desktop-v0.1.51`（annotated）→ 远端 main `5d50b8f`。Desktop Release run **41032047665** 三 job 全绿
+  （09:15:03Z 起）。
+- ⚠️ **0.1.50 已被 gzip 修复占用**（另一会话把 fix+release 合成一个 commit `a84420f`，tag 已在远端）——
+  发版前先 `git ls-remote --tags origin 'desktop-v*'` 对齐序号，别按本地 README/记忆里的「最新版」算。
+- push 绕法：工作区 `git push` 仍报 `not a git repository`；本轮 `%TEMP%` 复制 `.git` 的老绕法**直接好用**
+  （`git tag -a` 先在工作区打 → 复制 → 副本里 `git push origin main <tag>` 两连推 → 工作区 `fetch` 对齐）。
+- 验收：`verify-channel.mjs 0.1.51` → **34/34 PASS**；`desktop-latest` id/created_at 原地不变
+  （398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.51 无 0.1.50 残留、keyid `226B03192E5DF60B` == 基线；
+  CI vite 指纹 `index-BsYhVWZA.js 327.30` / `index-B8igtjlR.css 46.75`（**105 modules**）== 干净副本本地 build
+  逐字一致（`git archive 5d50b8f desktop` + 拷 node_modules 到 `.workbuddy/tmp/pristine-0151`——工作区有
+  他人在研文件，不能直接 build，105 modules 也印证 ChartView 在研改动没进包）。
