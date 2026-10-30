@@ -1,9 +1,10 @@
 /**
- * 行情入口：现货固定走 Gate（与 App 相同 —— 多盘口只做合约），永续按用户在「数据源」
- * 弹窗里选定的候选分发（见 lib/sources.ts）。
+ * 行情入口：现货与永续都按用户在「数据源」弹窗里选定的候选分发（见 lib/sources.ts）——
+ * 现货出厂币安（可切 Gate），永续在 9 个候选里点选。
  *
- * 传输统一走宿主侧（lib/http.ts）：webview 的 fetch 只有 Gate 等少数盘口能读响应体
- * （CORS），而各家的 URL 构造与响应解析在 lib/dialects.ts（对应 App 的 dialect 层）。
+ * 传输统一走宿主侧（lib/http.ts）：webview 的 fetch 只有币安现货镜像、Gate 等少数盘口
+ * 能读响应体（CORS），而各家的 URL 构造与响应解析在 lib/dialects.ts / spotDialects.ts
+ * （对应 App 的 dialect 层）。
  *
  * 符号一律用 Gate 形（`BTC_USDT`）—— 方言层在边界换算成各家原生写法，所以标签页、
  * 搜索、图表这些下游不感知数据源。
@@ -371,13 +372,79 @@ const instrumentCache = new Map<MarketType, Promise<Instrument[]>>();
  */
 const instrumentResolved = new Map<MarketType, Instrument[]>();
 
-/** 同步取已缓存的清单，没有就返回 null（调用方自己决定要不要拉）。 */
+/** 清单落盘键（按市场）。启动时先拿它渲染，网络那份在后台刷新。 */
+function instrumentsKey(market: MarketType): string {
+  return `mm.instruments.${market}`;
+}
+
+/** 这份清单属于哪个源 —— 存下来的清单只对同一个源有效（两家的标的名完全不同）。 */
+function instrumentsSource(market: MarketType): string {
+  return market === 'FUTURES' ? currentFutures().baseUrl : currentSpotSource();
+}
+
+/**
+ * 读上次成功落盘的那份。**只在这一份的源与当前源一致时才认**：换过源就该当没存过
+ * （否则搜索会列出另一家的标的名）。坏数据 / 配额异常一律当没存过，不影响启动。
+ */
+function readStoredInstruments(market: MarketType): Instrument[] | null {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(instrumentsKey(market));
+  } catch {
+    return null;
+  }
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(raw) as { source?: unknown; rows?: unknown };
+    if (parsed.source !== instrumentsSource(market) || !Array.isArray(parsed.rows)) return null;
+    const rows = parsed.rows.filter(
+      (r): r is Instrument =>
+        r != null &&
+        typeof r === 'object' &&
+        typeof (r as Instrument).symbol === 'string' &&
+        typeof (r as Instrument).baseAsset === 'string',
+    );
+    return rows.length > 0 ? rows : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredInstruments(market: MarketType, rows: Instrument[]): void {
+  if (rows.length === 0) return;
+  try {
+    localStorage.setItem(
+      instrumentsKey(market),
+      JSON.stringify({ source: instrumentsSource(market), rows }),
+    );
+  } catch {
+    /* 配额满 / 隐私模式：只影响下次启动的首屏速度，不影响本次 */
+  }
+}
+
+function clearStoredInstruments(market: MarketType): void {
+  try {
+    localStorage.removeItem(instrumentsKey(market));
+  } catch {
+    /* 拿不到 storage 就没什么可清的 */
+  }
+}
+
+/**
+ * 同步取已缓存的清单，没有就返回 null（调用方自己决定要不要拉）。
+ * 内存里没有再读一次落盘的那份 —— 启动后的第一批渲染就能直接有清单，不用等网络。
+ */
 export function peekInstruments(market: MarketType): Instrument[] | null {
-  return instrumentResolved.get(market) ?? null;
+  const memo = instrumentResolved.get(market);
+  if (memo != null) return memo;
+  const stored = readStoredInstruments(market);
+  if (stored != null) instrumentResolved.set(market, stored);
+  return stored;
 }
 
 /**
  * 该市场全部可交易标的，只取一次并缓存；失败作废缓存（下次重试）。
+ * 成功一次就落盘：下次启动先拿它渲染，网络那份只用来刷新。
  * 未收线的、下架的、非 tradable 的都滤掉，免得搜出一堆点进去没行情的名字。
  */
 export function fetchInstruments(market: MarketType): Promise<Instrument[]> {
@@ -390,6 +457,7 @@ export function fetchInstruments(market: MarketType): Promise<Instrument[]> {
       })
       .then((rows) => {
         instrumentResolved.set(market, rows);
+        writeStoredInstruments(market, rows);
         return rows;
       });
     instrumentCache.set(market, pending);
@@ -410,14 +478,21 @@ onFuturesSourceChange(() => {
   // 只动作合约那一份：现货清单属于另一个源，换合约源不该让它失效
   instrumentCache.delete('FUTURES');
   instrumentResolved.delete('FUTURES');
+  clearStoredInstruments('FUTURES');
   if (currentFuturesUrl()) void fetchInstruments('FUTURES').catch(() => {});
 });
 
 // —————————————————————————— 现货（Gate / 币安，可选） ——————————————————————————
 
 /**
- * 现货请求：按当前源的**主机链**依次试，前一个失败（网络层 / 5xx / 网关类状态）才试下一个。
- * 链见 `sources.ts` 的 `SPOT_ENDPOINTS` —— 币安那几条共享同一个 IP 限频池，
+ * 现货**单个域名**的时限。宿主默认 20s，而主机链是串行试的 —— 一个黑洞域名就能把
+ * 「拉清单」拖成几十秒。8s 足够把 300KB 的清单或一页 K 线拿回来，超时直接切下一个。
+ */
+const SPOT_HOST_TIMEOUT_MS = 8_000;
+
+/**
+ * 现货请求：按当前源的**主机链**依次试，前一个失败（网络层 / 超时 / 5xx / 网关类状态）
+ * 才试下一个。链见 `sources.ts` 的 `SPOT_ENDPOINTS` —— 币安那几条共享同一个 IP 限频池，
  * 这层只解决可达性（`data-api.binance.vision` 大陆通常可直连）。
  *
  * 业务性 4xx（参数/标的错误）换域也是同样的答案，直接上抛。
@@ -427,7 +502,7 @@ async function spotFetch(call: SpotCall): Promise<string> {
   let last: unknown = null;
   for (const host of endpoint.hosts) {
     try {
-      const res = await httpRequest(call.method, `${host}${call.url}`, call.body);
+      const res = await httpRequest(call.method, `${host}${call.url}`, call.body, SPOT_HOST_TIMEOUT_MS);
       if (res.status >= 200 && res.status < 300) return res.body;
       last = new Error(`HTTP ${res.status}`);
       if (
@@ -452,6 +527,7 @@ async function spotFetch(call: SpotCall): Promise<string> {
 onSpotSourceChange(() => {
   instrumentCache.delete('SPOT');
   instrumentResolved.delete('SPOT');
+  clearStoredInstruments('SPOT');
   void fetchInstruments('SPOT').catch(() => {});
 });
 

@@ -138,14 +138,17 @@ export function useFuturesSourceUrl(): string {
   return useSyncExternalStore(subscribe, () => current, () => current);
 }
 
-// —————————————————————————— 现货源（可选，默认 Gate） ——————————————————————————
+// —————————————————————————— 现货源（可选，默认币安） ——————————————————————————
 
 /**
  * 现货候选。与合约不同，这里**不做本机测速**：两家真正的区别只有「大陆能不能直连」，
  * 用户按自己的网络常识点一下即可，没必要为两个选项再打一轮探测。
  *
- * 币安那条是**域名链**：`data-api.binance.vision` 优先（实测大陆可直连），再退到
- * api1~4 与主域。这些域共享同一个 IP 限频池，所以这层只解决可达性，不解决限频。
+ * **出厂是币安**（2026-10-30 用户指定，与 App 端同口径）：`data-api.binance.vision` 优先
+ * （实测大陆可直连），再退到 api1~4 与主域。这些域共享同一个 IP 限频池，所以这层只解决
+ * 可达性，不解决限频；现货与合约是**两条独立**的限频/封禁线，合约被限不影响这里。
+ *
+ * 顺序即 SourcePanel 的列表顺序，也保证 `SPOT_ENDPOINTS[0]` 就是出厂值。
  */
 export interface SpotEndpoint {
   id: SpotSourceId;
@@ -156,12 +159,6 @@ export interface SpotEndpoint {
 }
 
 export const SPOT_ENDPOINTS: SpotEndpoint[] = [
-  {
-    id: 'GATE',
-    label: 'Gate 现货',
-    hosts: ['https://api.gateio.ws'],
-    note: '大陆通常可直连 · 有 USDC 现货',
-  },
   {
     id: 'BINANCE',
     label: '币安现货',
@@ -175,9 +172,15 @@ export const SPOT_ENDPOINTS: SpotEndpoint[] = [
     ],
     note: 'data-api 镜像优先 · 与合约限频/封禁分开计',
   },
+  {
+    id: 'GATE',
+    label: 'Gate 现货',
+    hosts: ['https://api.gateio.ws'],
+    note: '大陆通常可直连 · 有 USDC 现货',
+  },
 ];
 
-export const DEFAULT_SPOT_SOURCE: SpotSourceId = 'GATE';
+export const DEFAULT_SPOT_SOURCE: SpotSourceId = 'BINANCE';
 
 const SPOT_KEY = 'mm.spotSource';
 

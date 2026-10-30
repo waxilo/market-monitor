@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MARKET_LABEL, type Instrument, type MarketType } from '../lib/api';
 import type { WatchItem } from '../hooks/useWatchlist';
+import type { InstrumentsState } from '../hooks/useMarketData';
 import { rankMarket } from '../lib/search';
 import { displaySymbol } from '../lib/format';
 
 interface Props {
   /** 搜索词（已 trim 过，非空才渲染本组件）。 */
   keyword: string;
-  /** 永续全量标的（右栏）。 */
-  futures: Instrument[];
-  /** 现货全量标的（左栏）。 */
-  spot: Instrument[];
+  /** 永续清单（右栏）：含「拉取失败 / 重试」的状态，不只是数组。 */
+  futures: InstrumentsState;
+  /** 现货清单（左栏）。 */
+  spot: InstrumentsState;
   /** 选中一条 = 打开（或切到）它的标签页。**只查看**，不收藏 —— 主窗没有自选。 */
   onPick: (item: WatchItem) => void;
   /** 收起浮层（点击外部 / Esc / 选中之后）。**不清空输入框**。 */
@@ -40,10 +41,10 @@ export function SearchDropdown({ keyword, futures, spot, onPick, onClose }: Prop
   const rootRef = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<Cursor | null>(null);
 
-  const columns = useMemo<{ market: MarketType; list: Instrument[] }[]>(
+  const columns = useMemo<{ market: MarketType; list: Instrument[]; state: InstrumentsState }[]>(
     () => [
-      { market: 'SPOT', list: rankMarket(spot, keyword) },
-      { market: 'FUTURES', list: rankMarket(futures, keyword) },
+      { market: 'SPOT', list: rankMarket(spot.list, keyword), state: spot },
+      { market: 'FUTURES', list: rankMarket(futures.list, keyword), state: futures },
     ],
     [spot, futures, keyword],
   );
@@ -163,9 +164,22 @@ export function SearchDropdown({ keyword, futures, spot, onPick, onClose }: Prop
               })}
               {col.list.length === 0 && (
                 <div className="sr-col-empty">
-                  {(col.market === 'SPOT' ? spot : futures).length === 0
-                    ? `正在拉取${MARKET_LABEL[col.market]}标的…`
-                    : `没有匹配「${keyword}」的${MARKET_LABEL[col.market]}`}
+                  {/* 三态：拉失败给出口（自动退避重试照跑，点一下是立刻重来）、
+                      清单还没到 → 说在拉、清单到了只是没命中 → 说没匹配。 */}
+                  {col.state.error != null ? (
+                    <button
+                      type="button"
+                      className="sr-retry"
+                      title={col.state.error}
+                      onClick={col.state.reload}
+                    >
+                      拉取失败 · 重试
+                    </button>
+                  ) : col.state.list.length === 0 ? (
+                    `正在拉取${MARKET_LABEL[col.market]}标的…`
+                  ) : (
+                    `没有匹配「${keyword}」的${MARKET_LABEL[col.market]}`
+                  )}
                 </div>
               )}
             </div>

@@ -31,8 +31,8 @@ export function MiniListSection() {
   const resultsRef = useRef<HTMLDivElement>(null);
 
   // 两个市场各拉一份全量清单（api 层有缓存，合约那份通常主窗本来就拉着）
-  const futures = useInstruments('FUTURES');
-  const spot = useInstruments('SPOT');
+  const futures = useInstruments('FUTURES').list;
+  const spot = useInstruments('SPOT').list;
   const hits = useMemo(
     () =>
       rankAcrossMarkets(

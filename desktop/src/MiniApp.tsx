@@ -120,8 +120,8 @@ export function MiniApp() {
   // （名字直接取符号，不依赖清单）；只有一份市场时就不拉另一份（传 undefined 连请求都不发）
   const needFutures = rows.some((r) => r.market === 'FUTURES');
   const needSpot = rows.some((r) => r.market === 'SPOT');
-  const futuresList = useInstruments(needFutures ? 'FUTURES' : undefined);
-  const spotList = useInstruments(needSpot ? 'SPOT' : undefined);
+  const futuresList = useInstruments(needFutures ? 'FUTURES' : undefined).list;
+  const spotList = useInstruments(needSpot ? 'SPOT' : undefined).list;
   const instrumentMap = useMemo(() => {
     const map = new Map<string, Instrument>();
     for (const i of futuresList) map.set(`FUTURES:${i.symbol}`, i);

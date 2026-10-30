@@ -41,7 +41,7 @@ import {
   minutesOf,
 } from '../lib/intervals';
 import type { DrawTool, LineSelection } from '../lib/lineSelection';
-import { useSourceKey, endpointOf } from '../lib/sources';
+import { useSourceKey, endpointOf, spotEndpointOf, useSpotSource } from '../lib/sources';
 import { openBinanceStream, streamSymbolOf } from '../lib/stream';
 import {
   assignMaColor,
@@ -209,7 +209,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   });
   /** 当前市场 + 数据源**原生**支持哪些周期（分钟数）；换源后重算（依赖 source）。 */
   const natives = useMemo(() => nativeMinutes(market ?? 'FUTURES'), [market, source]);
-  const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : 'Gate 现货';
+  /** 现货源是可选的（默认币安）：标签必须跟着选择走，不能写死某一家。 */
+  const spotSource = useSpotSource();
+  const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : spotEndpointOf(spotSource).label;
   /** 当前数据源有没有历史持仓量（OI 副图那枚 chip 的可用性）；换源后重算（依赖 source）。 */
   const oiSupported = useMemo(
     () => (market === 'FUTURES' ? supportsOpenInterest(market) : false),

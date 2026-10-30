@@ -29,7 +29,7 @@ const OFFLINE_MISSES = 2;
  * **币安系合约改走 WebSocket**（见 lib/stream.ts）：REST 逐标的轮询既费权重、又是
  * 429/418 的来源，WS 权重为零。WS 活着时合约那几个标的不再轮询；连不上就回退到
  * 下面的 REST 轮询，冷却期（418/429）则连轮询也不发。
- * 现货在桌面端恒走 Gate（没开 WS），仍按拍轮询。
+ * 现货（币安或 Gate，出厂币安）没接 WS，仍按拍轮询。
  */
 export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
   const [cells, setCells] = useState<Record<string, TickerCell>>({});

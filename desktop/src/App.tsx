@@ -57,10 +57,10 @@ export default function App() {
   const spotInstruments = useInstruments('SPOT');
   const instrumentMap = useMemo(() => {
     const map = new Map<string, Instrument>();
-    for (const i of futuresInstruments) map.set(`FUTURES:${i.symbol}`, i);
-    for (const i of spotInstruments) map.set(`SPOT:${i.symbol}`, i);
+    for (const i of futuresInstruments.list) map.set(`FUTURES:${i.symbol}`, i);
+    for (const i of spotInstruments.list) map.set(`SPOT:${i.symbol}`, i);
     return map;
-  }, [futuresInstruments, spotInstruments]);
+  }, [futuresInstruments.list, spotInstruments.list]);
 
   /** 顶栏空白处按住就能搬窗口（按钮/输入框上不生效，双击最大化）。 */
   const windowDrag = useWindowDrag({ dblClickMaximize: true });

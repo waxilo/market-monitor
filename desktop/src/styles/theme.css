@@ -884,6 +884,25 @@ body {
   line-height: 1.6;
   color: var(--muted);
 }
+/* 清单拉取失败时的出口：红字小按钮。自动退避重试仍在后台跑，点它只是立刻重来一次。 */
+.sr-retry {
+  padding: 5px 10px;
+  border: 1px solid rgba(240, 67, 90, 0.28);
+  border-radius: 8px;
+  background: var(--flash-down);
+  color: var(--down);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.sr-retry:hover {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
 /* 结果区封顶后内部滚动：拉到全市场 80 条也不会把浮层撑到屏幕外 */
 .sr-scroll {
   max-height: 340px;

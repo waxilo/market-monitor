@@ -25,7 +25,7 @@
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（**浏览器式标签页**（一标签 = 一个市场+标的的图，可锁定 / 一键关闭全部）、跨市场搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 | 桌面端标签页（浏览器的样子：点搜索结果/悬浮窗即开一个，切市场 = 切标签；**用户不关就一直留着**，重启也在；每枚可锁定（锁定后连「关闭全部」都动不了），右侧「关闭全部」一次收掉未锁定的） | `desktop/src/hooks/useTabs.ts`、`components/TabStrip.tsx` | 已实现；存 `mm.tabs` / `mm.tabActive` / `mm.tabLocked`；主窗**没有自选**了（0.1.48 起），图表的去留由标签页自己决定 |
-| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有 Gate / 币安两个候选（存 `mm.spotSource`，默认 Gate） |
+| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有币安 / Gate 两个候选（存 `mm.spotSource`，默认币安，与 App 端同口径） |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于主窗标签页） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会落一份出厂名单（BTC / ETH × 现货/永续） |
 | 桌面端 EMA 指标分析（**入口在周期条右端的「EMA分析」chip**，点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**，点行内周期小方框＝切到该周期看图） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
@@ -67,7 +67,7 @@ cd android
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-桌面端（Tauri v2 + Vite/React，现货在 Gate / 币安里选（默认 Gate），合约在 9 个候选接口里测速点选）：
+桌面端（Tauri v2 + Vite/React，现货在币安 / Gate 里选（默认币安），合约在 9 个候选接口里测速点选）：
 
 ```bash
 cd desktop
@@ -180,6 +180,11 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 - **搜索结果不给价格**：它没有现成的逐标的轮询源，硬要显示就得把全量快照扩成常开
   （两家盘口各拉一次全量）—— 与限频治理背道而驰。同理，排序也不按成交额，只按匹配质量 +
   计价币主流度 + 字母序（`rankMarket` / 悬浮窗混搜用的 `rankAcrossMarkets`，两者同一把尺子）。
+- **标的清单：本地缓存 + 失败重试 + 单域名时限**（`lib/api.ts`、`hooks/useMarketData.ts`）：成功拉一次就落盘
+  `mm.instruments.<SPOT|FUTURES>`（连同数据源一起存，换源即作废），启动先拿它渲染、网络那份在后台刷新 ——
+  搜索列一打开就是满的。拉失败时列里给「拉取失败 · 重试」，并按 1s / 3s / 8s 自动退避重试；早先异常被
+  `catch(() => {})` 吞掉，一次失败就等于**永远**显示「正在拉取现货标的…」。现货主机链每个域名 8s 时限
+  （宿主默认 20s），一个黑洞域名不再把整个等待拖成几十秒。
 - **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
   就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
@@ -389,7 +394,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.48`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.49`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
