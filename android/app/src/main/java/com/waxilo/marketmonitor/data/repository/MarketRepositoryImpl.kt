@@ -82,11 +82,9 @@ class MarketRepositoryImpl(
     }
 
     /** 快照流即 Room 流：REST 轮询每次落库都会驱动一次发射，UI 侧自带合并节流。 */
-    override fun tickers(market: MarketType, quoteAsset: String?): Flow<List<MarketTicker>> =
+    override fun tickers(market: MarketType): Flow<List<MarketTicker>> =
         tickerDao.observeMarket(market.key).map { rows ->
-            rows.mapNotNull { it.toDomain() }
-                .filter { quoteAsset == null || it.id.symbol.endsWith(quoteAsset) }
-                .sortedByDescending { it.quoteVolume }
+            rows.mapNotNull { it.toDomain() }.sortedByDescending { it.quoteVolume }
         }.distinctUntilChanged()
 
     override fun ticker(id: SymbolId): Flow<MarketTicker?> =

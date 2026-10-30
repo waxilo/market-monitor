@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -44,10 +43,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -106,17 +103,6 @@ fun SettingsScreen(
                             fillWidth = false,
                         )
                     }
-                }
-            }
-
-            item {
-                Section(title = "行情") {
-                    ValueRow(
-                        label = "计价币",
-                        value = state.quoteAsset,
-                        placeholder = "USDT",
-                        onValue = viewModel::setQuoteAsset,
-                    )
                 }
             }
 
@@ -336,56 +322,6 @@ fun SettingsScreen(
                 onDetectAll = viewModel::detectEndpoints,
                 onProbeOne = viewModel::probeOne,
                 onDismiss = { sourcePickerOpen = false },
-            )
-        }
-    }
-}
-
-/**
- * 「标签 —— 可编辑值」一行。
- *
- * 值用无边框 BasicTextField 而不是 OutlinedTextField：设置里的值通常是短字符串，
- * 边框不会带来任何可读性收益，只会让一列值看起来像一堆输入框。聚焦时给整行加一条
- * 底边线来表示「正在编辑」，比常驻边框克制得多。
- */
-@Composable
-private fun ValueRow(
-    label: String,
-    value: String,
-    placeholder: String,
-    onValue: (String) -> Unit,
-    valueWidth: Dp = 160.dp,
-) {
-    val colors = MarketTheme.colors
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = colors.ink,
-        )
-        Box(modifier = Modifier.width(valueWidth)) {
-            if (value.isEmpty()) {
-                Text(
-                    text = placeholder,
-                    modifier = Modifier.fillMaxWidth(),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = colors.muted.copy(alpha = 0.6f),
-                    maxLines = 1,
-                )
-            }
-            BasicTextField(
-                value = value,
-                onValueChange = onValue,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = MaterialTheme.typography.labelMedium.copy(color = colors.ink),
-                singleLine = true,
-                cursorBrush = SolidColor(colors.ink),
             )
         }
     }

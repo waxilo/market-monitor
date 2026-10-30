@@ -51,13 +51,13 @@ object FuturesEndpoints {
 
     val ALL = listOf(
         // —— 币安同构（/fapi/v1 路径直接可用）——
-        FuturesEndpoint("Aster 官方", DEFAULT_URL, "Aster 盘口 · 大陆通常可直连", FuturesDialect.BINANCE),
-        FuturesEndpoint("币安合约 主域", "https://fapi.binance.com", "币安盘口 · 大陆通常需代理", FuturesDialect.BINANCE),
+        FuturesEndpoint("Aster 官方", DEFAULT_URL, "Aster 盘口 · 大陆通常可直连 · 只有 USDT 合约", FuturesDialect.BINANCE),
+        FuturesEndpoint("币安合约 主域", "https://fapi.binance.com", "币安盘口 · 大陆通常需代理 · 含 USDC 永续", FuturesDialect.BINANCE),
         // —— 独立盘口（协议各异，走对应适配器）——
         FuturesEndpoint("OKX", "https://www.okx.com", "独立盘口 · 大陆通常需代理", FuturesDialect.OKX),
         FuturesEndpoint("Bybit", "https://api.bybit.com", "独立盘口 · 大陆通常需代理", FuturesDialect.BYBIT),
         FuturesEndpoint("Bitget", "https://api.bitget.com", "独立盘口", FuturesDialect.BITGET),
-        FuturesEndpoint("Gate", "https://api.gateio.ws", "独立盘口 · 大陆通常可直连", FuturesDialect.GATE),
+        FuturesEndpoint("Gate", "https://api.gateio.ws", "独立盘口 · 大陆通常可直连 · 永续无公开 USDC", FuturesDialect.GATE),
         FuturesEndpoint("MEXC", "https://contract.mexc.com", "独立盘口", FuturesDialect.MEXC),
         FuturesEndpoint("Hyperliquid", "https://api.hyperliquid.xyz", "独立盘口 · 链上永续", FuturesDialect.HYPERLIQUID),
         // —— 新增（2026-09-29 实测：接口完整且直连可用；HTX 的域名偶有 DNS 污染，故不宣称稳定）——

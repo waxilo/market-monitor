@@ -16,8 +16,6 @@ import kotlinx.coroutines.flow.Flow
 data class AppSettings(
     /** 主题模式（PRD 4.5「主题：跟随系统 / 浅色 / 深色」）。 */
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    /** 市场浏览的计价币过滤。 */
-    val quoteAsset: String = "USDT",
     /** 冷启动默认市场。 */
     val defaultMarket: MarketType = MarketType.SPOT,
     /** 详情页记忆的周期（CandleInterval.storageKey）。 */

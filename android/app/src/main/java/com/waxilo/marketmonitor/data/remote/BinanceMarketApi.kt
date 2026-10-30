@@ -77,13 +77,24 @@ class DefaultRestHosts(
     }.distinct()
 }
 
-/** 接口错误。`binanceCode` 为币安业务错误码（-1121 等），`httpCode` 为传输层状态码。 */
-class MarketApiException(
+/**
+ * 接口错误。`binanceCode` 为币安业务错误码（-1121 等），`httpCode` 为传输层状态码。
+ * `retryAfterSecs` 是 429/418 时服务端给的冷却秒数（币安会带 `Retry-After`）。
+ */
+open class MarketApiException(
     val httpCode: Int,
     val binanceCode: Int = 0,
     message: String,
     cause: Throwable? = null,
+    val retryAfterSecs: Int = 0,
 ) : IOException(message, cause)
+
+/**
+ * 限频冷却期内的拦截：请求根本没发出去。`resumeAt` 给界面显示剩余时间，
+ * 界面上它**不是**「网络不可用」—— 网络是通的，是接口在封你。
+ */
+class RateLimitedException(val resumeAt: Long) :
+    MarketApiException(418, -1003, "合约接口限频冷却中")
 
 object MarketJson {
     val DEFAULT = Json {
@@ -106,6 +117,8 @@ class BinanceMarketApi(
      * 探测（[probeFutures]）与现货请求都不上报。
      */
     private val onFuturesResult: ((durationMs: Long, failed: Boolean) -> Unit)? = null,
+    /** 合约 REST 的限频冷却；容器里只有一个 API 实例，界面与告警服务共用同一份状态。 */
+    private val rateGate: FuturesRateGate = FuturesRateGate(),
 ) {
 
     private val budgets = mapOf(
@@ -342,12 +355,27 @@ class BinanceMarketApi(
      * 只量 HTTP 往返 —— 不计预算排队与响应解析，否则「等额度」会被误当成源慢。
      */
     private suspend fun executeFutures(request: FuturesDialectAdapter.Request): String {
+        // 冷却按源隔离：用请求自己的 scheme://host 记账，换到独立盘口不会被旧的冷却卡住
+        val origin = request.url.toHttpUrlOrNull()?.let { "${it.scheme}://${it.host}" }
         val started = System.nanoTime()
         return try {
+            if (origin != null) rateGate.assertAllowed(origin)
             val text = executeText(request)
+            if (origin != null) rateGate.noteOk(origin)
             onFuturesResult?.invoke(elapsedMsSince(started), false)
             text
         } catch (e: CancellationException) {
+            throw e
+        } catch (e: RateLimitedException) {
+            // 冷却拦截**不是**新的 418：再记一次会把冷却一路往后推，永远出不来
+            if (isSourceUnavailable(e)) onFuturesResult?.invoke(elapsedMsSince(started), true)
+            throw e
+        } catch (e: MarketApiException) {
+            // 429/418 才进冷却；其余 4xx 是参数/标的错误，跟限频无关
+            if (origin != null && (e.httpCode == 418 || e.httpCode == 429)) {
+                rateGate.noteLimited(origin, e.httpCode, e.retryAfterSecs)
+            }
+            if (isSourceUnavailable(e)) onFuturesResult?.invoke(elapsedMsSince(started), true)
             throw e
         } catch (e: Exception) {
             if (isSourceUnavailable(e)) onFuturesResult?.invoke(elapsedMsSince(started), true)
@@ -388,7 +416,9 @@ private fun Response.toApiError(body: String?): MarketApiException {
         MarketJson.DEFAULT.decodeFromString(ErrorResponseDto.serializer(), body.orEmpty())
     }.getOrNull()
     val reason = if (parsed != null) "${parsed.code}: ${parsed.msg}" else "HTTP $code $message"
-    return MarketApiException(code, parsed?.code ?: 0, reason)
+    // 币安的 418 把封禁时长放在这个头里（秒）；没有就由 FuturesRateGate 按指数退避兜底
+    val retryAfterSecs = header("Retry-After")?.trim()?.toIntOrNull() ?: 0
+    return MarketApiException(code, parsed?.code ?: 0, reason, retryAfterSecs = retryAfterSecs)
 }
 
 private fun elapsedMsSince(startNanos: Long): Long = (System.nanoTime() - startNanos) / 1_000_000

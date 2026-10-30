@@ -37,7 +37,6 @@ sealed interface ProbeOutcome {
 @Immutable
 data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val quoteAsset: String = "USDT",
     /** 用户选定的合约行情接口（FuturesEndpoints 之一）。 */
     val futuresHost: String = FuturesEndpoints.DEFAULT_URL,
     /** 合约源自动选择开关（出厂关闭）：开着才会在失败/慢响应时自动测速换源。 */
@@ -89,7 +88,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 backing.update { s ->
                     s.copy(
                         themeMode = it.themeMode,
-                        quoteAsset = it.quoteAsset,
                         futuresHost = it.futuresRestHost,
                         autoFuturesSource = it.autoFuturesSource,
                         notificationEnabled = it.notificationEnabled,
@@ -132,11 +130,6 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
     fun setThemeMode(v: ThemeMode) {
         backing.update { it.copy(themeMode = v) }
         persist { s -> s.copy(themeMode = v) }
-    }
-
-    fun setQuoteAsset(v: String) {
-        backing.update { it.copy(quoteAsset = v) }
-        persist { s -> s.copy(quoteAsset = v.ifBlank { "USDT" }) }
     }
 
     /**

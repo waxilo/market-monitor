@@ -106,7 +106,7 @@ fun MarketScreen(
     Column(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         AppBar(
             title = "行情",
-            subtitle = "自选 · ${state.quoteAsset} · ${state.rows.size} 个标的",
+            subtitle = "自选 · ${state.rows.size} 个标的",
             actions = {
                 IconButton(onClick = onOpenSearch) {
                     Icon(Icons.Default.Search, contentDescription = "搜索交易对")

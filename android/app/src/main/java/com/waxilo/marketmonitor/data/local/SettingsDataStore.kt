@@ -47,7 +47,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         val d = DEFAULTS
         return d.copy(
             themeMode = ThemeMode.fromKey(this[Keys.THEME]),
-            quoteAsset = this[Keys.QUOTE] ?: d.quoteAsset,
             defaultMarket = MarketType.fromKey(this[Keys.MARKET] ?: d.defaultMarket.key),
             lastIntervalKey = this[Keys.INTERVAL] ?: d.lastIntervalKey,
             intervalKeys = this[Keys.INTERVAL_LIST] ?: d.intervalKeys,
@@ -141,7 +140,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
 
     private fun AppSettings.writeTo(prefs: MutablePreferences) {
         prefs[Keys.THEME] = themeMode.key
-        prefs[Keys.QUOTE] = quoteAsset
         prefs[Keys.MARKET] = defaultMarket.key
         prefs[Keys.INTERVAL] = lastIntervalKey
         prefs[Keys.INTERVAL_LIST] = intervalKeys
@@ -188,7 +186,6 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
 
         private object Keys {
             val THEME = stringPreferencesKey("theme_mode")
-            val QUOTE = stringPreferencesKey("quote_asset")
             val MARKET = stringPreferencesKey("default_market")
             val INTERVAL = stringPreferencesKey("last_interval")
             val INTERVAL_LIST = stringPreferencesKey("interval_list")

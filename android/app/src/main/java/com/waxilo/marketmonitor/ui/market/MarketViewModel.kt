@@ -53,7 +53,6 @@ data class TickerRow(
 data class MarketUiState(
     val market: MarketType = MarketType.SPOT,
     val tab: MarketTab = MarketTab.WATCHLIST,
-    val quoteAsset: String = "USDT",
     val rows: List<TickerRow> = emptyList(),
     val watchCount: Int = 0,
     val loading: Boolean = true,
@@ -76,7 +75,6 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     private val watchlist = container.watchlistRepository
 
     private val activeMarket = MutableStateFlow(MarketType.SPOT)
-    private val quoteAsset = MutableStateFlow("USDT")
     private val tab = MutableStateFlow(MarketTab.WATCHLIST)
     private val flags = MutableStateFlow(Flags())
 
@@ -124,9 +122,9 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     private val sources = activeMarket.flatMapLatest { market ->
         combine(
             // Room 流在每次轮询落库时发射；sample 500ms 把高频更新合并成每 0.5 秒一次重绘（PRD 4.3）。
-            // quote 过滤传 null：自选行按 SymbolId 精确匹配，BNBUSDC/XRPTUSD 这类
-            // 非 USDT 报价的关注标的不能被滤掉（否则行永远缺数据）。
-            repository.tickers(market, null).sample(500),
+            // 自选行按 SymbolId 精确匹配，BNBUSDC/XRPTUSD 这类非 USDT 报价的关注标的
+            // 不能被按报价过滤掉（否则行永远缺数据）。
+            repository.tickers(market).sample(500),
             watchlist.watchlist(market),
             repository.instruments(market),
             trends,
@@ -163,7 +161,6 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         MarketUiState(
             market = source.market,
             tab = selectedTab,
-            quoteAsset = quoteAsset.value,
             rows = rows,
             watchCount = watchedIds.size,
             loading = current.loading,
@@ -176,7 +173,6 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     init {
         viewModelScope.launch {
             val settings = container.settings.current()
-            quoteAsset.value = settings.quoteAsset
             // 初始市场跟随设置；列表页顶部可随时切换 现货 / 永续合约
             selectMarket(settings.defaultMarket)
             // selectMarket 在市场未变化时会提前返回（默认市场 SPOT == activeMarket SPOT），
