@@ -79,7 +79,7 @@ class MaCatalogTest {
         val ma = MA_LINE_ROLES.toSet()
         val ema = EMA_LINE_ROLES.toSet()
         assertTrue("MA / EMA 不应共用色位", ma.intersect(ema).isEmpty())
-        // BOLL 的三位（QUINARY / SENARY / OCTONARY）也不该被任一族占用
+        // BOLL 三线共用的 OCTONARY 也不该被任一族占用
         assertTrue(MA_LINE_ROLES.none { it.ordinal in 5..7 })
         assertTrue(EMA_LINE_ROLES.none { it.ordinal in 5..7 })
         assertNotEquals(maRoleForSlot(MaFamily.MA, 0), maRoleForSlot(MaFamily.EMA, 0))

@@ -547,20 +547,19 @@ class ChartModelTest {
     }
 
     @Test
-    fun `开启 BOLL 后给出中轨上下轨与填充带`() {
+    fun `开启 BOLL 后给出中轨上下轨, 三线同色`() {
         val series = ChartModel.build(candles(60), listOf(5), showBoll = true, subPanes = emptyList())
-        assertNotNull(series.overlay.bandFill)
         // 三条线缺一不可：历史上只加了上下轨，中轨（SMA）画不出来
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.MB" })
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.UP" })
-        assertTrue(series.overlay.lines.any { it.label == "BOLL.DN" })
+        val boll = series.overlay.lines.filter { it.label.startsWith("BOLL") }
+        assertEquals(listOf("BOLL.MB", "BOLL.UP", "BOLL.DN"), boll.map { it.label })
+        // 三线读作一条通道：不与 MA 分色
+        assertEquals(setOf(LineRole.OCTONARY), boll.map { it.role }.toSet())
     }
 
     @Test
     fun `均线可全部关闭以显示裸 K 图`() {
         val series = ChartModel.build(candles(60), emptyList(), showBoll = false, subPanes = emptyList())
         assertTrue(series.overlay.lines.isEmpty())
-        assertNull(series.overlay.bandFill)
     }
 
     @Test

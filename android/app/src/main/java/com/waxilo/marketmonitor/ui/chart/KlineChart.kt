@@ -679,7 +679,6 @@ fun KlineChart(
         grid = scheme.outlineVariant,
         label = scheme.onSurfaceVariant,
         lines = ChartLineColors,
-        band = scheme.primary.copy(alpha = 0.08f),
         crosshair = scheme.onSurface,
         // primary 就是设计系统的 accent 黄（见 Color.kt 的 lightMaterialScheme）
         mark = scheme.primary,
@@ -1310,7 +1309,6 @@ fun ChartSkeleton(
         grid = scheme.outlineVariant,
         label = scheme.onSurfaceVariant,
         lines = ChartLineColors,
-        band = scheme.primary.copy(alpha = 0.08f),
         crosshair = scheme.onSurface,
         mark = scheme.primary,
     )
@@ -1409,7 +1407,6 @@ private data class ChartPalette(
     val grid: Color,
     val label: Color,
     val lines: List<Color>,
-    val band: Color,
     val crosshair: Color,
     /**
      * 用户画线（水平线 / 直线）：黄（= 设计系统的 accent）。
@@ -1421,7 +1418,7 @@ private data class ChartPalette(
     val mark: Color,
 ) {
     /**
-     * 角色 → 颜色。调色板色位（MA 八位 / EMA 八位 / BOLL 三位）直接按 ordinal 取
+     * 角色 → 颜色。调色板色位（MA 八位 / EMA 八位 / BOLL 一位）直接按 ordinal 取
      * [lines]（= `ChartLineColors`，两者下标一一对应，见 `LineRole` 的注释）；
      * UP / DOWN / LABEL 是语义色，走主题。
      *
@@ -1662,9 +1659,6 @@ private fun DrawScope.drawOverlays(
     palette: ChartPalette,
     range: ValueRange,
 ) {
-    series.overlay.bandFill?.let { (upper, lower) ->
-        bandPath(upper, lower, plot, geo, range)?.let { drawPath(it, palette.band) }
-    }
     series.overlay.lines.forEach { line ->
         val path = linePath(line.values, plot, geo, range, geo.mainHeightPx, geo.mainTopPx)
         if (path != null) drawPath(path, palette.roleColor(line.role), style = Stroke(width = 2.5f))
@@ -1914,33 +1908,6 @@ private fun linePath(
         if (current == null) path = Path().apply { moveTo(x, y) } else current.lineTo(x, y)
     }
     return path
-}
-
-private fun bandPath(
-    upper: DoubleArray,
-    lower: DoubleArray,
-    plot: PlotGeometry,
-    geo: ChartGeo,
-    range: ValueRange,
-): Path? {
-    val points = plot.indices.filter {
-        !upper.getOrElse(it) { Double.NaN }.isNaN() && !lower.getOrElse(it) { Double.NaN }.isNaN()
-    }
-    if (points.size < 2) return null
-    return Path().apply {
-        points.forEachIndexed { order, i ->
-            val x = geo.xOf(i, plot)
-            val y = geo.yOf(range.toFraction(upper[i]), geo.mainTopPx, geo.mainHeightPx)
-            if (order == 0) moveTo(x, y) else lineTo(x, y)
-        }
-        points.asReversed().forEach { i ->
-            lineTo(
-                geo.xOf(i, plot),
-                geo.yOf(range.toFraction(lower[i]), geo.mainTopPx, geo.mainHeightPx),
-            )
-        }
-        close()
-    }
 }
 
 /**

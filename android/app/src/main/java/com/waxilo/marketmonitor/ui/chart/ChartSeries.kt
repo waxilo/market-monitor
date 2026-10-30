@@ -18,7 +18,7 @@ import java.util.Locale
 
 /**
  * 线条配色只给语义角色，具体颜色由主题在绘制层解析，避免图表模型绑死配色。
- * PRIMARY~UNDENARY 是十一个老色位：BOLL 固定用 QUINARY/SENARY/OCTONARY（5~7），
+ * PRIMARY~UNDENARY 是十一个老色位：BOLL 三条统一用 OCTONARY（7，中性冷灰），
  * MA 用其余八位；`EMA1~EMA8` 是 EMA 一族自己的八位（11~18，见 [EMA_LINE_ROLES]）——
  * 两族各八条、各占各的色位，同时画满也不撞色。
  * [LABEL] 不是一条线，只给读数行里那些中性文字（指标名、参数）用。
@@ -89,10 +89,9 @@ data class ChartLine(
  */
 data class ReadoutSegment(val text: String, val role: LineRole)
 
-/** 主图叠加：收盘价衍生出的均线与布林带。 */
+/** 主图叠加：收盘价衍生出的均线与布林带（不填充带内区域，三条轨就是整个通道）。 */
 data class OverlayData(
     val lines: List<ChartLine>,
-    val bandFill: Pair<DoubleArray, DoubleArray>?,
 )
 
 /** 一个副图窗格。[bars] 非空时按柱状绘制（VOL、MACD 柱），否则画折线。 */
@@ -222,7 +221,7 @@ private enum class ReadoutFamily { MA, EMA, BOLL }
 
 private fun readoutFamilyOf(role: LineRole): ReadoutFamily = when (role) {
     in EMA_LINE_ROLES -> ReadoutFamily.EMA
-    LineRole.QUINARY, LineRole.SENARY, LineRole.OCTONARY -> ReadoutFamily.BOLL
+    LineRole.OCTONARY -> ReadoutFamily.BOLL
     else -> ReadoutFamily.MA
 }
 
@@ -338,20 +337,17 @@ object ChartModel {
             lines
         } else {
             // 三条都要加：只加上下轨的话中轨（SMA）画不出来；
-            // 三线各占一个色位，彼此与均线族都不同色
+            // 三线同色：BOLL 读作「一条通道」，不像 MA 那样按线分色（与桌面端同口径）
             lines + listOf(
-                ChartLine("BOLL.MB", LineRole.QUINARY, boll.middle),
-                ChartLine("BOLL.UP", LineRole.SENARY, boll.upper),
+                ChartLine("BOLL.MB", LineRole.OCTONARY, boll.middle),
+                ChartLine("BOLL.UP", LineRole.OCTONARY, boll.upper),
                 ChartLine("BOLL.DN", LineRole.OCTONARY, boll.lower),
             )
         }
         return ChartSeries(
             candles = candles,
             closes = closes,
-            overlay = OverlayData(
-                lines = overlayLines,
-                bandFill = boll?.let { Pair(it.upper, it.lower) },
-            ),
+            overlay = OverlayData(lines = overlayLines),
             // 按枚举声明顺序输出，保证「多选后副图从上到下的次序」稳定，
             // 不随用户点击先后跳来跳去。
             subPanes = SubPaneKind.entries

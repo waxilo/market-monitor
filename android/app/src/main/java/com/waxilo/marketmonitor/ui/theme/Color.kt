@@ -67,8 +67,9 @@ val OnAccentDark = Color(0xFF1B1200)
  * 取经典统计图表色板的中间调：饱和度统一压在中低档，与涨跌红绿拉开——
  * 高饱和线压在 K 线上既抢蜡烛的注意力又显廉价，这套灰调彩在墨黑/纸白
  * 两个主题下都耐看。十九个色位里 MA 用 0~4、8~10（八条均线，每条一色），
- * BOLL 用 5~7（中/上/下轨），EMA 用 11~18（另一族八条）——三族互不撞色；
- * 与桌面端 `chartSeries.LINE_COLORS` 同源（顺序也一致）。
+ * BOLL 三条统一用 7（OCTONARY 冷灰——读作一条通道，不按线分色），
+ * EMA 用 11~18（另一族八条）——三族互不撞色；5 / 6 两位空置，
+ * 只为保持与桌面端 `chartSeries.LINE_COLORS` 的下标对齐。
  */
 val ChartLineColors = listOf(
     Color(0xFF5C8AC6), // PRIMARY    钢蓝
@@ -76,9 +77,9 @@ val ChartLineColors = listOf(
     Color(0xFFE8C547), // TERTIARY   软黄
     Color(0xFF9D6FC0), // ACCENT     藕紫
     Color(0xFF5FBDB2), // QUATERNARY 青瓷
-    Color(0xFFC9825E), // QUINARY    陶土（BOLL 中轨）
-    Color(0xFFD98CA6), // SENARY     藕粉（BOLL 上轨）
-    Color(0xFF9AA3AE), // OCTONARY   冷灰（BOLL 下轨）
+    Color(0xFFC9825E), // QUINARY    陶土（空位，保持与桌面端色位对齐）
+    Color(0xFFD98CA6), // SENARY     藕粉（空位，同上）
+    Color(0xFF9AA3AE), // OCTONARY   冷灰（BOLL 三条共用）
     Color(0xFF6FBF73), // NONARY     草绿
     Color(0xFFE0716B), // DENARY     珊瑚
     Color(0xFFB487E0), // UNDENARY   浅紫
