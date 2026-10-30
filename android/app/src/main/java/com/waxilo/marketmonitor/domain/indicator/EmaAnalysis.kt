@@ -235,6 +235,15 @@ object EmaAnalysis {
     fun note(interval: CandleInterval, period: Int): String = "${interval.label}EMA$period"
 
     /**
+     * 这串名字是不是面板自动起的（[note] / [legacyNote] 的形态，`8时EMA50` / `1hEMA50`）。
+     *
+     * 图上挂牌用：自动名直接充当备注（不写库），用户的预警在被问到「这根红线是哪一档」
+     * 时就不用去预警页翻。用户自己起的名字（多半带空格或不含 EMA 档位）不会误伤。
+     */
+    fun isAutoNote(name: String?): Boolean =
+        name != null && Regex("^\\S+EMA\\d+$").matches(name)
+
+    /**
      * **旧版**自动名（`1hEMA50`，周期用英文码）。
      *
      * 0.9.51 把周期条改成中文短名（`1h → 1时`）之前，面板画出来的线都叫这串。

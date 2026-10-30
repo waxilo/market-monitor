@@ -339,11 +339,7 @@ fun DetailScreen(
                 notice = notice,
                 onRefresh = viewModel::refreshEmaAnalysis,
                 onToggleLine = viewModel::toggleEmaLine,
-                onPickInterval = { target ->
-                    viewModel.selectInterval(target)
-                    // 切过去就把面板关掉：留着它正好挡住「那个周期长什么样」
-                    emaSheetOpen = false
-                },
+                onClearLines = viewModel::clearEmaLines,
                 onDismiss = { emaSheetOpen = false },
             )
         }
@@ -1969,8 +1965,8 @@ private fun IndicatorBar(
             InlineLabel(text = "指标")
             FamilyChip(MaFamily.MA, maVisible, isCompact = true)
             FamilyChip(MaFamily.EMA, emaVisible, isCompact = true)
-            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
+            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             if (showSubPanes) {
                 Box(
                     modifier = Modifier
@@ -2000,8 +1996,8 @@ private fun IndicatorBar(
         ChipRow(label = "指标") {
             FamilyChip(MaFamily.MA, maVisible, isCompact = true)
             FamilyChip(MaFamily.EMA, emaVisible, isCompact = true)
-            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
             FilterChip(text = "BOLL", selected = showBoll, onClick = onToggleBoll, compact = true)
+            FilterChip(text = "＋", selected = false, onClick = onManageMa, compact = true)
         }
         ChipRow(label = "副图") {
             SubPaneKind.entries.forEach { kind ->

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -114,6 +115,14 @@ data class AlertPriceLine(
     val ruleId: Long?,
     val price: Double,
     val dragging: Boolean = false,
+    /**
+     * 线上挂的备注牌（画在绘图区左端、与线同高）。
+     *
+     * EMA 分析画的线名字形如 `8时EMA50`（面板靠它回显），用户不写备注就认不出图上
+     * 哪根红线是哪一档 —— 所以自动名直接充当备注；用户在编辑栏写的 [AlertRule.note]
+     * 优先于自动名。null = 不挂牌。
+     */
+    val label: String? = null,
 )
 
 /**
@@ -1066,9 +1075,8 @@ fun KlineChart(
             // 藏起来 —— 而右侧刻度是 1-2-5 阶梯，最近的一条离现价往往还差一段，靠目测估价
             // 没有意义。所以这里不再用 Composable 的书写顺序隐式决定层级（那是最脆弱的做法：
             // 谁后写谁在上，加一枚标就可能把现价盖掉），而是收成一张带优先级的清单：
-            //   ① 按优先级**从高到低占位** —— 高的保持原位（贴着它的线/手指），低的上下让开；
-            //   ② 再按优先级**从低到高绘制** —— 高的后落笔、压在上面。
-            // 两层保险：避让成功时互不重叠，实在挤不下时也绝不会盖住现价。
+            // 落位只裁边、**太近就原地叠住**，再按优先级**从低到高绘制** —— 高的后落笔、
+            // 压在上面。挤动式的避让已撤（2026-10-30）：标签离了它那条线，读数看着就像别的价位。
             //
             // 线不画时标签也不画 —— 只藏线不藏数字，右侧会凭空挂着一串来路不明的价位。
             val rightPriceTags = buildList {
@@ -1091,6 +1099,13 @@ fun KlineChart(
                 geo = geo,
                 density = density,
                 tickSize = tickSize,
+            )
+            // 线备注牌（左端）：EMA 面板画的线靠它认档位 —— 右轴价签只答价钱，答不了「这是哪条线」
+            LineNoteBadges(
+                lines = visibleAlertLines,
+                range = mainRange,
+                geo = geo,
+                density = density,
             )
             SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
             TimeAxisLabels(
@@ -2014,91 +2029,59 @@ private fun CrosshairTimeBadge(
 }
 
 /**
- * 右轴价格标的占位优先级。数值越大越优先：**先占位**（贴着它所指的线/手指），
- * 也**最后绘制**（压在上面）。
+ * 右轴价格标的绘制优先级。数值越大越**后绘制**（压在上面）。
  *
- * 排序的唯一依据是「它回答的问题有多不可替代」：
+ * 太近就原地叠住、不互相挪 —— 让谁露出来只由这一层决定：
  * · 最新价 —— 现在多少钱，任何时刻都得看得见；
  * · 十字光标 —— 手指正在指的那一格，跟着手动、抬手就消失；
- * · 划线（告警线 / 水平画线）—— 用户自己记下的价位，一屏可以有好几条，
- *   彼此挤一挤、挪一档的代价最小，所以由它让位。
+ * · 划线（告警线 / 水平画线）—— 用户自己记下的价位，被压住时那条线还在图上，
+ *   挪开读数反而会让「标」与「线」对不上（2026-10-30 撤掉让位，与桌面端同口径）。
  */
 private const val PRICE_BADGE_PRIORITY_LAST = 3
 private const val PRICE_BADGE_PRIORITY_CROSSHAIR = 2
 private const val PRICE_BADGE_PRIORITY_LINE = 1
 
-/** 让位后相邻两枚标之间至少留的空隙（dp）。 */
-private const val PRICE_BADGE_STACK_GAP_DP = 1f
-
-/**
- * 让位最多挪几档。再多就离它所指的那条线太远，读数看着像「另一个价位」——
- * 宁可与高优先级的标重叠（那边还有绘制顺序兜底，高优先级压在上面）。
- */
-private const val PRICE_BADGE_MAX_SHIFTS = 8
-
 /**
  * 右轴价格标的一个候选。
  *
  * [yPx] 是**线 / 手指**所在的高度（已裁进主图）：它既用来反算要显示的价格，
- * 也是摆放的理想位置。避让只能动标签的位置、不能动数字 —— 所以读数永远按 [yPx]
- * 反算，而不是按最终落位反算（否则被挤开一档，标上的价就跟着变了）。
+ * 也是标签的摆放位置 —— 标签永远与它所指的那条线同高。
+ *
+ * [exactPrice] 非 null 时**直接显示**这个价、不再按 [yPx] 反算：线的真实价位只有
+ * `alert_rule` / `chart_line` 里那份，线滑出可视区后 yPx 被裁到边上，反算出来的
+ * 只会是边缘价（2026-10-30 修的「越界的线价签值不准」）。此时 [yPx] 只剩摆放职责 ——
+ * 钉在最近的边上，指「这条线在图外这个方向」。
  */
 private class RightPriceTag(
     val yPx: Float,
     val accent: Color?,
     val priority: Int,
+    val exactPrice: Double? = null,
 )
 
 /**
- * 把一串理想高度摊成互不重叠的标签中心；[desired] 必须**按优先级从高到低**排好。
- *
- * 规则：高优先级保持原位；后来的若与已占位的那几枚重叠（中心距小于一个标签高），
- * 就上下交替找最近的一个空档，步长 [stepPx]。全都占满时保持原位，交给绘制顺序 ——
- * 宁可靠压着，也不能让一枚标凭空消失（那等于丢了一个价位）。
+ * 把一串理想高度落成标签中心：只**裁进主图**（上下各让出半个标签高，贴边不被裁半截），
+ * 不做任何避让 —— 太近就叠住，交给绘制顺序决定谁在上面。
  *
  * 纯函数、只吃像素值（不碰 Compose），单测直接喂数值断言。
  */
-internal fun staggerAxisTags(
+internal fun placeAxisTags(
     desired: List<Float>,
     heightPx: Float,
     topPx: Float,
     bottomPx: Float,
-    stepPx: Float,
 ): List<Float> {
-    if (desired.isEmpty() || heightPx <= 0f || stepPx <= 0f || bottomPx <= topPx) return desired
-    // 中心的可落范围：上下各让出半个标签高，贴边时才不会被裁掉半截
+    if (desired.isEmpty() || heightPx <= 0f || bottomPx <= topPx) return desired
     val minCenter = topPx + heightPx / 2f
     val maxCenter = bottomPx - heightPx / 2f
     if (maxCenter < minCenter) return desired
-
-    val placed = ArrayList<Float>(desired.size)
-    fun isFree(y: Float) = placed.none { abs(it - y) < heightPx }
-    for (want in desired) {
-        val ideal = want.coerceIn(minCenter, maxCenter)
-        var pick = ideal.takeIf { isFree(it) }
-        var shift = 1
-        while (pick == null && shift <= PRICE_BADGE_MAX_SHIFTS) {
-            val delta = shift * stepPx
-            val down = ideal + delta
-            val up = ideal - delta
-            pick = when {
-                down <= maxCenter && isFree(down) -> down
-                up >= minCenter && isFree(up) -> up
-                else -> null
-            }
-            shift++
-        }
-        val y = pick ?: ideal
-        // 兜底那枚也要占位：后到的先撞它，才谈得上「谁让谁」
-        placed += y
-    }
-    return placed
+    return desired.map { it.coerceIn(minCenter, maxCenter) }
 }
 
 /**
  * 把一条价格 / 一个手指高度包成候选：主图之外的一律不收 ——
  * 那里既没有横线可指，右侧凭空冒一个读数只会误导。
- * 落在主图内、但越出上下沿的会被裁回来（后续避让还会再让出半个标签高）。
+ * 落在主图内、但越出上下沿的会被裁回来（落位时还会再裁进半个标签高）。
  */
 private fun rightPriceTag(
     yPx: Float,
@@ -2144,26 +2127,33 @@ private fun crosshairPriceTag(crosshair: Crosshair?, geo: ChartGeo): RightPriceT
     crosshair?.let { rightPriceTag(it.yPx, PRICE_BADGE_PRIORITY_CROSSHAIR, geo) }
 
 /**
- * 水平线（告警线 / 画线共用）的价格标。y 由**已保存的价格**反算 —— 原始的落点像素
- * 并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
+ * 水平线（告警线 / 画线共用）的价格标。**显示的价**由已保存的价格直接给出 ——
+ * 原始的落点像素并没有意义（量程可能已经被缩放/平移过），价格才是唯一真相。
  * 右缘只放价位：线的身份由颜色回答（红 = 告警、黄 = 画线）。
+ *
+ * 线滑出可视区时标签钉在最近的边上，显示的仍是线的真实价位 ——
+ * 上越界与下越界一个待遇（此前下越界整枚签消失、上越界显示的是边缘价，都不对）。
  */
 private fun linePriceTag(price: Double?, range: ValueRange, geo: ChartGeo): RightPriceTag? {
     if (price == null || !price.isFinite()) return null
     val y = geo.yOf(range.toFraction(price), geo.mainTopPx, geo.mainHeightPx)
-    return rightPriceTag(y, PRICE_BADGE_PRIORITY_LINE, geo)
+    val top = geo.mainTopPx
+    val bottom = top + geo.mainHeightPx
+    if (bottom <= top) return null
+    return RightPriceTag(
+        yPx = y.coerceIn(top, bottom),
+        accent = null,
+        priority = PRICE_BADGE_PRIORITY_LINE,
+        exactPrice = price,
+    )
 }
 
 /**
  * 右轴那一列价格标的总绘制口。
  *
- * 两件事在这里合成：**先算落位**（[staggerAxisTags]，高优先级先占位），
- * **再按优先级从低到高绘制** —— 同一个 Box 的子节点按声明顺序绘制、后声明的在上，
- * 所以反过来遍历就等于「优先级高的压在上面」。
- *
- * 取舍说明：标签被挤开一档后，它与那条线不再严格同高。右轴只有一列宽，
- * 重叠的两枚里总得有一枚让路；让路的永远是低优先级的划线，而读数仍是那条线的真价
- * （按 [RightPriceTag.yPx] 反算，不是按落位反算）。
+ * 落位只裁边不避让（[placeAxisTags]）：太近就原地叠住，**按优先级从低到高绘制** ——
+ * 同一个 Box 的子节点按声明顺序绘制、后声明的在上，所以反过来遍历就等于
+ * 「优先级高的压在上面」。标签与它所指的线永远同高，读数按 [RightPriceTag.yPx] 反算。
  */
 @Composable
 private fun BoxScope.RightPriceBadges(
@@ -2181,12 +2171,11 @@ private fun BoxScope.RightPriceBadges(
     val heightPx = remember(style, density) {
         measurer.measure(AnnotatedString("00000000"), style, density = density).size.height.toFloat() + padV * 2f
     }
-    val placed = staggerAxisTags(
+    val placed = placeAxisTags(
         desired = tags.map { it.yPx },
         heightPx = heightPx,
         topPx = geo.mainTopPx,
         bottomPx = geo.mainTopPx + geo.mainHeightPx,
-        stepPx = heightPx + with(density) { PRICE_BADGE_STACK_GAP_DP.dp.toPx() },
     )
     // 清单是高 → 低，绘制要从低到高（后落笔的在上面）
     for (index in tags.indices.reversed()) {
@@ -2200,6 +2189,60 @@ private fun BoxScope.RightPriceBadges(
             tickSize = tickSize,
             modifier = Modifier.align(Alignment.TopStart),
             accent = tag.accent,
+            exactPrice = tag.exactPrice,
+        )
+    }
+}
+
+/**
+ * 画在绘图区**左端**的线备注牌：与线同高，答「这是哪条线」——右轴价签只答「多少钱」。
+ *
+ * EMA 分析画的线名字形如 `8时EMA50`（面板靠它回显），不挂牌的话图上一排红线分不清
+ * 哪根是哪一档（2026-10-30 用户反馈）。用户在编辑栏写的备注优先于自动名。
+ *
+ * 落位与右轴价签同一口径：只裁边不避让，太近就叠住。
+ */
+@Composable
+private fun BoxScope.LineNoteBadges(
+    lines: List<AlertPriceLine>,
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+) {
+    val style = rememberPriceTagStyle()
+    val measurer = rememberTextMeasurer()
+    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
+    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
+    val colors = MarketTheme.colors
+    for (line in lines) {
+        val note = line.label?.takeIf { it.isNotBlank() } ?: continue
+        val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
+        val measured = remember(note, style, density) {
+            measurer.measure(AnnotatedString(note), style, density = density).size
+        }
+        // 中心贴着线；线滑出可视区时与价格签一样钉在最近的边上（牌子跟签走，才对得上是同一条线）；
+        // 贴边时裁进主图，牌子不被裁掉半截
+        val center = if (geo.mainHeightPx > measured.height) {
+            y.coerceIn(geo.mainTopPx + measured.height / 2f, geo.mainTopPx + geo.mainHeightPx - measured.height / 2f)
+        } else {
+            y
+        }
+        Text(
+            text = note,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .widthIn(max = with(density) { (geo.plotWidthPx * 0.45f).toDp() })
+                .offset(
+                    x = 0.dp,
+                    y = with(density) { (center - measured.height / 2f - padV).toDp() },
+                )
+                .clip(Radius.xsShape)
+                .background(colors.ink)
+                .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
+            style = style,
+            color = colors.paper,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -2207,9 +2250,9 @@ private fun BoxScope.RightPriceBadges(
 /**
  * 贴在右轴上的价格标。[priceYPx] 决定**显示什么价**，[centerYPx] 决定**贴在哪**。
  *
- * 两者分开正是为了让位：标签被挤开一档时，读数仍按它所指的那条线反算。
- * 取值走 [ValueRange.fromFraction]——正是 `drawCandles` 里 `toFraction` 的逆运算，
- * 所以数字与线所指的价位严格一致，不会因为刻度对齐而差一格。
+ * 两者分开是给「贴边被裁」留的余地：中心被夹进主图半个标签高时，读数仍按它所指的
+ * 那条线反算。取值走 [ValueRange.fromFraction]——正是 `drawCandles` 里 `toFraction`
+ * 的逆运算，所以数字与线所指的价位严格一致，不会因为刻度对齐而差一格。
  */
 @Composable
 private fun PriceTag(
@@ -2225,13 +2268,19 @@ private fun PriceTag(
      * 最新价传涨跌色，让它与同高的那条虚线一眼能对上。
      */
     accent: Color? = null,
+    /**
+     * 直接显示的价位（线的真实价格，见 [RightPriceTag.exactPrice]）；
+     * null = 按 [priceYPx] 反算（现价 / 十字光标这类「y 就是真的」的标）。
+     */
+    exactPrice: Double? = null,
 ) {
     val bottom = geo.mainTopPx + geo.mainHeightPx
     // 落到副图上时不画（上游 rightPriceTag 已挡过一遍，这里防新调用方漏判）
     if (priceYPx > bottom) return
     val anchor = priceYPx.coerceIn(geo.mainTopPx, bottom)
     val fraction = if (geo.mainHeightPx > 0f) (anchor - geo.mainTopPx) / geo.mainHeightPx else 0f
-    val price = range.fromFraction(fraction)
+    // 越界的线不能从裁过的 y 反算：那读出来是边缘价，不是这条线的价
+    val price = exactPrice ?: range.fromFraction(fraction)
     if (!price.isFinite()) return
 
     val colors = MarketTheme.colors

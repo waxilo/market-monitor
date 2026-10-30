@@ -116,7 +116,8 @@ fun EmaAnalysisSheet(
     notice: String?,
     onRefresh: () -> Unit,
     onToggleLine: (EmaLevelRow) -> Unit,
-    onPickInterval: (CandleInterval) -> Unit,
+    /** 一键清掉本标的图上全部 EMA 划线（面板自动名的那批告警规则）。 */
+    onClearLines: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     // 横屏（全屏看图那一档）屏高只有 360dp 上下：30 行单列要滚很久，改两列并排 ——
@@ -196,7 +197,9 @@ fun EmaAnalysisSheet(
                         done = analysis.done,
                         total = state.intervals.size,
                         updatedAt = analysis.updatedAt,
+                        marked = remember(rules) { rules.count { EmaAnalysis.isAutoNote(it.name) } },
                         onRefresh = onRefresh,
+                        onClearLines = onClearLines,
                         onDismiss = onDismiss,
                     )
                     Rule(inset = Spacing.Gutter)
@@ -239,7 +242,6 @@ fun EmaAnalysisSheet(
                                     state = state,
                                     refOf = refOf,
                                     onToggleLine = onToggleLine,
-                                    onPickInterval = onPickInterval,
                                 )
                                 Box(
                                     modifier = Modifier
@@ -254,7 +256,6 @@ fun EmaAnalysisSheet(
                                     state = state,
                                     refOf = refOf,
                                     onToggleLine = onToggleLine,
-                                    onPickInterval = onPickInterval,
                                 )
                             }
 
@@ -265,7 +266,6 @@ fun EmaAnalysisSheet(
                                 state = state,
                                 refOf = refOf,
                                 onToggleLine = onToggleLine,
-                                onPickInterval = onPickInterval,
                             )
                         }
                     }
@@ -274,7 +274,6 @@ fun EmaAnalysisSheet(
                         scan = scan,
                         orphans = orphans,
                         tickSize = state.tickSize,
-                        onPickInterval = onPickInterval,
                     )
                 }
 
@@ -339,7 +338,10 @@ private fun PanelHead(
     done: Int,
     total: Int,
     updatedAt: Long,
+    /** 图上有几条 EMA 划线（自动名的那批告警规则）：0 时不给「清空」入口。 */
+    marked: Int,
     onRefresh: () -> Unit,
+    onClearLines: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -387,6 +389,17 @@ private fun PanelHead(
                 color = if (refreshing) colors.muted else colors.ink,
                 style = InlineActionStyle,
             )
+            // 一键清空：只收面板自动名的那批线，用户手画的告警 / 划线一概不碰；
+            // 画没了随时再点行补回来，所以不设二次确认。
+            if (marked > 0) {
+                Spacer(Modifier.width(Spacing.Sm))
+                TextAction(
+                    text = "清空划线",
+                    onClick = onClearLines,
+                    color = colors.ink,
+                    style = InlineActionStyle,
+                )
+            }
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -468,7 +481,6 @@ private fun TabbedColumn(
     state: DetailUiState,
     refOf: (EmaLevelRow) -> EmaLineRef?,
     onToggleLine: (EmaLevelRow) -> Unit,
-    onPickInterval: (CandleInterval) -> Unit,
 ) {
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         item(key = "head") {
@@ -486,7 +498,6 @@ private fun TabbedColumn(
                 side = side,
                 state = state,
                 onToggle = { onToggleLine(row) },
-                onPickInterval = onPickInterval,
             )
         }
         if (rows.isEmpty()) item(key = "empty") { EmptyRow(side.empty) }
@@ -502,7 +513,6 @@ private fun ColumnColumn(
     state: DetailUiState,
     refOf: (EmaLevelRow) -> EmaLineRef?,
     onToggleLine: (EmaLevelRow) -> Unit,
-    onPickInterval: (CandleInterval) -> Unit,
 ) {
     LazyColumn(modifier = modifier.fillMaxSize()) {
         item(key = "head") { ColumnHead(side = side, rows = rows, marked = rows.count { refOf(it) != null }) }
@@ -513,7 +523,6 @@ private fun ColumnColumn(
                 side = side,
                 state = state,
                 onToggle = { onToggleLine(row) },
-                onPickInterval = onPickInterval,
             )
         }
         if (rows.isEmpty()) item(key = "empty") { EmptyRow(side.empty) }
@@ -579,11 +588,10 @@ private fun ColumnHead(
 }
 
 /**
- * 一行 = 一个候选价位。
+ * 一行 = 一个候选价位。整行可点（画 / 对齐 / 取消告警线）。
  *
- * 整行可点（画 / 对齐 / 取消告警线）；行内那枚周期小方框**单独可点**（切到那个周期看图，
- * 面板随即关掉）。两种动作分开是刻意的：把切周期放在整行上，点一下就离开表，
- * 没法连着点几道压力位一起画。
+ * 行内的周期小方框**只是标注**，不再可点 —— 点了会切周期并把面板关掉，连画几道
+ * 压力位的节奏就被打断（2026-10-30 用户要求撤掉这个跳转）。
  */
 @Composable
 private fun EmaRow(
@@ -592,7 +600,6 @@ private fun EmaRow(
     side: Side,
     state: DetailUiState,
     onToggle: () -> Unit,
-    onPickInterval: (CandleInterval) -> Unit,
 ) {
     val colors = MarketTheme.colors
     val slot = state.emaColors[row.period] ?: 0
@@ -615,7 +622,7 @@ private fun EmaRow(
             modifier = Modifier.width(52.dp),
             maxLines = 1,
         )
-        IntervalBadge(row.interval.label, onPick = { onPickInterval(row.interval) })
+        IntervalBadge(row.interval.label)
         Spacer(Modifier.weight(1f))
         Text(
             text = formatPrice(row.value, state.tickSize),
@@ -635,20 +642,12 @@ private fun EmaRow(
             maxLines = 1,
         )
         Spacer(Modifier.width(Spacing.Xs))
-        // 回显：这条线在图上（已画），还是画在旧价位上（待对齐）。
-        // 用文字不用图形 —— 这一行已经有色点、底色、两处变色数值，再加符号会看不清谁在说什么。
+        // 回显：画在旧价位上（待对齐）才提示 —— 「已画」不再写字，行底的选中底色已经
+        // 把「这条在图上」说清了（2026-10-30 用户要求去掉）。
         Text(
-            text = when {
-                line == null -> ""
-                line.aligned -> "已画"
-                else -> "待对齐"
-            },
+            text = if (line != null && !line.aligned) "待对齐" else "",
             style = MaterialTheme.typography.labelSmall,
-            color = when {
-                line == null -> Color.Transparent
-                line.aligned -> colors.down
-                else -> colors.muted
-            },
+            color = if (line != null && !line.aligned) colors.muted else Color.Transparent,
             textAlign = TextAlign.End,
             modifier = Modifier.width(42.dp),
             maxLines = 1,
@@ -656,15 +655,14 @@ private fun EmaRow(
     }
 }
 
-/** 周期小方框：点它 = 切到那个周期看图（与整行那个动作不同，所以自带背景框）。 */
+/** 周期小方框：纯标注这一行属于哪个周期（曾经可点切周期，已撤）。 */
 @Composable
-private fun IntervalBadge(text: String, onPick: () -> Unit) {
+private fun IntervalBadge(text: String) {
     val colors = MarketTheme.colors
     Box(
         modifier = Modifier
             .clip(RoundedCornerShape(Radius.Xs))
             .background(colors.washStrong)
-            .clickable(onClick = onPick)
             .padding(horizontal = 5.dp, vertical = 2.dp),
     ) {
         Text(
@@ -718,14 +716,12 @@ private fun EmptyHint(title: String, subtitle: String?, numeric: Boolean = false
  *
  * 失败与「算不出」**分开报**：前者是网络不通（该重试），后者是这个周期取回的根数不够算
  * 这一档（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
- * 点周期标签能直接切过去看 —— 这是「为什么这一档没进表」最省事的回答。
  */
 @Composable
 private fun Footnotes(
     scan: EmaScan,
     orphans: List<String>,
     tickSize: BigDecimal?,
-    onPickInterval: (CandleInterval) -> Unit,
 ) {
     val colors = MarketTheme.colors
     if (scan.failures.isEmpty() && scan.missing.isEmpty() && orphans.isEmpty()) return

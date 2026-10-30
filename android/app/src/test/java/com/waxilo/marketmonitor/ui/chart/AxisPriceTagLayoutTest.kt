@@ -3,80 +3,51 @@ package com.waxilo.marketmonitor.ui.chart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import kotlin.math.abs
 
 /**
- * 右轴价格标的让位规则（[staggerAxisTags]）。
+ * 右轴价格标的落位规则（[placeAxisTags]）。
  *
- * 要守住的一条：**最新价永远在最前面、永远不被挤动**，划线（告警线 / 水平画线）
- * 在撞上它时自己挪开。这里的输入顺序就是优先级顺序（高 → 低），
- * 所以断言的是「第 0 枚不动、后面的自己走」。
+ * 要守住的一条：**标签永远贴着它所指的那条线** —— 落位只把中心裁进主图（贴边不被裁半截），
+ * 不做任何避让。太近就原地叠住，谁露出来交给绘制顺序（优先级高的压在上面）。
  */
 class AxisPriceTagLayoutTest {
 
     private val height = 30f
-    private val step = 32f
 
     private fun layout(vararg desired: Float, top: Float = 0f, bottom: Float = 300f) =
-        staggerAxisTags(desired.toList(), heightPx = height, topPx = top, bottomPx = bottom, stepPx = step)
+        placeAxisTags(desired.toList(), heightPx = height, topPx = top, bottomPx = bottom)
 
     @Test
-    fun `互不重叠时原样返回`() {
-        // 现价 100、划线 220：中间隔着一个标签高以上，谁也不用动
-        assertEquals(listOf(100f, 220f), layout(100f, 220f))
+    fun `都在主图内时原样返回`() {
+        // 现价 100、划线 105：离得再近也不挪，叠住由绘制顺序决定谁在上面
+        assertEquals(listOf(100f, 105f), layout(100f, 105f))
     }
 
     @Test
-    fun `划线压在最新价上时让位一档`() {
-        val placed = layout(100f, 100f)
-        // 第 0 枚（最新价）保持原位
-        assertEquals(100f, placed[0])
-        // 第 1 枚（划线）被推开恰好一档，且不再与最新价相交
-        assertEquals(132f, placed[1])
-        assertTrue(abs(placed[1] - placed[0]) >= height)
+    fun `贴边时中心裁进半个标签高`() {
+        // 落点在底沿之外 ⇒ 中心夹到 maxCenter（300 - 15），标签不会被裁掉半截
+        assertEquals(285f, layout(299f)[0])
+        // 上沿同理
+        assertEquals(15f, layout(1f)[0])
     }
 
     @Test
-    fun `下方没有空间时改向上让位`() {
-        // 现价贴着主图底沿（中心最多到 100），下面无位可退 ⇒ 只能往上
-        val placed = layout(100f, 100f, bottom = 115f)
-        assertEquals(100f, placed[0])
-        assertEquals(68f, placed[1])
-    }
-
-    @Test
-    fun `刻度贴近边缘时先裁进主图再排`() {
-        // 落点在底沿之外 ⇒ 中心先夹到 maxCenter（300 - 15），不吃到副图上
-        val placed = layout(299f, top = 0f, bottom = 300f)
-        assertEquals(285f, placed[0])
-    }
-
-    @Test
-    fun `多条同价线依次散开且一条不少`() {
+    fun `多枚同价线全部原位重叠`() {
         val placed = layout(100f, 100f, 100f, 100f, 100f)
-        assertEquals(5, placed.size)
-        assertEquals(100f, placed[0])
-        // 相邻两枚都不再相交
-        placed.zipWithNext().forEach { (a, b) -> assertTrue(abs(a - b) >= height) }
+        assertEquals(List(5) { 100f }, placed)
     }
 
     @Test
-    fun `实在放不下时不丢条目`() {
-        // 主图只有 60px 高，塞两枚 30px 的标：挤不下也该都留着（交给绘制顺序压住）
-        val placed = staggerAxisTags(
-            desired = listOf(30f, 30f),
-            heightPx = 30f,
-            topPx = 0f,
-            bottomPx = 60f,
-            stepPx = 32f,
-        )
-        assertEquals(2, placed.size)
+    fun `主图比标签还矮时原样返回`() {
+        // 高度不足一个标签：裁无可裁，宁可叠住也不乱挪（绘制顺序兜底）
+        assertEquals(listOf(10f, 20f), layout(10f, 20f, top = 40f, bottom = 20f))
     }
 
     @Test
     fun `空清单与退化尺寸都不炸`() {
-        assertEquals(emptyList<Float>(), staggerAxisTags(emptyList(), 30f, 0f, 300f, 32f))
-        // 高度不足一个标签：原样返回，宁可重叠也不乱挪
-        assertEquals(listOf(10f, 20f), staggerAxisTags(listOf(10f, 20f), 30f, 40f, 20f, 32f))
+        assertEquals(emptyList<Float>(), placeAxisTags(emptyList(), 30f, 0f, 300f))
+        // 高度为 0 / 主图退化：裁无可裁，原样返回，别把 coerceIn 用非法区间炸了
+        assertEquals(listOf(10f, 20f), placeAxisTags(listOf(10f, 20f), 0f, 0f, 300f))
+        assertEquals(listOf(10f, 20f), placeAxisTags(listOf(10f, 20f), 30f, 100f, 100f))
     }
 }

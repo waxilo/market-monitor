@@ -386,6 +386,8 @@ class DetailViewModel(
                 AlertPriceLine(
                     ruleId = rule.id,
                     price = threshold.toDouble(),
+                    // 用户写的备注优先；EMA 面板自动画的线没有 note，自动名（8时EMA50）直接顶上
+                    label = rule.note ?: rule.name.takeIf(EmaAnalysis::isAutoNote),
                 )
             }
         if (drag == null) own
@@ -393,6 +395,8 @@ class DetailViewModel(
             ruleId = drag.ruleId,
             price = drag.price.toDouble(),
             dragging = true,
+            // 拖动中的线沿用它的备注：松手前后牌子不闪
+            label = own.firstOrNull { it.ruleId == drag.ruleId }?.label,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -1019,6 +1023,27 @@ class DetailViewModel(
                 throw e
             } catch (e: Exception) {
                 showNotice("操作失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 一键清掉本标的图上**全部 EMA 分析画的线**（= 名字是面板自动名的那批告警规则）。
+     *
+     * 只按名字收（`8时EMA50` / 旧名 `1hEMA50`，见 [EmaAnalysis.isAutoNote]）：
+     * 用户手拖的告警线、手画的划线一概不碰。画没了随时回面板点行补回来，
+     * 所以不设二次确认 —— 回执里说了清了几条。
+     */
+    fun clearEmaLines() {
+        viewModelScope.launch {
+            try {
+                val targets = symbolRules.value.filter { EmaAnalysis.isAutoNote(it.name) }
+                targets.forEach { alerts.deleteRule(it.id) }
+                showNotice(if (targets.isEmpty()) "图上没有 EMA 划线" else "已清空 ${targets.size} 条 EMA 划线")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("清空失败：${e.displayMessage()}")
             }
         }
     }
