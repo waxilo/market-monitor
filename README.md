@@ -185,6 +185,10 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   搜索列一打开就是满的。拉失败时列里给「拉取失败 · 重试」，并按 1s / 3s / 8s 自动退避重试；早先异常被
   `catch(() => {})` 吞掉，一次失败就等于**永远**显示「正在拉取现货标的…」。现货主机链每个域名 8s 时限
   （宿主默认 20s），一个黑洞域名不再把整个等待拖成几十秒。
+- **宿主 reqwest 必须开 `gzip`**（`src-tauri/Cargo.toml`，0.1.50 起）：币安 `exchangeInfo` 不压缩是
+  **17.8MB**、gzip 后 324KB（同一台机器实测 10.3s vs 0.66s）。不开这个 feature 时 reqwest 连
+  `Accept-Encoding` 都不发，8s 单域名时限下必然超时 —— 这就是 2026-10-30「现货清单永远拉不到」的根因；
+  前端那三层（缓存 / 重试 / 时限）修的是表象，压缩才是解药。
 - **拖窗口自己实现**（`lib/windowDrag.ts`），不要用 `data-tauri-drag-region`：那个属性标在哪个元素上，
   就把它内部的按钮一起变成拖拽热区（表现为「点按钮在拖窗口」）。顶栏空白区按下即拖、双击最大化；
   悬浮窗要**按住 200ms** 才拖 —— 行本身是按钮，点选不能被拖拽吃掉。
@@ -394,7 +398,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.49`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.50`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |

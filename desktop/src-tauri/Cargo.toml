@@ -37,6 +37,9 @@ tauri-plugin-updater = { version = "2", default-features = false, features = [
 reqwest = { version = "0.13", default-features = false, features = [
     "native-tls",
     "system-proxy",
+    # 必须开：币安现货 exchangeInfo 未压缩是 17.8MB、gzip 只有 324KB（实测 10.3s vs 0.66s）。
+    # 不开它 reqwest 连 Accept-Encoding 都不发，慢网里必然超时 —— 2026-10-30 的「现货清单拉不到」就是这个。
+    "gzip",
 ] }
 url = "2"
 # 安装包的 minisign 签名自验（与插件内部相同的校验实现）
