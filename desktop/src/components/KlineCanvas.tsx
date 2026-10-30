@@ -691,6 +691,17 @@ export function KlineCanvas({
     // 实体随槽宽等比。曾钳 26px 上限：放大/短序列撑满后实体不再变宽、间距继续拉大，
     // 就是「实体偏窄、间距巨大」那个散开观感的来源（2026-10-03 去上限）。
     const bodyW = Math.max(1, slot * BODY_SHARE);
+    /**
+     * 柱体矩形：**从影线的圆整中心反推**，不许自己对 `x - bodyW/2` 和 `bodyW` 分别取整 ——
+     * 那两个小数部分各丢各的，柱心会偏离影线 ±1px；平移时 x 的小数部分连续变化、
+     * 两处跳变方向还不一致，就是「影线与柱体不居中、拖动画布左右偏」的来源。
+     * 影线落在 `Math.round(x) + 0.5`（vline 内部），宽度取**奇数**才能让整数左缘的
+     * 柱心精确落回这个半像素上（偶数宽的中心只能落在整数上，必然偏半像素）。
+     */
+    const bodyRect = (x: number) => {
+      const w = Math.max(1, Math.round(bodyW)) | 1;
+      return { left: Math.round(x) - (w - 1) / 2, w };
+    };
     const dec = decimalsFor(ts);
     /** 一根 K 线的时长（直线锚点的时间 ⇄ 下标换算用）。 */
     const ivMs = (minutesOf(iv) ?? 15) * 60_000;
@@ -743,10 +754,11 @@ export function KlineCanvas({
       const openY = yOf(toFraction(mainR, c.open), mainTop, mh);
       const closeY = yOf(toFraction(mainR, c.close), mainTop, mh);
       ctx.fillStyle = color;
+      const { left, w } = bodyRect(x);
       ctx.fillRect(
-        Math.round(x - bodyW / 2),
+        left,
         Math.round(Math.min(openY, closeY)),
-        Math.max(1, Math.round(bodyW)),
+        w,
         Math.max(1, Math.abs(closeY - openY)),
       );
     }
@@ -905,10 +917,11 @@ export function KlineCanvas({
           if (x < -1 || x > plotW + 1) continue;
           const y = yOf(toFraction(range, value), paneTop, paneH);
           ctx.fillStyle = !c || c.close >= c.open ? p.up : p.down;
+          const { left, w } = bodyRect(x);
           ctx.fillRect(
-            Math.round(x - bodyW / 2),
+            left,
             Math.round(Math.min(y, zero)),
-            Math.max(1, Math.round(bodyW)),
+            w,
             Math.max(1, Math.abs(zero - y)),
           );
         }
