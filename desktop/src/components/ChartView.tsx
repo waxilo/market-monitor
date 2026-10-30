@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   fetchKlines,
   fetchKlinesBefore,
@@ -54,6 +54,13 @@ import {
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
 import { alignEmaLines, applyEmaLine, emaWindow } from '../lib/emaAnalysis';
+import {
+  isKlineFresh,
+  klineCacheKey,
+  mergeRefreshedKlines,
+  recallKlines,
+  rememberKlines,
+} from '../lib/klineCache';
 import { Sparkline } from '../hooks/useSparks';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
@@ -139,20 +146,56 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    * 面板本体也在本组件里渲染，它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。
    */
   const [emaOpen, setEmaOpen] = useState(false);
+  const [candles, setCandles] = useState<Bar[]>([]);
+  /**
+   * 画布上这份蜡烛属于哪条缓存（见 `lib/klineCache`）。实时帧、翻旧页都在改写 `candles`，
+   * 写回缓存时必须认准**它自己**那条 —— 切过去的瞬间 `candles` 还是上一段的，
+   * 按「当前选中的周期」写就会把上一段的蜡烛塞进新周期。
+   */
+  const [candlesKey, setCandlesKey] = useState<string | null>(null);
+  /**
+   * EMA 预热放弃（历史不够长 / 补齐失败）：那时就用手上的根数直接画，不再等。
+   * 换标的 / 换周期时归零（见下面的取数 effect）。
+   */
+  const [warmGaveUp, setWarmGaveUp] = useState(false);
+  /**
+   * 首屏根数：EMA 一族要「最长档位 × 4」根才收敛（见 `emaAnalysis.EMA_WARMUP_FACTOR`），
+   * 这一段是**后台补齐**的目标，不是首屏要等的量。
+   */
+  const initialBars = emaWindow(families.EMA.catalog);
+  /**
+   * 首屏一次取多少根：**一屏多一点**（默认视窗 60 根 + 左缘提前量 120），
+   * 再保证最长 MA 算得出来（+30 缓冲）；BOLL 只要 20 根。
+   * 长档 EMA 的预热历史由下面的补齐 effect 慢慢往上堆 —— 首屏不陪它等。
+   */
+  const fastBars = Math.max(200, ...families.MA.catalog.map((period) => period + 30));
+  /**
+   * EMA 到底画不画（族开着、至少一条眼睛睁着）。不画就**不需要**预热 —— 裸 K / 只开 MA 时
+   * 不该为了一条看不见的线多打一次补齐请求。
+   */
+  const emaDrawn = !families.EMA.hidden && drawnPeriods(families.EMA).length > 0;
+  /**
+   * EMA 能不能画：根数够了（或补齐已放弃 / 本来就不画）。补齐前**不画 EMA 线与读数** ——
+   * 用短窗口算出来的值会与 EMA 分析面板对不上，先闪一个错数再自己变，比晚一秒更糟。
+   */
+  const emaReady = !emaDrawn || candles.length >= initialBars || warmGaveUp;
   /**
    * 交给画布的均线族：把「藏起来」的族折算成空目录，**族内再减去眼睛闭上的那几条** ——
    * 画布只画给它的东西，不知道显隐开关这回事（与画线小眼睛同口径）。
+   * EMA 在预热补齐前也折算成空目录（见 `emaReady`）。
    */
   const visibleFamilies = useMemo<MaFamilySpec[]>(
     () =>
       MA_KINDS.map((kind) => ({
         kind,
-        periods: families[kind].hidden ? [] : drawnPeriods(families[kind]),
+        periods:
+          families[kind].hidden || (kind === 'EMA' && !emaReady)
+            ? []
+            : drawnPeriods(families[kind]),
         colors: families[kind].colors,
       })),
-    [families],
+    [families, emaReady],
   );
-  const [candles, setCandles] = useState<Bar[]>([]);
   /**
    * 取数状态。换标的 / 换周期 / 换数据源时先立 `loading`（画布出骨架 + 遮罩），
    * 数据到了才落下 —— 不立的话那一段只能看到一块全白的画布，用户分不清是在取数还是坏了。
@@ -212,6 +255,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   /** 现货源是可选的（默认币安）：标签必须跟着选择走，不能写死某一家。 */
   const spotSource = useSpotSource();
   const sourceLabel = market === 'FUTURES' ? endpointOf(source).label : spotEndpointOf(spotSource).label;
+  /** 当前这组「市场|标的|数据源|周期」的缓存键；没选标的时为 null。 */
+  const klineKey = item ? klineCacheKey(item.market, item.symbol, source, interval) : null;
   /** 当前数据源有没有历史持仓量（OI 副图那枚 chip 的可用性）；换源后重算（依赖 source）。 */
   const oiSupported = useMemo(
     () => (market === 'FUTURES' ? supportsOpenInterest(market) : false),
@@ -254,23 +299,26 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     setInterval_(firstSupported(intervals));
   }, [interval, intervals]);
 
-  /**
-   * 首屏根数：与 EMA 面板同一口径（按**整个** EMA 目录算，藏起来的档位面板里也在），
-   * 只在最长档位变化时才变 ⇒ 改颜色 / 开关小眼睛不会触发重拉。
-   */
-  const initialBars = emaWindow(families.EMA.catalog);
-
-  // 切换标的/周期：全量拉 initialBars 根（`reloadSeq` 只为「重新加载」按钮服务）
-  useEffect(() => {
-    if (!market || !symbol) {
+  // 切换标的/周期：先看缓存（切回来 = 同步上屏、零等待），再按新鲜度核对最新一段。
+  // `reloadSeq` 只为「重新加载」按钮服务。
+  //
+  // 用 layout effect 而不是 effect：换周期必须**在同一帧里**把蜡烛换掉。缓存命中时若等到
+  // 被动 effect 才换，画布会先用新周期的坐标画上一段的蜡烛（一帧错轴、时间轴标签也错）。
+  useLayoutEffect(() => {
+    if (!market || !symbol || klineKey == null) {
+      setCandlesKey(null);
       setCandles([]);
       setLoad({ loading: false, failed: false, reason: '' });
       return;
     }
     let alive = true;
-    setCandles([]);
-    // 旧图立刻撤掉、遮罩立刻盖上：这一段里画布画的是骨架（见 KlineCanvas 的 draw）
-    setLoad({ loading: true, failed: false, reason: '' });
+    const cached = recallKlines(klineKey);
+    // 旧图立刻撤掉、遮罩立刻盖上：这一段里画布画的是骨架（见 KlineCanvas 的 draw）。
+    // 命中缓存就没有这一段 —— 图上直接是刚才那一张，随后静默换成核对过的最新数据。
+    setCandlesKey(klineKey);
+    setCandles(cached ?? []);
+    setLoad({ loading: cached == null, failed: false, reason: '' });
+    setWarmGaveUp(false);
     // 换目标 = 上一段的历史翻页全部作废；旧页在飞也让它自生自灭（epoch 对不上不落地）
     const older = olderRef.current;
     older.inFlight = false;
@@ -278,22 +326,99 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     older.requestedOldest = 0;
     older.failedAt = 0;
     older.epoch += 1;
-    fetchKlines(market, symbol, interval, initialBars)
+    // 刚取过就不再打接口：这十几秒里最新那几根由 2s 的实时轮询追平，
+    // 于是「两个周期来回切」既不等待、也不产生请求
+    if (cached != null && isKlineFresh(klineKey)) return;
+    fetchKlines(market, symbol, interval, fastBars)
       .then((bars) => {
         if (!alive) return;
-        setCandles(bars);
+        // 核对回来是空的（数据源抽风）：手上这份更可信，别把图清掉
+        if (bars.length === 0 && cached != null) {
+          setLoad({ loading: false, failed: false, reason: '' });
+          return;
+        }
+        // 只换掉重叠段，缓存里更老的历史（翻旧页补回来的）原样保留
+        setCandles(mergeRefreshedKlines(bars, recallKlines(klineKey)));
         setLoad({ loading: false, failed: false, reason: '' });
       })
       .catch((error: unknown) => {
+        // 有缓存就留着它：图上那份仍然有效、最多差几根，遮罩比旧图更吓人
+        if (!alive || cached != null) return;
         // 失败也要把遮罩撤掉，否则一直是「加载中」，看着像卡死了（那时给的是「重新加载」）
         // reason 一路带出来：各家业务码（如 Bitget 400171 参数非法）与「网络不通」是两种病，
         // 提示里只说「网络或数据源不通」会把能自查的线索吞掉（2026-10-22 的 Bitget 周期码 bug 即如此）
-        if (alive) setLoad({ loading: false, failed: true, reason: errorText(error) });
+        setLoad({ loading: false, failed: true, reason: errorText(error) });
       });
     return () => {
       alive = false;
     };
-  }, [market, symbol, interval, source, reloadSeq, initialBars]);
+  }, [market, symbol, klineKey, interval, source, fastBars, reloadSeq]);
+
+  /**
+   * EMA 预热补齐：首屏只取 `fastBars`，长档 EMA 要「最长档 × 4」根才收敛，
+   * 这段历史在**后台往前补** —— 一次 effect 只补一页，candles 变长后自己重跑，
+   * 天然串行，也不会和用户「拖到左墙」的补页抢（共用 `olderRef.inFlight`）。
+   *
+   * 取到历史头（短页 / 空页）、来源不支持时间窗、或这一页失败：就用手上的根数收尾
+   * （`setWarmGaveUp`）—— 新上市的标的本来就没有那么多历史，EMA 不该一直不出现。
+   */
+  useEffect(() => {
+    if (!market || !symbol || klineKey == null || candles.length === 0 || !emaDrawn) return;
+    if (candles.length >= initialBars || warmGaveUp) return;
+    const older = olderRef.current;
+    if (older.exhausted) {
+      setWarmGaveUp(true);
+      return;
+    }
+    if (older.inFlight) return;
+    if (!supportsOlderKlines(market)) {
+      older.exhausted = true;
+      setWarmGaveUp(true);
+      return;
+    }
+    const oldest = candles[0]?.timestamp;
+    if (oldest == null) return;
+    // 这一端已经为这根要过一页、却没往前推进（服务端无视时间窗 / 整页都被去重掉）：
+    // 再要只会原地打转，收手用手上的根数画。
+    if (oldest === older.requestedOldest) {
+      setWarmGaveUp(true);
+      return;
+    }
+    const limit = Math.min(PAGE_BARS, initialBars - candles.length);
+    const epoch = older.epoch;
+    older.inFlight = true;
+    older.requestedOldest = oldest;
+    fetchKlinesBefore(market, symbol, interval, oldest, limit)
+      .then((bars) => {
+        if (olderRef.current.epoch !== epoch) return;
+        if (bars.length < limit) olderRef.current.exhausted = true;
+        if (bars.length > 0) {
+          setCandles((prev) => {
+            // 以 prev 的老端为准再滤一次（与 loadOlder 同一口径）
+            if (prev.length === 0 || prev[0].timestamp !== oldest) return prev;
+            const fresh = bars.filter((b) => b.timestamp < prev[0].timestamp);
+            return fresh.length === 0 ? prev : [...fresh, ...prev];
+          });
+        }
+        if (bars.length < limit) setWarmGaveUp(true);
+      })
+      .catch(() => {
+        if (olderRef.current.epoch !== epoch) return;
+        // 补不回来就算了：EMA 用手上的根数先画，别让图一直缺一族
+        olderRef.current.failedAt = Date.now();
+        setWarmGaveUp(true);
+      })
+      .finally(() => {
+        if (olderRef.current.epoch === epoch) olderRef.current.inFlight = false;
+      });
+  }, [market, symbol, klineKey, interval, source, candles, initialBars, warmGaveUp, emaDrawn]);
+
+  // 实时帧、翻旧页都在改写 candles：同步写回**它自己**那条缓存，
+  // 切回来时连补过的历史一起恢复（否则只记得首屏那几百根）。
+  useEffect(() => {
+    if (candlesKey == null || candlesKey !== klineKey || candles.length === 0) return;
+    rememberKlines(candlesKey, candles);
+  }, [candlesKey, klineKey, candles]);
 
   /**
    * 「时间轴快够到已加载的最老一根了」→ 往前补一页（画布逐帧上报，这里同步去重）。
