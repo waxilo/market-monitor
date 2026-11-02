@@ -986,6 +986,9 @@ fun KlineChart(
                                 ValueRange.MAX_SPAN_RATIO.toFloat(),
                             )
                         },
+                        // 读实时值：手势协程不在缩放时重启，捕获定值会让纵向平移
+                        // 一直按手势开始时的倍数换算（放大后越拖越快）。
+                        priceZoom = { priceZoom },
                         onPricePan = { deltaFraction ->
                             // 钳的是累积量本身而不是渲染结果：否则拖到边界后 pricePan
                             // 还在涨，反向拖要先走完这段空行程才见效，手感像卡住了。
@@ -2595,6 +2598,13 @@ private suspend fun PointerInputScope.detectChartGestures(
     onPan: (deltaPx: Float) -> Unit,
     onZoom: (barFactor: Float, anchorX: Float) -> Unit,
     onPriceZoom: (factor: Float) -> Unit,
+    /**
+     * 当前纵向缩放倍数（1f = 自动量程，< 1 = 放大）。
+     *
+     * 走取值函数而不是定值：手势协程的 key 不含缩放倍数，捕获成定值会一直用
+     * 手势开始那一刻的倍数换算纵向平移，放大后拖动画布就会越拖越快。
+     */
+    priceZoom: () -> Float,
     onPricePan: (deltaFraction: Float) -> Unit,
     onCrosshair: (Offset?) -> Unit,
 ) {
@@ -2961,7 +2971,12 @@ private suspend fun PointerInputScope.detectChartGestures(
                                 // 绘图区：手指下滑 = 量程下移（看更低价区），因此取正号。
                                 // 副图区（onSubPane）图表什么都不做：那场纵向位移
                                 // 没被消费，父滚动容器已接手翻页。
-                                onPricePan(deltaY / height)
+                                //
+                                // 比例要乘回当前缩放倍数：pricePan 相对的是未缩放量程，
+                                // 手指走的是屏幕上缩放后的量程（见 ChartGesture.pricePanFraction）。
+                                onPricePan(
+                                    ChartGesture.pricePanFraction(deltaY, height, priceZoom()),
+                                )
                             }
                         }
                     }

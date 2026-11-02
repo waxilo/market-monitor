@@ -28,6 +28,7 @@
 详情页 ViewModel 随 NavBackStackEntry 销毁，退出再进来必须回到最新一根（`restoreChartPreferences` 用
 `DEFAULT_RIGHT_BLANK`）。本页内（切周期、竖屏↔全屏、旋屏）仍靠 ViewModel 内存里的 `ChartViewState` 交接。
 复位（右上角小标，2026-11-02 从左下角迁走）= 横纵缩放全回默认 + 回最新价（`ChartViewport.initial()`），亮起条件 = 纵向调过 || `!viewport.isInitial()`；重开详情只回最新价、缩放保留（2026-10-26 第四次）。
+**纵向平移换算（2026-11-02，用户报「纵坐标放大后拖动画布变快」）**：`pricePan` 是相对**未缩放基准量程**的比例，手势侧必须用 `ChartGesture.pricePanFraction(deltaY, 主图高, priceZoom)` 把屏幕像素折算进来（**乘 zoom**）。漏乘时画面位移 = 手指位移 / zoom，放大 1.67 倍后拖 88px 画面会走 147px。桌面端 `panPriceView` 一直是乘 `zoom` 的口径，两端现已一致。
 
 ## 横向平移松手不再重排纵轴（2026-10-26，用户报「拖到历史 K 线自动摆到画布中间、K 线跳」）
 - **症状 100% 在 Android**（桌面端没有冻结，价格轴逐帧跟随，松手无突变）：`priceBase` 在 `onGestureStart`

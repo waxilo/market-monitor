@@ -92,6 +92,11 @@ const BODY_SHARE = 0.66;
 const MAX_TIME_LABELS = 6;
 const TIME_LABEL_GAP = 12;
 const AXIS_MIN_GAP = 13;
+/**
+ * 悬浮读数的命中容差（像素）：指针落在蜡烛 **最高价～最低价** 的上下这么多像素内，
+ * 才算「压在这根 K 线上」。只按横向列判会让指针停在上下大片空白里也弹读数。
+ */
+const CANDLE_HIT_PAD_PX = 3;
 const FONT = '10px ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace';
 /** 画线备注的字体：比刻度大一号 —— 它是给人读的句子，不是刻度。 */
 const NOTE_FONT = '11px ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace';
@@ -537,10 +542,17 @@ export function KlineCanvas({
   const recenterPendingRef = useRef(false);
   /**
    * 十字光标。`index` 是**夹回序列内**的下标（读数带、横线与价格标都按它走），
-   * `onBar` 则表示指针是不是真的压在某根蜡烛的格子上 —— 竖线与顶部读数带只看这一个开关，
+   * `onBar` 表示指针是不是落在有数据的横向区间里 —— 竖线与时间标只看这一个开关，
    * 因为视窗右侧还有一段没有蜡烛的留白（默认 3 根）。
+   * `onCandle` 更严：指针还要落在**这根蜡烛的最高价～最低价**之间（带几像素容差），
+   * 顶部那叠 K 线 / 指标读数只在它为真时出现 —— 指针停在图上下空白里不该弹读数。
    */
-  const crossRef = useRef<{ index: number; y: number; onBar: boolean } | null>(null);
+  const crossRef = useRef<{
+    index: number;
+    y: number;
+    onBar: boolean;
+    onCandle: boolean;
+  } | null>(null);
   /** 复位小标上一帧的落点，供点击命中判定；不在图上时为 null。 */
   const badgeRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   /**
@@ -1066,11 +1078,13 @@ export function KlineCanvas({
     }
 
     // ── 悬浮读数（主图左上角）──
-    // 不占版面：主图从画布顶端开始画，读数叠在图上；只在指针压在某根蜡烛上时出现
-    // （与竖线同一个 `onBar` 判据）。底下垫一层 86% 纸色的圆角薄垫，压在蜡烛 /
-    // 布林线上也读得清 —— 无描边、无阴影，它是浮在图上的一块读数，不是卡片。
+    // 不占版面：主图从画布顶端开始画，读数叠在图上；只在指针**压在某根蜡烛上**时出现
+    // （`onCandle` = 横向落在这一列 + 纵向落在最高～最低价之间）。只按列判的话，
+    // 指针停在蜡烛上方/下方的大片空白里也会弹读数（2026-11-02 用户报）。
+    // 底下垫一层 86% 纸色的圆角薄垫，压在蜡烛 / 布林线上也读得清 ——
+    // 无描边、无阴影，它是浮在图上的一块读数，不是卡片。
     const idx = cross ? clampNum(cross.index, 0, n - 1) : n - 1;
-    if (cross && cross.onBar && cross.index >= rs && cross.index <= re) {
+    if (cross && cross.onCandle && cross.index >= rs && cross.index <= re) {
       const rows: TextSegment[][] = [candleRowSegments(list[idx], list[idx - 1], dec, minutes, p)];
       for (const family of families) {
         rows.push(
@@ -1665,12 +1679,25 @@ export function KlineCanvas({
       }
       applyCursor(canvas, cursor);
       // 十字光标照常贯穿副图：竖线跨窗格、副图读数带要能读值，那不属于「拖拽/缩放」
-      // `onBar` 管竖线与顶部读数带（右侧留白里没有蜡烛，就不读数），横线与价格标照旧。
+      // `onBar` 管竖线与时间标（右侧留白里没有蜡烛，就不画）；
+      // `onCandle` 再收紧一步给顶部读数：指针必须落在该蜡烛的最高～最低价之间。
       const px = e.clientX - rect.left;
       const fraction = px / plotW;
       const index = indexAt(vpRef.current, fraction, n);
+      const onBar = px <= plotW && overDataAt(vpRef.current, fraction, n);
+      let onCandle = false;
+      if (onBar && index >= 0) {
+        const candle = modelRef.current.series.candles[index];
+        const { top, bottom } = mainBounds();
+        if (candle != null && y >= top && y <= bottom) {
+          const a = yOfPrice(candle.high);
+          const b = yOfPrice(candle.low);
+          onCandle =
+            y >= Math.min(a, b) - CANDLE_HIT_PAD_PX && y <= Math.max(a, b) + CANDLE_HIT_PAD_PX;
+        }
+      }
       crossRef.current = index >= 0
-        ? { index, y, onBar: px <= plotW && overDataAt(vpRef.current, fraction, n) }
+        ? { index, y, onBar, onCandle }
         : null;
       draw();
     };

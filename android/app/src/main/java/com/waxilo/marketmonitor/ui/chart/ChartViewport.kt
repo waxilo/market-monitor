@@ -362,10 +362,14 @@ data class ValueRange(val low: Double, val high: Double) {
     /**
      * 纵向平移：整段量程上下移动（手指下滑 = 看更低价区）。
      *
-     * 位移量按 [base]（**未缩放**的原始量程）计算，而不是当前量程 ——
-     * 否则放大 10 倍后拖同样的手指距离，图会飞出去 10 倍远。
+     * 位移量按 [base]（**未缩放**的原始量程）计算 —— `pricePan` 存的始终是相对基准量程的
+     * 比例，与缩放倍数解耦，所以缩放后、换周期、重开详情都能原样套用。
      *
-     * @param deltaFraction 手指位移占主图高度的比例
+     * 手势侧必须把**屏幕像素**按当前缩放倍数折算成这个比例
+     * （见 `ChartGesture.pricePanFraction`）：手指走的是缩放后的量程，漏乘 zoom 的话，
+     * 纵向放大两倍后同样拖 100px，画面会跑 200px。
+     *
+     * @param deltaFraction 手指位移占主图高度的比例（已按当前缩放折算）
      */
     fun panned(deltaFraction: Float, base: ValueRange = this): ValueRange {
         val baseSpan = base.high - base.low

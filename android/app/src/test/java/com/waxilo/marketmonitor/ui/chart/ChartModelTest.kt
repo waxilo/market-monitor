@@ -1273,6 +1273,36 @@ class ChartModelTest {
     }
 
     @Test
+    fun `纵向平移按当前缩放倍数折算后与手指一比一`() {
+        // pricePan 是相对**未缩放**基准量程的比例，手指走的是屏幕上缩放后的量程。
+        // 画面位移（像素）= fraction × 主图高度 / zoom；要让它等于手指位移，
+        // fraction 必须是 deltaY / 高度 × zoom。
+        val height = 400f
+        val base = ValueRange(100.0, 200.0) // 基准跨度 100
+        for (zoom in listOf(0.5f, 1f, 2f)) {
+            val deltaY = 40f
+            val fraction = ChartGesture.pricePanFraction(deltaY, height, zoom)
+            val shifted = base.scaled(zoom, base).panned(fraction, base)
+            val displayedSpan = shifted.high - shifted.low
+            val movedPx = ((shifted.center - base.center) / displayedSpan * height).toFloat()
+            assertEquals(
+                "zoom=$zoom 时画面应正好跟手指走 $deltaY px，实际 $movedPx",
+                deltaY,
+                movedPx,
+                1e-3f,
+            )
+        }
+    }
+
+    @Test
+    fun `纵向平移换算对非法输入视为本帧无位移`() {
+        assertEquals(0f, ChartGesture.pricePanFraction(deltaY = 10f, plotHeightPx = 0f, zoom = 1f))
+        assertEquals(0f, ChartGesture.pricePanFraction(deltaY = 10f, plotHeightPx = 400f, zoom = 0f))
+        assertEquals(0f, ChartGesture.pricePanFraction(deltaY = 10f, plotHeightPx = 400f, zoom = Float.NaN))
+        assertEquals(0f, ChartGesture.pricePanFraction(deltaY = Float.NaN, plotHeightPx = 400f, zoom = 1f))
+    }
+
+    @Test
     fun `双指纵向拉开是把价格量程收窄K线变高`() {
         // 上下拉开：纵向间距 100 → 200。复用 pinchFactor 得到 < 1 的因子，
         // 乘到价格量程上即为「量程变小 = K 线纵向变高」—— 与时间轴的拉开语义一致。

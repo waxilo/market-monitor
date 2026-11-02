@@ -72,6 +72,24 @@ object ChartGesture {
     }
 
     /**
+     * 拖动绘图区时的纵向位移 → `pricePan` 的比例。
+     *
+     * `pricePan` 存的是**未缩放基准量程**的比例，而手指走的是屏幕上**缩放后**的量程：
+     * 必须乘上当前 [zoom]，画面才与手指一比一。漏乘的话，纵向放大两倍（`zoom = 0.5`）
+     * 后同样拖 100px，画面会跑 200px —— 用户报的「放大后拖动画布变快」。
+     *
+     * @param deltaY 本帧纵向像素位移（屏幕坐标，向下为正）
+     * @param plotHeightPx 主图高度，用来把像素位移归一化成比例
+     * @param zoom 当前纵向缩放倍数（1f = 自动量程；< 1 = 放大）
+     */
+    fun pricePanFraction(deltaY: Float, plotHeightPx: Float, zoom: Float): Float {
+        if (plotHeightPx <= 0f || !plotHeightPx.isFinite()) return 0f
+        if (!deltaY.isFinite() || !zoom.isFinite() || zoom <= 0f) return 0f
+        val fraction = deltaY / plotHeightPx * zoom
+        return if (fraction.isFinite()) fraction else 0f
+    }
+
+    /**
      * 把单帧像素位移换算成「根数」（可为小数）。
      *
      * 结果**不做取整**：视窗的可见根数与右端偏移都是浮点，单帧位移折算出来
