@@ -36,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalConfiguration
@@ -89,11 +91,11 @@ import java.util.Locale
  *   不够算这一档（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
  * - **点一行画告警线**：每一行就是一个候选价位，点一下在图上落一条告警线（穿越弹通知），
  *   再点一下取消。面板**不关**，所以可以连着点几道压力位一起画。这条线是普通告警规则
- *   （名字 = `1时EMA50`），面板靠这个名字回显：行尾标「已画」。
+ *   （名字 = `1时EMA50`），面板靠这个名字回显：整行铺一层告警红底 + 左缘一道色条。
  *   EMA 每分钟都在动，所以**每轮刷新都会把这些自动线拉到新值**（见
  *   `DetailViewModel.alignEmaRules` → `EmaAnalysis.alignments`）—— 线是用来看的一道墙，
- *   得长在 EMA 现在的位置上。行尾的「待对齐」因此只剩两种短暂情形：刚被拖过（下一轮就拉回），
- *   以及这一档这一轮没取到数；点一下那行照样能立刻拉回来。手画的线一概不动。
+ *   得长在 EMA 现在的位置上。手画的线一概不动。行内不再写「已画 / 待对齐」：
+ *   底色已经把「这条在图上」说清，而 EMA 一动，「待对齐」这种瞬时状态会自己变来变去。
  *
  * 版式与桌面端不同：桌面端两列并排（宽屏），这里**竖屏用页签切换**、横屏仍两列。
  * 竖屏一行放不下两列（每列不到 180dp，六个字段会挤成一团）；早先的做法是把两侧叠在一列里
@@ -604,12 +606,19 @@ private fun EmaRow(
     val colors = MarketTheme.colors
     val slot = state.emaColors[row.period] ?: 0
     val dot = ChartLineColors[maRoleForSlot(MaFamily.EMA, slot).ordinal]
-    val drifted = line != null && !line.aligned
+    val selected = line != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .background(if (line != null && !drifted) colors.wash else Color.Transparent)
+            // 选中 = 这一档已经有图上的告警线：铺一层告警红 + 左缘一道色条。
+            // 旧版用 wash 淡灰几乎看不见，用户要求「一眼看出哪些画过」。
+            .background(if (selected) colors.down.copy(alpha = 0.16f) else Color.Transparent)
+            .drawBehind {
+                if (selected) {
+                    drawRect(color = colors.down, size = Size(3.dp.toPx(), size.height))
+                }
+            }
             .padding(horizontal = Spacing.Gutter, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -639,17 +648,6 @@ private fun EmaRow(
             color = if (side == Side.RESISTANCE) colors.down else colors.up,
             textAlign = TextAlign.End,
             modifier = Modifier.width(54.dp),
-            maxLines = 1,
-        )
-        Spacer(Modifier.width(Spacing.Xs))
-        // 回显：画在旧价位上（待对齐）才提示 —— 「已画」不再写字，行底的选中底色已经
-        // 把「这条在图上」说清了（2026-10-30 用户要求去掉）。
-        Text(
-            text = if (line != null && !line.aligned) "待对齐" else "",
-            style = MaterialTheme.typography.labelSmall,
-            color = if (line != null && !line.aligned) colors.muted else Color.Transparent,
-            textAlign = TextAlign.End,
-            modifier = Modifier.width(42.dp),
             maxLines = 1,
         )
     }

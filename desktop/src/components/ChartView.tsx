@@ -42,7 +42,7 @@ import {
 } from '../lib/intervals';
 import type { DrawTool, LineSelection } from '../lib/lineSelection';
 import { useSourceKey, endpointOf, spotEndpointOf, useSpotSource } from '../lib/sources';
-import { openBinanceStream, streamSymbolOf } from '../lib/stream';
+import { openBinanceSpotStream, openBinanceStream, streamSymbolOf } from '../lib/stream';
 import {
   assignMaColor,
   defaultCatalog,
@@ -53,7 +53,7 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
-import { alignEmaLines, applyEmaLine, emaWindow } from '../lib/emaAnalysis';
+import { alignEmaLines, applyEmaLine, emaWindow, isEmaSystemLine } from '../lib/emaAnalysis';
 import {
   isKlineFresh,
   klineCacheKey,
@@ -467,10 +467,11 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   }, [market, symbol, interval, candles]);
 
   /**
-   * 实时的那一根：币安系走 WS 推 `@kline_<周期>`，省掉 2s 一次的 REST 权重。
-   * WS 不是免封金牌 —— 受限 IP 上币安会接受握手但不推任何数据，所以只有收到
-   * **首帧**才停 REST 兜底；其余来源或 WS 没数据时仍按 2s 取末根（App 的增量节奏也是 2s）。
-   * 聚合周期没有原生流（如 45m），只能继续走 REST —— 那边本来就是拼出来的。
+   * 实时的那一根：币安系（合约 / Aster / 币安现货）走 WS 推 `@kline_<周期>`，
+   * 省掉 2s 一次的 REST 权重。WS 不是免封金牌 —— 受限 IP 上币安会接受握手但不推任何数据，
+   * 所以只有收到**首帧**才停 REST 兜底；其余来源或 WS 没数据时仍按 2s 取末根
+   * （App 的增量节奏也是 2s）。聚合周期没有原生流（如 45m），只能继续走 REST ——
+   * 那边本来就是拼出来的。
    */
   useEffect(() => {
     if (!market || !symbol) return;
@@ -488,21 +489,26 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
     const minutes = minutesOf(interval);
     const code = minutes != null && natives.has(minutes) ? nativeLadder(market)[minutes] : undefined;
-    const wsBase = market === 'FUTURES' && endpointOf(source).dialect === 'BINANCE' ? source : null;
+    const futuresStream = market === 'FUTURES' && endpointOf(source).dialect === 'BINANCE';
+    const spotStream = market === 'SPOT' && spotSource === 'BINANCE';
     let wsLive = false;
     let stopStream = () => {};
-    if (wsBase != null && code != null) {
-      stopStream = openBinanceStream(wsBase, [`${streamSymbolOf(symbol)}@kline_${code}`], {
+    if (code != null && (futuresStream || spotStream)) {
+      const streams = [`${streamSymbolOf(symbol)}@kline_${code}`];
+      const handlers = {
         onClose: () => {
           wsLive = false;
         },
-        onKline: (streamSymbol, bar) => {
+        onKline: (streamSymbol: string, bar: Bar) => {
           if (!alive || streamSymbol !== symbol) return;
           // 收到第一帧才停 REST 兜底：受限 IP 上币安会接受握手但不推任何数据
           wsLive = true;
           applyLive(bar);
         },
-      });
+      };
+      stopStream = futuresStream
+        ? openBinanceStream(source, streams, handlers)
+        : openBinanceSpotStream(streams, handlers);
     }
 
     const timer = setInterval(() => {
@@ -1123,10 +1129,10 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       {/* EMA 分析：范围取「EMA 族的目录 × 周期条的列表」（都算配置，不管图上画没画）。
           点一行 = 把这一档落成图上一条**系统划线**（自动备注「1时EMA50」，带 origin 身份落盘，
           面板不关，可连点几道）：没画就画、漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
-          带着身份落盘，面板重开时那几行才能回显「已画 / 待对齐」。
+          带着身份落盘，面板重开时那几行才能回显（整行选中底色）。
           每一轮取数回来（手动刷新 + 每分钟自动）都把系统划线拉到新值：EMA 是活的，
-          线得跟着走。手画的线一概不动。
-          点行内周期小方框才切周期 —— 切完把面板关掉，不挡着图。 */}
+          线得跟着走。手画的线一概不动。抬头「清空划线」只收这批带身份的系统线。
+          行内周期小方框只是标注，不可点 —— 点走会关面板，打断连画几道压力位。 */}
       {emaOpen && (
         <EmaAnalysisPanel
           market={item.market}
@@ -1154,9 +1160,13 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
               return plan.moved > 0 ? plan.lines : current;
             });
           }}
-          onPickInterval={(iv) => {
-            setInterval_(iv);
-            setEmaOpen(false);
+          onClearLines={() => {
+            // 只收带 EMA 身份的线；手画的水平线 / 直线原样留着。
+            // 原表返回 = 没有可清的（按钮此时本来也不显示），别造新数组触发重渲染。
+            drawings.editPriceLines((current) => {
+              const next = current.filter((line) => !isEmaSystemLine(line));
+              return next.length === current.length ? current : next;
+            });
           }}
           onClose={() => setEmaOpen(false)}
         />

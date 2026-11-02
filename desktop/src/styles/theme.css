@@ -26,6 +26,9 @@
   --down: #f0435a;
   --flash-up: rgba(23, 201, 138, 0.1);
   --flash-down: rgba(240, 67, 90, 0.1);
+  /* EMA 面板选中行：告警线同款红，比 flash 更实 —— 一眼看出「这一档画过」 */
+  --ema-on: rgba(240, 67, 90, 0.24);
+  --ema-on-hover: rgba(240, 67, 90, 0.32);
   --accent: #f7b90c;
   --on-accent: #241a00;
   /* 用户画线（水平线 / 两点直线）：黄。告警线借 --down 的红、现价线借 --muted 的灰，
@@ -73,6 +76,8 @@
   --down: #e02f45;
   --flash-up: rgba(14, 164, 114, 0.08);
   --flash-down: rgba(224, 47, 69, 0.08);
+  --ema-on: rgba(224, 47, 69, 0.15);
+  --ema-on-hover: rgba(224, 47, 69, 0.22);
   --accent: #f0b90b;
   --on-accent: #241a00;
   --line-mark: #f0b90b;
@@ -2824,62 +2829,265 @@ body {
    两列内部都是「离现价近的在前」，所以每列第一行就是最近那道水位。
 
    颜色只给列定调（压力红 / 支撑绿，与技术分析软件同一套语言），数值本身不染色 ——
-   整屏红绿数字反而会把「近不近」这条主要信息淹掉。 */
-.ema-summary {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--sp-md);
-  padding-bottom: var(--sp-sm);
-  border-bottom: 1px solid var(--hairline);
+   整屏红绿数字反而会把「近不近」这条主要信息淹掉。
+
+   2026-11 重构：抬头压成「标题 + 刷新胶囊」，标的与现价收进一张 hero 卡，
+   两列改成各自独立的卡片（列头固定、数据区各滚各的）。面板高度封顶，行数多少
+   都不会把窗口撑高再缩回去 —— 打开 / 刷新时版面不该跳。 */
+.up-panel.ema-panel {
+  width: min(980px, 100%);
+  height: min(560px, calc(100vh - 48px));
 }
-.ema-sym {
-  flex: 1;
+.ema-head {
+  gap: var(--sp-sm);
+  padding: 11px 10px 11px var(--gutter);
+  background:
+    radial-gradient(120% 160% at 0% 0%, var(--glow), transparent 62%),
+    var(--surface);
+}
+.ema-head-id {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
-.ema-sym-name {
+.ema-head-title {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 20px;
+  letter-spacing: -0.2px;
+  color: var(--ink);
+}
+.ema-head-kicker {
   font-family: var(--mono);
-  font-size: 17px;
-  letter-spacing: -0.3px;
+  font-size: 10px;
+  line-height: 13px;
+  letter-spacing: 0.6px;
+  color: var(--muted);
 }
-.ema-price {
+/* 清空面板画下的那批系统划线：低存在感的文字按钮，hover 才露出告警红。
+   它是批量删除，不该和「刷新」抢注意力；手画的线一概不碰。 */
+.ema-clear {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    color var(--fast) var(--ease-standard);
+}
+.ema-clear:hover {
+  background: var(--ema-on);
+  color: var(--down);
+}
+/* 刷新胶囊：平时一枚绿点（数据在线），取数时换成一圈转动的细环 ——
+   不靠文字也能看出它在忙；宽度用 min-width 撑住，文案切换不推歪右侧。 */
+.ema-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  min-width: 74px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard);
+}
+.ema-refresh::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--up);
+}
+.ema-refresh:hover:not(:disabled) {
+  background: var(--wash);
+  border-color: var(--hairline-strong);
+}
+.ema-refresh:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+.ema-refresh:disabled::before {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+  border: 1.5px solid var(--hairline-strong);
+  border-top-color: var(--muted);
+  animation: ema-spin 700ms linear infinite;
+}
+@keyframes ema-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.ema-body {
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+  padding: 10px var(--gutter) 14px;
+  overflow: hidden;
+}
+/* 抬头卡：标的与现价是进面板最先要看的两样东西，单独抬成一张卡 */
+.ema-hero {
+  flex: 0 0 auto;
   display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-md);
+  padding: 11px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  box-shadow: var(--ring);
+}
+.ema-hero-id {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ema-sym-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
   gap: var(--sp-xs);
 }
+.ema-sym-name {
+  font-family: var(--sans);
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 22px;
+  letter-spacing: -0.4px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ema-tag {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  background: var(--wash);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+.ema-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.ema-hero-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ema-hero-sep {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: var(--r-full);
+  background: var(--hairline-strong);
+}
+.ema-price {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.ema-price-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
 .ema-price-v {
-  font-size: 17px;
-  font-weight: 500;
-  letter-spacing: -0.3px;
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 26px;
+  letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
 }
 /* 基准不是实时价时点明来源（否则「最新价」这三个字会误导） */
 .ema-src {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
+/* 两列卡片：列头固定，数据区各自滚动（每块区域只有一条滚动条） */
 .ema-cols {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--sp-md);
-  align-items: start;
+  gap: var(--sp-sm);
+  align-items: stretch;
 }
 .ema-col {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--sp-xxs);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
 }
 .ema-col-head {
+  flex: none;
   display: flex;
-  align-items: baseline;
-  gap: var(--sp-xs);
-  padding: 0 6px var(--sp-xxs);
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--hairline);
+  background: var(--surface-2);
+}
+.ema-col.resistance .ema-col-head {
+  background: linear-gradient(180deg, var(--flash-down), var(--surface-2) 78%);
+}
+.ema-col.support .ema-col-head {
+  background: linear-gradient(180deg, var(--flash-up), var(--surface-2) 78%);
 }
 .ema-col-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.1px;
+}
+.ema-col-name::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: currentColor;
 }
 .ema-col.resistance .ema-col-name {
   color: var(--down);
@@ -2887,12 +3095,30 @@ body {
 .ema-col.support .ema-col-name {
   color: var(--up);
 }
+.ema-col-count,
+.ema-col-marked {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  padding: 0 6px;
+  border-radius: var(--r-full);
+  white-space: nowrap;
+}
 .ema-col-count {
-  font-size: 11px;
   color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+}
+/* 列名旁那枚「已画 N」：这一侧画到图上的档数（与整行选中底色说的是同一件事） */
+.ema-col-marked {
+  color: var(--down);
+  background: var(--ema-on);
 }
 .ema-col-near {
   margin-left: auto;
+  min-width: 0;
+  font-family: var(--mono);
   font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
@@ -2900,20 +3126,27 @@ body {
   text-overflow: ellipsis;
 }
 .ema-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
-/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离 / 回显标记。整行可点（画·对齐·取消这条系统划线），
+/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（画·对齐·取消这条系统划线），
    所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。
-   六列是固定的：没有回显标记的行把最右那格空着，保证各行的价位纵向对齐。 */
+   选中态 = 这一档已有图上的告警线：实色红底 + 左缘一道 3px 色条，
+   比一层淡灰更清楚，又不至于让满屏红条盖过价位本身。 */
 .ema-row {
+  flex: 0 0 auto;
   position: relative;
   display: grid;
-  grid-template-columns: 7px auto auto minmax(0, 1fr) auto auto;
+  grid-template-columns: 7px auto auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--sp-xs);
-  padding: 5px 7px;
+  padding: 7px 8px;
   border: 0;
   border-radius: 8px;
   background: none;
@@ -2929,29 +3162,21 @@ body {
 .ema-row:hover {
   background: var(--wash);
 }
-/* 已画告警线：左边缘一道红条 + 极淡红底。
-   不用「红点/红字」标它，是因为这一行已经有色点（EMA 线色）与两个变色数值（偏离），
-   再加一个彩色符号就分不清哪个颜色在说什么；一道竖条是这一列里**唯一的形状差异**。 */
 .ema-row.on {
-  background: rgba(229, 56, 75, 0.09);
+  background: var(--ema-on);
 }
 .ema-row.on:hover {
-  background: rgba(229, 56, 75, 0.14);
+  background: var(--ema-on-hover);
 }
 .ema-row.on::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 3px;
-  bottom: 3px;
-  width: 2px;
-  border-radius: 1px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
   background: var(--down);
-}
-/* 漂了的那条：线还画在旧价位上（EMA 一直在动，线不会自己走）。
-   形状留着、分量减轻 —— 它仍然属于这一档，只是已经不对齐了。 */
-.ema-row.on.drift::before {
-  opacity: 0.4;
 }
 .ema-row:focus-visible {
   outline: 1px solid var(--accent);
@@ -2963,8 +3188,7 @@ body {
   border-radius: var(--r-full);
 }
 /* 周期做成小方框（与 .iv-tag 的语言一致）：它是「哪根 K 线」，不是数值。
-   这一格是**独立动作**（切到该周期看图），所以 hover 要明显区别于整行的「画告警线」：
-   描边与字色抬到前景色，指针也换一下（行本身已经是 pointer，这里靠颜色说明）。 */
+   只是个标注，不可点 —— 点走会切周期并关掉面板，连画几道压力位的节奏就断了。 */
 .ema-iv {
   font-size: 11px;
   line-height: 1.3;
@@ -2973,14 +3197,6 @@ body {
   border: 1px solid var(--hairline);
   border-radius: var(--r-xs);
   white-space: nowrap;
-  cursor: zoom-in;
-  transition:
-    border-color var(--fast) var(--ease-standard),
-    color var(--fast) var(--ease-standard);
-}
-.ema-iv:hover {
-  border-color: var(--hairline-strong);
-  color: var(--ink);
 }
 .ema-val {
   text-align: right;
@@ -2989,7 +3205,7 @@ body {
   white-space: nowrap;
 }
 .ema-gap {
-  min-width: 54px;
+  min-width: 58px;
   text-align: right;
 }
 .ema-col.resistance .ema-gap {
@@ -2998,44 +3214,55 @@ body {
 .ema-col.support .ema-gap {
   color: var(--up);
 }
-/* 回显标记：这条线在图上（已画），还是画在旧价位上（待对齐）。
-   10px 纯文字、不做胶囊 —— 这一行已经有红竖条 + 两处变色数值，再加一块底色会把它
-   读成按钮，而它只是状态。价位与偏离的差都写在 title 里（行上放不下两句）。 */
-.ema-mark {
-  font-size: 10px;
-  line-height: 1.5;
-  color: var(--down);
-  white-space: nowrap;
-}
-.ema-mark.drift {
-  color: var(--muted);
-}
-/* 列名旁那枚「已画 N」：这一侧画到图上的档数（与行尾标记同一件事的总数） */
-.ema-col-marked {
-  font-family: var(--mono);
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  color: var(--down);
-  white-space: nowrap;
-}
 .ema-empty {
   font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
+  padding: 14px 10px;
 }
-/* 脚注（没取到的周期 / 根数不够的档位）：11px 一行，全文进 title */
+.ema-rows > .ema-empty {
+  text-align: center;
+}
+.ema-body > .ema-empty {
+  margin: auto;
+  text-align: center;
+}
+/* 脚注（没取到的周期 / 根数不够的档位）：11px，全文进 title */
+.ema-notes {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 2px;
+}
 .ema-note {
+  position: relative;
+  padding-left: 10px;
   font-size: 11px;
   line-height: 1.6;
   color: var(--muted);
 }
+.ema-note::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: var(--hairline-strong);
+}
 .ema-note.bad {
   color: var(--down);
 }
-/* 极窄窗口（< 640px 的内容宽）两列会挤成一列字，直接竖排 */
+.ema-note.bad::before {
+  background: var(--down);
+}
+/* 极窄窗口：两列上下叠，各占一半高度、各自滚自己的 */
 @media (max-width: 760px) {
   .ema-cols {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 
@@ -3089,12 +3316,6 @@ body {
 }
 .note-count.full {
   color: var(--down);
-}
-/* 刷新按钮：固定宽度，「刷新」↔「刷新中」切换时不要把右边的价位列推歪。
-   刷新中只靠这一枚按钮说话（表格照旧可读），所以也不再给它加重/变色的强调。 */
-.ema-refresh {
-  min-width: 62px;
-  text-align: center;
 }
 
 /* ── 动效 ─────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   emaWindow,
   EMPTY_EMA_SCAN,
   findEmaLine,
+  isEmaSystemLine,
   lastEma,
   mergeEmaScan,
   splitLevels,
@@ -78,8 +79,11 @@ interface Props {
    * 挂在「刷新」而不是「面板打开」上 —— 线要跟的是数值，而数值只在刷新时变。
    */
   onLevels: (levels: EmaLevel[]) => void;
-  /** 点行内的周期小方框 = 切到那个 K 线周期看图（顺手关掉面板）。 */
-  onPickInterval: (interval: string) => void;
+  /**
+   * 清空图上属于本面板的全部系统划线（`PriceLine.origin.kind === 'ema'`）。
+   * 手画的水平线 / 直线一概不碰 —— 这是「把连点画下的那几道墙一次收掉」，不是清空画布。
+   */
+  onClearLines: () => void;
   onClose: () => void;
 }
 
@@ -112,13 +116,14 @@ function clockText(at: number): string {
  * - **点一行画系统划线**：表里每一行就是一个候选价位，点一下直接在图上落一条红色告警线
  *   （穿越时弹系统通知），再点一下取消 —— 面板**不关**，所以可以连着点几道压力位一起画。
  *   这条线是带**身份**落盘的（`PriceLine.origin` = 周期 + 档位），于是打开面板时会**回显**：
- *   那一行标「已画」。EMA 每分钟都在动，所以每一轮取数回来都会把这些系统划线**自动拉到**
- *   各自的新值（`onLevels` → `alignEmaLines`）—— 线是用来看盘的一道墙，墙得长在 EMA 现在
- *   的位置上，不能停在画它的那一刻。手画的线一概不动：那是用户自己的判断。
+ *   那一行带选中底色。EMA 每分钟都在动，所以每一轮取数
+ *   回来都会把这些系统划线**自动拉到**各自的新值（`onLevels` → `alignEmaLines`）——
+ *   线是用来看盘的一道墙，墙得长在 EMA 现在的位置上，不能停在画它的那一刻。
+ *   手画的线一概不动：那是用户自己的判断。
  *   旧逻辑在这种时候只会叠出第二条线，两条都画着、谁也不准，面板还看不出自己画过。
- *   想看某一道在哪根 K 线上，点行内那个周期小方框（切过去，面板随即关掉，不挡着图）。
- *   两种动作分开：整行是「盯住这个价」，周期方框是「去看这个周期」，
- *   把切周期放在整行上会让人点一下就离开表，没法连续画线。
+ *   行内的周期小方框只是标注，不可点 —— 点走会切周期并关掉面板，打断连画几道压力位的节奏。
+ *   选中态只靠整行底色 + 左侧色条表达，不再写「已画 / 待对齐」—— 文案会与底色重复，
+ *   而 EMA 实时在动，一秒前的「待对齐」下一秒就自己消失了。
  */
 export function EmaAnalysisPanel({
   market,
@@ -132,7 +137,7 @@ export function EmaAnalysisPanel({
   priceLines,
   onToggleLine,
   onLevels,
-  onPickInterval,
+  onClearLines,
   onClose,
 }: Props) {
   /** 换源 = 换盘口：整表重取（与 ChartView 的 K 线口径一致）。 */
@@ -307,6 +312,14 @@ export function EmaAnalysisPanel({
   }, [priceLines, intervals, periods]);
   /** 表里已经有值吗 —— 有值就绝不拿加载文案盖住它（这就是「静默」的字面含义）。 */
   const hasTable = scan.levels.length > 0;
+  /**
+   * 图上属于本面板的系统划线总数（含配置里已经删掉的孤儿线）。
+   * 「清空划线」按它决定出不出：一条都没有时这枚按钮不该占着抬头。
+   */
+  const emaLineCount = useMemo(
+    () => priceLines.filter(isEmaSystemLine).length,
+    [priceLines],
+  );
 
   const column = (rows: EmaLevelRow[], side: 'resistance' | 'support') => {
     const nearest = rows[0];
@@ -322,7 +335,7 @@ export function EmaAnalysisPanel({
           {marked > 0 && (
             <span
               className="ema-col-marked"
-              title="这一侧已经画到图上的档数（行尾标「已画 / 待对齐」的就是）"
+              title="这一侧已经画到图上的档数"
             >
               已画 {marked}
             </span>
@@ -337,8 +350,8 @@ export function EmaAnalysisPanel({
           {rows.map((row) => {
             const label = intervalLabel(row.interval);
             const note = emaAlertNote(label, row.period);
-            /* 回显：图上与这一档绑定的那条线（没有 = 还没画）。它带着自己的价位回来，
-               所以行尾要说清「画在哪儿」——「已画」/「待对齐」两态的区别全在价位对不对得上。 */
+            /* 回显：图上与这一档绑定的那条线（没有 = 还没画）。选中态交给整行底色，
+               行内不再写字 —— EMA 一跳，「待对齐」这种瞬时状态就会自己变来变去。 */
             const line = findEmaLine(priceLines, row, note);
             const priceText = formatPrice(row.value, tickSize);
             const gapText = formatChange(row.gapPercent);
@@ -347,16 +360,14 @@ export function EmaAnalysisPanel({
               line && !line.aligned && row.value > 0
                 ? formatChange(((line.price - row.value) / row.value) * 100)
                 : '';
-            /* 整行 = 「把这一档落成系统划线（画 / 对齐 / 取消）」；周期小方框单独可点 = 「切过去看这根 K 线」。
-               没有用两层 button：`<button>` 里塞第二个可点元素属于交互元素嵌套（HTML 不允许），
-               所以行本身是带 role=button 的 div（Enter / 空格等同于点击）。 */
+            /* 整行 = 「把这一档落成系统划线（画 / 对齐 / 取消）」；行内的周期小方框只是
+               标注（不可点：点走会切周期并关掉面板，连画几道压力位就断了）。 */
             return (
               <div
                 key={`${row.interval}-${row.period}`}
-                className={`ema-row${line ? ' on' : ''}${line && !line.aligned ? ' drift' : ''}`}
+                className={`ema-row${line ? ' on' : ''}`}
                 role="button"
                 tabIndex={0}
-                /* 「已画」= 这一档在图上有一条自己的线（不管告警开没开），这正是回显的语义 */
                 aria-pressed={line != null}
                 title={
                   line
@@ -368,9 +379,8 @@ export function EmaAnalysisPanel({
                       (line.alert ? '，穿越时弹通知' : '，告警已关') +
                       (line.aligned
                         ? '\n再点一下删掉这条线'
-                        : `\n点一下把它对齐到 ${priceText}`) +
-                      '（点周期方框切到该周期看图）'
-                    : `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n点一下在这个价位画告警线，自动备注「${note}」，价格穿越时弹通知；之后每次刷新会跟着 EMA 走（点周期方框切到该周期看图）`
+                        : `\n点一下把它对齐到 ${priceText}`)
+                    : `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n点一下在这个价位画告警线，自动备注「${note}」，价格穿越时弹通知；之后每次刷新会跟着 EMA 走`
                 }
                 onClick={() => onToggleLine(row, note)}
                 onKeyDown={(e) => {
@@ -386,28 +396,9 @@ export function EmaAnalysisPanel({
                   aria-hidden
                 />
                 <span className="ema-name">EMA{row.period}</span>
-                <span
-                  className="ema-iv"
-                  role="button"
-                  title={`切到 ${label} 看图`}
-                  onClick={(e) => {
-                    // 不让这一下冒泡成「画 / 对齐 / 取消这条线」
-                    e.stopPropagation();
-                    onPickInterval(row.interval);
-                  }}
-                >
-                  {label}
-                </span>
+                <span className="ema-iv">{label}</span>
                 <span className="ema-val num">{priceText}</span>
                 <span className="ema-gap num">{gapText}</span>
-                {/* 回显的另一半：这条线在图上（已画），还是暂时不在当前值上（待对齐，
-                    多半是刚被拖过 —— 下一轮刷新就拉回）。用文字不用图形 ——
-                    这一行已经有色点、红条、两处变色数值，再加符号会看不清谁在说什么。 */}
-                {line && (
-                  <span className={`ema-mark${line.aligned ? '' : ' drift'}`}>
-                    {line.aligned ? '已画' : '待对齐'}
-                  </span>
-                )}
               </div>
             );
           })}
@@ -424,51 +415,77 @@ export function EmaAnalysisPanel({
   return (
     <div className="up-backdrop" onMouseDown={onClose}>
       <section
-        className="up-panel up-wide ema-panel"
+        className="up-panel ema-panel"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="EMA 指标分析"
       >
-        <header className="up-head">
-          <span className="overline">EMA · 压力支撑分析</span>
+        <header className="up-head ema-head">
+          <div className="ema-head-id">
+            <span className="ema-head-title">EMA 压力支撑</span>
+            <span className="ema-head-kicker">指标分析</span>
+          </div>
           <span className="grow" />
+          {emaLineCount > 0 && (
+            <button
+              type="button"
+              className="ema-clear"
+              title={`清空图上全部 ${emaLineCount} 条 EMA 划线（手画的线不受影响）`}
+              onClick={onClearLines}
+            >
+              清空划线
+            </button>
+          )}
+          <button
+            type="button"
+            className="ema-refresh"
+            disabled={refreshing}
+            aria-busy={refreshing}
+            title={
+              refreshing
+                ? `正在取 ${intervals.length} 个周期的 K 线… ${done} / ${intervals.length}（旧值暂时留在表里）`
+                : `按当前配置重新取一遍各周期 K 线（面板开着时每 1 分钟自动刷新${
+                    updatedAt ? `；上次 ${clockText(updatedAt)} 更新` : ''
+                  }）`
+            }
+            onClick={() => setSeq((n) => n + 1)}
+          >
+            {refreshing ? `刷新中 ${done}/${intervals.length}` : '刷新'}
+          </button>
           <button className="panel-close" title="关闭（Esc）" onClick={onClose}>
             ×
           </button>
         </header>
 
-        <div className="up-body">
-          <div className="ema-summary">
-            <div className="ema-sym">
-              <span className="ema-sym-name">{displaySymbol(symbol)}</span>
-              <span className="iv-tag">
-                {market === 'FUTURES' ? '永续' : '现货'} · {sourceLabel}
-              </span>
+        <div className="up-body ema-body">
+          <section className="ema-hero">
+            <div className="ema-hero-id">
+              <div className="ema-sym-line">
+                <span className="ema-sym-name">{displaySymbol(symbol)}</span>
+                <span className="ema-tag">
+                  {market === 'FUTURES' ? '永续' : '现货'} · {sourceLabel}
+                </span>
+              </div>
+              <div className="ema-hero-meta">
+                <span>
+                  {intervals.length} 个周期 × {periods.length} 档 EMA
+                </span>
+                <span className="ema-hero-sep" aria-hidden />
+                <span>
+                  {refreshing
+                    ? `正在取数 ${done}/${intervals.length}`
+                    : updatedAt
+                      ? `${clockText(updatedAt)} 更新`
+                      : '等待首轮取数'}
+                </span>
+              </div>
             </div>
             <div className="ema-price">
-              <span className="overline">最新价</span>
+              <span className="ema-price-label">最新价</span>
               <span className="ema-price-v num">{formatPrice(base, tickSize)}</span>
               {!livePrice && <span className="ema-src">末根收盘价</span>}
             </div>
-            {/* 刷新中的唯一可见痕迹：按钮自己说话（文案 + 禁用），表格不动。
-                宽度靠 min-width 撑住，免得「刷新」↔「刷新中」来回跳把右侧布局推歪。 */}
-            <button
-              type="button"
-              className="up-btn ema-refresh"
-              disabled={refreshing}
-              aria-busy={refreshing}
-              title={
-                refreshing
-                  ? `正在取 ${intervals.length} 个周期的 K 线… ${done} / ${intervals.length}（旧值暂时留在表里）`
-                  : `按当前配置重新取一遍各周期 K 线（面板开着时每 1 分钟自动刷新${
-                      updatedAt ? `；上次 ${clockText(updatedAt)} 更新` : ''
-                    }）`
-              }
-              onClick={() => setSeq((n) => n + 1)}
-            >
-              {refreshing ? '刷新中' : '刷新'}
-            </button>
-          </div>
+          </section>
 
           {intervals.length === 0 ? (
             <p className="ema-empty">
@@ -490,62 +507,68 @@ export function EmaAnalysisPanel({
           )}
 
           {/* 异常提示跟着整张扫描走：有旧值时不显示「正在取」那种过渡态，但异常照报 */}
-          {scan.failures.length > 0 && (
-            <p
-              className="ema-note bad"
-              title={scan.failures.map((f) => `${f.interval}：${f.reason}`).join('\n')}
-            >
-              {scan.failures.length} 个周期没取到：
-              {scan.failures.map((f) => intervalLabel(f.interval)).join(' / ')}
-              {scan.stale.length > 0
-                ? `（${scan.stale.map((iv) => intervalLabel(iv)).join(' / ')} 显示的是上次的值）`
-                : ''}
-              （悬停看原因）
-            </p>
-          )}
-          {scan.missing.length > 0 && (
-            <p
-              className="ema-note"
-              title={scan.missing
-                .map(
-                  (m) =>
-                    `${intervalLabel(m.interval)} 的 EMA${m.period}：只取到 ${m.bars} 根，至少要 ${m.period} 根`,
-                )
-                .join('\n')}
-            >
-              {scan.missing.length} 档根数不够算不出：
-              {scan.missing
-                .slice(0, 6)
-                .map((m) => `${intervalLabel(m.interval)}·EMA${m.period}`)
-                .join(' / ')}
-              {scan.missing.length > 6 ? ' …' : ''}
-              （悬停看明细）
-            </p>
-          )}
-          {orphanLines.length > 0 && (
-            <p
-              className="ema-note"
-              title={orphanLines
-                .map((line) =>
-                  line.origin?.kind === 'ema'
-                    ? `${intervalLabel(line.origin.interval)} · EMA${line.origin.period} @ ${formatPrice(line.price, tickSize)}`
-                    : '',
-                )
-                .filter((text) => text !== '')
-                .join('\n')}
-            >
-              图上还有 {orphanLines.length} 条 EMA 划线不在当前配置里（档位或周期被删掉了）：
-              {orphanLines
-                .slice(0, 4)
-                .map((line) =>
-                  line.origin?.kind === 'ema'
-                    ? `${intervalLabel(line.origin.interval)}·EMA${line.origin.period}`
-                    : '',
-                )
-                .join(' / ')}
-              {orphanLines.length > 4 ? ' …' : ''}
-              （改回配置即可回显，或在划线区选中它再删掉；悬停看价位）
-            </p>
+          {(scan.failures.length > 0 ||
+            scan.missing.length > 0 ||
+            orphanLines.length > 0) && (
+            <footer className="ema-notes">
+              {scan.failures.length > 0 && (
+                <p
+                  className="ema-note bad"
+                  title={scan.failures.map((f) => `${f.interval}：${f.reason}`).join('\n')}
+                >
+                  {scan.failures.length} 个周期没取到：
+                  {scan.failures.map((f) => intervalLabel(f.interval)).join(' / ')}
+                  {scan.stale.length > 0
+                    ? `（${scan.stale.map((iv) => intervalLabel(iv)).join(' / ')} 显示的是上次的值）`
+                    : ''}
+                  （悬停看原因）
+                </p>
+              )}
+              {scan.missing.length > 0 && (
+                <p
+                  className="ema-note"
+                  title={scan.missing
+                    .map(
+                      (m) =>
+                        `${intervalLabel(m.interval)} 的 EMA${m.period}：只取到 ${m.bars} 根，至少要 ${m.period} 根`,
+                    )
+                    .join('\n')}
+                >
+                  {scan.missing.length} 档根数不够算不出：
+                  {scan.missing
+                    .slice(0, 6)
+                    .map((m) => `${intervalLabel(m.interval)}·EMA${m.period}`)
+                    .join(' / ')}
+                  {scan.missing.length > 6 ? ' …' : ''}
+                  （悬停看明细）
+                </p>
+              )}
+              {orphanLines.length > 0 && (
+                <p
+                  className="ema-note"
+                  title={orphanLines
+                    .map((line) =>
+                      line.origin?.kind === 'ema'
+                        ? `${intervalLabel(line.origin.interval)} · EMA${line.origin.period} @ ${formatPrice(line.price, tickSize)}`
+                        : '',
+                    )
+                    .filter((text) => text !== '')
+                    .join('\n')}
+                >
+                  图上还有 {orphanLines.length} 条 EMA 划线不在当前配置里（档位或周期被删掉了）：
+                  {orphanLines
+                    .slice(0, 4)
+                    .map((line) =>
+                      line.origin?.kind === 'ema'
+                        ? `${intervalLabel(line.origin.interval)}·EMA${line.origin.period}`
+                        : '',
+                    )
+                    .join(' / ')}
+                  {orphanLines.length > 4 ? ' …' : ''}
+                  （改回配置即可回显，或点上方「清空划线」一次收掉；悬停看价位）
+                </p>
+              )}
+            </footer>
           )}
         </div>
       </section>

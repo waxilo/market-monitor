@@ -1,5 +1,5 @@
 /**
- * 币安系（币安合约 / Aster）的实时行情通道。
+ * 币安系（币安合约 / Aster / 币安现货）的实时行情通道。
  *
  * **为什么要有它**：实时价靠 REST 轮询既费权重（标签页一多就顶 IP 额度），也是 429/418
  * 的来源。WS 一条连接就能推全部标签页，权重归零。
@@ -17,6 +17,10 @@
  * 一条连接承载多个流（组合流 `/stream?streams=a/b`）：所有开着的 `@ticker` 合成一条，
  * 图表的 `@kline_<周期>` 另开一条。断线按指数退避重连；60 秒收不到任何帧就当作
  * 假死（币安每秒都有 ticker 推送），主动断开重连。
+ *
+ * **合约与现货是两套后端**（`fstream.*` / `data-stream.binance.vision`），所以各开各的
+ * 连接；重连策略共用下面这一份实现，别让现货退回到「只靠 REST 轮询」——那样一断网，
+ * 恢复后要等下一拍才回来，且没有假死重连。
  */
 
 import type { Bar } from './api';
@@ -26,6 +30,12 @@ import type { TickerSnapshot } from './dialects';
 const RECONNECT_CAP_MS = 30_000;
 /** 多久收不到任何帧就判定连接假死（币安每秒都有推送）。 */
 const SILENT_TIMEOUT_MS = 60_000;
+
+/**
+ * 币安现货的 WS 主机：与 REST 的 `data-api.binance.vision` 同一套「只读行情」入口。
+ * 实测 `wss://stream.binance.com:9443` 在本机代理下连不上，这个镜像能正常推送。
+ */
+export const BINANCE_SPOT_STREAM_HOST = 'wss://data-stream.binance.vision';
 
 /**
  * ❗**连上不等于有数据**：币安对受限 IP 会接受 WS 握手（101）却一帧都不推（实测
@@ -59,10 +69,13 @@ export function streamSymbolOf(symbol: string): string {
   return `${base}${quote}`.toLowerCase();
 }
 
-/** 币安原生符号（`BTCUSDT`）→ 桌面端规范符号（`BTC_USDT`）；非 USDT 本位返回 null。 */
+/** 币安原生符号（`BTCUSDT` / `BTCUSDC`）→ 桌面端规范符号；其它本位返回 null。 */
+const QUOTES = ['USDT', 'USDC'];
+
 function canonicalSymbol(native: unknown): string | null {
-  if (typeof native !== 'string' || !native.endsWith('USDT')) return null;
-  return `${native.slice(0, -4)}_USDT`;
+  if (typeof native !== 'string') return null;
+  const quote = QUOTES.find((q) => native.endsWith(q));
+  return quote == null ? null : `${native.slice(0, -quote.length)}_${quote}`;
 }
 
 function number(value: unknown): number {
@@ -100,10 +113,11 @@ function barOf(k: Record<string, unknown>): Bar | null {
 }
 
 /**
- * 订阅一组组合流。返回取消函数（组件卸载、换源、换标的都调用它）。
+ * 订阅币安**合约系**（合约 / Aster）的一组组合流。返回取消函数
+ * （组件卸载、换源、换标的都调用它）。
  *
  * `streams` 用币安原生写法，如 `btcusdt@ticker`、`btcusdt@kline_1m`；
- * 传空数组直接返回空操作 —— 别为「没有可订阅的东西」建一条连接。
+ * 传空数组或 REST 不是币安同构域名时直接返回空操作。
  */
 export function openBinanceStream(
   restBase: string,
@@ -112,7 +126,23 @@ export function openBinanceStream(
 ): () => void {
   const host = streamHostOf(restBase);
   if (host == null || streams.length === 0) return () => {};
+  return openStream(host, streams, handlers);
+}
 
+/**
+ * 订阅币安**现货**的一组组合流：重连、退避、假死看门狗与合约完全同一套，
+ * 只是主机换成现货行情入口（`data-stream.binance.vision`）。
+ */
+export function openBinanceSpotStream(
+  streams: string[],
+  handlers: StreamHandlers,
+): () => void {
+  if (streams.length === 0) return () => {};
+  return openStream(BINANCE_SPOT_STREAM_HOST, streams, handlers);
+}
+
+/** 合约与现货共用：按给定 WS 主机订阅组合流，断线指数退避重连、静默超时主动重连。 */
+function openStream(host: string, streams: string[], handlers: StreamHandlers): () => void {
   const url = `${host}/stream?streams=${streams.join('/')}`;
   let socket: WebSocket | null = null;
   let stopped = false;

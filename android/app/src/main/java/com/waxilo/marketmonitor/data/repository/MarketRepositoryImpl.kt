@@ -20,13 +20,20 @@ import com.waxilo.marketmonitor.domain.repository.KlinePage
 import com.waxilo.marketmonitor.domain.repository.MarketRepository
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+
+/** 单标的报价的超时：报价每拍都发，断网时不该让一条请求占住整轮刷新。 */
+private const val TICKER_TIMEOUT_MS = 8_000L
 
 /**
  * 行情仓库（PRD 3.2）。编排规则：
@@ -64,15 +71,18 @@ class MarketRepositoryImpl(
         // 只刷新关注（自选）交易对，不再全量拉取（PRD 4.3：仅刷新关注 + 控制权重）
         val watched = watchlist.watchlist(market).first().filter { it.market == market }
         if (watched.isEmpty()) return 0
-        var count = 0
-        watched.forEach { id ->
-            if (refreshTicker(id) != null) count++
+        // 并发而不是逐个 await：断网时每个请求都要等超时，串行十几条会把一整轮拖成几分钟，
+        // 期间价格冻住、离线横幅也迟迟不出现（真机实测）。一轮的上限现在 = 单请求超时。
+        val results = coroutineScope {
+            watched.map { id -> async { refreshTicker(id) } }.awaitAll()
         }
-        return count
+        return results.count { it != null }
     }
 
     override suspend fun refreshTicker(id: SymbolId): MarketTicker? = try {
-        val ticker = api.ticker(id.market, id.symbol)
+        // 报价是每拍都要的轻量请求：给一个独立的短超时。默认 30s 的 callTimeout 是留给
+        // 300 根 K 线的；断网时拿它等报价，恢复网络后还要把旧一轮的超时等完才轮到新请求。
+        val ticker = withTimeoutOrNull(TICKER_TIMEOUT_MS) { api.ticker(id.market, id.symbol) }
         if (ticker != null) tickerDao.upsertAll(listOf(ticker.toEntity()))
         ticker
     } catch (e: CancellationException) {

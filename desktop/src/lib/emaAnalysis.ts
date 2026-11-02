@@ -212,11 +212,11 @@ export function sideOf(gapPercent: number): 'resistance' | 'support' | 'flat' {
  * 面板里点一行会**代画**一条系统划线（`PriceLine.origin = { kind: 'ema', interval, period }`），
  * 线在图上与手画的线看不出差别，但身份记在存档里。回显就是反过来读这份身份：
  *
- *  - 面板重开时，靠 (周期, 档位) 认出「这一档我已经画过了」→ 行上标「已画」；
+ *  - 面板重开时，靠 (周期, 档位) 认出「这一档我已经画过了」→ 整行带选中底色；
  *  - EMA 每分钟都在动，所以**线必须跟着走**：每一轮取数回来（手动「刷新」与每分钟自动那一轮
  *    走的是同一条路）都由面板调一次 `alignEmaLines`，把所有系统划线拉到各自的最新值。
- *    行上仍保留「待对齐」这一态，但它只覆盖两种短暂情形：线上价位刚被用户拖过（下一轮刷新
- *    就拉回），以及这一档这一轮没取到数。点一下那行照样能立刻拉回来。
+ *    线上的价位与当前值不一致（`aligned = false`）时行上不再写状态字：它只用来决定
+ *    这一下点击是「拉回」还是「取消」；下一轮刷新同样会把线拉回。
  *
  * 一切判断都落在「这一档 ↔ 一条线」上，所以**同一档最多只认一条线**（见 `findEmaLine`）。
  */
@@ -245,6 +245,23 @@ export interface EmaLineKey {
 /** 这一档的系统划线身份 —— 落进 `PriceLine.origin` 的就是它。 */
 export function emaOrigin(interval: string, period: number): LineOrigin {
   return { kind: 'ema', interval, period };
+}
+
+/**
+ * 自动备注的格式（`1时EMA50` / 老存档 `1hEMA50`）：非空白串 + EMA + 档位。
+ * 与 App 的 `EmaAnalysis.isAutoNote` 同口径 —— 两端「清空划线」收掉的是同一批线。
+ */
+const AUTO_NOTE = /^\S+EMA\d+$/;
+
+/**
+ * 一条线是不是 EMA 分析面板画下的系统线。
+ *
+ * 身份优先；老存档没有 `origin`，只能按自动备注认领（`findEmaLine` 的第二道匹配也是它）。
+ * 「清空划线」按这个判据收线，手画的线（备注是用户自己写的话）一概不碰。
+ */
+export function isEmaSystemLine(line: PriceLine): boolean {
+  if (line.origin) return line.origin.kind === 'ema';
+  return AUTO_NOTE.test(line.note ?? '');
 }
 
 /**
