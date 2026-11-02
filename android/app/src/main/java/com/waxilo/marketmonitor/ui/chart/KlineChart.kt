@@ -464,8 +464,6 @@ fun KlineChart(
     // 走 rememberUpdatedState 包一层，免得调用方换了 lambda 之后这里还留着旧的。
     val selectionSink by rememberUpdatedState(onSelectionChange)
     LaunchedEffect(selectedLine) { selectionSink(selectedLine) }
-    // 整个图表共用一个测量器：每个子组件各建一个没有意义，还多一份缓存
-    val measurer = rememberTextMeasurer()
     /**
      * 纵向缩放倍数（相对主图原始量程）。1f = 自动量程。
      * 手指在**价格轴一侧**上下拖会改它 —— 这是「拉伸/压缩金额刻度」的手势。
@@ -626,7 +624,7 @@ fun KlineChart(
      *
      * 仍然保留重定的理由：旧意图里的**位置**套到新序列上会把现价顶出量程，
      * 现价虚线与现价牌会整个消失（见 [drawLastPrice]），而切周期后第一眼要看的就是现价。
-     * 之后手势照常可再调，左下角小标仍可复位成贴合的自动量程。
+     * 之后手势照常可再调，右上角小标仍可复位成贴合的自动量程。
      *
      * 量程不取 [liveAutoRange] 而是按当前序列+视口现算（与 [autoRange] 同口径）：
      * 序列从空变满的那一刻，本协程在重算 `autoRange` 的那次重组**之前**就 resumes，
@@ -653,7 +651,7 @@ fun KlineChart(
      * 不这么做的话，[priceBase] 一清空 `rangeBase` 就切回新窗口的自动量程，
      * 量程与中心一起变 ⇒ 松手瞬间整张 K 线上下跳一下（用户报的「拖到历史时
      * 自动把 K 线摆到画布中间」）。落成意图之后，取景与手指松开前逐像素一致；
-     * 想恢复自动适配仍由左下角「复位」一键完成。
+     * 想恢复自动适配仍由右上角「复位」一键完成。
      *
      * [frozenBase] 是手势开始时冻结的**基准**量程，屏幕上真正显示的是它叠加
      * `priceZoom` / `pricePan` 之后的结果 —— 要保住的是后者，所以先回放一次。
@@ -756,7 +754,7 @@ fun KlineChart(
         }
 
     /**
-     * 图内浮层（左下角「全屏」角标、右下角的显隐开关组）距绘图区边缘的内缩距离。
+     * 图内浮层（左下角「全屏」角标、右上角「复位」小标、右下角的显隐开关组）距绘图区边缘的内缩距离。
      * 几处浮层同用 [CORNER_BUTTON_INSET] 一档值，贴角才对称。
      */
     val cornerInsetPx = with(density) { CORNER_BUTTON_INSET.toPx() }
@@ -929,7 +927,7 @@ fun KlineChart(
                             // 冻结的量程若直接交回自动量程，它会按新窗口重算，K 线整块上下跳一下
                             // —— 看着就像「拖到历史时自动把 K 线摆回画布中间」。
                             // 把冻结量程反算成相对新窗口的意图，取景原样留住；
-                            // 想回到自动适配仍走左下角「复位」。
+                            // 想回到自动适配仍走右上角「复位」。
                             if (pannedHorizontal && frozen != null) {
                                 repinPriceRange(frozen)
                             }
@@ -1247,23 +1245,11 @@ fun KlineChart(
         // 不给出口用户就回不到默认。往前拖看历史后松手也会亮 —— 横向位置离开了最新价。
         // 复位 = **横纵缩放全部回默认 + 回到最新价格的 K 线**（2026-10-26 用户拍板）；
         // 与「重开详情」的区别：重开只回到最新价，缩放原样保留。按一次即经 onViewChange 落盘。
-        // 位置选**绘图区左下角**：
-        //   · 右侧不放 —— 最新/最该看的蜡烛就在右边，浮层压上去代价最大；
-        //   · 顶部不放 —— 指标读数带占满左上，且绘图区顶端往往是近期高点；
-        //   · 左下角是整块图里信息密度最低的地方（左侧是历史蜡烛、下沿是最低价影线），
-        //     且天然离读数带与时间轴都足够远。
+        // 位置选**绘图区右上角**（2026-11-02 用户拍板）：原来放左下角，紧挨横向拖图与
+        // 全屏角标的起手处，手指扫过极易误触 —— 误点一次就把缩放与位置全清掉。
+        // 落在右侧刻度列顶端（58dp 宽，刚好容下这枚小标）：不压最新蜡烛，
+        // 代价只是临时盖住最顶一格刻度，下一格照常可读。
         if (priceZoom != 1f || pricePan != 0f || !viewport.isInitial()) {
-            val badgeStyle = MaterialTheme.typography.labelSmall
-            val badgeSize = remember(badgeStyle, density) {
-                measurer.measure(
-                    AnnotatedString(RESET_BADGE_TEXT),
-                    badgeStyle,
-                    density = density,
-                ).size
-            }
-            val badgeHeightPx = with(density) {
-                badgeSize.height.toFloat() + RESET_BADGE_VERTICAL_PADDING_DP.dp.toPx()
-            }
             PriceScaleResetBadge(
                 onClick = {
                     viewport = ChartViewport.initial()
@@ -1271,21 +1257,10 @@ fun KlineChart(
                     pricePan = 0f
                 },
                 modifier = Modifier
-                    .offset(
-                        // 左下角现在也站着全屏角标：小标挪到角的右侧，且两者挂在同一条
-                        // 水平中线（角标的行中心）上，一高一低会显得散。
-                        x = with(density) {
-                            (Spacing.Sm.toPx() +
-                                if (cornerAction != null) CORNER_BUTTON_SIZE.toPx() + Spacing.Xs.toPx()
-                                else 0f
-                                ).toDp()
-                        },
-                        y = with(density) {
-                            ((geo.mainTopPx + geo.mainHeightPx) -
-                                CORNER_BUTTON_INSET.toPx() -
-                                CORNER_BUTTON_SIZE.toPx() / 2f -
-                                badgeHeightPx / 2f).toDp()
-                        },
+                    .align(Alignment.TopEnd)
+                    .padding(
+                        top = with(density) { geo.mainTopPx.toDp() } + CORNER_BUTTON_INSET,
+                        end = CORNER_BUTTON_INSET,
                     ),
             )
         }
@@ -3259,11 +3234,11 @@ private const val LINE_SELECTED_HALO_ALPHA = 0.22f
 /** 外发光的线宽（px）：比本色线的 2.5px 宽出一圈，看着像一层柔光。 */
 private const val LINE_SELECTED_HALO_WIDTH = 9f
 
-/** 左下角角标按钮的边长。 */
+/** 全屏角标按钮的边长。 */
 private val CORNER_BUTTON_SIZE = 26.dp
 
 /**
- * 图内浮层（左下角「全屏」角标、右下角的显隐开关组）距绘图区边缘的内缩距离。
+ * 图内浮层（左下角「全屏」角标、右上角「复位」小标、右下角的显隐开关组）距绘图区边缘的内缩距离。
  * 几处浮层同用这一档值，贴角才对称。
  */
 private val CORNER_BUTTON_INSET = 12.dp

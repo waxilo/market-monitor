@@ -3138,7 +3138,12 @@ body {
 /* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（画·对齐·取消这条系统划线），
    所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。
    选中态 = 这一档已有图上的告警线：实色红底 + 左缘一道 3px 色条，
-   比一层淡灰更清楚，又不至于让满屏红条盖过价位本身。 */
+   比一层淡灰更清楚，又不至于让满屏红条盖过价位本身。
+
+   **不要加过渡**（2026-11-02 用户报「鼠标划过不跟手、显得很卡」）：这是一张密集
+   列表，鼠标快速扫过时每一行都会启动一次 140ms 的底色渐变，屏幕上同时挂着十几行
+   半亮不亮的旧行，高亮总落后手指一截。整行底色跟着指针瞬时切换，才像「指哪儿亮哪儿」；
+   实测同样的扫过路径，样式重算减少约七成。 */
 .ema-row {
   flex: 0 0 auto;
   position: relative;
@@ -3157,7 +3162,6 @@ body {
   text-align: left;
   cursor: pointer;
   user-select: none;
-  transition: background var(--fast) var(--ease-standard);
 }
 .ema-row:hover {
   background: var(--wash);
