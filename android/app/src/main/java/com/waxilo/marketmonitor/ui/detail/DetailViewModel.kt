@@ -21,8 +21,10 @@ import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
 import com.waxilo.marketmonitor.domain.kline.OfficialInterval
+import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.model.closeDouble
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SymbolId
@@ -435,6 +437,19 @@ class DetailViewModel(
      */
     val alertLinesVisible: StateFlow<Boolean> = alertLinesVisibleState.asStateFlow()
 
+    /**
+     * 顶栏副标题里的数据源名（现货：币安 / Gate；合约：设置页选定的接口）。
+     * 换源后必须跟着变，否则标题还写着旧盘口，用户分不清图上是哪家的价。
+     */
+    private val sourceLabelState = MutableStateFlow(
+        if (id.market == MarketType.FUTURES) {
+            FuturesEndpoints.of(FuturesEndpoints.DEFAULT_URL).label
+        } else {
+            SpotSource.DEFAULT.label.removeSuffix("现货")
+        },
+    )
+    val sourceLabel: StateFlow<String> = sourceLabelState.asStateFlow()
+
     fun toggleAlertLines() {
         alertLinesVisibleState.update { !it }
     }
@@ -603,9 +618,20 @@ class DetailViewModel(
         // 自动兜底换了合约源：旧盘口的缓存已由容器清空，重拉当前周期；
         // 新源的持仓量能力可能不同，OI 副图按新方言重启。
         viewModelScope.launch {
-            container.futuresSourceChanges.collect { _ ->
+            container.futuresSourceChanges.collect { host ->
                 if (id.market != MarketType.FUTURES) return@collect
+                sourceLabelState.value = FuturesEndpoints.of(host).label
                 oiSupported.value = repository.supportsOpenInterest(id.market)
+                sourceVersion.update { it + 1 }
+                reloadToken.update { it + 1 }
+            }
+        }
+        // 现货换源：缓存已清空，当前图必须从新源重取；新源没有这个标的时
+        // 会走「空态 + 重新加载」，而不是继续显示旧盘口的线。
+        viewModelScope.launch {
+            container.spotSourceChanges.collect { source ->
+                if (id.market != MarketType.SPOT) return@collect
+                sourceLabelState.value = source.label.removeSuffix("现货")
                 sourceVersion.update { it + 1 }
                 reloadToken.update { it + 1 }
             }
@@ -683,6 +709,12 @@ class DetailViewModel(
     /** 详情页的图表偏好跨会话保留（PRD 8 设置：周期、均线、副图、布林、视角）。 */
     private suspend fun restoreChartPreferences() {
         val saved = settings.current()
+        // 顶栏的数据源标签读实际选择（桌面端踩过「写死 Gate 现货」的坑）
+        sourceLabelState.value = if (id.market == MarketType.FUTURES) {
+            FuturesEndpoints.of(saved.futuresRestHost).label
+        } else {
+            saved.spotSource.label.removeSuffix("现货")
+        }
         CandleInterval.fromStorageKey(saved.lastIntervalKey)?.let { interval.value = it }
         // 视角只按「意图」恢复：越界与否到用的时候由 ChartViewport.clamp 兜底。
         // 横向位置**不恢复**（2026-10-26 用户：往前翻看历史后退出详情、再进应回到最新一根）：

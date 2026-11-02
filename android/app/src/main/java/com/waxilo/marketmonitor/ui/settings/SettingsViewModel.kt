@@ -8,6 +8,7 @@ import com.waxilo.marketmonitor.data.remote.MarketApiException
 import com.waxilo.marketmonitor.di.AppContainer
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.repository.AppSettings
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
@@ -37,6 +38,8 @@ sealed interface ProbeOutcome {
 @Immutable
 data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    /** 现货行情来源（币安 / Gate）。 */
+    val spotSource: SpotSource = SpotSource.DEFAULT,
     /** 用户选定的合约行情接口（FuturesEndpoints 之一）。 */
     val futuresHost: String = FuturesEndpoints.DEFAULT_URL,
     /** 合约源自动选择开关（出厂关闭）：开着才会在失败/慢响应时自动测速换源。 */
@@ -88,6 +91,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 backing.update { s ->
                     s.copy(
                         themeMode = it.themeMode,
+                        spotSource = it.spotSource,
                         futuresHost = it.futuresRestHost,
                         autoFuturesSource = it.autoFuturesSource,
                         notificationEnabled = it.notificationEnabled,
@@ -123,6 +127,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.futuresSourceChanges.collect { host ->
                 backing.update { it.copy(futuresHost = host) }
+            }
+        }
+        // 现货源没有自动换源，但仍从容器订阅：以后若加入自动兜底，界面不会显示错源
+        viewModelScope.launch {
+            container.spotSourceChanges.collect { source ->
+                backing.update { it.copy(spotSource = source) }
             }
         }
     }
@@ -182,6 +192,16 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                 probingUrls = s.probingUrls - baseUrl,
             )
         }
+    }
+
+    /**
+     * 切换现货源：交给容器统一切换（清现货缓存、广播重载、持久化、重同步交易对）。
+     * 立即回填选中态，落盘/重同步失败不会把界面留在旧选项上。
+     */
+    fun setSpotSource(source: SpotSource) {
+        if (source == state.value.spotSource) return
+        backing.update { it.copy(spotSource = source) }
+        viewModelScope.launch { container.selectSpotSource(source) }
     }
 
     /**

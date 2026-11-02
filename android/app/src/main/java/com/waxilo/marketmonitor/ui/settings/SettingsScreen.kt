@@ -50,6 +50,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.repository.UpdateInfo
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
@@ -103,6 +104,43 @@ fun SettingsScreen(
                             fillWidth = false,
                         )
                     }
+                }
+            }
+
+            item {
+                Section(title = "现货行情接口") {
+                    SegmentRow("数据源") {
+                        SegmentedControl(
+                            options = SpotSource.entries.toList(),
+                            selected = state.spotSource,
+                            labelOf = { it.label.removeSuffix("现货") },
+                            onSelect = viewModel::setSpotSource,
+                            fillWidth = false,
+                        )
+                    }
+                    Text(
+                        text = "${state.spotSource.primaryHost} · ${state.spotSource.note}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Xs,
+                        ),
+                    )
+                    Text(
+                        text = "移动网络下币安经常连不上或被墙，表现为「一直在加载」；这时切到 Gate 通常能直连。" +
+                            "切换会清空现货缓存并重新同步交易对 —— 自选、预警按交易对保留，新源没有的标的会显示为暂无数据。" +
+                            "现货与合约的限频互不影响。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
+                    Rule()
                 }
             }
 
@@ -300,7 +338,7 @@ fun SettingsScreen(
             item {
                 Section(title = "关于") {
                     Text(
-                        text = "行情监控 · 现货数据来自币安公开接口；永续合约行情来自上方弹窗选定的接口（默认 Aster）。本应用不构成投资建议。",
+                        text = "行情监控 · 现货行情来自 ${state.spotSource.label}；永续合约行情来自上方选定的 ${FuturesEndpoints.of(state.futuresHost).label}。本应用不构成投资建议。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(

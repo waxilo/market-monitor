@@ -150,6 +150,14 @@ class SearchViewModel(private val container: AppContainer) : ViewModel() {
             market.value = target
             ensureInstruments(target)
         }
+        // 现货换源：容器清空了清单并重同步。这里只放开「已同步」标记 ——
+        // 同步成功时 Room 流自己会把新清单推上来；失败时页面是空列表，
+        // 标记已放开，底部「重新同步」才点得动（否则会被当成已经同步过）。
+        viewModelScope.launch {
+            container.spotSourceChanges.collect {
+                syncedMarkets.remove(MarketType.SPOT)
+            }
+        }
     }
 
     fun selectMarket(target: MarketType) {

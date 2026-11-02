@@ -2,6 +2,7 @@ package com.waxilo.marketmonitor.domain.repository
 
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 
@@ -72,8 +73,12 @@ data class AppSettings(
     val webhookEnabled: Boolean = true,
     /** 允许局域网 http 端点，仅调试用（PRD FR-4.1）。 */
     val allowInsecureWebhook: Boolean = false,
-    /** 备用域名，逗号分隔；为空表示仅用官方域名。 */
-    val spotRestMirror: String = "",
+    /**
+     * 现货行情来源（[com.waxilo.marketmonitor.domain.model.SpotSource]）。
+     * 出厂币安；移动网络下币安被墙/很慢时可在设置页一键切到 Gate。
+     * 切换会清空现货缓存并重新同步交易对，自选与预警按交易对保留。
+     */
+    val spotSource: SpotSource = SpotSource.DEFAULT,
     /**
      * 用户选定的合约行情接口（[com.waxilo.marketmonitor.domain.model.FuturesEndpoints] 之一）。
      * 合约行情只发往这一个域名，不再逐域回退试探；设置页一键检测后点选。

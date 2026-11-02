@@ -3,11 +3,6 @@ package com.waxilo.marketmonitor.data.remote
 import com.waxilo.marketmonitor.data.remote.dialect.FuturesDialectAdapter
 import com.waxilo.marketmonitor.data.remote.dialect.FuturesDialects
 import com.waxilo.marketmonitor.data.remote.dto.ErrorResponseDto
-import com.waxilo.marketmonitor.data.remote.dto.ExchangeInfoDto
-import com.waxilo.marketmonitor.data.remote.dto.TickerDto
-import com.waxilo.marketmonitor.data.remote.dto.toDomain
-import com.waxilo.marketmonitor.data.remote.dto.toKline
-import com.waxilo.marketmonitor.domain.kline.OfficialInterval
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.InstrumentMeta
@@ -15,14 +10,11 @@ import com.waxilo.marketmonitor.domain.model.Kline
 import com.waxilo.marketmonitor.domain.model.MarketTicker
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.HttpUrl
@@ -41,39 +33,30 @@ import kotlin.math.ceil
 /** 测速（探测）超时：5 秒不响应即判超时（用户口径，与桌面端同）。 */
 private const val PROBE_TIMEOUT_MS = 5_000L
 
-/** REST 域名来源：现货走镜像+官方回退链；合约只用用户选定的单一接口（PRD 3.2）。 */
+/**
+ * 现货域名链里**单个主机**的取数上限。桌面端同为 8 秒；OkHttp 的 30 秒 callTimeout
+ * 是留给大响应（K 线 / 清单）的，拿它等一个被黑洞的域名，会让换源前的等待长得像断网。
+ */
+private const val SPOT_HOST_TIMEOUT_MS = 8_000L
+
+/** REST 域名来源：现货按用户选定的源走其域名链；合约只用用户选定的单一接口（PRD 3.2）。 */
 interface RestHosts {
     fun hostsFor(market: MarketType): List<String>
 }
 
 class DefaultRestHosts(
-    private val spotMirror: () -> String = { "" },
+    private val spotSource: () -> SpotSource = { SpotSource.DEFAULT },
     private val futuresHost: () -> String = { FuturesEndpoints.DEFAULT_URL },
 ) : RestHosts {
-    override fun hostsFor(market: MarketType): List<String> = buildList {
-        when (market) {
-            MarketType.SPOT -> {
-                spotMirror().split(',').map { it.trim().removeSuffix("/") }
-                    .filter { it.isNotEmpty() }
-                    .let { addAll(it) }
-                // data-api 是官方行情镜像，大陆网络可直连；放首位避免前面被墙的官方主域
-                // 逐个走完 connect/read 超时再兜底（那样会让每次加载都慢到看似“请求不到数据”）。
-                addAll(
-                    listOf(
-                        "https://data-api.binance.vision",
-                        "https://api.binance.com",
-                        "https://api1.binance.com",
-                        "https://api2.binance.com",
-                        "https://api3.binance.com",
-                    ),
-                )
-            }
-            // 合约行情不再逐域回退试探：候选清单内置在设置页（FuturesEndpoints），
-            // 用户在一键检测后点选一个，这里就只发往那一个。
-            // 币安合约与 Aster 是独立盘口，混用同一市场会污染 (FUTURES, symbol) 缓存，
-            // 切换接口时由设置页负责清合约缓存并重同步。
-            MarketType.FUTURES -> add(FuturesEndpoints.normalize(futuresHost()))
-        }
+    override fun hostsFor(market: MarketType): List<String> = when (market) {
+        // 现货两家各自准备一条域名链：币安是镜像+官方回退，Gate 只有主域。
+        // 链的顺序只是「首选」，真正每次先试哪个由 SpotHostHealth 的健康记忆决定。
+        MarketType.SPOT -> spotSource().hosts
+        // 合约行情不再逐域回退试探：候选清单内置在设置页（FuturesEndpoints），
+        // 用户在一键检测后点选一个，这里就只发往那一个。
+        // 币安合约与 Aster 是独立盘口，混用同一市场会污染 (FUTURES, symbol) 缓存，
+        // 切换接口时由设置页负责清合约缓存并重同步。
+        MarketType.FUTURES -> listOf(FuturesEndpoints.normalize(futuresHost()))
     }.distinct()
 }
 
@@ -111,7 +94,8 @@ object MarketJson {
 class BinanceMarketApi(
     private val client: OkHttpClient,
     private val hosts: RestHosts = DefaultRestHosts(),
-    private val json: Json = MarketJson.DEFAULT,
+    /** 当前现货源；决定解析方言与限频预算，合约路径不受影响。 */
+    private val spotSource: () -> SpotSource = { SpotSource.DEFAULT },
     /**
      * 每次**合约取数**的往返耗时与成败，供 [FuturesAutoSelector] 决定要不要换源。
      * 探测（[probeFutures]）与现货请求都不上报。
@@ -121,17 +105,30 @@ class BinanceMarketApi(
     private val rateGate: FuturesRateGate = FuturesRateGate(),
 ) {
 
-    private val budgets = mapOf(
-        // 留出余量：官方上限 6000 / 2400，避免与同 IP 的其他客户端抢额度
-        MarketType.SPOT to RateBudget(5_600),
-        MarketType.FUTURES to RateBudget(2_200),
-    )
+    // 现货与合约各自的预算；现货再按源分开：
+    // - 币安官方上限 6000 / 分，留余量取 5600（60 秒窗口）。
+    // - Gate 公开接口是 200 次 / 10 秒，同样用 10 秒窗口、取 160 留余量。
+    //   超预算让 [RateBudget] 排队，而不是等 Gate 回 429 把整条链路打红。
+    private val binanceSpotBudget = RateBudget(5_600)
+    private val gateSpotBudget = RateBudget(160, windowMs = 10_000L)
+    private val futuresBudget = RateBudget(2_200)
+
+    private fun budgetFor(market: MarketType): RateBudget = when {
+        market.isFutures -> futuresBudget
+        spotSource() == SpotSource.GATE -> gateSpotBudget
+        else -> binanceSpotBudget
+    }
+
+    private val spotAdapter get() = SpotDialects.of(spotSource())
+
+    /** 现货域名链的健康记忆：首选最近成功的主机，失败主机冷却（见 [SpotHostHealth]）。 */
+    private val spotHostHealth = SpotHostHealth()
 
     suspend fun ping(market: MarketType): Boolean = try {
         if (market.isFutures) {
             probeFutures(hosts.hostsFor(market).first())
         } else {
-            get(market, "/ping", weight = 1)
+            getSpot(spotAdapter.pingPath(), weight = 1)
         }
         true
     } catch (e: IOException) {
@@ -149,15 +146,15 @@ class BinanceMarketApi(
         if (market.isFutures) {
             FuturesDialects.of(futuresEndpoint().dialect).intervalLadder.keys.sorted()
         } else {
-            OfficialInterval.entries.map { it.minutes }
+            spotAdapter.intervalMinutes
         }
 
-    /** 单次 K 线请求根数上限（各家不同：OKX 300、Hyperliquid 500、币安系 1000）。 */
+    /** 单次 K 线请求根数上限（各家不同：OKX 300、Hyperliquid 500、币安/Gate 现货 1000）。 */
     fun maxKlineLimit(market: MarketType): Int =
         if (market.isFutures) {
             FuturesDialects.of(futuresEndpoint().dialect).maxKlineLimit
         } else {
-            MAX_KLINE_LIMIT
+            spotAdapter.maxKlineLimit
         }
 
     /**
@@ -194,7 +191,7 @@ class BinanceMarketApi(
             ?: throw MarketApiException(0, 0, "${endpoint.label} 没有持仓量历史")
         val base = oiBaseFor(spec.ladder.keys.toList(), baseMinutes)
         val needed = maxOf(1, ceil(limit.toDouble() * baseMinutes / base).toInt())
-        budgets.getValue(market).await(1)
+        budgetFor(market).await(1)
         val text = executeFutures(spec.call(endpoint.baseUrl, symbol, base, needed))
         return OpenInterestSeries(spec.parse(text), spec.baseCoinValue)
     }
@@ -220,24 +217,15 @@ class BinanceMarketApi(
         if (market.isFutures) {
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
-            budgets.getValue(market).await(20)
+            budgetFor(market).await(20)
             val text = executeFutures(dialect.exchangeInfo(endpoint.baseUrl))
             val all = dialect.parseExchangeInfo(text)
             return symbol?.let { s -> all.filter { it.id.symbol == s } } ?: all
         }
-        val query = symbol?.let { mapOf("symbol" to it) }.orEmpty()
-        val element = get(market, "/exchangeInfo", query, weight = 20)
-        val dto = json.decodeFromJsonElement(ExchangeInfoDto.serializer(), element)
-        return dto.symbols.mapNotNull { it.toDomain(market) }
-    }
-
-    /** 全市场 24h 快照。现货/合约均为数组响应，weight 80（全量）。 */
-    suspend fun tickers(market: MarketType): List<MarketTicker> {
-        val element = get(market, "/ticker/24hr", weight = 80)
-        val now = System.currentTimeMillis()
-        return array(element).mapNotNull { item ->
-            json.decodeFromJsonElement(TickerDto.serializer(), item).toDomain(market, now)
-        }
+        val adapter = spotAdapter
+        val text = getSpot(adapter.exchangeInfoPath(), weight = 20)
+        val all = parseSpot("交易对清单") { adapter.parseExchangeInfo(text) }
+        return symbol?.let { s -> all.filter { it.id.symbol == s } } ?: all
     }
 
     /** 单个交易对的 24h 快照（详情页/预警轮询用，权重远低于全量）。 */
@@ -245,13 +233,13 @@ class BinanceMarketApi(
         if (market.isFutures) {
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
-            budgets.getValue(market).await(1)
+            budgetFor(market).await(1)
             val text = executeFutures(dialect.ticker(endpoint.baseUrl, symbol))
             return dialect.parseTicker(text, symbol, System.currentTimeMillis())
         }
-        val element = get(market, "/ticker/24hr", mapOf("symbol" to symbol), weight = 1)
-        return json.decodeFromJsonElement(TickerDto.serializer(), element)
-            .toDomain(market, System.currentTimeMillis())
+        val adapter = spotAdapter
+        val text = getSpot(adapter.tickerPath(symbol), weight = 1)
+        return parseSpot("24h 行情") { adapter.parseTicker(text, symbol, System.currentTimeMillis()) }
     }
 
     /**
@@ -271,23 +259,19 @@ class BinanceMarketApi(
         if (market.isFutures) {
             val endpoint = futuresEndpoint()
             val dialect = FuturesDialects.of(endpoint.dialect)
-            budgets.getValue(market).await(klineWeight(capped))
+            budgetFor(market).await(klineWeight(capped))
             val text = executeFutures(dialect.klines(endpoint.baseUrl, symbol, minutes, capped, startTime, endTime))
             return dialect.parseKlines(text, minutes)
         }
-        val code = OfficialInterval.entries.firstOrNull { it.minutes == minutes }?.apiCode
-            ?: throw MarketApiException(0, 0, "现货不支持 ${minutes} 分钟周期")
-        val query = buildMap {
-            put("symbol", symbol)
-            put("interval", code)
-            put("limit", capped.toString())
-            startTime?.let { put("startTime", it.toString()) }
-            endTime?.let { put("endTime", it.toString()) }
+        val adapter = spotAdapter
+        if (minutes !in adapter.intervalMinutes) {
+            throw MarketApiException(0, 0, "现货不支持 ${minutes} 分钟周期")
         }
-        val element = get(market, "/klines", query, weight = klineWeight(capped))
-        return array(element).mapNotNull { row ->
-            (row as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }?.toKline()
-        }
+        val text = getSpot(
+            adapter.klinesPath(symbol, minutes, capped, startTime, endTime),
+            weight = klineWeight(capped),
+        )
+        return parseSpot("K 线") { adapter.parseKlines(text, minutes) }
     }
 
     private fun klineWeight(limit: Int): Int = when {
@@ -297,50 +281,75 @@ class BinanceMarketApi(
         else -> 10
     }
 
-    private fun array(element: JsonElement): List<JsonElement> =
-        (element as? JsonArray)?.toList() ?: emptyList()
-
-    private suspend fun get(
-        market: MarketType,
-        path: String,
-        query: Map<String, String> = emptyMap(),
-        weight: Int,
-    ): JsonElement {
-        val candidates = hosts.hostsFor(market).ifEmpty {
-            throw MarketApiException(0, 0, "未配置 ${market.label} 接口域名")
+    /**
+     * 现货取数的统一出口。
+     *
+     * 域名顺序不是固定的：先看 [SpotHostHealth]，最近成功的主机置顶、刚失败的主机冷却；
+     * 每个主机最多等 [SPOT_HOST_TIMEOUT_MS]（不是 OkHttp 的 30 秒整体超时）。
+     * 整条链全失败后短暂「停试」，后续请求快速失败并让界面进入离线态 ——
+     * 蜂窝网络下被墙的域名不该让每一拍都白等几十秒。
+     */
+    private suspend fun getSpot(path: String, weight: Int): String {
+        val source = spotSource()
+        if (spotHostHealth.unavailable(source.key)) {
+            throw spotHostHealth.lastFailure ?: IOException("${source.label}暂不可用")
+        }
+        val candidates = hosts.hostsFor(MarketType.SPOT).ifEmpty {
+            throw MarketApiException(0, 0, "未配置 ${source.label} 接口域名")
         }
         var lastError: IOException? = null
-        for (host in candidates) {
-            // 用户在设置里写错的镜像域不该拖垮整条链路，跳过试下一个
-            val url = buildUrl(host, market, path, query) ?: continue
-            budgets.getValue(market).await(weight)
+        for (host in spotHostHealth.order(candidates)) {
+            val url = buildUrl(host, path) ?: continue
+            budgetFor(MarketType.SPOT).await(weight)
             try {
-                return execute(url)
+                val text = withTimeoutOrNull(SPOT_HOST_TIMEOUT_MS) { executeSpot(url) }
+                    ?: throw SocketTimeoutException("${SPOT_HOST_TIMEOUT_MS / 1_000} 秒无响应")
+                spotHostHealth.noteOk(host)
+                return text
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: MarketApiException) {
                 if (!shouldTryNextHost(e)) throw e
+                if (isSourceUnavailable(e)) spotHostHealth.noteFailed(host)
                 lastError = e
             } catch (e: IOException) {
+                spotHostHealth.noteFailed(host)
                 lastError = e
             }
         }
         val tried = candidates.joinToString("、") { host -> host.substringAfter("//").substringBefore("/") }
-        throw lastError?.let { IOException("${market.label}行情请求失败：$tried 都不可用（${it.message}）", it) }
-            ?: MarketApiException(0, 0, "未配置 ${market.label} 接口域名")
+        val error = lastError?.let {
+            IOException("${source.label}行情请求失败：$tried 都不可用（${it.message}）", it)
+        } ?: MarketApiException(0, 0, "未配置 ${source.label} 接口域名")
+        // 全失败停试只用于两类场景：多域名链一起挂（省掉下一拍再撞一遍几十秒），
+        // 以及服务端明确限频（429/418，等窗口过去）。单域名的一次偶发超时不该把
+        // 整条源判死 —— 那会让同一时刻其它正常请求一起被短路，看起来像「切源后反而更差」。
+        val status = (lastError as? MarketApiException)?.httpCode
+        val shouldPause = lastError != null && (
+            (candidates.size > 1 && isSourceUnavailable(lastError)) ||
+                status == 418 || status == 429
+            )
+        if (shouldPause) spotHostHealth.noteAllFailed(source.key, error)
+        throw error
     }
 
-    private fun buildUrl(host: String, market: MarketType, path: String, query: Map<String, String>): HttpUrl? {
-        val base = (host.trimEnd('/') + market.apiPrefix + path).toHttpUrlOrNull() ?: return null
-        return base.newBuilder().apply { query.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
-    }
+    private fun buildUrl(host: String, path: String): HttpUrl? =
+        (host.trimEnd('/') + path).toHttpUrlOrNull()
 
-    private suspend fun execute(url: HttpUrl): JsonElement {
+    private suspend fun executeSpot(url: HttpUrl): String {
         val request = Request.Builder().url(url).header("Accept", "application/json").build()
-        val text = client.newCall(request).awaitText()
-        return try {
-            json.parseToJsonElement(text)
-        } catch (e: Exception) {
-            throw MarketApiException(200, 0, "响应解析失败：${e.message}", e)
-        }
+        return client.newCall(request).awaitText()
+    }
+
+    /** 解析失败与网络失败一样归到 [MarketApiException]，仓库层的缓存降级/重试才能接住。 */
+    private inline fun <T> parseSpot(what: String, block: () -> T): T = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        throw e
+    } catch (e: Exception) {
+        throw MarketApiException(200, 0, "${what}解析失败：${e.message}", e)
     }
 
     /** 方言请求（GET 或 POST）原文发出、原文收回；解析交给各家适配器。 */

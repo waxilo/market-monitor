@@ -10,7 +10,7 @@ import org.junit.Test
 class RateBudgetTest {
 
     private var now = 0L
-    private val budget = RateBudget(limitPerMinute = 100, nowMs = { now })
+    private val budget = RateBudget(limitPerWindow = 100, nowMs = { now })
 
     @Test
     fun `预算未满时可立即发出`() = runTest {
@@ -36,7 +36,7 @@ class RateBudgetTest {
 
     @Test
     fun `await 会真的挂起到窗口滑出`() = runTest {
-        val clock = RateBudget(limitPerMinute = 100, nowMs = { testScheduler.currentTime })
+        val clock = RateBudget(limitPerWindow = 100, nowMs = { testScheduler.currentTime })
         clock.await(100)
         clock.await(1)
         assertEquals(RateBudget.WINDOW_MS, testScheduler.currentTime)
@@ -45,7 +45,7 @@ class RateBudgetTest {
     /** 排队多笔时等到最老一笔滑出窗口即放行，放行后窗口内重新有余量。 */
     @Test
     fun `排队多笔时等到最老一笔滑出窗口`() = runTest {
-        val clock = RateBudget(limitPerMinute = 100, nowMs = { testScheduler.currentTime })
+        val clock = RateBudget(limitPerWindow = 100, nowMs = { testScheduler.currentTime })
         clock.await(30)
         delay(1_000)
         clock.await(30)

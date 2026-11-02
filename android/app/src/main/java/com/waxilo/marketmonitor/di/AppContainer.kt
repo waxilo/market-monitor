@@ -32,6 +32,7 @@ import com.waxilo.marketmonitor.domain.repository.WebhookRepository
 import com.waxilo.marketmonitor.data.local.room.MarketDatabase
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -145,9 +146,24 @@ class AppContainer(private val context: Context) {
     /** 合约数据源切换（手动点选或自动兜底）的广播：正在取数的页面据此重载。 */
     val futuresSourceChanges: SharedFlow<String> = _futuresSourceChanges.asSharedFlow()
 
+    /**
+     * 自动换源后的内存覆盖（与合约同一套理由）：DataStore 写入与快照传播都有延迟，
+     * 换源后紧跟的请求必须立刻走新源。
+     */
+    @Volatile
+    private var selectedSpotSource: SpotSource? = null
+
+    private fun currentSpotSource(): SpotSource =
+        selectedSpotSource ?: settingsSnapshot.value.spotSource
+
+    private val _spotSourceChanges = MutableSharedFlow<SpotSource>(extraBufferCapacity = 1)
+
+    /** 现货数据源切换的广播：首页 / 搜索 / 详情据此重载。 */
+    val spotSourceChanges: SharedFlow<SpotSource> = _spotSourceChanges.asSharedFlow()
+
     private val restHosts by lazy {
         DefaultRestHosts(
-            spotMirror = { settingsSnapshot.value.spotRestMirror },
+            spotSource = { currentSpotSource() },
             futuresHost = { currentFuturesHost() },
         )
     }
@@ -156,6 +172,7 @@ class AppContainer(private val context: Context) {
         BinanceMarketApi(
             client = restClient,
             hosts = restHosts,
+            spotSource = { currentSpotSource() },
             onFuturesResult = { durationMs, failed -> autoSelector.report(durationMs, failed) },
         )
     }
@@ -196,6 +213,28 @@ class AppContainer(private val context: Context) {
             throw e
         } catch (_: Exception) {
             // 清单没拉下来不致命：列表页刷新时会再同步
+        }
+    }
+
+    /**
+     * 切换现货数据源（币安 / Gate）。
+     *
+     * 顺序与合约切换一致：先写内存覆盖 → 清现货缓存 → 广播 → 落盘 → 重同步交易对。
+     * 清缓存不能省：两家盘口的报价与 K 线不能混进同一 (SPOT, symbol)；
+     * 但内部交易对统一用币安写法，自选 / 预警 / 划线不需要迁移，只是新源没有的标的会没数据。
+     */
+    suspend fun selectSpotSource(source: SpotSource) {
+        if (source == currentSpotSource()) return
+        selectedSpotSource = source
+        marketRepository.clearMarketCache(MarketType.SPOT)
+        _spotSourceChanges.emit(source)
+        settings.edit { it.copy(spotSource = source) }
+        try {
+            marketRepository.syncInstruments(MarketType.SPOT)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // 清单没拉下来不致命：首页/搜索刷新时会再同步
         }
     }
 

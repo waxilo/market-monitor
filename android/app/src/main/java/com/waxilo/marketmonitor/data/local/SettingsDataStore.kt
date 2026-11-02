@@ -18,6 +18,7 @@ import com.waxilo.marketmonitor.domain.repository.SettingsRepository
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.update.UpdateMirror
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -69,7 +70,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             longVibrateEnabled = this[Keys.LONG_VIBRATE] ?: d.longVibrateEnabled,
             webhookEnabled = this[Keys.WEBHOOK] ?: d.webhookEnabled,
             allowInsecureWebhook = this[Keys.INSECURE] ?: d.allowInsecureWebhook,
-            spotRestMirror = this[Keys.SPOT_MIRROR] ?: d.spotRestMirror,
+            spotSource = SpotSource.normalize(this[Keys.SPOT_SOURCE] ?: d.spotSource.key),
             futuresRestHost = FuturesEndpoints.normalize(this[Keys.FUTURES_HOST]),
             autoFuturesSource = this[Keys.AUTO_FUTURES_SOURCE] ?: d.autoFuturesSource,
             updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
@@ -170,7 +171,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.LONG_VIBRATE] = longVibrateEnabled
         prefs[Keys.WEBHOOK] = webhookEnabled
         prefs[Keys.INSECURE] = allowInsecureWebhook
-        prefs[Keys.SPOT_MIRROR] = spotRestMirror
+        prefs[Keys.SPOT_SOURCE] = spotSource.key
         prefs[Keys.FUTURES_HOST] = futuresRestHost
         prefs[Keys.AUTO_FUTURES_SOURCE] = autoFuturesSource
         prefs[Keys.UPDATE_PROXY] = updateMirror.key
@@ -219,7 +220,8 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val LONG_VIBRATE = booleanPreferencesKey("long_vibrate_enabled")
             val WEBHOOK = booleanPreferencesKey("webhook_enabled")
             val INSECURE = booleanPreferencesKey("allow_insecure_webhook")
-            val SPOT_MIRROR = stringPreferencesKey("spot_rest_mirror")
+            /** 现货行情来源（SpotSource.key）；缺 key 即出厂币安。 */
+            val SPOT_SOURCE = stringPreferencesKey("spot_source")
             val FUTURES_HOST = stringPreferencesKey("futures_rest_host")
             /** 合约源自动选择开关（出厂关：缺 key 即关，见 AppSettings.autoFuturesSource）。 */
             val AUTO_FUTURES_SOURCE = booleanPreferencesKey("auto_futures_source")

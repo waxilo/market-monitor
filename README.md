@@ -1,6 +1,6 @@
 # Market Monitor（行情监控）
 
-币安现货 + USDT-M 合约的行情监控 App：K 线图表、价格预警、Webhook 推送与应用内更新。
+币安 / Gate 现货 + 多源 USDT-M 合约的行情监控 App：K 线图表、价格预警、Webhook 推送与应用内更新。
 只做行情与预警，不碰账户：没有任何签名/私有接口，也不需要填 API Key。
 需求与取舍见 [`docs/需求文档.md`](android/docs/需求文档.md)。
 
@@ -18,6 +18,7 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除；关注列表报价**并发**刷新、单标的 8 秒超时，断网时一轮不会被串行超时拖住） | `data/remote`、`data/local` | 已实现 |
+| App 端现货多数据源（币安 / Gate，设置页点选即切换；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
 | 合约行情多接口（9 个候选：Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力；Bitunix 也已下线（REST K 线只回已收盘蜡烛，图上最后一根永远落后一个周期） |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |

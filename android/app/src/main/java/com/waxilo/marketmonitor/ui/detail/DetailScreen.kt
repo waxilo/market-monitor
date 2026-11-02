@@ -160,6 +160,7 @@ fun DetailScreen(
     },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val sourceLabel by viewModel.sourceLabel.collectAsStateWithLifecycle()
     // 提到这一层是因为竖屏图与全屏图都要画告警线：线由预警规则派生，在哪个模式下看都该一致
     val alertLines by viewModel.alertLines.collectAsStateWithLifecycle()
     val symbolRules by viewModel.symbolRules.collectAsStateWithLifecycle()
@@ -227,6 +228,7 @@ fun DetailScreen(
             ) {
                 DetailTopBar(
                     state = state,
+                    sourceLabel = sourceLabel,
                     onBack = onBack,
                     onOpenEmaAnalysis = { emaSheetOpen = true },
                     onToggleWatch = viewModel::toggleWatch,
@@ -1374,6 +1376,7 @@ private val LastPriceBoardPriceStyle = HeroPriceStyle.copy(
 @Composable
 private fun DetailTopBar(
     state: DetailUiState,
+    sourceLabel: String,
     onBack: () -> Unit,
     onOpenEmaAnalysis: () -> Unit,
     onToggleWatch: () -> Unit,
@@ -1382,7 +1385,7 @@ private fun DetailTopBar(
     val colors = MarketTheme.colors
     AppBar(
         title = state.title,
-        subtitle = "${state.id.symbol} · ${state.id.market.label}",
+        subtitle = "${state.id.symbol} · ${state.id.market.label} · $sourceLabel",
         onBack = onBack,
         large = false,
         actions = {

@@ -187,7 +187,31 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         // 自动兜底换了合约源：缓存已被容器清空，首页停在合约市场时立刻用新源重拉
         viewModelScope.launch {
             container.futuresSourceChanges.collect {
+                // 换源后旧盘口的价格/走势不能再当「缺报兜底」显示
+                // （Room 已清，内存里的 lastTickers 与 trends 也要清）
+                lastTickers.clear()
+                trends.value = emptyMap()
                 if (activeMarket.value == MarketType.FUTURES) refresh()
+            }
+        }
+        // 手动切换现货源（币安 / Gate）：容器清了现货缓存，首页停在同一市场时重载。
+        // 同时让下一次 refresh 重新同步清单 —— 容器那次失败时还有一次自愈机会。
+        viewModelScope.launch {
+            container.spotSourceChanges.collect {
+                lastTickers.clear()
+                trends.value = emptyMap()
+                // 清单由容器在切换时统一重同步；这里只拉报价，别把首屏价格排在 1MB 清单后面。
+                // 标记放开是为了容器那次同步失败时，用户手动刷新还能再试一次。
+                syncedMarkets.remove(MarketType.SPOT)
+                if (activeMarket.value == MarketType.SPOT) {
+                    viewModelScope.launch {
+                        repository.refreshTickers(MarketType.SPOT)
+                        flags.update {
+                            it.copy(offline = repository.isStale(MarketType.SPOT), error = null)
+                        }
+                        reloadTrends()
+                    }
+                }
             }
         }
     }
@@ -313,8 +337,13 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     }
 }
 
-/** 首页行情自动刷新的轮询间隔（毫秒）。 */
-private const val AUTO_REFRESH_MS = 500L
+/**
+ * 首页行情自动刷新的轮询间隔（毫秒）。
+ *
+ * 500ms 对 REST 逐标的轮询太激进：移动网络下这个频率会持续占着射频，切到 Gate 后
+ * 还会逼近它「200 次 / 10 秒」的公开限频。1 秒仍是「价格在动」的观感，负载减半。
+ */
+private const val AUTO_REFRESH_MS = 1_000L
 
 /** 迷你走势线的取数周期与根数：24 根 1h = 最近一天，正好对应列表展示的 24h 涨跌。 */
 private val SPARKLINE_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.H1)

@@ -102,7 +102,7 @@ fun AlertEditorScreen(
                 label = "交易对代码",
                 value = form.symbol,
                 placeholder = "如 BTCUSDT",
-                supporting = "${form.market.sourceName} · 当前价 ${hints.currentPrice}",
+                supporting = "${form.market.label} · 当前价 ${hints.currentPrice}",
                 onChange = { symbol -> viewModel.on { it.copy(symbol = symbol.uppercase()) } },
             )
             if (hints.quickPicks.isNotEmpty()) {
