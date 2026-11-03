@@ -642,3 +642,32 @@ tag `0.9.60`（annotated `8d98421ce2f6`）→ 远端 main `80f2b27`；Release ru
   CI vite 指纹 `index-BsYhVWZA.js 327.30` / `index-B8igtjlR.css 46.75`（**105 modules**）== 干净副本本地 build
   逐字一致（`git archive 5d50b8f desktop` + 拷 node_modules 到 `.workbuddy/tmp/pristine-0151`——工作区有
   他人在研文件，不能直接 build，105 modules 也印证 ChartView 在研改动没进包）。
+
+## 0.9.66 / desktop 0.1.56（双端同发，2026-11-03 上午）
+
+「K 线读数常在（不悬停时读最新一根）+ 藏线状态下落笔即睁眼」。两个 tag 同指附注 tag 的远端
+`3ce11bc`（远程 `9fd20ec` fix(chart) → `3ce11bc` chore(release)；本地 `7c6f58f` → `3732cd3`）。
+Release run **41562079980** 绿（01:48:06 → 01:51:5xZ，含 CI 内 pinned-key 断言）、Desktop Release run
+**41562067966** 三 job 全绿（01:47:59 → 01:54:35Z）、main CI run **41562054920** 绿（另一条 41562022052 被
+`concurrency` 正常取消）。`verify-channel.mjs 0.1.56` → **34/34 PASS**。
+
+- 本轮改动：桌面端读数块从「只在 `onCandle` 时出现」改成常驻（不悬停 / 图内空白 / 右侧留白 / 指针出画布
+  一律读 `n-1`，副图读数共用同一下标）；桌面端双击落水平线、Android `commitDrawLine` / `commitAlertLine`
+  落笔时把「隐藏画线」眼睛自动睁开（`DetailViewModel.showAlertLines()`）。
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.56
+  无 0.1.55 残留、latest.json 0.1.56（pub_date `2026-11-03T01:54:35.047Z`）、两平台 URL 指向本版、
+  内联签名 == `.sig`、两平台 keyid `226B03192E5DF60B` == 基线；exe **2824010** 字节 sha256
+  `0049923b602a83fe…` == 边车、dmg 4463740、mac app.tar.gz 4382615；
+  CI vite 指纹 `index-D1U5oXcT.js 330.70` / `index-DAjkS9_K.css 50.62`（**106 modules**）== 本地 `npm run build`
+  逐字一致（工作区只有本轮 4 个源文件，没有别的在研文件，直接在工作区构建即可）。
+- Android：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、只有
+  `market-monitor-0.9.66.apk`（**11203204**，0.9.65 = 11203208，仅差 4 字节）+ `.sha256`；CI 日志
+  `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥指纹、`本次版本号：0.9.66`。
+- ✅ 打 tag 前本地 `:app:testDebugUnitTest` **424 例全绿**（1m30s）、桌面 `tsc --noEmit` + `vite build` 绿。
+- push 仍被沙箱拦（`git push --dry-run` 即 `fatal: not a git repository`）：`.workbuddy/tmp/api-push-0948.py`
+  两次（`7c6f58f` → 远端 `9fd20ec`；`3732cd3 --parent 9fd20ec…` 完整 40 位 → 远端 `3ce11bc`），
+  tag 用 `.workbuddy/tmp/tag-0966-0156.py <远端SHA> <本地ref>`（先断言 tree 一致，两个 tag 一次打完）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main 3ce11bc`（没 reset）+ 本地 `tag -f -a` 重指。
+- ⚠️ `git api` 直连 `releases/download/.../latest.json` 用 curl 取回来不是 JSON（本次踩到）——查通道里的
+  `latest.json` 用 `gh api -H "Accept: application/octet-stream" releases/assets/<assetId>` 下 blob。
+- 用掉的 tag 追加：`0.9.66`、`desktop-v0.1.56`。
