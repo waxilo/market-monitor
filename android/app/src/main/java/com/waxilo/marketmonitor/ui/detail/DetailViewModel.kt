@@ -454,6 +454,14 @@ class DetailViewModel(
         alertLinesVisibleState.update { !it }
     }
 
+    /**
+     * 把眼睛睁开（幂等）。落笔时用：藏线状态下新画的线一收起工具就跟着藏掉，
+     * 看着像「没画上」，也让人忘了图上还有别的线。
+     */
+    fun showAlertLines() {
+        alertLinesVisibleState.value = true
+    }
+
     /** 序列与指标开关放在一起：任何一项变化都要重算展示序列。 */
     private data class ChartData(
         /** 已加载的原始蜡烛（**基础周期**，展示序列由它重聚合而来）。 */
@@ -911,6 +919,8 @@ class DetailViewModel(
     fun commitAlertLine() {
         val drag = alertDrag.value ?: return
         val aligned = alignToTick(drag.price)
+        // 眼睛闭着时落下的这根在工具收起后会一起消失 —— 落笔即睁眼（见 showAlertLines）
+        showAlertLines()
         viewModelScope.launch {
             if (upsertAlertLineRule(drag.ruleId, aligned)) alertDrag.value = null
         }
@@ -1234,6 +1244,8 @@ class DetailViewModel(
     /** 松手：草稿落库（id 为 0 新建，其余原位更新）。失败保留草稿，可换个位置再试。 */
     fun commitDrawLine() {
         val draft = drawDraft.value ?: return
+        // 同 commitAlertLine：藏线时落了笔就把眼睛睁开，否则新线当场跟着藏掉
+        showAlertLines()
         viewModelScope.launch {
             try {
                 chartLinesRepo.save(draft)

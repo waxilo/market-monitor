@@ -1077,7 +1077,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           selection={drawings.linesHidden ? null : selection}
           onSelect={setSelection}
           onAddTrend={drawings.addTrendLine}
-          onAddPriceLine={(price) => drawings.addPriceLine(price, false)}
+          onAddPriceLine={(price) => {
+            drawings.addPriceLine(price, false);
+            // 藏线时双击落下的这根会被眼睛一并藏掉，看着像「双击没反应」，也让人忘了图上
+            // 还有别的线 —— 落线即睁眼（与 EMA 面板落线同一口径，见下面 onToggleLine）。
+            if (drawings.linesHidden) drawings.setLinesHidden(false);
+          }}
           onDrawn={() => setTool('none')}
           linesLocked={drawings.linesLocked}
           onMovePriceLine={drawings.movePriceLine}

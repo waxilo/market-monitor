@@ -380,6 +380,9 @@ fun KlineChart(
      * 划线是否画在图上（由右下角的小眼睛控制）。仅在非划线模式下生效 ——
      * 划线时线必须可见，否则是在拖一根看不见的线。
      *
+     * 落笔之后调用方会把眼睛睁开（见 `DetailViewModel.commitDrawLine` / `commitAlertLine`）：
+     * 藏线状态下新落的线在工具收起后会一起消失，看着像没画上。
+     *
      * 均线那边**没有**对应的开关：MA / EMA 的整族显隐住在指标条的两枚 chip 上
      * （见 `DetailScreen.IndicatorBar`），图里再放一枚「MA」只会和它们重复。
      */
