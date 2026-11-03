@@ -671,3 +671,26 @@ Release run **41562079980** 绿（01:48:06 → 01:51:5xZ，含 CI 内 pinned-key
 - ⚠️ `git api` 直连 `releases/download/.../latest.json` 用 curl 取回来不是 JSON（本次踩到）——查通道里的
   `latest.json` 用 `gh api -H "Accept: application/octet-stream" releases/assets/<assetId>` 下 blob。
 - 用掉的 tag 追加：`0.9.66`、`desktop-v0.1.56`。
+
+## desktop 0.1.57（**只发桌面端**，2026-11-03 上午）
+
+「K 线读数按指针所在列取」——用户 2026-11-03 口径：横坐标落在哪根就展示谁的详情，纵坐标不参与命中
+（上一版 0.1.56 是「不悬停读最新」，但同一列上下空白仍读最新，被用户纠正）。
+实现：`KlineCanvas` 里删掉 `onCandle` 判定与 `CANDLE_HIT_PAD_PX`，读数只看 `onBar`
+（横向落在有数据的区间）；右侧留白 / 价格轴 / 指针离开画布读 `n-1`。Android 未动，不发 Android 通道。
+tag `desktop-v0.1.57`（annotated `f6f9fecdd31d`）→ 远端 `38058c4c`
+（本地 `28f4d41` fix → `67b676a` chore(release)）。
+Desktop Release run **41564810361** 三 job 全绿（02:11:5x → 02:21:5xZ，约 10 分钟）；
+main CI run **41564784353** 绿（前一条 41564760516 被 `concurrency` 正常取消）。
+`verify-channel.mjs 0.1.57` → **34/34 PASS**。
+
+- 通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.57
+  无 0.1.56 残留、latest.json 0.1.57（pub_date `2026-11-03T02:21:44.168Z`）、两平台 URL 指向本版、
+  两平台 keyid `226B03192E5DF60B` == 基线；exe **2825430** 字节、dmg 4465161、mac app.tar.gz 4384565。
+- 包内新前端：CI vite 指纹 `index-DvJkNc_H.js 330.48` / `index-DAjkS9_K.css 50.62`（**106 modules**）
+  == 本地 `npm run build` 逐字一致（CSS 与 0.1.56 同 = 样式没动，JS 换名换体积 = 包内是新逻辑）。
+- 验收脚本：`.workbuddy/tmp/check-readout-column.mjs`（五态：列上方空白 / 列下方空白 / 另一列中间 /
+  右侧留白 / 指针出画布），截图逐个核对读数时间与竖线时间标一致。
+- push 仍走 `.workbuddy/tmp/api-push-0948.py` 两次（`28f4d41` → 远端 `0e46da9`；`67b676a --parent 0e46da9…`
+  → 远端 `38058c4c`），tag 用 `.workbuddy/tmp/tag-0157.py`；推完 `git fetch` + `update-ref`（没 reset）。
+- 用掉的 tag 追加：`desktop-v0.1.57`。
