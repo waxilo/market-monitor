@@ -694,3 +694,41 @@ main CI run **41564784353** 绿（前一条 41564760516 被 `concurrency` 正常
 - push 仍走 `.workbuddy/tmp/api-push-0948.py` 两次（`28f4d41` → 远端 `0e46da9`；`67b676a --parent 0e46da9…`
   → 远端 `38058c4c`），tag 用 `.workbuddy/tmp/tag-0157.py`；推完 `git fetch` + `update-ref`（没 reset）。
 - 用掉的 tag 追加：`desktop-v0.1.57`。
+
+## 0.9.67 / desktop 0.1.58（双端同发，2026-11-04 上午）
+
+「换网 / 开关 VPN 后不再复用旧路径连接（双端）」。两个 tag 同指远端 `71f8f15`
+（远程 `ab18fcb` fix(net) → `71f8f15` chore(release)；本地 `5783cda` → `fdf7cf9`）。
+Release run **41766193087** 绿（03:17:33 → 03:20:47Z）、Desktop Release run **41766186894**
+三 job 全绿（03:17:29 → 03:26:18Z）、main CI run **41766135146** 绿（41766079242 被
+`concurrency` 正常取消）。`verify-channel.mjs 0.1.58` → **34/34 PASS**。
+
+- 本轮改动：
+  - Android：`AppContainer` 注册默认网络回调（VPN 开关 / 换 Wi-Fi 与蜂窝 / 链路属性变更）→
+    换代 + 取消在途行情请求 + `connectionPool.evictAll()` + `SpotHostHealth.reset()`；
+    OkHttp 加 `pingInterval(20s)`（HTTP/2 假死自检）；首页 / 详情订阅 `networkChanges` 立即重取；
+    `getSpot` 按网络代次记账，横跨换网的失败不再打进新路径。
+  - 桌面：`market.rs` 客户端改成可重建（`ClientSlot` + 代次 + 3 秒冷却，只对传输层失败换池）；
+    `stream.ts` 假死看门狗 60s→15s 且**自己收尾**（黑洞连接上 onclose 可能迟迟不来，
+    期间 REST 兜底还被停着）、握手阶段也计时。
+- 真机验证（MuMu，debug 包）：iptables `DROP` 黑洞断网 → 出现「网络中断」；撤规则后
+  **5 秒内恢复**、价格继续跳动；Wi-Fi 关→开 → 日志两次「网络路径变更」，界面无横幅、无重启。
+- Android 通道：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、
+  只有 `market-monitor-0.9.67.apk`（**11203204**，与 0.9.66 同字节数属压缩/对齐巧合）+ `.sha256`；
+  asset digest `6db996e8…` == 边车；CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、
+  `本次版本号：0.9.67`；旧 0.9.66 产物在发布步骤被移除。
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、
+  8 产物全 0.1.58 无残留；latest.json 0.1.58（pub_date `2026-11-04T03:26:08.024Z`）、
+  两平台 URL 指向本版、两平台 keyid `226B03192E5DF60B` == 基线；
+  exe **2819879**、dmg 4469301、mac app.tar.gz 4390800。
+- 包内新前端：CI vite 指纹 `index-B3G6GN7E.js 330.51` / `index-DAjkS9_K.css 50.62`
+  （**106 modules**）== 本地 `npm run build` 逐字一致（CSS 与 0.1.57 同 = 样式没动）。
+- ✅ 打 tag 前：Android `testDebugUnitTest` **425 例全绿**（含新增「换网后首选与冷却全部作废」）；
+  桌面 `tsc --noEmit` + `vite build` + `cargo test`（2 例）绿；看门狗逻辑用假 WebSocket
+  harness（`.workbuddy/tmp/check-stream-watchdog.mjs`）验证「15s 自行收尾 / 晚到 onclose 不重复 / 重连」。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（`5783cda` → 远端 `ab18fcb`；
+  `fdf7cf9 --parent ab18fcb…` 完整 40 位 → 远端 `71f8f15`）；tag 用
+  `.workbuddy/tmp/tag-0967-0158.py <远端SHA> fdf7cf9`（先断言 tree 一致）；推完 `git fetch` + `update-ref`（没 reset）。
+- ⚠️ 本轮 `gh release download` 被企业 DLP 钩子拦（同批命令里有 `rm -rf`）——按规范不绕行，
+  Android 侧改用 asset `digest` + 边车 API 内容 + CI 日志取证。
+- 用掉的 tag 追加：`0.9.67`、`desktop-v0.1.58`。
