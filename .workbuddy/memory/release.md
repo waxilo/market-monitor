@@ -831,3 +831,36 @@ Desktop Release run **41810993885** 三 job 全绿（09:57:41 → 10:06:37Z）�
   `.workbuddy/tmp/tag-0969-0161.py <远端SHA> a2e4502`（先断言 tree 一致，两个 tag 一次打完）；
   推完 `git fetch origin main` + `update-ref refs/heads/main 2f8f97f`（没 reset）+ 本地 `tag -f -a` 重指。
 - 用掉的 tag 追加：`0.9.69`、`desktop-v0.1.61`。
+
+## desktop 0.1.62（**只发桌面端**，2026-11-04 傍晚）
+
+EMA 分析面板改版（用户口径：去掉没用的悬浮文字提示；页面重新规划；点条目看形态、要能缩放）：
+1. 删掉行上的原生 `title` tooltip（悬浮文字提示整段移除）。
+2. 版面改成**两栏**：左栏是「上方压力 / 下方支撑」分段页签 + 该侧条目，右栏是选中那一档的
+   缩略形态图（收盘淡灰 + EMA 色槽色，共用一根纵轴）。
+3. **点条目 = 选中**（淡黄底 + accent 描边；「已画」仍走告警红底 + 左缘色条，两层互不覆盖），
+   右栏跟着换图；进面板 / 切页签自动选中该侧离现价最近的一条。
+4. **滚轮缩放**可见根数（16 ～ 240，默认 120）、双击复位；图按 `ResizeObserver` 量出的真实像素画。
+5. 画线动作从「点行」挪到右栏底部按钮（画 / 对齐 / 删除），身份落盘与自动跟随逻辑不变。
+Android 未动，不发 Android 通道。
+
+两个 commit：`c530cfc` feat(desktop)（本地）→ 远端 `27ce0c3`；`3fc2e59` chore(release) → 远端 `8e4921a`。
+tag `desktop-v0.1.62`（annotated `948f2d1`）→ 远端 commit `8e4921a`。
+Desktop Release run **41832503257** 三 job 全绿（12:48:45 → 12:54:5xZ）；
+main CI run **41832466031** 绿（41832426571 被 `concurrency` 正常取消）。
+`verify-channel.mjs 0.1.62` → **34/34 PASS**。
+
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.62
+  无 0.1.61 残留、latest.json 0.1.62（pub_date `2026-11-04T12:54:38.550Z`）、两平台 keyid
+  `226B03192E5DF60B` == 基线；exe **2822359** 字节（sha256 `1a1f80a2da1e6aad…` == 边车）、
+  dmg 4469644、mac app.tar.gz 4391010。
+- 包内新前端：CI vite 指纹 `index-96gEDDV3.js 335.90` / `index-Dk37-5av.css 53.54`（**106 modules**）
+  == 本地 `npm run build` 逐字一致（CSS 50.62→53.54 = 新增 `ema-tabs / ema-shape*`，JS 331.64→335.90）。
+- ✅ 打 tag 前：桌面 `tsc --noEmit` + `vite build` 绿（106 modules）；CDP 实测浅/深两套：
+  页签切换、点行换图、滚轮放大 68/240、复位 120/240、缩小 186/240、画线/删线、`.ema-row[title]` 计数 0。
+- Android 通道：`android-latest` 仍是 0.9.69（本轮未发，verify 脚本顺带确认）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（**注意**：Git Bash 下要带 `PYTHONIOENCODING=utf-8`，
+  否则脚本里的 `✓` 在 GBK 控制台抛 UnicodeEncodeError；blob 上传可重入）；tag 用
+  `.workbuddy/tmp/tag-0162.py <远端SHA> 3fc2e59`（先断言 tree 一致）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main 8e4921a`（没 reset）+ 本地 `tag -f -a` 重指。
+- 用掉的 tag 追加：`desktop-v0.1.62`。
