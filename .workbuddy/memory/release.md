@@ -864,3 +864,37 @@ main CI run **41832466031** 绿（41832426571 被 `concurrency` 正常取消）�
   `.workbuddy/tmp/tag-0162.py <远端SHA> 3fc2e59`（先断言 tree 一致）；
   推完 `git fetch origin main` + `update-ref refs/heads/main 8e4921a`（没 reset）+ 本地 `tag -f -a` 重指。
 - 用掉的 tag 追加：`desktop-v0.1.62`。
+
+## android 0.9.70（**只发 Android**，2026-11-04 夜）
+
+EMA 分析面板对齐桌面端改版（用户口径：App 也要缩略图；竖屏上半屏、横屏左半屏；都要能缩放）：
+1. 点击行从「画告警线」改成**选中**（淡黄底 + 右缘黄条；「已画」仍是告警红底 + 左缘红条，两层互不覆盖），
+   画线动作挪到缩略图那一栏的按钮（画 / 对齐 / 删除）。
+2. 缩略图：收盘淡灰 + EMA 色槽色共用纵轴；**双指缩放**可见根数（16 ～ 240，默认 120）、双击复位，
+   另配「− / ＋」兜底；数据来自 `EmaAnalysisState.curves`（`EmaAnalysis.curve`，与末值同一次递推）。
+3. 版式判据改用 `Configuration.orientation`（原来的 `screenHeightDp < 480` 在 MuMu 1080p 横屏
+   heightDp=540 上会误判成竖屏，实测踩到）；竖屏时缩略图在上半屏、页签+列表在下半屏，
+   横屏时缩略图在左半屏、页签+列表在右半屏。横屏原先的「压力/支撑两列并排」撤掉（页签统一）。
+
+两个 commit：`24b8b88` feat(android)（本地）→ 远端 `3de7e07`；`f76736a` chore(release) → 远端 `72370fb`。
+tag `0.9.70`（annotated `707a2a2`）→ 远端 commit `72370fb`。
+Release run **41850938792** 绿（14:46 → 14:50Z）；main CI run **41850908087** 绿（41850861991 被 `concurrency` 取消）。
+
+- Android 通道：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、
+  只有 `market-monitor-0.9.70.apk`（**11219588**）+ `.sha256`（asset digest `a8094c3d…` == 边车
+  `a8094c3d8f4c490b…`）；CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、
+  `本次版本号：0.9.70`；旧 0.9.69 产物已移除。
+- 桌面通道未动：`verify-channel.mjs 0.1.62` → **34/34 PASS**（latest.json 仍是 0.1.62）。
+- ✅ 打 tag 前：Android `testDebugUnitTest` **428 例全绿**（新增 3 例 `EmaAnalysis.curve`：末值一致 /
+  预热段跳过 / 尾段 240 根）；`:app:assembleDebug` 绿。
+- 实机验收（MuMu，debug 包，横屏 1920×1080）：左半屏缩略图 + 右半屏页签列表；
+  点行换图（EMA12→EMA50 8时）、「−」缩放到 240/240、「＋」到 47/240、切「下方支撑」自动选中最近一条、
+  「画告警线」后行变红条 + 抬头出现「清空划线」+ 回执「已画 1周EMA12」。
+  **竖屏在这台 MuMu 上无法切**（`wm size` / `user_rotation` / 改 MuMu 分辨率都不生效，宿主固定 1920×1080），
+  竖屏堆叠版式在改版前的截图（`android/.workbuddy/ema-land-1.png`，同一条 portrait 分支）里验过。
+  双击复位只能用真手指验：`adb shell input tap` 连发两次间隔超过系统双击窗口，实测未触发（不是代码问题，
+  验证手段受限）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（均带 `PYTHONIOENCODING=utf-8`）；tag 用
+  `.workbuddy/tmp/tag-0970.py <远端SHA> f76736a`（先断言 tree 一致）；推完 `git fetch origin main` +
+  `update-ref refs/heads/main 72370fb`（没 reset）+ 本地 `tag -f -a` 重指。
+- 用掉的 tag 追加：`0.9.70`。
