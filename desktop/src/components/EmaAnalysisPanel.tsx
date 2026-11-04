@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { fetchKlines, type Bar, type MarketType } from '../lib/api';
 import {
   emaAlertNote,
+  emaCurve,
   emaWindow,
   EMPTY_EMA_SCAN,
   findEmaLine,
   isEmaSystemLine,
-  lastEma,
   mergeEmaScan,
   splitLevels,
+  type EmaCurve,
   type EmaFailure,
   type EmaLevel,
   type EmaLevelRow,
@@ -18,7 +19,7 @@ import {
 import type { PriceLine } from '../lib/priceLines';
 import { maSlotColors, type MaColors } from '../lib/chartSeries';
 import { intervalLabel, minutesOf } from '../lib/intervals';
-import { displaySymbol, formatChange, formatPrice } from '../lib/format';
+import { changeClass, displaySymbol, formatChange, formatPrice } from '../lib/format';
 import { useSourceKey } from '../lib/sources';
 
 /** 一个周期取回来了 / 没取回来（失败原因原样留着，压进提示里）。 */
@@ -51,6 +52,108 @@ function rememberScan(key: string, scan: EmaScan): void {
   }
 }
 
+/** 曲线键：一档 EMA = (周期, 档位)。 */
+function curveKeyOf(interval: string, period: number): string {
+  return `${interval}|${period}`;
+}
+
+/** 中间缩略图的默认 / 最小可见根数（滚轮在这两档之间缩放，上限是曲线全长）。 */
+const SHAPE_VIEW_BARS = 120;
+const SHAPE_MIN_BARS = 16;
+/** 滚轮一格 ≈ 10% 的缩放步长（deltaY 一格通常是 ±100）。 */
+const SHAPE_ZOOM_RATE = 0.0012;
+
+/**
+ * 中间那一栏的缩略形态图：收盘价（淡灰）+ 这一档 EMA（色槽同色），**共用一根纵轴**。
+ *
+ * 共用才是重点 —— 分开归一化会把「均线贴在价格上方」画成两条互不相干的曲线，
+ * 而用户要看的正是「均线相对价格是抬还是压、拐点在哪」。
+ *
+ * 用真实像素尺寸画（ResizeObserver 量容器）：`preserveAspectRatio="none"` 拉满会把
+ * 线宽和末点圆一起压扁。滚轮缩放改**可见根数**，右端始终贴着最新一根 ——
+ * 这是一张「看形态」的图，不需要横向平移。
+ */
+function EmaShapeChart({ curve, color }: { curve: EmaCurve; color: string }) {
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [size, setSize] = useState({ w: 320, h: 200 });
+  const [bars, setBars] = useState(() => Math.min(SHAPE_VIEW_BARS, curve.values.length));
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const measure = () => {
+      const rect = el.getBoundingClientRect();
+      setSize({ w: Math.max(60, Math.round(rect.width)), h: Math.max(40, Math.round(rect.height)) });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // 滚轮缩放：React 的 onWheel 在根节点上是 passive 的，preventDefault 会被忽略，所以挂原生。
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const max = curve.values.length;
+      const min = Math.min(SHAPE_MIN_BARS, max);
+      setBars((prev) =>
+        Math.round(Math.max(min, Math.min(max, prev * Math.exp(e.deltaY * SHAPE_ZOOM_RATE)))),
+      );
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [curve]);
+
+  const total = curve.values.length;
+  const n = Math.min(bars, total);
+  const closes = curve.closes.slice(total - n);
+  const values = curve.values.slice(total - n);
+  const { w, h } = size;
+
+  let body: ReactNode = null;
+  if (n >= 2) {
+    const padX = 6;
+    const padY = 8;
+    const min = Math.min(...closes, ...values);
+    const max = Math.max(...closes, ...values);
+    const span = max - min || 1;
+    const x = (i: number) => padX + (i / (n - 1)) * (w - padX * 2);
+    const y = (v: number) => h - padY - ((v - min) / span) * (h - padY * 2);
+    const points = (valuesOfLine: number[]) =>
+      valuesOfLine.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    body = (
+      <svg width={w} height={h} role="img" aria-label={`EMA 最近 ${n} 根形态`}>
+        <polyline className="ema-shape-close" points={points(closes)} />
+        <polyline
+          points={points(values)}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <circle cx={x(n - 1)} cy={y(values[n - 1])} r="2.5" fill={color} />
+      </svg>
+    );
+  }
+
+  return (
+    <div
+      ref={wrapRef}
+      className="ema-shape-chart"
+      onDoubleClick={() => setBars(Math.min(SHAPE_VIEW_BARS, total))}
+    >
+      {body}
+      <span className="ema-shape-bars num">
+        {n} / {total} 根
+      </span>
+    </div>
+  );
+}
+
 interface Props {
   market: MarketType;
   symbol: string;
@@ -68,8 +171,8 @@ interface Props {
   /** 当前标的上已有的水平线 —— 回显「这一档画过没有」全靠它。 */
   priceLines: readonly PriceLine[];
   /**
-   * 点一行 = 把这一档落成图上的一条**系统划线**：没画就画、漂了拉回当前值、已对齐就删掉。
-   * `note` 是自动备注文案（新画时写上去）。
+   * 中间缩略图下方那枚动作按钮 = 把这一档落成图上的一条**系统划线**：
+   * 没画就画、漂了拉回当前值、已对齐就删掉。`note` 是自动备注文案（新画时写上去）。
    */
   onToggleLine: (level: EmaLevelRow, note: string) => void;
   /**
@@ -113,17 +216,18 @@ function clockText(at: number): string {
  *   并把这些周期标成「上次的值」。断网时一道压力线凭空消失，比显示略旧的数危险得多。
  * - **失败与「算不出」分开报**：前者是网络/数据源不通（该重试），后者是这个周期取回的根数
  *   不够算这一档 EMA（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
- * - **点一行画系统划线**：表里每一行就是一个候选价位，点一下直接在图上落一条红色告警线
- *   （穿越时弹系统通知），再点一下取消 —— 面板**不关**，所以可以连着点几道压力位一起画。
- *   这条线是带**身份**落盘的（`PriceLine.origin` = 周期 + 档位），于是打开面板时会**回显**：
- *   那一行带选中底色。EMA 每分钟都在动，所以每一轮取数
+ * - **左列表 / 右缩略图**：左栏是「上方压力 / 下方支撑」两个页签（同一时刻只看一侧），
+ *   点一条 = **选中**它，右栏立刻画出这一档 EMA 的形态（收盘价淡灰、EMA 用色槽色，
+ *   共用一根纵轴），滚轮缩放可见根数、双击复位。悬浮不再弹原生文字提示 ——
+ *   详细信息都在右栏里，tooltip 只会挡着下面几行。
+ * - **画线是右栏的动作按钮**：选中一条后，右栏底部那枚按钮把它落成图上的**系统划线**
+ *   （没画就画、漂了拉回、已对齐就删）。这条线带**身份**落盘（`PriceLine.origin` =
+ *   周期 + 档位），打开面板时那一行带「已画」底色回显。EMA 每分钟都在动，所以每一轮取数
  *   回来都会把这些系统划线**自动拉到**各自的新值（`onLevels` → `alignEmaLines`）——
  *   线是用来看盘的一道墙，墙得长在 EMA 现在的位置上，不能停在画它的那一刻。
  *   手画的线一概不动：那是用户自己的判断。
- *   旧逻辑在这种时候只会叠出第二条线，两条都画着、谁也不准，面板还看不出自己画过。
- *   行内的周期小方框只是标注，不可点 —— 点走会切周期并关掉面板，打断连画几道压力位的节奏。
- *   选中态只靠整行底色 + 左侧色条表达，不再写「已画 / 待对齐」—— 文案会与底色重复，
- *   而 EMA 实时在动，一秒前的「待对齐」下一秒就自己消失了。
+ *   行内的周期小方框只是标注，不可点 —— 点走会切周期并关掉面板。
+ *   选中是另一层底色（`.sel`），与「已画」的红底（`.on`）分开：选中的那条不一定画过线。
  */
 export function EmaAnalysisPanel({
   market,
@@ -172,6 +276,19 @@ export function EmaAnalysisPanel({
   const [seq, setSeq] = useState(0);
   /** 上次拿到新值的时间（0 = 还没成功过），写进按钮的 title。 */
   const [updatedAt, setUpdatedAt] = useState(0);
+  /**
+   * 每一档的尾段曲线 —— 中间缩略图的数据源。
+   *
+   * 与 `scan.levels` 同源（同一次扫描算出来），但单独存一份：表只留末值，
+   * 而缩略图要看整段形态。断网时与表同口径地**沿用上一轮**（见下面的合并）。
+   */
+  const [curves, setCurves] = useState<Record<string, EmaCurve>>({});
+  /** 左栏页签：一次只看一侧（压力 / 支撑），另一侧留在页签上的数字里。 */
+  const [tab, setTab] = useState<'resistance' | 'support'>('resistance');
+  /** 当前选中的那一档 —— 中间缩略图跟着它走。 */
+  const [selected, setSelected] = useState<{ interval: string; period: number } | null>(null);
+  /** 首次拿到数据时挑一次页签（哪边有货看哪边），之后不再自动改，免得和用户抢。 */
+  const tabPicked = useRef(false);
 
   // 换标的 / 换源 / 改配置：立刻换成那一份的缓存（没有就空表）并重新取。
   // 不这么做的话，切币的瞬间会先显示上一个币的价位 —— 那比空表更容易被当真。
@@ -180,6 +297,10 @@ export function EmaAnalysisPanel({
     // 镜像必须跟着换：并到「上一个币的表」上会把别家的水位搬过来
     scanRef.current = cached;
     setScan(cached);
+    // 曲线缓存不跟着搬：换了表（标的 / 源 / 配置）之后上一张图的形态已经没意义
+    setCurves({});
+    setSelected(null);
+    tabPicked.current = false;
     setRefreshing(true);
   }, [scanKey]);
 
@@ -188,6 +309,8 @@ export function EmaAnalysisPanel({
       setRefreshing(false);
       scanRef.current = EMPTY_EMA_SCAN;
       setScan(EMPTY_EMA_SCAN);
+      setCurves({});
+      setSelected(null);
       setDone(0);
       return;
     }
@@ -219,6 +342,7 @@ export function EmaAnalysisPanel({
       const nextLevels: EmaLevel[] = [];
       const nextFailures: EmaFailure[] = [];
       const nextMissing: EmaMissing[] = [];
+      const nextCurves: Record<string, EmaCurve> = {};
       // 兜底基准取**最细**那个周期（周期越细，最后一根离「此刻」越近）
       let finest = Infinity;
       let finestClose = NaN;
@@ -241,9 +365,12 @@ export function EmaAnalysisPanel({
         }
         const closes = bars.map((bar) => bar.close);
         for (const period of periods) {
-          const value = lastEma(closes, period);
-          if (Number.isFinite(value) && value > 0) {
+          // 曲线与末值出自同一次递推：表里的价与预览图右端不可能对不上
+          const curve = emaCurve(outcome.interval, closes, period);
+          const value = curve ? curve.values[curve.values.length - 1] : NaN;
+          if (curve && Number.isFinite(value) && value > 0) {
             nextLevels.push({ interval: outcome.interval, minutes, period, value });
+            nextCurves[curveKeyOf(outcome.interval, period)] = curve;
           } else {
             nextMissing.push({ interval: outcome.interval, period, bars: bars.length });
           }
@@ -261,6 +388,16 @@ export function EmaAnalysisPanel({
       scanRef.current = merged;
       rememberScan(scanKey, merged);
       setScan(merged);
+      // 预览与表同口径：表里还留着这一档（整段没取回来 / 这轮根数差几根）就沿用上一轮的曲线，
+      // 断网时悬浮仍看得出形态；表里已经没了的档位，曲线也一起丢掉
+      const keptLevels = new Set(merged.levels.map((level) => curveKeyOf(level.interval, level.period)));
+      setCurves((prev) => {
+        const next: Record<string, EmaCurve> = {};
+        for (const [key, curve] of Object.entries(prev)) {
+          if (keptLevels.has(key)) next[key] = curve;
+        }
+        return Object.assign(next, nextCurves);
+      });
       setUpdatedAt(Date.now());
       setRefreshing(false);
       // 数值到手了：让图上的系统划线跟着走（手画的线一概不碰，见 `alignEmaLines`）。
@@ -321,96 +458,193 @@ export function EmaAnalysisPanel({
     [priceLines],
   );
 
-  const column = (rows: EmaLevelRow[], side: 'resistance' | 'support') => {
-    const nearest = rows[0];
-    /** 把一档换算成它的自动备注（= 老存档里那条线的识别键，见 `findEmaLine`）。 */
-    const autoNote = (row: EmaLevelRow) => emaAlertNote(intervalLabel(row.interval), row.period);
-    /** 这一侧已经画到图上的档数 —— 回显的另一半：一眼看出「这一侧我盯了几道」。 */
-    const marked = rows.filter((row) => findEmaLine(priceLines, row, autoNote(row))).length;
-    return (
-      <section className={`ema-col ${side}`}>
-        <header className="ema-col-head">
-          <span className="ema-col-name">{side === 'resistance' ? '上方压力' : '下方支撑'}</span>
-          <span className="ema-col-count num">{rows.length}</span>
-          {marked > 0 && (
-            <span
-              className="ema-col-marked"
-              title="这一侧已经画到图上的档数"
-            >
-              已画 {marked}
-            </span>
-          )}
-          {nearest && (
-            <span className="ema-col-near num" title="离现价最近的一条">
-              最近 {intervalLabel(nearest.interval)} · EMA{nearest.period}
-            </span>
-          )}
-        </header>
-        <div className="ema-rows">
-          {rows.map((row) => {
-            const label = intervalLabel(row.interval);
-            const note = emaAlertNote(label, row.period);
-            /* 回显：图上与这一档绑定的那条线（没有 = 还没画）。选中态交给整行底色，
-               行内不再写字 —— EMA 一跳，「待对齐」这种瞬时状态就会自己变来变去。 */
-            const line = findEmaLine(priceLines, row, note);
-            const priceText = formatPrice(row.value, tickSize);
-            const gapText = formatChange(row.gapPercent);
-            const lineText = line ? formatPrice(line.price, tickSize) : '';
-            const driftText =
-              line && !line.aligned && row.value > 0
-                ? formatChange(((line.price - row.value) / row.value) * 100)
-                : '';
-            /* 整行 = 「把这一档落成系统划线（画 / 对齐 / 取消）」；行内的周期小方框只是
-               标注（不可点：点走会切周期并关掉面板，连画几道压力位就断了）。 */
-            return (
-              <div
-                key={`${row.interval}-${row.period}`}
-                className={`ema-row${line ? ' on' : ''}`}
-                role="button"
-                tabIndex={0}
-                aria-pressed={line != null}
-                title={
-                  line
-                    ? `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n` +
-                      `图上已画线「${line.note ?? note}」= ${lineText}` +
-                      (line.aligned
-                        ? '，与当前值一致（每次刷新自动跟到最新值）'
-                        : `，偏离当前值 ${driftText}（下一轮刷新会拉回，也可以点这一行立刻对齐）`) +
-                      (line.alert ? '，穿越时弹通知' : '，告警已关') +
-                      (line.aligned
-                        ? '\n再点一下删掉这条线'
-                        : `\n点一下把它对齐到 ${priceText}`)
-                    : `${label} 周期 EMA${row.period} = ${priceText}（${gapText}）\n点一下在这个价位画告警线，自动备注「${note}」，价格穿越时弹通知；之后每次刷新会跟着 EMA 走`
-                }
-                onClick={() => onToggleLine(row, note)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onToggleLine(row, note);
-                  }
-                }}
-              >
-                <span
-                  className="ema-dot"
-                  style={{ background: palette[colors[row.period] ?? 0] }}
-                  aria-hidden
-                />
-                <span className="ema-name">EMA{row.period}</span>
-                <span className="ema-iv">{label}</span>
-                <span className="ema-val num">{priceText}</span>
-                <span className="ema-gap num">{gapText}</span>
-              </div>
-            );
-          })}
-          {rows.length === 0 && (
-            <p className="ema-empty">
-              {side === 'resistance' ? '现价上方还没有已配置的 EMA' : '现价下方还没有已配置的 EMA'}
-            </p>
-          )}
+  /** 一档的自动备注（= 老存档里那条线的识别键，见 `findEmaLine`）。 */
+  const autoNoteOf = (row: EmaLevelRow) => emaAlertNote(intervalLabel(row.interval), row.period);
+  const rows = tab === 'resistance' ? buckets.resistance : buckets.support;
+
+  // 首次拿到数据时挑一次页签：压力有货就先看压力，没有才落到支撑
+  useEffect(() => {
+    if (tabPicked.current || !hasTable) return;
+    tabPicked.current = true;
+    if (buckets.resistance.length === 0 && buckets.support.length > 0) setTab('support');
+  }, [hasTable, buckets]);
+
+  // 选中项跟着页签 / 数据走：还在当前页签里就保留；否则落到这一侧**离现价最近**的一条
+  // （现价穿过一条 EMA 时，它会当场换筐 —— 选中项不该因此跳到一个随机位置）
+  useEffect(() => {
+    if (
+      selected &&
+      rows.some(
+        (row) => curveKeyOf(row.interval, row.period) === curveKeyOf(selected.interval, selected.period),
+      )
+    ) {
+      return;
+    }
+    const first = rows[0];
+    setSelected(first ? { interval: first.interval, period: first.period } : null);
+  }, [rows, selected]);
+
+  const selectedKey = selected ? curveKeyOf(selected.interval, selected.period) : null;
+  const selectedRow = selectedKey
+    ? (rows.find((row) => curveKeyOf(row.interval, row.period) === selectedKey) ??
+       buckets.resistance.find((row) => curveKeyOf(row.interval, row.period) === selectedKey) ??
+       buckets.support.find((row) => curveKeyOf(row.interval, row.period) === selectedKey) ??
+       null)
+    : null;
+  const selectedCurve = selectedKey ? curves[selectedKey] ?? null : null;
+  const selectedLine = selectedRow ? findEmaLine(priceLines, selectedRow, autoNoteOf(selectedRow)) : null;
+  const marked = rows.filter((row) => findEmaLine(priceLines, row, autoNoteOf(row)) !== null).length;
+
+  /**
+   * 左栏：页签（上方压力 / 下方支撑）+ 这一侧的条目。
+   *
+   * 点一条 = **选中**它（中间缩略图跟着换），不再直接画线 —— 画线是中间那一栏的动作按钮。
+   * 行上的「已画」仍然只靠底色 + 左缘色条表达（`.on`），选中是另一层底色（`.sel`）：
+   * 两件事互不包含（选中的那条不一定画过线），混成一个颜色就分不清了。
+   */
+  const listPane = (
+    <section className={`ema-col ${tab}`}>
+      <header className="ema-col-head ema-tabs">
+        <div className="ema-tab-switch" role="tablist" aria-label="上方压力 / 下方支撑">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'resistance'}
+            className={`ema-tab${tab === 'resistance' ? ' on' : ''}`}
+            onClick={() => setTab('resistance')}
+          >
+            上方压力 <span className="num">{buckets.resistance.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'support'}
+            className={`ema-tab${tab === 'support' ? ' on' : ''}`}
+            onClick={() => setTab('support')}
+          >
+            下方支撑 <span className="num">{buckets.support.length}</span>
+          </button>
         </div>
-      </section>
-    );
-  };
+        {marked > 0 && <span className="ema-col-marked">已画 {marked}</span>}
+      </header>
+      <div className="ema-rows">
+        {rows.map((row) => {
+          const label = intervalLabel(row.interval);
+          /* 回显：图上与这一档绑定的那条线（没有 = 还没画）。选中态交给另一层底色，
+             行内不再写字 —— EMA 一跳，「待对齐」这种瞬时状态就会自己变来变去。 */
+          const line = findEmaLine(priceLines, row, autoNoteOf(row));
+          const isSelected = selectedKey === curveKeyOf(row.interval, row.period);
+          return (
+            <div
+              key={`${row.interval}-${row.period}`}
+              className={`ema-row${line ? ' on' : ''}${isSelected ? ' sel' : ''}`}
+              role="button"
+              tabIndex={0}
+              aria-pressed={isSelected}
+              onClick={() => setSelected({ interval: row.interval, period: row.period })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setSelected({ interval: row.interval, period: row.period });
+                }
+              }}
+            >
+              <span
+                className="ema-dot"
+                style={{ background: palette[colors[row.period] ?? 0] }}
+                aria-hidden
+              />
+              <span className="ema-name">EMA{row.period}</span>
+              <span className="ema-iv">{label}</span>
+              <span className="ema-val num">{formatPrice(row.value, tickSize)}</span>
+              <span className="ema-gap num">{formatChange(row.gapPercent)}</span>
+            </div>
+          );
+        })}
+        {rows.length === 0 && (
+          <p className="ema-empty">
+            {tab === 'resistance' ? '现价上方还没有已配置的 EMA' : '现价下方还没有已配置的 EMA'}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+
+  /** 右栏：选中那一档的缩略形态图 + 画线动作（滚轮缩放）。 */
+  const shapePane = (
+    <section className="ema-shape">
+      {selectedRow && selectedCurve ? (
+        <>
+          <header className="ema-shape-head">
+            <span
+              className="ema-shape-dot"
+              style={{ background: palette[colors[selectedRow.period] ?? 0] }}
+              aria-hidden
+            />
+            <span className="ema-shape-name">EMA{selectedRow.period}</span>
+            <span className="ema-iv">{intervalLabel(selectedRow.interval)}</span>
+            <span className={`ema-shape-gap num ${changeClass(selectedRow.gapPercent)}`}>
+              {formatChange(selectedRow.gapPercent)}
+            </span>
+          </header>
+          <div className="ema-shape-value">
+            <b className="num">{formatPrice(selectedRow.value, tickSize)}</b>
+            <span className="ema-shape-sub">
+              {tab === 'resistance' ? '上方压力' : '下方支撑'} · 距现价
+            </span>
+          </div>
+          <EmaShapeChart
+            key={selectedKey ?? ''}
+            curve={selectedCurve}
+            color={palette[colors[selectedRow.period] ?? 0]}
+          />
+          <div className="ema-shape-foot">
+            <span>
+              <i className="ema-shape-swatch close" aria-hidden />
+              收盘
+            </span>
+            <span>
+              <i
+                className="ema-shape-swatch"
+                style={{ background: palette[colors[selectedRow.period] ?? 0] }}
+                aria-hidden
+              />
+              EMA
+            </span>
+            <span className="ema-shape-hint">滚轮缩放 · 双击复位</span>
+          </div>
+          <div className="ema-shape-actions">
+            <span className={`ema-shape-line${selectedLine && !selectedLine.aligned ? ' drift' : ''}`}>
+              {selectedLine
+                ? `图上已画 ${formatPrice(selectedLine.price, tickSize)}${
+                    selectedLine.aligned
+                      ? ''
+                      : `（偏离 ${formatChange(
+                          ((selectedLine.price - selectedRow.value) / selectedRow.value) * 100,
+                        )}）`
+                  }`
+                : '图上未画告警线'}
+            </span>
+            <button
+              type="button"
+              className="ema-shape-btn"
+              onClick={() => onToggleLine(selectedRow, autoNoteOf(selectedRow))}
+            >
+              {selectedLine
+                ? selectedLine.aligned && selectedLine.alert
+                  ? '删除告警线'
+                  : '对齐到当前值'
+                : '画告警线'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <p className="ema-shape-empty">
+          {hasTable ? '点左侧的条目，在这里看它的均线形态' : '等这一轮取数回来…'}
+        </p>
+      )}
+    </section>
+  );
 
   return (
     <div className="up-backdrop" onMouseDown={onClose}>
@@ -495,8 +729,8 @@ export function EmaAnalysisPanel({
             <p className="ema-empty">EMA 一档都没配置 —— 先在指标栏「＋」里加几档再来分析。</p>
           ) : hasTable ? (
             <div className="ema-cols">
-              {column(buckets.resistance, 'resistance')}
-              {column(buckets.support, 'support')}
+              {listPane}
+              {shapePane}
             </div>
           ) : refreshing ? (
             <p className="ema-empty num">
@@ -571,6 +805,7 @@ export function EmaAnalysisPanel({
             </footer>
           )}
         </div>
+
       </section>
     </div>
   );

@@ -3040,12 +3040,13 @@ body {
   font-size: 10px;
   color: var(--muted);
 }
-/* 两列卡片：列头固定，数据区各自滚动（每块区域只有一条滚动条） */
+/* 两栏：左 = 页签列表（压力 / 支撑），右 = 选中那一档的缩略形态图。
+   列表占小半、图占大半 —— 图是「看形态」的主角，列表只是选它。 */
 .ema-cols {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
   gap: var(--sp-sm);
   align-items: stretch;
 }
@@ -3062,6 +3063,7 @@ body {
 .ema-col-head {
   flex: none;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
@@ -3074,29 +3076,50 @@ body {
 .ema-col.support .ema-col-head {
   background: linear-gradient(180deg, var(--flash-up), var(--surface-2) 78%);
 }
-.ema-col-name {
+/* 页签：一个分段控件，两个选项各带自己的条数（压力 / 支撑一次只看一侧）。
+   选中那一侧用本侧色写字 —— 与列头渐变、行里的偏离色说的是同一套语言。 */
+.ema-tab-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-full);
+  background: var(--surface);
+}
+.ema-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-full);
+  background: none;
+  color: var(--muted);
+  font-family: var(--sans);
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: -0.1px;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.ema-col-name::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: var(--r-full);
-  background: currentColor;
+.ema-tab .num {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
-.ema-col.resistance .ema-col-name {
+.ema-tab.on {
+  background: var(--surface-2);
+  box-shadow: var(--ring);
+}
+.ema-col.resistance .ema-tab.on {
   color: var(--down);
 }
-.ema-col.support .ema-col-name {
+.ema-col.support .ema-tab.on {
   color: var(--up);
 }
-.ema-col-count,
 .ema-col-marked {
+  margin-left: auto;
   font-family: var(--mono);
   font-size: 10px;
   line-height: 16px;
@@ -3105,25 +3128,10 @@ body {
   border-radius: var(--r-full);
   white-space: nowrap;
 }
-.ema-col-count {
-  color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-}
 /* 列名旁那枚「已画 N」：这一侧画到图上的档数（与整行选中底色说的是同一件事） */
 .ema-col-marked {
   color: var(--down);
   background: var(--ema-on);
-}
-.ema-col-near {
-  margin-left: auto;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .ema-rows {
   flex: 1;
@@ -3135,10 +3143,11 @@ body {
   flex-direction: column;
   gap: 2px;
 }
-/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（画·对齐·取消这条系统划线），
+/* 一行 = 色点 / 档位 / 周期 / 价位 / 偏离。整行可点（**选中**它，右栏看形态），
    所以给的是 button 的语义与 pointer；hover 只抬底色，不加描边（一列十几行会花）。
-   选中态 = 这一档已有图上的告警线：实色红底 + 左缘一道 3px 色条，
-   比一层淡灰更清楚，又不至于让满屏红条盖过价位本身。
+   两层状态互不包含：
+   · 「已画」= 这一档已有图上的告警线：实色红底 + 左缘一道 3px 色条（`.on`）；
+   · 「选中」= 右栏正在看的那一档：淡黄底 + 一圈 accent 描边（`.sel`）。
 
    **不要加过渡**（2026-11-02 用户报「鼠标划过不跟手、显得很卡」）：这是一张密集
    列表，鼠标快速扫过时每一行都会启动一次 140ms 的底色渐变，屏幕上同时挂着十几行
@@ -3181,6 +3190,13 @@ body {
   width: 3px;
   border-radius: 0 2px 2px 0;
   background: var(--down);
+}
+/* 选中（右栏正在看的那一档）：淡黄底 + 一圈 accent 描边。
+   写在 `.on` 之后：同时「已画 + 选中」时底色归选中、左缘那道红线照旧由 `.on::before` 给。 */
+.ema-row.sel,
+.ema-row.sel:hover {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .ema-row:focus-visible {
   outline: 1px solid var(--accent);
@@ -3262,11 +3278,188 @@ body {
 .ema-note.bad::before {
   background: var(--down);
 }
-/* 极窄窗口：两列上下叠，各占一半高度、各自滚自己的 */
+/* ── 右栏：选中那一档的缩略形态图 ────────────────────────────────────────
+   一张常驻的卡片（不再随鼠标飘）：头（档位 / 周期 / 距现价）+ 价位 + 图 +
+   图例/提示 + 动作按钮。收盘价压成一条淡灰线、EMA 用该档的色槽色，**共用一根
+   纵轴** —— 要看的就是「均线相对价格是抬还是压、拐点在哪」，分开归一化会把这条
+   信息抹掉。图本体用真实像素画（ResizeObserver），滚轮缩放可见根数。 */
+.ema-shape {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.ema-shape-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-2);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.ema-shape-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-full);
+}
+.ema-shape-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+.ema-shape-gap {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.ema-shape-gap.up {
+  color: var(--up);
+}
+.ema-shape-gap.down {
+  color: var(--down);
+}
+.ema-shape-gap.flat {
+  color: var(--muted);
+}
+.ema-shape-value {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px 2px;
+}
+.ema-shape-value b {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 24px;
+  letter-spacing: -0.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.ema-shape-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+/* 图的容器：flex 吃掉剩余高度；`canvas` 之外的读数（可见根数）贴右下角 */
+.ema-shape-chart {
+  position: relative;
+  flex: 1;
+  min-height: 80px;
+  padding: 4px 8px 0;
+  overflow: hidden;
+  cursor: crosshair;
+}
+.ema-shape-chart svg {
+  display: block;
+}
+.ema-shape-close {
+  fill: none;
+  stroke: var(--muted);
+  stroke-opacity: 0.45;
+  stroke-width: 1;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.ema-shape-bars {
+  position: absolute;
+  right: 10px;
+  bottom: 6px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  pointer-events: none;
+}
+.ema-shape-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 12px;
+}
+.ema-shape-foot > span {
+  display: inline-flex;
+  align-items: center;
+}
+.ema-shape-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 2px;
+  margin-right: 3px;
+  border-radius: 1px;
+}
+.ema-shape-swatch.close {
+  background: var(--muted);
+  opacity: 0.45;
+}
+.ema-shape-hint {
+  margin-left: auto;
+}
+.ema-shape-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-xs);
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--hairline);
+}
+.ema-shape-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+}
+.ema-shape-line.drift {
+  color: var(--down);
+}
+.ema-shape-btn {
+  flex: none;
+  margin-left: auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background var(--fast) var(--ease-standard),
+    border-color var(--fast) var(--ease-standard);
+}
+.ema-shape-btn:hover {
+  background: var(--wash);
+  border-color: var(--hairline-strong);
+}
+.ema-shape-empty {
+  margin: auto;
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+/* 极窄窗口：列表在上、图在下（图仍占大头） */
 @media (max-width: 760px) {
   .ema-cols {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1.2fr);
   }
 }
 

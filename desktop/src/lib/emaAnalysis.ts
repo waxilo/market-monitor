@@ -165,6 +165,56 @@ export function lastEma(closes: readonly number[], period: number): number {
   return values[values.length - 1] ?? NaN;
 }
 
+/**
+ * 缩略图最多保留的根数（滚轮缩小的上限）。
+ * 默认只画 120 根 —— 够看出趋势拐点，又不至于把线条压成一条毛毛虫；想看更长的
+ * 历史再往外滚。
+ */
+export const EMA_PREVIEW_BARS = 240;
+
+/**
+ * 一档 EMA 的尾段曲线（面板里悬浮预览用）。
+ *
+ * `closes` 与 `values` 逐点对齐、长度相同，画在同一根坐标轴上才看得出
+ * 「价格在均线上方还是下方、均线本身是抬还是压」。
+ * 全段 EMA 都是 NaN（根数不足）时给 null —— 调用方据此决定「这一档没有可预览的形态」。
+ */
+export interface EmaCurve {
+  interval: string;
+  period: number;
+  closes: number[];
+  values: number[];
+}
+
+/**
+ * 算出一档 EMA 的尾段曲线，同时给出末值 —— **与 `lastEma` 同一个数**（同一次递推），
+ * 所以表里的价与预览图右端永远对得上。
+ *
+ * 只在 `end - bars` 之后开窗（不截断 EMA 递推本身）：EMA 是全历史递推量，
+ * 拿尾段重算会得到另一条线。
+ */
+export function emaCurve(
+  interval: string,
+  closes: readonly number[],
+  period: number,
+  bars: number = EMA_PREVIEW_BARS,
+): EmaCurve | null {
+  if (closes.length === 0 || !Number.isFinite(period) || period <= 0) return null;
+  const values = ema([...closes], period);
+  let end = closes.length;
+  while (end > 0 && !(Number.isFinite(values[end - 1]) && Number.isFinite(closes[end - 1]))) end -= 1;
+  if (end === 0) return null;
+  let start = Math.max(0, end - Math.max(2, bars));
+  // 历史刚好够算这一档时，开窗可能落在 EMA 还是 NaN 的预热段上（points 里混进 NaN 会把整条线画没）
+  while (start < end - 1 && !Number.isFinite(values[start])) start += 1;
+  return {
+    interval,
+    period,
+    closes: closes.slice(start, end),
+    values: values.slice(start, end),
+  };
+}
+
 /** 一批 K 线 → 指定各档的末值（顺序与 `periods` 一致，算不出的给 NaN）。 */
 export function lastEmaOf(bars: readonly Bar[], periods: readonly number[]): number[] {
   const closes = bars.map((bar) => bar.close);
