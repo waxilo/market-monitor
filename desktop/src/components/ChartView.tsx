@@ -282,6 +282,31 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     if (selection.index >= count) setSelection(null);
   }, [selection, drawings.priceLines.length, drawings.trendLines.length]);
 
+  /** 删掉当前选中的那条线（划线区的垃圾桶与键盘 Delete / Backspace 共用一个动作）。 */
+  const removeSelected = useCallback(() => {
+    if (!selection) return;
+    if (selection.kind === 'price') drawings.removePriceLine(selection.index);
+    else drawings.removeTrendLine(selection.index);
+    setSelection(null);
+  }, [selection, drawings.removePriceLine, drawings.removeTrendLine]);
+
+  // 选中一条线后按 Delete / Backspace 直接删掉它（Mac 键盘上那颗删除键发的是 Backspace）。
+  // 三处让路，删除键在这些时候不归画线：备注弹窗开着；焦点在输入类控件里；键已被别的组件
+  // 吃掉（EnglishField 这类自绘框靠 preventDefault 把 ←→ / 退格收给自己，不能再删线）。
+  useEffect(() => {
+    if (!selection) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.defaultPrevented || noteEdit) return;
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      e.preventDefault();
+      removeSelected();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selection, noteEdit, removeSelected]);
+
   useEffect(() => {
     localStorage.setItem(INTERVALS_KEY, serializeIntervals(intervals));
   }, [intervals]);
@@ -920,13 +945,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                 <button
                   type="button"
                   className="chip icon-only danger"
-                  title="删除这条线"
+                  title="删除这条线（Delete / Backspace）"
                   aria-label="删除"
-                  onClick={() => {
-                    if (selection.kind === 'price') drawings.removePriceLine(selection.index);
-                    else drawings.removeTrendLine(selection.index);
-                    setSelection(null);
-                  }}
+                  onClick={removeSelected}
                 >
                   <TrashIcon />
                 </button>
