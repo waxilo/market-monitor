@@ -732,3 +732,32 @@ Release run **41766193087** 绿（03:17:33 → 03:20:47Z）、Desktop Release ru
 - ⚠️ 本轮 `gh release download` 被企业 DLP 钩子拦（同批命令里有 `rm -rf`）——按规范不绕行，
   Android 侧改用 asset `digest` + 边车 API 内容 + CI 日志取证。
 - 用掉的 tag 追加：`0.9.67`、`desktop-v0.1.58`。
+
+## desktop 0.1.59（**只发桌面端**，2026-11-04 下午）
+
+「选中划线后按 `Delete` / `Backspace` 直接删线」——用户口径：选中图上某条线后按 delete 就删掉。
+实现：`ChartView` 抽出 `removeSelected`（垃圾桶按钮共用），选中时挂 `window` keydown 收 Delete / Backspace；
+三处让路：备注弹窗开着、焦点在 `input / textarea / select / contenteditable`、事件已 `defaultPrevented`
+（顶栏 `EnglishField` 自绘框靠 preventDefault 收退格，用「查 activeElement」会漏）。删完 `selection` 一并清。
+Android 未动，不发 Android 通道。
+
+tag `desktop-v0.1.59`（annotated `707911c597ff`）→ 远端 `fa533b05`
+（本地 `74d3804` fix → `d90b3b3` chore(release)）。
+Desktop Release run **41784816571** 三 job 全绿（06:20:03 → 06:26:31Z）；
+main CI run **41784793885** 绿（41784764265 被 `concurrency` 正常取消）。
+`verify-channel.mjs 0.1.59` → **34/34 PASS**。
+
+- 通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.59
+  无 0.1.58 残留、latest.json 0.1.59（pub_date `2026-11-04T06:26:19.928Z`）、两平台 keyid
+  `226B03192E5DF60B` == 基线；exe **2819696** 字节（sha256 `4772dce6aab0ef55…` 与边车一致）、
+  dmg 4468155、mac app.tar.gz 4388797。
+- 包内新前端：CI vite 指纹 `index-BqHd3HcX.js 330.98` / `index-DAjkS9_K.css 50.62`（**106 modules**）
+  == 本地 `npm run build` 逐字一致（CSS 与 0.1.58 同 = 样式没动，JS 换名换体积 = 包内是新逻辑）。
+- 验收脚本：`.workbuddy/tmp/verify-draw-delete-key.mjs`（CDP 真按键，**21/21**）——Delete / Backspace
+  各删一条水平线、焦点在搜索框与备注 `textarea` 里按删除不误删、关弹窗后再按才删、两点直线也可删；
+  截图 `del-1-selected.png` / `-2-note-open.png` / `-3-trend-selected.png`。
+- ✅ 打 tag 前：桌面 `tsc --noEmit` + `vite build` 绿（106 modules / 330.98 kB）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（`74d3804` → 远端 `ae2c061`；
+  `d90b3b3 --parent ae2c061…` 完整 40 位 → 远端 `fa533b0`）；tag 用 `.workbuddy/tmp/tag-0159.py`；
+  推完 `git fetch` + `update-ref`（没 reset）。
+- 用掉的 tag 追加：`desktop-v0.1.59`。

@@ -1166,7 +1166,10 @@ contract_stats —— 点亮 chip 恰发一次请求（URL 逐字）→ 读数�
   工具态 → 命中线（未选中 / 已选中）→ 空白（取消选中 + 拖画布）。
 - 只有**选中**线才画端点把手、才可拖；未选中线一根把手都不画（不给能抓的错觉，0.1.12 的老口径）。
 - 画完**工具自动收回**；两点直线的 `pendingRef` 等待期不算画完（第二下成线才算），Esc / 右键只撤销这一笔。
-- 删除只剩「**选中 → 编辑栏删除**」一条路；右键不再删线、也不再有「删掉这条直线」。
+- 删除只有两条路：**选中 → 编辑栏垃圾桶** 与 **选中 → 按 `Delete` / `Backspace`**；右键不再删线、也不再有「删掉这条直线」。
+  键盘删除挂在 `ChartView`（`window` keydown，选中才挂），让路三处：备注弹窗开着（`noteEdit`）、焦点在
+  `input / textarea / select / contenteditable` 里、事件已 `defaultPrevented`（顶栏 `EnglishField` 自绘框
+  就是靠自己 preventDefault 把退格收走 —— 换成「判断 activeElement」会漏掉它）。删完 `selection` 一并清。
 
 **右键菜单整档移除**：`ChartMenu.tsx` 删除，`KlineCanvas` 的 `ChartMenuHit` / `ChartMenuRequest` / `TrendSeed`
 三个类型与 `onMenu` / `trendSeed` / `resetPriceSignal` 三个 prop 一并删。右键现在只剩 `preventDefault()`（挡浏览器
@@ -1187,6 +1190,10 @@ EMA 面板收回）→ 选中越界即清。**不要**用时间窗或「下次�
 选中后拖才改价、告警切换、删除、空白取消选中、两点直线两下成线、锁定时线型置灰、清空两种线一起清。截图
 `draw-zone-1-idle.png` / `-2-selected.png` / `-3-final.png`（同目录）。`tsc --noEmit` + `npm run build` 绿；
 **Tauri 真窗口未目视验收、未发版**。
+
+键盘删除单独一份：`.workbuddy/tmp/verify-draw-delete-key.mjs`（CDP 真按键，21 条断言）—— Delete / Backspace
+各删一条水平线、焦点在顶栏自绘搜索框与备注 `textarea` 里按删除**不误删**（线仍选中）、关掉弹窗再按才删、
+两点直线按 Delete 同样删掉；截图 `del-1-selected.png` / `-2-note-open.png` / `-3-trend-selected.png`。
 
 ## EMA 系统划线「跟着 EMA 走」（2026-10-24 定版，随 0.1.40 发布）
 
