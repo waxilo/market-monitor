@@ -688,6 +688,19 @@ export function KlineCanvas({
     const rangeBase = panBaseRef.current ?? mainRange(s, ws, we);
     const mainR = priceRange(rangeBase, priceRef.current);
     const subRs = s.subPanes.map((pane) => subRange(pane, ws, we));
+    /**
+     * 可见窗口里的最高 / 最低那一根（币安式极值标注，画法见主图那段与价格标之后那段）。
+     * 标的是「画布上这几根 K 线的高低」：平移或缩放换了一批 K 线，标就跟着换成新窗口的极值。
+     * 同价取**较新**的一根，牌面更靠近右侧正在走的部分。
+     */
+    let hiIdx = -1;
+    let loIdx = -1;
+    for (let i = ws; i <= we; i++) {
+      const c = list[i];
+      if (!c) continue;
+      if (hiIdx < 0 || c.high >= list[hiIdx].high) hiIdx = i;
+      if (loIdx < 0 || c.low <= list[loIdx].low) loIdx = i;
+    }
     const [rs, re] = plotRange(vpRef.current, n);
     const start = plotStart(vpRef.current, n);
     const slot = plotW / Math.max(1, vp.visibleBars);
@@ -887,6 +900,24 @@ export function KlineCanvas({
       hline(ctx, 0, plotW, lastY);
       ctx.setLineDash([]);
     }
+
+    // ── 可见区间最高 / 最低的价线 ──
+    // 从极值那一根往右牵一条很淡的虚线到轴边（币安那张图的画法）：它只是「这个价位在这儿」的
+    // 引线，所以既比最新价那条更淡、也不横贯整张图 —— 左边那半张图不该被两条新线切碎。
+    // 价牌与它成对，画在价格标之后（见下面「可见区间最高 / 最低的价牌」）。
+    const drawExtremeLevel = (idx: number, price: number) => {
+      const y = yOf(toFraction(mainR, price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) return;
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = p.label;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      hline(ctx, Math.max(0, xOf(idx)), plotW, y);
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    };
+    if (hiIdx >= 0) drawExtremeLevel(hiIdx, list[hiIdx].high);
+    if (loIdx >= 0) drawExtremeLevel(loIdx, list[loIdx].low);
 
     // 备注牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
     // 放在最新价虚线之后，是为了让牌面永远干净（牌上不许有别的线划过去）。
@@ -1118,6 +1149,42 @@ export function KlineCanvas({
         p,
       );
     });
+
+    // ── 可见区间最高 / 最低的价牌 ──
+    // 挂在极值那一根的影线旁：最高在上方、最低在下方（没地方就翻到另一侧），
+    // 牌面与读数垫同一套（纸色 + 无描边、无阴影）—— 它是浮在图上的一块读数，不是卡片。
+    // 与左上角读数垫**打架时让开**：读数常在、指标越多垫子越高，极值只是辅助信息。
+    const drawExtremeTag = (idx: number, price: number, isHigh: boolean) => {
+      const y = yOf(toFraction(mainR, price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) return;
+      const text = priceText(price);
+      const w = ctx.measureText(text).width + 8;
+      const h = 14;
+      const gap = 3;
+      let left = clampNum(xOf(idx) - w / 2, 2, Math.max(2, plotW - w - 2));
+      let top = isHigh ? y - gap - h : y + gap;
+      if (top < mainTop + 1 || top + h > mainBottom - 1) {
+        top = isHigh ? y + gap : y - gap - h;
+      }
+      top = clampNum(top, mainTop + 1, Math.max(mainTop + 1, mainBottom - h - 1));
+      const overlapsPlate =
+        left < plateX + plateW && left + w > plateX && top < plateY + plateH && top + h > plateY;
+      if (overlapsPlate) {
+        const rightOfPlate = plateX + plateW + 4;
+        left =
+          rightOfPlate + w <= plotW - 2
+            ? rightOfPlate
+            : clampNum(plateX - 4 - w, 2, Math.max(2, plotW - w - 2));
+      }
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = p.paper;
+      roundRect(ctx, left, top, w, h, 3);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = p.label;
+      ctx.fillText(text, left + 4, top + h / 2 + 0.5);
+    };
+    if (hiIdx >= 0) drawExtremeTag(hiIdx, list[hiIdx].high, true);
+    if (loIdx >= 0) drawExtremeTag(loIdx, list[loIdx].low, false);
 
     // ── 「复位」小标 ──
     // 视角一旦被调离默认取景就没法从图上看出来（刻度拖远了 / 往前翻到历史里），

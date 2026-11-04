@@ -543,6 +543,11 @@ fun KlineChart(
     val autoRange = remember(series, dataWindow.first, dataWindow.last) {
         series.mainRange(dataWindow.first, dataWindow.last)
     }
+    /**
+     * 可见窗口的最高 / 最低价（币安式极值标注）。跟着窗口走 —— 平移或捏合换了一批
+     * K 线，标就换成新窗口的极值，回答的是「眼前这段的高低」。
+     */
+    val extremes = remember(series, dataWindow) { series.extremeMarks(dataWindow) }
     /** 纵向缩放/平移的基准：手势中为冻结值，平时为自动量程（见 [priceBase]）。 */
     val rangeBase = priceBase ?: autoRange
     val mainRange = remember(rangeBase, priceZoom, pricePan) {
@@ -1024,6 +1029,7 @@ fun KlineChart(
                 drawCandles(series, plot, geo, palette, mainRange)
                 drawOverlays(series, plot, geo, palette, mainRange)
                 drawLastPrice(series, geo, palette, mainRange)
+                drawExtremeLevels(extremes, plot, geo, palette, mainRange)
                 if (visibleAlertLines.isNotEmpty()) {
                     drawAlertLines(visibleAlertLines, geo, palette, mainRange, selectedLine)
                 }
@@ -1100,6 +1106,16 @@ fun KlineChart(
             RightPriceBadges(
                 tags = rightPriceTags,
                 range = mainRange,
+                geo = geo,
+                density = density,
+                tickSize = tickSize,
+            )
+            // 可见区间的最高 / 最低价牌：挂在极值那一根的影线旁（币安式）。
+            // 排在右轴价签之后：右轴回答「这些线多少钱」永远优先，极值牌只负责标出这段的高低。
+            ExtremeBadges(
+                marks = extremes,
+                range = mainRange,
+                plot = plot,
                 geo = geo,
                 density = density,
                 tickSize = tickSize,
@@ -1680,6 +1696,31 @@ private fun DrawScope.drawLastPrice(
 }
 
 /**
+ * 可见窗口最高 / 最低价的引线：从极值那一根往右牵一条很淡的虚线到轴边（币安那张图的画法）。
+ * 它只是「这个价位在这儿」的引线，所以比最新价那条更淡、也不横贯整张图 ——
+ * 左边那半张图不该被两条新线切碎。价牌由 [ExtremeBadges] 挂在极值那一根旁。
+ */
+private fun DrawScope.drawExtremeLevels(
+    marks: List<ExtremeMark>,
+    plot: PlotGeometry,
+    geo: ChartGeo,
+    palette: ChartPalette,
+    range: ValueRange,
+) {
+    marks.forEach { mark ->
+        val y = geo.yOf(range.toFraction(mark.price), geo.mainTopPx, geo.mainHeightPx)
+        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+        drawLine(
+            color = palette.label.copy(alpha = 0.5f),
+            start = Offset(geo.xOf(mark.index, plot).coerceAtLeast(0f), y),
+            end = Offset(geo.plotWidthPx, y),
+            strokeWidth = 1f,
+            pathEffect = PathEffect.dashPathEffect(floatArrayOf(2f, 3f)),
+        )
+    }
+}
+
+/**
  * 已有的告警线，一次一排。
  *
  * 与 [drawLastPrice] 用同一条换算链（`toFraction` → `yOf`），所以线所在的高度与右侧
@@ -2101,6 +2142,29 @@ private fun lastPriceTag(
 }
 
 /**
+ * 可见窗口里的最高 / 最低那一根（币安式极值标注）。
+ *
+ * [isHigh] 决定价牌挂在影线上方还是下方。标的是「画布上这几根 K 线的高低」，
+ * 不是整段序列：平移 / 捏合换了一批 K 线，标就跟着换成新窗口的极值。
+ * 同价取**较新**的一根，牌面更靠近右侧正在走的部分。
+ */
+private data class ExtremeMark(val index: Int, val price: Double, val isHigh: Boolean)
+
+private fun ChartSeries.extremeMarks(window: IntRange): List<ExtremeMark> {
+    var hi = -1
+    var lo = -1
+    for (i in window) {
+        val candle = candles.getOrNull(i) ?: continue
+        if (hi < 0 || candle.highDouble() >= candles[hi].highDouble()) hi = i
+        if (lo < 0 || candle.lowDouble() <= candles[lo].lowDouble()) lo = i
+    }
+    return buildList {
+        if (hi >= 0) add(ExtremeMark(hi, candles[hi].highDouble(), isHigh = true))
+        if (lo >= 0) add(ExtremeMark(lo, candles[lo].lowDouble(), isHigh = false))
+    }
+}
+
+/**
  * 十字光标横线的读数。显示条件跟**横线**走（落在主图内），与 `drawCrosshair` 一致：
  * 手指划到副图上时横线不画，这里也不该冒出一个孤立的读数。
  */
@@ -2171,6 +2235,67 @@ private fun BoxScope.RightPriceBadges(
             modifier = Modifier.align(Alignment.TopStart),
             accent = tag.accent,
             exactPrice = tag.exactPrice,
+        )
+    }
+}
+
+/**
+ * 可见区间最高 / 最低价的价牌：挂在极值那一根的影线旁 —— 最高在上方、最低在下方，
+ * 贴边没地方就翻到另一侧，横向以那根蜡烛为心中再夹进绘图区。
+ *
+ * 牌面与读数垫同一套（纸色 + 无描边）：它是浮在图上的一块读数，不是卡片。
+ * 落在主图之外的极值不画（用户纵向缩放/平移把它推出取景时，牌不该钉在边上冒充极值）。
+ */
+@Composable
+private fun BoxScope.ExtremeBadges(
+    marks: List<ExtremeMark>,
+    range: ValueRange,
+    plot: PlotGeometry,
+    geo: ChartGeo,
+    density: Density,
+    tickSize: BigDecimal?,
+) {
+    if (marks.isEmpty()) return
+    val colors = MarketTheme.colors
+    val style = rememberPriceTagStyle()
+    val measurer = rememberTextMeasurer()
+    val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
+    val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
+    val gap = with(density) { EXTREME_TAG_GAP_DP.dp.toPx() }
+    val top = geo.mainTopPx
+    val bottom = top + geo.mainHeightPx
+    for (mark in marks) {
+        val y = geo.yOf(range.toFraction(mark.price), top, geo.mainHeightPx)
+        if (y !in top..bottom) continue
+        val text = PriceFormatter.localeNumber(mark.price, PriceFormatter.decimalsFor(tickSize))
+        val textSize = remember(text, style, density) {
+            measurer.measure(AnnotatedString(text), style, density = density).size
+        }
+        val width = textSize.width + padH * 2f
+        val height = textSize.height + padV * 2f
+        val left = (geo.xOf(mark.index, plot) - width / 2f)
+            .coerceIn(0f, (geo.plotWidthPx - width).coerceAtLeast(0f))
+        val preferred = if (mark.isHigh) y - gap - height else y + gap
+        val flipped = if (mark.isHigh) y + gap else y - gap - height
+        val placedTop = (if (preferred < top || preferred + height > bottom) flipped else preferred)
+            .coerceIn(top, (bottom - height).coerceAtLeast(top))
+        Text(
+            text = text,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .offset(
+                    x = with(density) { left.toDp() },
+                    y = with(density) { placedTop.toDp() },
+                )
+                .clip(Radius.xsShape)
+                .background(colors.paper.copy(alpha = 0.9f))
+                .padding(
+                    horizontal = with(density) { padH.toDp() },
+                    vertical = with(density) { padV.toDp() },
+                ),
+            style = style,
+            color = colors.muted,
+            maxLines = 1,
         )
     }
 }
@@ -3225,6 +3350,9 @@ private const val PRICE_BADGE_PAD_H_DP = 3.5f
 
 /** 价格标的垂直内边距（dp）。 */
 private const val PRICE_BADGE_PAD_V_DP = 1f
+
+/** 可见区间极值价牌与影线之间的竖向间隙（dp）：留一点缝，别把最高/最低那根影线盖住。 */
+private const val EXTREME_TAG_GAP_DP = 3f
 
 /*
  * 图上三类线的透明度口径：**不淡**。
