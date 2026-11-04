@@ -761,3 +761,39 @@ main CI run **41784793885** 绿（41784764265 被 `concurrency` 正常取消）�
   `d90b3b3 --parent ae2c061…` 完整 40 位 → 远端 `fa533b0`）；tag 用 `.workbuddy/tmp/tag-0159.py`；
   推完 `git fetch` + `update-ref`（没 reset）。
 - 用掉的 tag 追加：`desktop-v0.1.59`。
+
+## 0.9.68 / desktop 0.1.60（双端同发，2026-11-04 下午）
+
+「可见区间最高 / 最低价标注（双端）」——用户口径：画布上展示的所有 K 线要标出最高点和最低点价格，
+参考币安。实现：两端都取**可见数据窗口**的极值（不是整段序列，平移/缩放换一批就跟着换，同价取较新的一根），
+极值那一根往右牵一条淡虚线到轴边，价牌挂在影线旁（最高在上、最低在下，贴边翻到另一侧，横向以那根
+蜡烛为心中再夹进绘图区）；价牌沿用读数垫的纸色 90% + 无描边，桌面端还做了与左上读数垫打架时让开的处理。
+极值被纵向缩放/平移推出取景时不画牌（桌面 `drawExtremeTag` / Android `ExtremeBadges` 的 y 判据）。
+
+两个 tag 同指远端 `cf621126`（远程 `927650b` feat(chart) → `cf621126` chore(release)；本地 `9908c1b` → `2afc0f3`）。
+Release run **41788998141** 绿（06:57:59 → 07:01:29Z）、Desktop Release run **41789007011** 三 job 全绿
+（06:58:04 → 07:06:42Z）、main CI run **41788977701** 绿（41788939021 被 `concurrency` 正常取消）。
+`verify-channel.mjs 0.1.60` → **34/34 PASS**。
+
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.60
+  无 0.1.59 残留、latest.json 0.1.60（pub_date `2026-11-04T07:06:29.278Z`）、两平台 URL 指向本版、
+  两平台 keyid `226B03192E5DF60B` == 基线；exe **2821191** 字节（sha256 `5ffdf3752bc560f2…` 与边车一致）、
+  dmg 4468442、mac app.tar.gz 4389266。
+- 包内新前端：CI vite 指纹 `index-Ct5TRZN3.js 331.92` / `index-DAjkS9_K.css 50.62`（**106 modules**）
+  == 本地 `npm run build` 逐字一致（CSS 与 0.1.59 同 = 样式没动，JS 330.98→331.92 = 包内是新逻辑）。
+- Android 通道：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、
+  只有 `market-monitor-0.9.68.apk`（**11203204**，与 0.9.66 / 0.9.67 同字节数属压缩/对齐巧合）+ `.sha256`
+  （asset digest `e9800135…` == 边车）；CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、
+  `本次版本号：0.9.68`；旧 0.9.67 产物在发布步骤被移除。
+- ✅ 打 tag 前：Android `testDebugUnitTest` **425 例全绿**（45s）；桌面 `tsc --noEmit` + `vite build` 绿。
+- 实机验收（改版时已完成，发版只是打包）：桌面系统 Chrome + CDP 浅/深两套截图（`78,128.20` / `75,700.00`
+  挂在极值上）；MuMu 装 debug 包截 BTC 日线（`87395.67` / `74967.97`）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（`9908c1b` → 远端 `927650b`；
+  `2afc0f3 --parent 927650b…` 完整 40 位 → 远端 `cf621126`），tag 用
+  `.workbuddy/tmp/tag-0968-0160.py <远端SHA> 2afc0f3`（先断言 tree 一致，两个 tag 一次打完）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main cf621126`（没 reset）+ 本地 `tag -f -a` 重指。
+- 本轮按用户要求清理本地构建产物：Android 侧 `gradlew --stop` + `gradlew clean` 清掉了 `android/app/build`
+  （179M；第一次 clean 报「有进程占用」，停 daemon 后成功）。其余目录（`desktop/dist`、`android/build/reports`、
+  `android/.gradle`、`android/.kotlin`、`android/.workbuddy` 截图）的删除命令被企业 DLP 钩子拦，按规范不绕行，
+  留给用户在资源管理器里删；`desktop/src-tauri/target` 本机本来就不存在（没在本地跑 tauri 打包）。
+- 用掉的 tag 追加：`0.9.68`、`desktop-v0.1.60`。
