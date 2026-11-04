@@ -797,3 +797,37 @@ Release run **41788998141** 绿（06:57:59 → 07:01:29Z）、Desktop Release ru
   `android/.gradle`、`android/.kotlin`、`android/.workbuddy` 截图）的删除命令被企业 DLP 钩子拦，按规范不绕行，
   留给用户在资源管理器里删；`desktop/src-tauri/target` 本机本来就不存在（没在本地跑 tauri 打包）。
 - 用掉的 tag 追加：`0.9.68`、`desktop-v0.1.60`。
+
+## 0.9.69 / desktop 0.1.61（双端同发，2026-11-04 傍晚）
+
+「画布标注归位」三件套（用户逐条报的）：
+1. 可见区间最高 / 最低价签**从图内小牌子挪到右轴**，用一条淡虚线从极值那根连过去
+   （桌面 `drawExtremeLevel` / Android `drawExtremeLevels` + `extremePriceTag`，极值走 exactPrice）。
+2. 划线（告警线 / 水平画线）的价牌**不占右轴那一列**，改为右对齐浮在画布右端、贴价格轴左侧
+   （距轴 6dp / 6px），备注牌仍在左端；告警红底、普通画线黄底。桌面 `drawLineNote` 新增
+   `rightAlign` / `font` 参数；Android `LineNoteBadges` 换成 `LineBadges`，优先级里删掉 LINE 档。
+3. 桌面端最新价的虚线与价签改用**涨跌色**（与 App 同口径，取最新一根 close vs open，实时翻面；
+   原先桌面走灰 `--label`）。极值虚线仍灰（注释不表态方向）。
+
+两个 tag 同指远端 `2f8f97f`（远程 `b28560b` feat(chart) → `2f8f97f` chore(release)；
+本地 `693cf23` → `a2e4502`）。Release run **41810986909** 绿（09:57:37 → 10:00:46Z）、
+Desktop Release run **41810993885** 三 job 全绿（09:57:41 → 10:06:37Z）、main CI run
+**41810968105** 绿（41810936350 被 `concurrency` 正常取消）。`verify-channel.mjs 0.1.61` → **34/34 PASS**。
+
+- 桌面通道：`desktop-latest` id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.61
+  无 0.1.60 残留、latest.json 0.1.61（pub_date `2026-11-04T10:06:13.440Z`）、两平台 keyid
+  `226B03192E5DF60B` == 基线；exe **2821832** 字节（sha256 `2547b6ffb02b7d34…` == 边车）、
+  dmg 4468467、mac app.tar.gz 4389130。
+- 包内新前端：CI vite 指纹 `index-D9c5vIK0.js 331.64` / `index-DAjkS9_K.css 50.62`（**106 modules**）
+  == 本地 `npm run build` 逐字一致（CSS 与 0.1.60 同 = 样式没动）。
+- Android 通道：`android-latest` id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z）、
+  只有 `market-monitor-0.9.69.apk`（**11203208**）+ `.sha256`（asset digest `19569930…` == 边车）；
+  CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、`本次版本号：0.9.69`；旧 0.9.68 已移除。
+- ✅ 打 tag 前：Android `testDebugUnitTest` **425 例全绿**（1m51s）；桌面 `tsc --noEmit` + `vite build` 绿。
+- 实机验收（改版时完成）：桌面 CDP 浅/深 + 画线两态（黄牌贴轴、现价绿/红各截一态）、
+  MuMu 全屏画水平线（`76,568.23` 黄牌贴轴）；本机 `android/app/build` 已 `gradlew clean`。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 两次（`693cf23` → 远端 `b28560b`；
+  `a2e4502 --parent b28560b…` 完整 40 位 → 远端 `2f8f97f`），tag 用
+  `.workbuddy/tmp/tag-0969-0161.py <远端SHA> a2e4502`（先断言 tree 一致，两个 tag 一次打完）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main 2f8f97f`（没 reset）+ 本地 `tag -f -a` 重指。
+- 用掉的 tag 追加：`0.9.69`、`desktop-v0.1.61`。
