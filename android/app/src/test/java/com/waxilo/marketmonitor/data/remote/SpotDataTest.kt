@@ -188,4 +188,18 @@ class SpotHostHealthTest {
         health.noteOk("a")
         assertFalse(health.unavailable(SpotSource.BINANCE.key))
     }
+
+    @Test
+    fun `换网后首选与冷却全部作废`() {
+        health.noteOk("b")
+        health.noteFailed("a")
+        health.noteAllFailed(SpotSource.BINANCE.key, IOException("all down"))
+
+        health.reset()
+
+        // 回到链的原顺序：旧路径上被记成「冷却中」的主机不再被压在链尾
+        assertEquals(listOf("a", "b"), health.order(listOf("a", "b")))
+        // 停试窗与上次错误一起清掉，下一次请求真的会发出去
+        assertFalse(health.unavailable(SpotSource.BINANCE.key))
+    }
 }

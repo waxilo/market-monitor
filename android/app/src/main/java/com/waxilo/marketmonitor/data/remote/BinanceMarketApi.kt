@@ -26,12 +26,19 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.net.SocketTimeoutException
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.ceil
 
 /** 测速（探测）超时：5 秒不响应即判超时（用户口径，与桌面端同）。 */
 private const val PROBE_TIMEOUT_MS = 5_000L
+
+/**
+ * 行情请求的标记：换网时按它筛出「在途的行情请求」并掐掉。
+ * 更新包下载与 webhook 走同一个 dispatcher，但不该因为一次换网被中止。
+ */
+private val MARKET_CALL_TAG = Any()
 
 /**
  * 现货域名链里**单个主机**的取数上限。桌面端同为 8 秒；OkHttp 的 30 秒 callTimeout
@@ -123,6 +130,36 @@ class BinanceMarketApi(
 
     /** 现货域名链的健康记忆：首选最近成功的主机，失败主机冷却（见 [SpotHostHealth]）。 */
     private val spotHostHealth = SpotHostHealth()
+
+    /**
+     * 网络路径的代次。换网 / 开关 VPN 时递增；请求在出发时记下代次，
+     * 收尾时对不上就说明它走的是**旧路径**，它的成败不能写进健康记忆。
+     */
+    private val networkGeneration = AtomicLong()
+
+    /**
+     * 容器在**默认网络变化**时调用（换 Wi-Fi/蜂窝、VPN 开关、系统代理变更）。
+     *
+     * 旧路径上的在途请求多半会以超时收场，若照常记账，会把新路径上本来能直连的域名
+     * 一起打进冷却；所以先换代，再作废整份健康记忆，让下一次请求从链首重来。
+     */
+    fun onNetworkChanged() {
+        networkGeneration.incrementAndGet()
+        spotHostHealth.reset()
+    }
+
+    /**
+     * 掐掉在途的行情请求。
+     *
+     * OkHttp 的连接池只会回收「空闲」连接：换网那一刻还挂在旧路径连接上的请求不结束，
+     * 那条连接就一直留在池里继续被复用。这些请求本来也只会等到超时，取消它们能让连接
+     * 立刻回到空闲、被随后的 `evictAll` 关掉。
+     */
+    fun cancelInFlightRequests() {
+        client.dispatcher.runningCalls().forEach { call ->
+            if (call.request().tag(Any::class.java) === MARKET_CALL_TAG) call.cancel()
+        }
+    }
 
     suspend fun ping(market: MarketType): Boolean = try {
         if (market.isFutures) {
@@ -291,6 +328,8 @@ class BinanceMarketApi(
      */
     private suspend fun getSpot(path: String, weight: Int): String {
         val source = spotSource()
+        // 出发时的网络代次：本请求若横跨了一次换网，收尾时的失败不算新路径的账
+        val generation = networkGeneration.get()
         if (spotHostHealth.unavailable(source.key)) {
             throw spotHostHealth.lastFailure ?: IOException("${source.label}暂不可用")
         }
@@ -310,10 +349,12 @@ class BinanceMarketApi(
                 throw e
             } catch (e: MarketApiException) {
                 if (!shouldTryNextHost(e)) throw e
-                if (isSourceUnavailable(e)) spotHostHealth.noteFailed(host)
+                if (isSourceUnavailable(e) && generation == networkGeneration.get()) {
+                    spotHostHealth.noteFailed(host)
+                }
                 lastError = e
             } catch (e: IOException) {
-                spotHostHealth.noteFailed(host)
+                if (generation == networkGeneration.get()) spotHostHealth.noteFailed(host)
                 lastError = e
             }
         }
@@ -329,7 +370,9 @@ class BinanceMarketApi(
             (candidates.size > 1 && isSourceUnavailable(lastError)) ||
                 status == 418 || status == 429
             )
-        if (shouldPause) spotHostHealth.noteAllFailed(source.key, error)
+        if (shouldPause && generation == networkGeneration.get()) {
+            spotHostHealth.noteAllFailed(source.key, error)
+        }
         throw error
     }
 
@@ -337,7 +380,11 @@ class BinanceMarketApi(
         (host.trimEnd('/') + path).toHttpUrlOrNull()
 
     private suspend fun executeSpot(url: HttpUrl): String {
-        val request = Request.Builder().url(url).header("Accept", "application/json").build()
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .tag(Any::class.java, MARKET_CALL_TAG)
+            .build()
         return client.newCall(request).awaitText()
     }
 
@@ -354,7 +401,10 @@ class BinanceMarketApi(
 
     /** 方言请求（GET 或 POST）原文发出、原文收回；解析交给各家适配器。 */
     private suspend fun executeText(request: FuturesDialectAdapter.Request): String {
-        val builder = Request.Builder().url(request.url).header("Accept", "application/json")
+        val builder = Request.Builder()
+            .url(request.url)
+            .header("Accept", "application/json")
+            .tag(Any::class.java, MARKET_CALL_TAG)
         request.postBody?.let { builder.post(it.toRequestBody(JSON_MEDIA_TYPE)) }
         return client.newCall(builder.build()).awaitText()
     }

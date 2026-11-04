@@ -644,6 +644,13 @@ class DetailViewModel(
                 reloadToken.update { it + 1 }
             }
         }
+        // 换网 / 开关 VPN：首屏可能整个栽在旧路径上（当时连接池与域名链都还是旧的）。
+        // 实时增量只往已有序列上补，序列空着它补不出来，所以这里必须重取一次。
+        viewModelScope.launch {
+            container.networkChanges.collect {
+                reloadToken.update { it + 1 }
+            }
+        }
         // 交易规则决定显示位数；首启可能还没落库，失败留给刷新兜底
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
         // 报价头来自 ticker 流（Room 缓存视图）；未加自选的标的没人替它刷新，

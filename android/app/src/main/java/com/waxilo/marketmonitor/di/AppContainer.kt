@@ -3,7 +3,10 @@ package com.waxilo.marketmonitor.di
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.waxilo.marketmonitor.BuildConfig
 import com.waxilo.marketmonitor.data.alert.AlertEngine
@@ -37,12 +40,15 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
@@ -54,6 +60,18 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 private const val TAG = "AppContainer"
+
+/** 网络切换后稍等再处理：一次切换会连发多个回调，合并成一次。 */
+private const val NETWORK_CHANGE_SETTLE_MS = 300L
+
+/** 注册回调后的启动噪音窗口：这期间收到的「当前网络」回报不算变化。 */
+private const val REGISTRATION_GRACE_MS = 1_500L
+
+/** 取消在途请求后，等调用线程把连接还回池里再 evictAll。 */
+private const val CONNECTION_DRAIN_MS = 250L
+
+/** OkHttp 对 HTTP/2 连接的心跳间隔（秒）。 */
+private const val PING_INTERVAL_SECONDS = 20L
 
 /**
  * 手工依赖容器（PRD 7 已定：不用 Hilt）。
@@ -78,8 +96,74 @@ class AppContainer(private val context: Context) {
             .readTimeout(15, TimeUnit.SECONDS)
             .callTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            // HTTP/2 下「对端已经没了」不会有 RST，socket 只是再也没数据回来；
+            // 定时 PING 让 OkHttp 自己发现这种假死连接并把它踢出连接池。
+            .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
             .proxySelector(SystemProxySelector())
             .build()
+    }
+
+    /**
+     * 默认网络的变化（换 Wi-Fi/蜂窝、VPN 开关、系统代理变更）。
+     *
+     * 注册回调时系统会立刻把当前网络回报一遍 —— 那不是「变化」（见 [armedAt]）。
+     */
+    private val networkWatch = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            onNetworkPathChanged()
+        }
+
+        override fun onLost(network: Network) {
+            onNetworkPathChanged()
+        }
+
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
+            onNetworkPathChanged()
+        }
+    }
+
+    /** 回调注册时刻：注册后系统会连发一串「当前网络」的回报，那一串要当成启动噪音忽略。 */
+    private var armedAt = 0L
+
+    /** 一次切换会连发 onLost + onAvailable + onLinkProperties：合并成一次处理。 */
+    private var networkChangeJob: Job? = null
+
+    private val _networkChanges = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    /** 网络路径变更的广播：页面据此立刻重取，不必等下一拍轮询。 */
+    val networkChanges: SharedFlow<Unit> = _networkChanges.asSharedFlow()
+
+    init {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        armedAt = SystemClock.elapsedRealtime()
+        runCatching { cm?.registerDefaultNetworkCallback(networkWatch) }
+            .onFailure { Log.w(TAG, "注册网络变更回调失败", it) }
+    }
+
+    /**
+     * 换网 / 开关 VPN 之后，旧连接必须整批作废。
+     *
+     * 币安行情域走 HTTP/2：VPN 关掉后，隧道里那些 socket 在系统看来仍是「已连接」
+     * （没有 RST，写进去的数据直接进黑洞），OkHttp 的健康检查也认为它们可用，
+     * 于是每一拍都复用它、每一拍都读到超时 —— 表现正是「关掉 VPN 后必须重启 App」。
+     * 清空连接池 + 作废域名链记忆，下一次请求就会重新解析域名、新建连接。
+     */
+    private fun onNetworkPathChanged() {
+        // 注册后那串「当前网络」的回报不是真的变化：若照常处理，冷启动刚发出的
+        // 请求会被当成旧路径掐掉，白白重来一轮。
+        if (SystemClock.elapsedRealtime() - armedAt < REGISTRATION_GRACE_MS) return
+        networkChangeJob?.cancel()
+        networkChangeJob = appScope.launch {
+            delay(NETWORK_CHANGE_SETTLE_MS)
+            Log.i(TAG, "网络路径变更：作废连接池与域名链记忆")
+            // 先换代：在途请求被取消后剩下那点收尾错误，不该记到新路径的域名链上
+            marketApi.onNetworkChanged()
+            marketApi.cancelInFlightRequests()
+            // 取消是异步的，等调用线程把连接还回池里再清，才真的关得掉
+            delay(CONNECTION_DRAIN_MS)
+            restClient.connectionPool.evictAll()
+            _networkChanges.tryEmit(Unit)
+        }
     }
 
     /**

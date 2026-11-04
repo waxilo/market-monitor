@@ -9,8 +9,8 @@
 //! 这里刻意只做「发请求」：各家的 URL 构造与响应归一化在前端的 lib/dialects.ts
 //! （对应 App 的 data/remote/dialect），Rust 侧不感知任何盘口协议。
 
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -21,6 +21,8 @@ const USER_AGENT: &str = "market-monitor-desktop";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 /// 单次请求总时限：K 线一次 300 根，慢网直连也得给够。
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// 传输层失败后重建客户端的冷却：一直失败时别每一拍都重建，但也不能不清。
+const CLIENT_RESET_COOLDOWN: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Serialize)]
 pub struct MarketResponse {
@@ -33,16 +35,65 @@ pub struct MarketResponse {
     used_weight_1m: Option<u32>,
 }
 
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent(USER_AGENT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("构造行情 HTTP 客户端失败")
+fn build_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT)
+        .build()
+        .expect("构造行情 HTTP 客户端失败")
+}
+
+/// 行情 HTTP 客户端 + 重建代次。
+///
+/// 客户端必须**可重建**：reqwest 的连接池会把上一次网络路径上的连接留着复用，
+/// 而关掉 VPN / 换代理之后这些连接只会一直超时（隧道断了但 socket 没有 RST，
+/// 池子仍认为它们可用）。池子不换掉就永远出不来 —— 旧版的表现正是
+/// 「关掉 VPN 后必须重启应用」。系统代理同样是在建客户端时读的，重建会顺带跟上新配置。
+struct ClientSlot {
+    client: reqwest::Client,
+    /// 同一批并发请求都会带着同一个代次失败，只该有第一个负责重建。
+    generation: u64,
+    last_reset: Option<Instant>,
+}
+
+fn slot() -> &'static Mutex<ClientSlot> {
+    static SLOT: OnceLock<Mutex<ClientSlot>> = OnceLock::new();
+    SLOT.get_or_init(|| {
+        Mutex::new(ClientSlot {
+            client: build_client(),
+            generation: 0,
+            last_reset: None,
+        })
     })
+}
+
+/// 取当前客户端与它的代次（`reqwest::Client` 内部是 Arc，clone 很便宜）。
+fn client() -> (reqwest::Client, u64) {
+    let slot = slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    (slot.client.clone(), slot.generation)
+}
+
+/// 这条路刚刚不通：把旧连接池整批丢掉，下一次请求重建连接（也重新读系统代理）。
+fn reset_client(generation: u64) {
+    let mut slot = slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.generation != generation {
+        return;
+    }
+    if let Some(last) = slot.last_reset {
+        if last.elapsed() < CLIENT_RESET_COOLDOWN {
+            return;
+        }
+    }
+    slot.client = build_client();
+    slot.generation = slot.generation.wrapping_add(1);
+    slot.last_reset = Some(Instant::now());
+}
+
+/// 只有「这条路不通」才算：超时、连不上、发出去没收回来、响应体读断。
+/// 业务错误（4xx/5xx）不算 —— 服务器答了，池子是好的，重建反而白丢连接。
+fn is_path_failure(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
 }
 
 /// 探测结果要在弹窗里逐行显示，网络栈原文（`error sending request for url …`）
@@ -82,24 +133,35 @@ pub async fn market_request(
     if !url.starts_with("https://") {
         return Err("只允许 https 请求".to_string());
     }
+    let (client, generation) = client();
     let mut request = if method.eq_ignore_ascii_case("POST") {
-        client()
+        client
             .post(&url)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body.unwrap_or_default())
     } else {
-        client().get(&url)
+        client.get(&url)
     };
     // 测速的请求级时限：5 秒不响应即判超时。数据请求不传，仍走客户端的 20s。
     if let Some(ms) = timeout_ms {
         request = request.timeout(Duration::from_millis(ms));
     }
-    let response = request.send().await.map_err(|e| short_error(&e))?;
+    let response = request.send().await.map_err(|e| {
+        if is_path_failure(&e) {
+            reset_client(generation);
+        }
+        short_error(&e)
+    })?;
     let status = response.status().as_u16();
     let retry_after_secs = header_u64(response.headers(), "retry-after");
     let used_weight_1m = header_u64(response.headers(), "x-mbx-used-weight-1m")
         .and_then(|v| u32::try_from(v).ok());
-    let body = response.text().await.map_err(|e| short_error(&e))?;
+    let body = response.text().await.map_err(|e| {
+        if is_path_failure(&e) {
+            reset_client(generation);
+        }
+        short_error(&e)
+    })?;
     Ok(MarketResponse {
         status,
         body,
@@ -135,5 +197,22 @@ mod tests {
         ))
         .unwrap_err();
         assert!(err.contains("https"), "{err}");
+    }
+
+    /// 一批并发请求带着同一代次失败时只重建一次；冷却期内不再重建。
+    #[test]
+    fn client_reset_is_per_generation_and_throttled() {
+        let (_, generation) = client();
+        reset_client(generation);
+        let (_, after_first) = client();
+        assert_ne!(after_first, generation, "第一次失败应该换掉连接池");
+
+        // 同一代次的其它并发失败：重建已经发生过了，不该再建一个
+        reset_client(generation);
+        assert_eq!(client().1, after_first, "旧代次的失败不该再重建");
+
+        // 新一代次的又一次失败：冷却期内仍然不重建（一直不通时别每拍都建）
+        reset_client(after_first);
+        assert_eq!(client().1, after_first, "冷却期内不应重建");
     }
 }

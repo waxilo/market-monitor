@@ -15,8 +15,13 @@
  * 三平台代理探测。Rust 侧只在 REST 上把关（见 lib/http.ts）。
  *
  * 一条连接承载多个流（组合流 `/stream?streams=a/b`）：所有开着的 `@ticker` 合成一条，
- * 图表的 `@kline_<周期>` 另开一条。断线按指数退避重连；60 秒收不到任何帧就当作
+ * 图表的 `@kline_<周期>` 另开一条。断线按指数退避重连；15 秒收不到任何帧就当作
  * 假死（币安每秒都有 ticker 推送），主动断开重连。
+ *
+ * ❗**假死必须由看门狗自己收尾，不能只依赖 onclose**：关掉 VPN 之后隧道里的连接既没有
+ * 数据也没有 RST，`close()` 的挥手同样发不出去（浏览器要等自己的关闭握手超时才回调），
+ * 这段时间里消费方还停在「WS 活着」的状态上、REST 兜底也被停着，界面就是冻住的。
+ * 所以看门狗到点直接按断开处理（排重连 + 通知消费方），再尽力关掉那条 socket。
  *
  * **合约与现货是两套后端**（`fstream.*` / `data-stream.binance.vision`），所以各开各的
  * 连接；重连策略共用下面这一份实现，别让现货退回到「只靠 REST 轮询」——那样一断网，
@@ -29,7 +34,7 @@ import type { TickerSnapshot } from './dialects';
 /** 断线重连的退避上限。 */
 const RECONNECT_CAP_MS = 30_000;
 /** 多久收不到任何帧就判定连接假死（币安每秒都有推送）。 */
-const SILENT_TIMEOUT_MS = 60_000;
+const SILENT_TIMEOUT_MS = 15_000;
 
 /**
  * 币安现货的 WS 主机：与 REST 的 `data-api.binance.vision` 同一套「只读行情」入口。
@@ -150,14 +155,6 @@ function openStream(host: string, streams: string[], handlers: StreamHandlers): 
   let reconnectTimer = 0;
   let silentTimer = 0;
 
-  const armSilentWatchdog = () => {
-    window.clearTimeout(silentTimer);
-    silentTimer = window.setTimeout(() => {
-      // 假死：close() 会走 onclose，由它排队重连
-      socket?.close();
-    }, SILENT_TIMEOUT_MS);
-  };
-
   const dispatch = (payload: unknown) => {
     if (payload == null || typeof payload !== 'object') return;
     // 组合流是 `{stream, data}`；单流是裸的消息体，这里两种都认
@@ -193,11 +190,34 @@ function openStream(host: string, streams: string[], handlers: StreamHandlers): 
     if (stopped) return;
     const ws = new WebSocket(url);
     socket = ws;
+    /** 一条连接只许「结束」一次：看门狗与 onclose 都会走到这里。 */
+    let closed = false;
+
+    const settle = () => {
+      if (closed) return;
+      closed = true;
+      window.clearTimeout(silentTimer);
+      if (socket === ws) socket = null;
+      handlers.onClose?.();
+      scheduleReconnect();
+    };
+
+    const armSilentWatchdog = () => {
+      window.clearTimeout(silentTimer);
+      silentTimer = window.setTimeout(() => {
+        // 假死连接上 close() 的挥手也发不出去，onclose 可能迟迟不来：
+        // 先按断开处理（消费方切回 REST、排上重连），再尽力关掉它
+        settle();
+        ws.close();
+      }, SILENT_TIMEOUT_MS);
+    };
+
     ws.onopen = () => {
       attempt = 0;
       armSilentWatchdog();
     };
     ws.onmessage = (event) => {
+      if (closed) return;
       armSilentWatchdog();
       try {
         dispatch(JSON.parse(String(event.data)));
@@ -208,12 +228,10 @@ function openStream(host: string, streams: string[], handlers: StreamHandlers): 
     ws.onerror = () => {
       // 具体原因浏览器不给；统一按断开处理（close 事件随后会到）
     };
-    ws.onclose = () => {
-      window.clearTimeout(silentTimer);
-      if (socket === ws) socket = null;
-      handlers.onClose?.();
-      scheduleReconnect();
-    };
+    ws.onclose = settle;
+    // 握手阶段也上表：黑洞路由上 new WebSocket 可能既不报错也不超时，
+    // 只靠 onopen 之后才计时会把「一直连不上」拖到系统 TCP 超时（分钟级）。
+    armSilentWatchdog();
   }
 
   connect();

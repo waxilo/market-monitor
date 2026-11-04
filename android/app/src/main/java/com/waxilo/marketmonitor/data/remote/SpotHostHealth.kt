@@ -11,11 +11,12 @@ import java.util.concurrent.ConcurrentHashMap
  * 一次加载几十秒，看起来就是「App 在蜂窝网络下很慢」。这里记住最近成功的主机并置顶，
  * 失败的主机进入冷却，本轮不再反复撞它。
  *
- * 所有主机都失败时再给整条链一个短暂的「停试窗」（[ALL_FAILED_COOLDOWN_MS]）：
+ * 所有主机都失败时再给整条链一个短暂的「停试窗」（[allFailedCooldownMs]）：
  * 断网 / 被墙期间请求应当**快速失败**并让界面显示离线，而不是每一拍都重走一遍
  * 几十秒的域名链。窗口过后自动重试，恢复网络无需重启 App。
  *
- * 冷却与首选都是纯内存状态：换网络或换源后最多多试一轮就会重新收敛。
+ * 冷却与首选都是纯内存状态，且**只对产生它们的那条网络路径有意义**：
+ * 开 / 关 VPN、换 Wi-Fi 与蜂窝之后由 [reset] 整份作废，下一次请求从链首重来。
  */
 internal class SpotHostHealth(
     private val now: () -> Long = System::currentTimeMillis,
@@ -32,6 +33,8 @@ internal class SpotHostHealth(
 
     @Volatile
     private var allFailedSource: String? = null
+
+    @Volatile
     private var allFailedUntil = 0L
 
     @Volatile
@@ -68,6 +71,21 @@ internal class SpotHostHealth(
     /** 当前源是否处于全失败停试窗内。 */
     fun unavailable(sourceKey: String): Boolean =
         now() < allFailedUntil && allFailedSource == sourceKey
+
+    /**
+     * 网络路径变了（开 / 关 VPN、换网、系统代理变更）：整份记忆作废。
+     *
+     * 旧路径上的成败对新路径一点参考价值都没有 —— 开着 VPN 时首选的主机，关掉 VPN 后
+     * 可能只剩超时；而刚被记成「冷却中」的主机，恰恰可能是新路径上唯一能直连的那个。
+     * 不清掉的话，链路要带着旧路径的偏见再撞满一两分钟。
+     */
+    fun reset() {
+        preferred = null
+        failedAt.clear()
+        allFailedSource = null
+        allFailedUntil = 0L
+        lastFailure = null
+    }
 
     private fun isCooling(host: String, at: Long): Boolean {
         val failed = failedAt[host] ?: return false

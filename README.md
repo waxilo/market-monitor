@@ -18,7 +18,7 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除；关注列表报价**并发**刷新、单标的 8 秒超时，断网时一轮不会被串行超时拖住） | `data/remote`、`data/local` | 已实现 |
-| App 端现货多数据源（币安 / Gate，设置页点选即切换；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
+| App 端现货多数据源（币安 / Gate，设置页点选即切换；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试；**换网 / 开关 VPN 时整份记忆作废并清空连接池**，不靠重启恢复） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`data/remote/SpotHostHealth.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
 | 合约行情多接口（9 个候选：Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力；Bitunix 也已下线（REST K 线只回已收盘蜡烛，图上最后一根永远落后一个周期） |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
@@ -26,7 +26,7 @@
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（**浏览器式标签页**（一标签 = 一个市场+标的的图，可锁定 / 一键关闭全部）、跨市场搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 | 桌面端标签页（浏览器的样子：点搜索结果/悬浮窗即开一个，切市场 = 切标签；**用户不关就一直留着**，重启也在；每枚可锁定（锁定后连「关闭全部」都动不了），右侧「关闭全部」一次收掉未锁定的） | `desktop/src/hooks/useTabs.ts`、`components/TabStrip.tsx` | 已实现；存 `mm.tabs` / `mm.tabActive` / `mm.tabLocked`；主窗**没有自选**了（0.1.48 起），图表的去留由标签页自己决定 |
-| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有币安 / Gate 两个候选（存 `mm.spotSource`，默认币安，与 App 端同口径）；**实时价走 WS**：合约的币安系（含 Aster）与币安现货各一条，断线指数退避重连、60 秒无帧判假死重连；WS 没帧时回退 REST，Gate 现货仍按拍轮询 |
+| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有币安 / Gate 两个候选（存 `mm.spotSource`，默认币安，与 App 端同口径）；**实时价走 WS**：合约的币安系（含 Aster）与币安现货各一条，断线指数退避重连、15 秒无帧判假死（由看门狗自己收尾，不等 onclose）；WS 没帧时回退 REST，Gate 现货仍按拍轮询 |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于主窗标签页） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会落一份出厂名单（BTC / ETH × 现货/永续） |
 | 桌面端 EMA 指标分析（**入口在周期条右端的「EMA分析」chip**，点一下就汇总「所有已配置的 EMA 档位 × 所有已配置的 K 线周期」的当前 EMA，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**；周期小方框只是标注、不可点；行内不写状态字，画过的档用整行告警红底 + 左缘色条标出，列头另有「已画 N」） | `desktop/src/components/EmaAnalysisPanel.tsx`、`lib/emaAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时EMA50」这样的备注**；抬头「清空划线」一次收掉这批系统线（手画线不动）；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
@@ -109,6 +109,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 除 Gate、Hyperliquid 与币安现货镜像外，其余接口都不回 `Access-Control-Allow-Origin`，webview 里读到的
 一定是 CORS 报错（宿主侧 reqwest 跟随系统代理，路由与浏览器一致）。Rust 只做搬运，周期映射、
 字段解析、业务码判定这些方言逻辑都在 `src/lib/dialects.ts`，判定结论与 App 的 `FuturesDialects.kt` 对齐。
+⚠️ **客户端是可重建的**：连接池与「系统代理」都是建客户端时确定的，关掉 VPN / 换代理后旧连接只会一直
+超时 —— 传输层失败（超时/连不上/收发中断）即整批换池（按代次只换一次、3 秒冷却），业务错误不换。
 
 ### 桌面端交互约定（改之前先看这几条）
 

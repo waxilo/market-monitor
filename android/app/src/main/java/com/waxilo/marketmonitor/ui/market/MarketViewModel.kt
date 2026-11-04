@@ -214,6 +214,14 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
                 }
             }
         }
+        // 换网 / 开关 VPN：连接池与域名链记忆已由容器作废，立刻重来一轮。
+        // 定时轮询本来也能自愈，但用户刚切完网络就盯着屏幕，等下一拍像「没恢复」。
+        viewModelScope.launch {
+            container.networkChanges.collect {
+                // 清单若因断网一直没同步上，这里顺带补一次
+                refresh()
+            }
+        }
     }
 
     fun selectMarket(target: MarketType) {
