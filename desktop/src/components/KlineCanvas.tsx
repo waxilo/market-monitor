@@ -360,15 +360,18 @@ function drawLineNote(
   plotW: number,
   top: number,
   bottom: number,
-) {
-  if (!text) return;
+  font = NOTE_FONT,
+  rightAlign = false,
+): { left: number; width: number } {
+  if (!text) return { left: x, width: 0 };
   const padX = 4;
   const h = 14;
   ctx.save();
-  ctx.font = NOTE_FONT;
+  ctx.font = font;
   ctx.textBaseline = 'middle';
   const w = ctx.measureText(text).width + padX * 2;
-  const nx = clampNum(x - padX, 2, Math.max(2, plotW - w - 2));
+  // rightAlign：把 x 当「牌子的右缘」用 —— 划线价牌要贴着价格轴左侧右对齐
+  const nx = clampNum(rightAlign ? x - w : x - padX, 2, Math.max(2, plotW - w - 2));
   const ny = clampNum(y, top + h / 2, Math.max(top + h / 2, bottom - h / 2));
   // **牌面照右轴那枚价签做**：实色块 + 高反差字，不是「纸色半透明」——
   // 纸色底板跟图底本来就同一个颜色，压在密集 K 线/网格上时字被底下的东西拖着读不清
@@ -380,6 +383,7 @@ function drawLineNote(
   ctx.fillStyle = color;
   ctx.fillText(text, nx + padX, ny + 0.5);
   ctx.restore();
+  return { left: nx, width: w };
 }
 
 /**
@@ -689,9 +693,9 @@ export function KlineCanvas({
     const mainR = priceRange(rangeBase, priceRef.current);
     const subRs = s.subPanes.map((pane) => subRange(pane, ws, we));
     /**
-     * 可见窗口里的最高 / 最低那一根（币安式极值标注，画法见主图那段与价格标之后那段）。
+     * 可见窗口里的最高 / 最低那一根（币安式极值标注，画法见主图那段与价格标那段）。
      * 标的是「画布上这几根 K 线的高低」：平移或缩放换了一批 K 线，标就跟着换成新窗口的极值。
-     * 同价取**较新**的一根，牌面更靠近右侧正在走的部分。
+     * 同价取**较新**的一根，标与线更靠近右侧正在走的部分。
      */
     let hiIdx = -1;
     let loIdx = -1;
@@ -701,6 +705,9 @@ export function KlineCanvas({
       if (hiIdx < 0 || c.high >= list[hiIdx].high) hiIdx = i;
       if (loIdx < 0 || c.low <= list[loIdx].low) loIdx = i;
     }
+    const extremes: { index: number; price: number }[] = [];
+    if (hiIdx >= 0) extremes.push({ index: hiIdx, price: list[hiIdx].high });
+    if (loIdx >= 0) extremes.push({ index: loIdx, price: list[loIdx].low });
     const [rs, re] = plotRange(vpRef.current, n);
     const start = plotStart(vpRef.current, n);
     const slot = plotW / Math.max(1, vp.visibleBars);
@@ -721,6 +728,9 @@ export function KlineCanvas({
       return { left: Math.round(x) - (w - 1) / 2, w };
     };
     const dec = decimalsFor(ts);
+    /** 价格读数（轴上的价签与画布左端的划线价牌共用一套小数位）。 */
+    const priceText = (price: number) =>
+      price.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
     /** 一根 K 线的时长（直线锚点的时间 ⇄ 下标换算用）。 */
     const ivMs = (minutesOf(iv) ?? 15) * 60_000;
     /**
@@ -827,7 +837,7 @@ export function KlineCanvas({
         ctx.lineWidth = selected ? 2 : 1;
         hline(ctx, 0, plotW, y);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
-        // 告警线红底纸色字、普通画线黄底深字。
+        // 告警线红底纸色字、普通画线黄底深字。价位另有一块浮在画布右端（见盖章那段）。
         if (line.note) {
           noteChips.push({
             text: line.note,
@@ -892,9 +902,11 @@ export function KlineCanvas({
 
     const last = list[n - 1];
     const lastY = yOf(toFraction(mainR, last.close), mainTop, mh);
+    /** 最新价的涨跌色：与 App 同口径，跟着**最新这一根**的收盘 vs 开盘走（实时跳动时也会翻面）。 */
+    const lastColor = last.close >= last.open ? p.up : p.down;
     if (lastY >= mainTop && lastY <= mainBottom) {
-      // 最新价线走灰：它是「现在在哪儿」，不表态方向，别去跟涨跌色抢
-      ctx.strokeStyle = p.label;
+      // 最新价线走涨跌色（与 App 一致）：它是「现在在哪儿」，而这一根的颜色就是最近的答案
+      ctx.strokeStyle = lastColor;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       hline(ctx, 0, plotW, lastY);
@@ -902,25 +914,45 @@ export function KlineCanvas({
     }
 
     // ── 可见区间最高 / 最低的价线 ──
-    // 从极值那一根往右牵一条很淡的虚线到轴边（币安那张图的画法）：它只是「这个价位在这儿」的
-    // 引线，所以既比最新价那条更淡、也不横贯整张图 —— 左边那半张图不该被两条新线切碎。
-    // 价牌与它成对，画在价格标之后（见下面「可见区间最高 / 最低的价牌」）。
-    const drawExtremeLevel = (idx: number, price: number) => {
+    // 从极值那一根拉一条虚线到右轴（币安那张图的画法）：左端咬住极值那根蜡烛、右端接上轴上的价签，
+    // 一眼看出「这个数字说的是图上哪个点」。所以它比最新价那条更淡、也不横贯整张图 ——
+    // 左边那半张图不该被两条新线切碎。
+    const drawExtremeLevel = (index: number, price: number) => {
       const y = yOf(toFraction(mainR, price), mainTop, mh);
       if (y < mainTop || y > mainBottom) return;
       ctx.globalAlpha = 0.5;
       ctx.strokeStyle = p.label;
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
-      hline(ctx, Math.max(0, xOf(idx)), plotW, y);
+      hline(ctx, Math.max(0, xOf(index)), plotW, y);
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     };
-    if (hiIdx >= 0) drawExtremeLevel(hiIdx, list[hiIdx].high);
-    if (loIdx >= 0) drawExtremeLevel(loIdx, list[loIdx].low);
+    for (const mark of extremes) drawExtremeLevel(mark.index, mark.price);
 
-    // 备注牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
+    // 备注牌 / 划线价牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
     // 放在最新价虚线之后，是为了让牌面永远干净（牌上不许有别的线划过去）。
+    //
+    // 划线自己的**价牌浮在画布右端**（2026-11-04 用户）：不进右轴那一列 —— 那一列只答
+    // 「现在多少钱 / 这段最高最低」，划线是用户自己的记号，价位贴着轴左侧浮在图上，
+    // 右对齐、上下跟着线走；备注牌仍在左端（图上一眼从左边读起）。
+    for (const line of pl) {
+      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) continue;
+      drawLineNote(
+        ctx,
+        priceText(line.price),
+        plotW - 6,
+        y,
+        line.alert ? p.paper : p.onAccent,
+        line.alert ? p.down : p.line,
+        plotW,
+        mainTop,
+        mainBottom,
+        FONT,
+        true,
+      );
+    }
     for (const chip of noteChips) {
       drawLineNote(ctx, chip.text, chip.x, chip.y, chip.fg, chip.bg, plotW, mainTop, mainBottom);
     }
@@ -1027,7 +1059,7 @@ export function KlineCanvas({
       }
     });
 
-    // ── 价格标（最新价 / 十字光标）：贴在右轴上，与线同高；排在校度之后，盖住同高刻度 ──
+    // ── 价格标（最新价 / 极值 / 十字光标）：贴在右轴上，与线同高；排在刻度之后，盖住同高刻度 ──
     const drawBadge = (text: string, centerY: number, bg: string, fg: string) => {
       const w = ctx.measureText(text).width + 8;
       const h = 14;
@@ -1037,18 +1069,19 @@ export function KlineCanvas({
       ctx.fillStyle = fg;
       ctx.fillText(text, plotW + 5, y + h / 2 + 0.5);
     };
-    const priceText = (price: number) =>
-      price.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
-    // 水平线的价格标先画：最新价标后画，同高时由它盖住（行情比画线重要）。
-    // **不在可视区里的线不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
+    // 右轴这一列只放**行情自己**的读数（划线自己的价牌在画布左端，见下面「盖章」那段）。
+    // **不在可视区里的不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
     // 看着像就在那个价上。
-    for (const line of pl) {
-      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
+    // 可见区间的最高 / 最低价：靠那条虚线对回极值那根；最新价后画，同高时由它盖住
+    // （行情本身比注释重要，且那时读数是同一个数）。
+    for (const mark of extremes) {
+      const y = yOf(toFraction(mainR, mark.price), mainTop, mh);
       if (y < mainTop || y > mainBottom) continue;
-      drawBadge(priceText(line.price), y, line.alert ? p.down : p.line, line.alert ? p.paper : p.onAccent);
+      drawBadge(priceText(mark.price), y, p.ink, p.paper);
     }
     if (lastY >= mainTop && lastY <= mainBottom) {
-      drawBadge(priceText(last.close), lastY, p.label, p.paper);
+      // 价签与线同色（涨绿 / 跌红），一眼对得上「这条虚线说的是这个数」
+      drawBadge(priceText(last.close), lastY, lastColor, p.paper);
     }
     if (cross && cross.index >= rs && cross.index <= re && cross.y <= mainBottom) {
       const y = clampNum(cross.y, mainTop, mainBottom);
@@ -1149,42 +1182,6 @@ export function KlineCanvas({
         p,
       );
     });
-
-    // ── 可见区间最高 / 最低的价牌 ──
-    // 挂在极值那一根的影线旁：最高在上方、最低在下方（没地方就翻到另一侧），
-    // 牌面与读数垫同一套（纸色 + 无描边、无阴影）—— 它是浮在图上的一块读数，不是卡片。
-    // 与左上角读数垫**打架时让开**：读数常在、指标越多垫子越高，极值只是辅助信息。
-    const drawExtremeTag = (idx: number, price: number, isHigh: boolean) => {
-      const y = yOf(toFraction(mainR, price), mainTop, mh);
-      if (y < mainTop || y > mainBottom) return;
-      const text = priceText(price);
-      const w = ctx.measureText(text).width + 8;
-      const h = 14;
-      const gap = 3;
-      let left = clampNum(xOf(idx) - w / 2, 2, Math.max(2, plotW - w - 2));
-      let top = isHigh ? y - gap - h : y + gap;
-      if (top < mainTop + 1 || top + h > mainBottom - 1) {
-        top = isHigh ? y + gap : y - gap - h;
-      }
-      top = clampNum(top, mainTop + 1, Math.max(mainTop + 1, mainBottom - h - 1));
-      const overlapsPlate =
-        left < plateX + plateW && left + w > plateX && top < plateY + plateH && top + h > plateY;
-      if (overlapsPlate) {
-        const rightOfPlate = plateX + plateW + 4;
-        left =
-          rightOfPlate + w <= plotW - 2
-            ? rightOfPlate
-            : clampNum(plateX - 4 - w, 2, Math.max(2, plotW - w - 2));
-      }
-      ctx.globalAlpha = 0.9;
-      ctx.fillStyle = p.paper;
-      roundRect(ctx, left, top, w, h, 3);
-      ctx.globalAlpha = 1;
-      ctx.fillStyle = p.label;
-      ctx.fillText(text, left + 4, top + h / 2 + 0.5);
-    };
-    if (hiIdx >= 0) drawExtremeTag(hiIdx, list[hiIdx].high, true);
-    if (loIdx >= 0) drawExtremeTag(loIdx, list[loIdx].low, false);
 
     // ── 「复位」小标 ──
     // 视角一旦被调离默认取景就没法从图上看出来（刻度拖远了 / 往前翻到历史里），
