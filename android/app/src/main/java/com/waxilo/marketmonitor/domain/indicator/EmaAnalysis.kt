@@ -106,6 +106,19 @@ data class EmaAlign(
     val price: BigDecimal get() = BigDecimal.valueOf(level.value)
 }
 
+/**
+ * 一档 EMA 的尾段曲线（面板缩略图用）。
+ *
+ * [closes] 与 [values] 逐点对齐、长度相同 —— 画在同一根纵轴上才看得出
+ * 「价格在均线上方还是下方、均线本身是抬还是压」。
+ */
+class EmaCurve(
+    val interval: CandleInterval,
+    val period: Int,
+    val closes: DoubleArray,
+    val values: DoubleArray,
+)
+
 /** 点了面板里一行之后对告警线该做什么。 */
 sealed interface EmaTick {
     /** 这一档还没有线：新建一条告警线。 */
@@ -151,6 +164,46 @@ object EmaAnalysis {
         val values = Indicators.ema(closes, period)
         return values.lastOrNull() ?: Double.NaN
     }
+
+    /**
+     * 缩略图最多保留的根数（双指缩小的上限）。
+     *
+     * 与桌面端 `EMA_PREVIEW_BARS` 同值：默认只画 120 根，够看出趋势拐点又不至于压成
+     * 一条毛毛虫；想看更长历史再往外捏。
+     */
+    const val PREVIEW_BARS = 240
+
+    /**
+     * 算出一档 EMA 的尾段曲线 —— **与 [lastEma] 同一次递推**，所以表里的值与缩略图右端
+     * 永远对得上。
+     *
+     * 只在窗口起点截取（不拿尾段重算）：EMA 是全历史递推量，重算会得到另一条线。
+     * 开窗可能落在 EMA 还是 NaN 的预热段上（历史刚好够算这一档时），起点往后挪到
+     * 第一个有效值 —— 曲线里混进 NaN 会把整条线画没。
+     */
+    fun curve(
+        interval: CandleInterval,
+        closes: DoubleArray,
+        period: Int,
+        bars: Int = PREVIEW_BARS,
+    ): EmaCurve? {
+        if (closes.isEmpty() || period <= 0) return null
+        val values = Indicators.ema(closes, period)
+        var end = closes.size
+        while (end > 0 && !(values[end - 1].isFinite() && closes[end - 1].isFinite())) end--
+        if (end == 0) return null
+        var start = maxOf(0, end - maxOf(2, bars))
+        while (start < end - 1 && !values[start].isFinite()) start++
+        return EmaCurve(
+            interval = interval,
+            period = period,
+            closes = closes.copyOfRange(start, end),
+            values = values.copyOfRange(start, end),
+        )
+    }
+
+    /** 一档 (周期, 档位) 的稳定键 —— 缩略图缓存用它当 Map 的 key。 */
+    fun curveKey(interval: CandleInterval, period: Int): String = key(interval, period)
 
     /**
      * 与现价比较并分档。

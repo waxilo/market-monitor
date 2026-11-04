@@ -342,4 +342,35 @@ class EmaAnalysisTest {
         val aligned = rules.map { if (it.id == move.ruleId) it.copy(threshold = move.price) else it }
         assertTrue(EmaAnalysis.lineOf(aligned, target)!!.aligned)
     }
+
+    // ---- 缩略图曲线（EmaAnalysis.curve） ----
+
+    private fun wobble(n: Int) = DoubleArray(n) { 100.0 + kotlin.math.sin(it / 7.0) * 5 + it * 0.05 }
+
+    @Test
+    fun `曲线末值与 lastEma 一致且跳过预热段`() {
+        // 60 根算 EMA50：前 49 根是预热段（NaN），窗口起点必须挪到第一个有效值
+        val closes = wobble(60)
+        val curve = EmaAnalysis.curve(m15, closes, 50)!!
+        assertEquals(11, curve.values.size)
+        assertTrue("曲线里不该有 NaN", curve.values.all { it.isFinite() })
+        assertEquals("closes / values 等长", curve.closes.size, curve.values.size)
+        assertEquals(EmaAnalysis.lastEma(closes, 50), curve.values.last(), 1e-9)
+    }
+
+    @Test
+    fun `根数不够算这一档时没有曲线`() {
+        assertNull(EmaAnalysis.curve(m15, wobble(40), 50))
+        assertNull(EmaAnalysis.curve(m15, DoubleArray(0), 20))
+        assertNull(EmaAnalysis.curve(m15, wobble(100), 0))
+    }
+
+    @Test
+    fun `长历史只保留尾段的 PREVIEW_BARS 根`() {
+        val closes = wobble(600)
+        val curve = EmaAnalysis.curve(m15, closes, 26)!!
+        assertEquals(EmaAnalysis.PREVIEW_BARS, curve.values.size)
+        assertEquals(closes.last(), curve.closes.last(), 1e-9)
+        assertEquals(EmaAnalysis.lastEma(closes, 26), curve.values.last(), 1e-9)
+    }
 }

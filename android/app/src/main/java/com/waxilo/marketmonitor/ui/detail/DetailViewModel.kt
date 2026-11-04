@@ -11,6 +11,7 @@ import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_EMA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_MA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.EmaAnalysis
+import com.waxilo.marketmonitor.domain.indicator.EmaCurve
 import com.waxilo.marketmonitor.domain.indicator.EmaFailure
 import com.waxilo.marketmonitor.domain.indicator.EmaLevel
 import com.waxilo.marketmonitor.domain.indicator.EmaLevelRow
@@ -310,6 +311,13 @@ data class EmaAnalysisState(
     val done: Int = 0,
     /** 上次拿到新值的时间（0 = 还没成功过），面板的刷新按钮据此报「上次更新」。 */
     val updatedAt: Long = 0L,
+    /**
+     * 每一档的尾段曲线（缩略图的数据源），键 = `EmaAnalysis.curveKey`。
+     *
+     * 与 [scan] 同源、单独存一份：表只留末值，缩略图要看整段形态。断网时与表同口径地
+     * **沿用上一轮**（见 `refreshEmaAnalysis` 的合并）。
+     */
+    val curves: Map<String, EmaCurve> = emptyMap(),
 )
 
 /**
@@ -970,6 +978,7 @@ class DetailViewModel(
      * 存在这里，关掉再开能立刻看到上次的数值，同时后台静默换成新的。
      */
     private val emaScan = MutableStateFlow(EmaScan())
+    private val emaCurves = MutableStateFlow<Map<String, EmaCurve>>(emptyMap())
     private val emaRefreshing = MutableStateFlow(false)
     private val emaDone = MutableStateFlow(0)
     private val emaUpdatedAt = MutableStateFlow(0L)
@@ -981,8 +990,9 @@ class DetailViewModel(
         emaRefreshing,
         emaDone,
         emaUpdatedAt,
-    ) { scan, refreshing, done, updatedAt ->
-        EmaAnalysisState(scan, refreshing, done, updatedAt)
+        emaCurves,
+    ) { scan, refreshing, done, updatedAt, curves ->
+        EmaAnalysisState(scan, refreshing, done, updatedAt, curves)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EmaAnalysisState())
 
     /**
@@ -1001,6 +1011,7 @@ class DetailViewModel(
             emaJob?.cancel()
             emaJob = null
             emaScan.value = EmaScan()
+            emaCurves.value = emptyMap()
             emaRefreshing.value = false
             emaDone.value = 0
             return
@@ -1016,8 +1027,13 @@ class DetailViewModel(
                     async { scanOneEmaInterval(iv, barCount).also { emaDone.update { n -> n + 1 } } }
                 }.awaitAll()
             }
-            val merged = EmaAnalysis.merge(emaScan.value, tallyEma(outcomes, periods))
+            val tally = tallyEma(outcomes, periods)
+            val merged = EmaAnalysis.merge(emaScan.value, tally.scan)
             emaScan.value = merged
+            // 曲线与表同口径：表里还留着这一档（整段没取回来 / 这轮根数差几根）就沿用上一轮，
+            // 断网时缩略图仍看得出形态；表里已经没了的档位，曲线也一起丢掉
+            val kept = merged.levels.map { EmaAnalysis.curveKey(it.interval, it.period) }.toSet()
+            emaCurves.value = emaCurves.value.filterKeys { it in kept } + tally.curves
             emaUpdatedAt.value = System.currentTimeMillis()
             emaRefreshing.value = false
             // 数值到手：图上的自动线跟着走（与桌面端 onLevels → alignEmaLines 同一时刻）。
@@ -1178,10 +1194,11 @@ class DetailViewModel(
         EmaOutcome.Bad(interval, e.displayMessage())
     }
 
-    private fun tallyEma(outcomes: List<EmaOutcome>, periods: List<Int>): EmaScan {
+    private fun tallyEma(outcomes: List<EmaOutcome>, periods: List<Int>): EmaTally {
         val levels = mutableListOf<EmaLevel>()
         val failures = mutableListOf<EmaFailure>()
         val missing = mutableListOf<EmaMissing>()
+        val curves = mutableMapOf<String, EmaCurve>()
         // 兜底基准取**最细**那个周期：周期越细，最后一根离「此刻」越近
         var finest = Long.MAX_VALUE
         var finestClose = Double.NaN
@@ -1202,9 +1219,12 @@ class DetailViewModel(
                         finestClose = close
                     }
                     for (period in periods) {
-                        val value = EmaAnalysis.lastEma(closes, period)
-                        if (value.isFinite() && value > 0) {
+                        // 曲线与末值出自同一次递推：表里的价与缩略图右端不可能对不上
+                        val curve = EmaAnalysis.curve(outcome.interval, closes, period)
+                        val value = curve?.values?.lastOrNull() ?: Double.NaN
+                        if (curve != null && value.isFinite() && value > 0) {
                             levels += EmaLevel(outcome.interval, period, value)
+                            curves[EmaAnalysis.curveKey(outcome.interval, period)] = curve
                         } else {
                             missing += EmaMissing(outcome.interval, period, closes.size)
                         }
@@ -1212,7 +1232,10 @@ class DetailViewModel(
                 }
             }
         }
-        return EmaScan(levels, failures, missing, emptyList(), finestClose)
+        return EmaTally(
+            scan = EmaScan(levels, failures, missing, emptyList(), finestClose),
+            curves = curves,
+        )
     }
 
     private fun priceLabel(price: BigDecimal): String = PriceFormatter.format(price, state.value.tickSize)
@@ -1609,6 +1632,12 @@ private fun String.toSubPaneKinds(): List<SubPaneKind> {
 private fun List<SubPaneKind>.toSubPaneKeys(): String = joinToString(",") { it.name }
 
 /** 单个周期取数的结果：拿到 K 线，或一句**原样留着**的失败原因（见面板的异常提示）。 */
+/** 一轮扫描的产物：整表 + 每档曲线（缩略图数据源）。 */
+private data class EmaTally(
+    val scan: EmaScan,
+    val curves: Map<String, EmaCurve>,
+)
+
 private sealed interface EmaOutcome {
     data class Ok(val interval: CandleInterval, val bars: List<Kline>) : EmaOutcome
 

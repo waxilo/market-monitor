@@ -1,15 +1,21 @@
 package com.waxilo.marketmonitor.ui.detail
 
+import android.content.res.Configuration
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,8 +33,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -37,9 +45,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -55,6 +69,7 @@ import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.EmaAnalysis
 import com.waxilo.marketmonitor.domain.indicator.EmaBuckets
+import com.waxilo.marketmonitor.domain.indicator.EmaCurve
 import com.waxilo.marketmonitor.domain.indicator.EmaLevelRow
 import com.waxilo.marketmonitor.domain.indicator.EmaLineRef
 import com.waxilo.marketmonitor.domain.indicator.EmaScan
@@ -74,6 +89,7 @@ import com.waxilo.marketmonitor.ui.theme.Radius
 import com.waxilo.marketmonitor.ui.theme.Spacing
 import java.math.BigDecimal
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * EMA 压力支撑分析面板（桌面端 `EmaAnalysisPanel` 的 Android 版）。
@@ -89,24 +105,24 @@ import java.util.Locale
  * - **刷新失败不清表**：哪个周期没取到就沿用上一轮该周期的各档，并在底部点明这些是上次的值。
  * - **失败与「算不出」分开报**：前者是网络/数据源不通（该重试），后者是这个周期取回的根数
  *   不够算这一档（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
- * - **点一行画告警线**：每一行就是一个候选价位，点一下在图上落一条告警线（穿越弹通知），
- *   再点一下取消。面板**不关**，所以可以连着点几道压力位一起画。这条线是普通告警规则
- *   （名字 = `1时EMA50`），面板靠这个名字回显：整行铺一层告警红底 + 左缘一道色条。
- *   EMA 每分钟都在动，所以**每轮刷新都会把这些自动线拉到新值**（见
- *   `DetailViewModel.alignEmaRules` → `EmaAnalysis.alignments`）—— 线是用来看的一道墙，
- *   得长在 EMA 现在的位置上。手画的线一概不动。行内不再写「已画 / 待对齐」：
- *   底色已经把「这条在图上」说清，而 EMA 一动，「待对齐」这种瞬时状态会自己变来变去。
+ * - **点一行 = 选中**：缩略图跟着换成那一档的形态（见下），行铺淡黄底 + 右缘黄条。
+ *   「已画」是另一层状态：已有图上的告警线 → 告警红底 + 左缘红条（两层互不覆盖）。
+ * - **画告警线是缩略图那一栏的按钮**：选中一条后按「画告警线 / 对齐到当前值 / 删除告警线」。
+ *   这条线是普通告警规则（名字 = `1时EMA50`），面板靠这个名字回显。EMA 每分钟都在动，
+ *   所以**每轮刷新都会把这些自动线拉到新值**（见 `DetailViewModel.alignEmaRules` →
+ *   `EmaAnalysis.alignments`）—— 线是用来看的一道墙，得长在 EMA 现在的位置上。
+ *   手画的线一概不动。
  *
- * 版式与桌面端不同：桌面端两列并排（宽屏），这里**竖屏用页签切换**、横屏仍两列。
- * 竖屏一行放不下两列（每列不到 180dp，六个字段会挤成一团）；早先的做法是把两侧叠在一列里
- * （压力倒序在上、现价分隔、支撑正序在下），滚一趟要翻过整张表才能看见另一侧，而且压力有
- * 十几道时「下方支撑」被顶到了屏幕外——用户根本不知道下面还有内容。改成页签后一次只呈现
- * 一侧，两个页签各自带条数，切过去就知道另一侧有几道、不用翻。
+ * 版式：一栏缩略图 + 一栏页签列表。「上方压力 / 下方支撑」两个页签一次只呈现一侧
+ * （早先两侧叠在一列里，压力十几道时支撑被顶到屏幕外）；**竖屏缩略图在上半屏**、
+ * **横屏缩略图在左半屏**（屏高只有 360dp 上下时竖着叠两边都矮）。
  *
- * 排序：**两侧都按「离现价由近到远」**（压力从低到高、支撑从高到低），竖屏页签与横屏
- * 两列一致。原来单列那套「压力倒序」是为了与图的纵轴同向，但表的第一行应当是最有用的
- * 那一条（最近的一道），也与表头写的「最近 X · EMA Y」对得上。全屏（横屏两列）曾为了
- * 「纵向对得上图」把压力倒过来，真机上反而要先滚到最底下才看见最近的一道，已改回原序。
+ * 缩略图：收盘价淡灰 + 这一档 EMA（色槽色）共用一根纵轴，**双指缩放**可见根数
+ * （16 ～ 曲线全长 240，默认 120）、双击复位，「− / ＋」兜底。数据来自
+ * `EmaAnalysisState.curves`（与表同一次递推算出来的尾段）。
+ *
+ * 排序：**两侧都按「离现价由近到远」**（压力从低到高、支撑从高到低）。表的第一行
+ * 应当是最有用的那一条（最近的一道），也与表头写的「最近 X · EMA Y」对得上。
  */
 @Composable
 fun EmaAnalysisSheet(
@@ -122,9 +138,9 @@ fun EmaAnalysisSheet(
     onClearLines: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    // 横屏（全屏看图那一档）屏高只有 360dp 上下：30 行单列要滚很久，改两列并排 ——
-    // 与桌面端的版式一致，也正是「宽大于高」时才划算的排法。
-    val twoColumn = LocalConfiguration.current.screenHeightDp < 480
+    // 横屏：左半屏缩略图、右半屏页签 + 列表（与桌面端同构）；竖屏：上半屏缩略图、下半屏列表。
+    // 判据用**屏幕方向**而不是屏高：MuMu 这类 1080p 横屏设备 heightDp 有 540，按高度会被误判成竖屏。
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     Dialog(
         onDismissRequest = onDismiss,
         // decorFitsSystemWindows = false：让窗口铺到状态栏下面，Surface 的纸色才盖得住
@@ -185,6 +201,32 @@ fun EmaAnalysisSheet(
         val resistanceScroll = rememberLazyListState()
         val supportScroll = rememberLazyListState()
 
+        /**
+         * 当前看的那一档 —— 缩略图跟着它。
+         *
+         * 存（周期 storageKey, 档位）而不是行对象：每分钟刷新都会重建 `EmaLevelRow`，
+         * 存行会让选中项被替换成上一轮的那个快照。没存过 / 那一档已不在当前页签里时，
+         * 落到这一侧**离现价最近**的一条（列表本来就是这么排的），所以切页签、现价穿档
+         * 都能自动跟到一条有效的水位。
+         */
+        var selectedIv by rememberSaveable { mutableStateOf("") }
+        var selectedPeriod by rememberSaveable { mutableStateOf(0) }
+        val sideRows = if (side == Side.RESISTANCE) buckets.resistance else buckets.support
+        val selectedRow = sideRows.firstOrNull {
+            it.interval.storageKey == selectedIv && it.period == selectedPeriod
+        }
+        LaunchedEffect(sideRows, selectedIv, selectedPeriod) {
+            if (selectedRow == null) {
+                sideRows.firstOrNull()?.let {
+                    selectedIv = it.interval.storageKey
+                    selectedPeriod = it.period
+                }
+            }
+        }
+        val selectionKey = selectedRow?.let { lineKey(it.interval, it.period) }.orEmpty()
+        val selectedCurve = selectedRow?.let { analysis.curves[lineKey(it.interval, it.period)] }
+        val selectedLine = selectedRow?.let(refOf)
+
         Surface(modifier = Modifier.fillMaxSize(), color = colors.paper) {
             // 外层 Box 只为一件事：让「操作回执」浮在版面之上。
             // 挂在 Column 里当普通子节点会顶掉 LazyColumn 的高度，列表会跟着跳。
@@ -206,15 +248,16 @@ fun EmaAnalysisSheet(
                     )
                     Rule(inset = Spacing.Gutter)
 
-                    // 页签固定在这一层（不随列表滚）：它同时是「另一侧有几道」的入口，
-                    // 滚到第十几行时还得能看见、还得能切过去。
-                    if (!twoColumn && hasTable) {
-                        SideTabs(
-                            side = side,
-                            buckets = buckets,
-                            onSelect = { picked = if (it == Side.SUPPORT) 1 else 0 },
-                        )
+                    // 选中那一档的色槽（缩略图的 EMA 线用它）
+                    val selectedColor = selectedRow
+                        ?.let { ChartLineColors[maRoleForSlot(MaFamily.EMA, state.emaColors[it.period] ?: 0).ordinal] }
+                        ?: colors.muted
+                    val selectTab: (Side) -> Unit = { picked = if (it == Side.SUPPORT) 1 else 0 }
+                    val selectRow: (EmaLevelRow) -> Unit = {
+                        selectedIv = it.interval.storageKey
+                        selectedPeriod = it.period
                     }
+                    val listState = if (side == Side.RESISTANCE) resistanceScroll else supportScroll
 
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         when {
@@ -236,39 +279,65 @@ fun EmaAnalysisSheet(
 
                             !hasTable -> EmptyHint("所有周期都没能算出 EMA", "原因见下方提示")
 
-                            twoColumn -> Row(modifier = Modifier.fillMaxSize()) {
-                                ColumnColumn(
-                                    rows = buckets.resistance,
-                                    side = Side.RESISTANCE,
-                                    modifier = Modifier.weight(1f),
-                                    state = state,
-                                    refOf = refOf,
-                                    onToggleLine = onToggleLine,
+                            // 横屏：左半屏缩略图、右半屏页签 + 列表
+                            landscape -> Row(modifier = Modifier.fillMaxSize()) {
+                                EmaShapePane(
+                                    row = selectedRow,
+                                    curve = selectedCurve,
+                                    side = side,
+                                    line = selectedLine,
+                                    color = selectedColor,
+                                    tickSize = state.tickSize,
+                                    resetKey = selectionKey,
+                                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                                    onToggle = { selectedRow?.let(onToggleLine) },
                                 )
                                 Box(
                                     modifier = Modifier
                                         .width(1.dp)
-                                        .fillMaxSize()
+                                        .fillMaxHeight()
                                         .background(colors.hairline),
                                 )
-                                ColumnColumn(
-                                    rows = buckets.support,
-                                    side = Side.SUPPORT,
-                                    modifier = Modifier.weight(1f),
-                                    state = state,
-                                    refOf = refOf,
-                                    onToggleLine = onToggleLine,
-                                )
+                                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                                    SideTabs(side = side, buckets = buckets, onSelect = selectTab)
+                                    TabbedColumn(
+                                        side = side,
+                                        rows = sideRows,
+                                        listState = listState,
+                                        state = state,
+                                        refOf = refOf,
+                                        selectedKey = selectionKey,
+                                        onSelect = selectRow,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
                             }
 
-                            else -> TabbedColumn(
-                                side = side,
-                                rows = if (side == Side.RESISTANCE) buckets.resistance else buckets.support,
-                                listState = if (side == Side.RESISTANCE) resistanceScroll else supportScroll,
-                                state = state,
-                                refOf = refOf,
-                                onToggleLine = onToggleLine,
-                            )
+                            // 竖屏：上半屏缩略图、下半屏页签 + 列表
+                            else -> Column(modifier = Modifier.fillMaxSize()) {
+                                EmaShapePane(
+                                    row = selectedRow,
+                                    curve = selectedCurve,
+                                    side = side,
+                                    line = selectedLine,
+                                    color = selectedColor,
+                                    tickSize = state.tickSize,
+                                    resetKey = selectionKey,
+                                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                                    onToggle = { selectedRow?.let(onToggleLine) },
+                                )
+                                SideTabs(side = side, buckets = buckets, onSelect = selectTab)
+                                TabbedColumn(
+                                    side = side,
+                                    rows = sideRows,
+                                    listState = listState,
+                                    state = state,
+                                    refOf = refOf,
+                                    selectedKey = selectionKey,
+                                    onSelect = selectRow,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
                         }
                     }
 
@@ -456,7 +525,7 @@ private fun PriceBlock(base: Double, live: Boolean, tickSize: BigDecimal?) {
     }
 }
 
-/** 竖屏页签：两个页签等宽，各自带条数 —— 切过去之前就知道另一侧有几道。 */
+/** 页签（竖屏在缩略图下方、横屏在右栏顶部）：两个等宽、各带条数 —— 切过去前就知道另一侧有几道。 */
 @Composable
 private fun SideTabs(side: Side, buckets: EmaBuckets, onSelect: (Side) -> Unit) {
     SegmentedControl(
@@ -469,11 +538,13 @@ private fun SideTabs(side: Side, buckets: EmaBuckets, onSelect: (Side) -> Unit) 
 }
 
 /**
- * 竖屏页签里的那一侧。
+ * 当前页签那一侧的条目（竖屏在下半屏、横屏在右半屏，同一份）。
  *
  * 行序直接用 `buckets` 里的原序：压力升序、支撑降序，两者都是**离现价由近到远**，
- * 所以第一条就是最近的一道 —— 与表头「最近 X · EMA Y」说的就是同一行。
- * 横屏两列也是同一个顺序（[ColumnColumn]），两侧互相对称。
+ * 所以第一条就是最近的一道。
+ *
+ * 点一行 = **选中**它（缩略图跟着换）。画线挪到缩略图那一栏的动作按钮 —— 选中与画线
+ * 拆开后，想连着比较几档的形态就不必在图上落一串线了。
  */
 @Composable
 private fun TabbedColumn(
@@ -482,9 +553,11 @@ private fun TabbedColumn(
     listState: LazyListState,
     state: DetailUiState,
     refOf: (EmaLevelRow) -> EmaLineRef?,
-    onToggleLine: (EmaLevelRow) -> Unit,
+    selectedKey: String,
+    onSelect: (EmaLevelRow) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
         item(key = "head") {
             ColumnHead(
                 side = side,
@@ -499,32 +572,8 @@ private fun TabbedColumn(
                 line = refOf(row),
                 side = side,
                 state = state,
-                onToggle = { onToggleLine(row) },
-            )
-        }
-        if (rows.isEmpty()) item(key = "empty") { EmptyRow(side.empty) }
-    }
-}
-
-/** 横屏：两列并排（各自的滚动条），与桌面端同版式、同顺序。 */
-@Composable
-private fun ColumnColumn(
-    rows: List<EmaLevelRow>,
-    side: Side,
-    modifier: Modifier,
-    state: DetailUiState,
-    refOf: (EmaLevelRow) -> EmaLineRef?,
-    onToggleLine: (EmaLevelRow) -> Unit,
-) {
-    LazyColumn(modifier = modifier.fillMaxSize()) {
-        item(key = "head") { ColumnHead(side = side, rows = rows, marked = rows.count { refOf(it) != null }) }
-        items(rows, key = { lineKey(it.interval, it.period) }) { row ->
-            EmaRow(
-                row = row,
-                line = refOf(row),
-                side = side,
-                state = state,
-                onToggle = { onToggleLine(row) },
+                selected = selectedKey == lineKey(row.interval, row.period),
+                onSelect = { onSelect(row) },
             )
         }
         if (rows.isEmpty()) item(key = "empty") { EmptyRow(side.empty) }
@@ -590,10 +639,13 @@ private fun ColumnHead(
 }
 
 /**
- * 一行 = 一个候选价位。整行可点（画 / 对齐 / 取消告警线）。
+ * 一行 = 一个候选价位。整行可点（**选中**它，缩略图跟着换）。
  *
- * 行内的周期小方框**只是标注**，不再可点 —— 点了会切周期并把面板关掉，连画几道
- * 压力位的节奏就被打断（2026-10-30 用户要求撤掉这个跳转）。
+ * 两层状态互不包含：
+ * · 「已画」= 这一档已有图上的告警线：告警红底 + 左缘 3dp 红条；
+ * · 「选中」= 缩略图正在看的那一档：淡黄底 + 右缘 2dp 黄条。
+ *
+ * 行内的周期小方框**只是标注**，不可点 —— 点了会切周期并把面板关掉。
  */
 @Composable
 private fun EmaRow(
@@ -601,22 +653,33 @@ private fun EmaRow(
     line: EmaLineRef?,
     side: Side,
     state: DetailUiState,
-    onToggle: () -> Unit,
+    selected: Boolean,
+    onSelect: () -> Unit,
 ) {
     val colors = MarketTheme.colors
     val slot = state.emaColors[row.period] ?: 0
     val dot = ChartLineColors[maRoleForSlot(MaFamily.EMA, slot).ordinal]
-    val selected = line != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            // 选中 = 这一档已经有图上的告警线：铺一层告警红 + 左缘一道色条。
-            // 旧版用 wash 淡灰几乎看不见，用户要求「一眼看出哪些画过」。
-            .background(if (selected) colors.down.copy(alpha = 0.16f) else Color.Transparent)
+            .clickable(onClick = onSelect)
+            .background(
+                when {
+                    selected -> colors.accent.copy(alpha = 0.16f)
+                    line != null -> colors.down.copy(alpha = 0.16f)
+                    else -> Color.Transparent
+                },
+            )
             .drawBehind {
-                if (selected) {
+                if (line != null) {
                     drawRect(color = colors.down, size = Size(3.dp.toPx(), size.height))
+                }
+                if (selected) {
+                    drawRect(
+                        color = colors.accent,
+                        topLeft = Offset(size.width - 2.dp.toPx(), 0f),
+                        size = Size(2.dp.toPx(), size.height),
+                    )
                 }
             }
             .padding(horizontal = Spacing.Gutter, vertical = 8.dp),
@@ -649,6 +712,273 @@ private fun EmaRow(
             textAlign = TextAlign.End,
             modifier = Modifier.width(54.dp),
             maxLines = 1,
+        )
+    }
+}
+
+/** 缩略图默认可见根数 / 最小根数（上限是曲线全长）。 */
+private const val SHAPE_DEFAULT_BARS = 120
+private const val SHAPE_MIN_BARS = 16
+
+/**
+ * 缩略形态图那一栏（竖屏在上半屏、横屏在左半屏）。
+ *
+ * 收盘价淡灰 + 这一档 EMA（色槽同色），**共用一根纵轴** —— 要看的就是
+ * 「均线相对价格是抬还是压、拐点在哪」，分开归一化会把这条信息抹掉。
+ * 双指缩放可见根数、双击复位；「− / ＋」给没有多指或想微调的场景兜底。
+ * 画线动作也在这里：选中一条 → 按按钮，图上落 / 对齐 / 删掉那条告警线。
+ */
+@Composable
+private fun EmaShapePane(
+    row: EmaLevelRow?,
+    curve: EmaCurve?,
+    side: Side,
+    line: EmaLineRef?,
+    color: Color,
+    tickSize: BigDecimal?,
+    /** 选中的那一档（变化时缩放回到默认值）。 */
+    resetKey: String,
+    modifier: Modifier = Modifier,
+    onToggle: () -> Unit,
+) {
+    val colors = MarketTheme.colors
+    Column(
+        modifier = modifier
+            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs)
+            .clip(RoundedCornerShape(Radius.Sm))
+            .background(colors.surface)
+            .border(1.dp, colors.hairline, RoundedCornerShape(Radius.Sm)),
+    ) {
+        if (row == null || curve == null) {
+            Box(Modifier.fillMaxSize().padding(Spacing.Md), contentAlignment = Alignment.Center) {
+                Text(
+                    text = "点列表里的条目，在这里看它的均线形态",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = colors.muted,
+                    textAlign = TextAlign.Center,
+                )
+            }
+            return@Column
+        }
+        val total = curve.values.size
+        // 0 = 还没手动缩放过（用默认根数）；选中的档换了就回到默认
+        var bars by remember(resetKey) { mutableIntStateOf(0) }
+        val minBars = minOf(SHAPE_MIN_BARS, total)
+        val defaultBars = minOf(SHAPE_DEFAULT_BARS, total)
+        val shown = (if (bars <= 0) defaultBars else bars).coerceIn(minBars, total)
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = Spacing.Sm, end = Spacing.Sm, top = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(7.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "EMA${row.period}",
+                style = MaterialTheme.typography.labelMedium,
+                color = colors.ink,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.width(6.dp))
+            IntervalBadge(row.interval.label)
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = PriceFormatter.formatChange(row.gapPercent),
+                style = MaterialTheme.typography.labelSmall,
+                color = if (side == Side.RESISTANCE) colors.down else colors.up,
+                maxLines = 1,
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Sm),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                text = formatPrice(row.value, tickSize),
+                style = PriceTextStyle,
+                color = colors.ink,
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(Spacing.Xs))
+            Text(
+                text = "${side.title} · 距现价",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+            )
+        }
+        EmaCurveChart(
+            curve = curve,
+            color = color,
+            bars = shown,
+            onZoom = { scale ->
+                val cur = if (bars <= 0) defaultBars else bars
+                bars = (cur / scale).roundToInt().coerceIn(minBars, total)
+            },
+            onReset = { bars = 0 },
+            modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LegendSwatch(color = colors.muted.copy(alpha = 0.5f), text = "收盘")
+            Spacer(Modifier.width(Spacing.Xs))
+            LegendSwatch(color = color, text = "EMA")
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "$shown / $total 根",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.muted,
+                maxLines = 1,
+            )
+            Spacer(Modifier.width(Spacing.Xs))
+            ZoomButton(text = "−", enabled = shown > minBars) {
+                bars = (shown * 1.6f).roundToInt().coerceIn(minBars, total)
+            }
+            Spacer(Modifier.width(4.dp))
+            ZoomButton(text = "＋", enabled = shown < total) {
+                bars = (shown / 1.6f).roundToInt().coerceIn(minBars, total)
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Spacing.Sm, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = when {
+                    line == null -> "图上未画告警线"
+                    line.aligned -> "图上已画 ${formatPrice(line.price, tickSize)}"
+                    else ->
+                        "图上已画 ${formatPrice(line.price, tickSize)}（偏离 ${
+                            PriceFormatter.formatChange(((line.price - row.value) / row.value) * 100)
+                        }）"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = if (line != null && !line.aligned) colors.down else colors.muted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            TextAction(
+                text = when {
+                    line == null -> "画告警线"
+                    line.aligned && line.enabled -> "删除告警线"
+                    else -> "对齐到当前值"
+                },
+                onClick = onToggle,
+                color = colors.ink,
+                style = InlineActionStyle,
+            )
+        }
+    }
+}
+
+/** 图例小横线 + 名字（收盘 / EMA）。 */
+@Composable
+private fun LegendSwatch(color: Color, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(width = 8.dp, height = 2.dp).background(color))
+        Spacer(Modifier.width(3.dp))
+        Text(text = text, style = MaterialTheme.typography.labelSmall, color = MarketTheme.colors.muted)
+    }
+}
+
+/** 缩略图的「− / ＋」：给没有多指（或想一格一格调）的场景兜底。 */
+@Composable
+private fun ZoomButton(text: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = MarketTheme.colors
+    Box(
+        modifier = Modifier
+            .size(26.dp)
+            .clip(CircleShape)
+            .background(if (enabled) colors.wash else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (enabled) colors.ink else colors.muted,
+        )
+    }
+}
+
+/**
+ * 缩略形态图本体：收盘（淡灰）+ EMA（色槽色），共用一根纵轴；
+ * 双指缩放改**可见根数**（右端始终贴着最新一根），双击复位。
+ */
+@Composable
+private fun EmaCurveChart(
+    curve: EmaCurve,
+    color: Color,
+    /** 当前可见根数（已按上下限夹过）。 */
+    bars: Int,
+    onZoom: (Float) -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MarketTheme.colors
+    val total = curve.values.size
+    val n = bars.coerceIn(1, total)
+    val start = total - n
+    Canvas(
+        modifier = modifier
+            // 只按 curve 重启手势：bars 一变就重启会把正在捏的这根手指打断
+            .pointerInput(curve) {
+                detectTransformGestures { _, _, zoom, _ ->
+                    if (zoom > 0f && zoom != 1f) onZoom(zoom)
+                }
+            }
+            .pointerInput(curve) {
+                detectTapGestures(onDoubleTap = { onReset() })
+            },
+    ) {
+        if (n < 2) return@Canvas
+        val padX = 2.dp.toPx()
+        val padY = 6.dp.toPx()
+        var lo = Double.MAX_VALUE
+        var hi = -Double.MAX_VALUE
+        for (i in start until total) {
+            val v = curve.values[i]
+            val c = curve.closes[i]
+            if (v < lo) lo = v
+            if (v > hi) hi = v
+            if (c < lo) lo = c
+            if (c > hi) hi = c
+        }
+        val span = (hi - lo).takeIf { it > 0 } ?: 1.0
+        val plotW = (size.width - padX * 2).coerceAtLeast(1f)
+        val plotH = (size.height - padY * 2).coerceAtLeast(1f)
+        val xAt = { i: Int -> padX + (i - start).toFloat() / (n - 1).toFloat() * plotW }
+        val yAt = { v: Double -> (padY + plotH - ((v - lo) / span * plotH)).toFloat() }
+
+        val closes = Path()
+        val ema = Path()
+        for (i in start until total) {
+            val x = xAt(i)
+            if (i == start) {
+                closes.moveTo(x, yAt(curve.closes[i]))
+                ema.moveTo(x, yAt(curve.values[i]))
+            } else {
+                closes.lineTo(x, yAt(curve.closes[i]))
+                ema.lineTo(x, yAt(curve.values[i]))
+            }
+        }
+        drawPath(
+            path = closes,
+            color = colors.muted.copy(alpha = 0.45f),
+            style = Stroke(width = 1.dp.toPx(), join = StrokeJoin.Round),
+        )
+        drawPath(
+            path = ema,
+            color = color,
+            style = Stroke(width = 1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+        drawCircle(
+            color = color,
+            radius = 2.5.dp.toPx(),
+            center = Offset(xAt(total - 1), yAt(curve.values[total - 1])),
         )
     }
 }
