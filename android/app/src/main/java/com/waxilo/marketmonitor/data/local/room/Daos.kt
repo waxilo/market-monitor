@@ -46,6 +46,10 @@ interface InstrumentDao {
     @Query("SELECT COUNT(*) FROM instrument WHERE market = :market")
     suspend fun count(market: String): Int
 
+    /** 最近一次清单同步的时间戳；没有数据时为 null。 */
+    @Query("SELECT MAX(syncedAt) FROM instrument WHERE market = :market")
+    suspend fun latestSyncedAt(market: String): Long?
+
     /** 下架标的清理：本轮同步时间戳早于上次同步即视为已消失。 */
     @Query("DELETE FROM instrument WHERE market = :market AND syncedAt < :before")
     suspend fun deleteStale(market: String, before: Long)

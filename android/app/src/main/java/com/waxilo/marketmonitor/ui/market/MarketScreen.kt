@@ -62,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.SymbolId
@@ -102,6 +103,12 @@ fun MarketScreen(
     viewModel: MarketViewModel = appViewModel { MarketViewModel(it) },
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    // 只在首页真正可见时轮询：进详情/搜索/切 tab 后停掉，不在后台和详情页抢限频预算。
+    LifecycleResumeEffect(viewModel) {
+        viewModel.onScreenVisible()
+        onPauseOrDispose { viewModel.onScreenHidden() }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         AppBar(

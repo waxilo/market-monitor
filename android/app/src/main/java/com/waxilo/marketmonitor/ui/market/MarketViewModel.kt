@@ -78,11 +78,14 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
     private val tab = MutableStateFlow(MarketTab.WATCHLIST)
     private val flags = MutableStateFlow(Flags())
 
-    /** 交易规则每个市场只需同步一次，重复请求只是白耗权重。 */
-    private val syncedMarkets = mutableSetOf<MarketType>()
-
-    /** 定时自动拉取 24h 快照的任务：列表价格的主要更新通道（WS 已移除）。 */
+    /**
+     * 定时自动拉取 24h 快照的任务：列表价格的主要更新通道（WS 已移除）。
+     * 只在首页可见时运行 —— 进详情 / 切页后继续轮询会和详情页抢同一个限频预算。
+     */
     private var autoRefreshJob: Job? = null
+
+    /** 是否已经历过一次可见：区分「首次显示」与「从详情返回」，后者要立刻补一拍。 */
+    private var hasBeenVisible = false
 
     /** 串行化拖动排序的落库（见 [moveWatch] 的说明）。 */
     private val reorderMutex = Mutex()
@@ -177,8 +180,8 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
             selectMarket(settings.defaultMarket)
             // selectMarket 在市场未变化时会提前返回（默认市场 SPOT == activeMarket SPOT），
             // 导致冷启动后 never 拉数据、界面停留在初始 loading。这里补一次首次加载。
+            // 后续定时轮询由页面生命周期驱动（见 onScreenVisible）。
             refresh()
-            startAutoRefresh()
         }
         // 自选集合或市场一变走势线就要重算（新增的标的还没画过线）
         viewModelScope.launch {
@@ -195,14 +198,11 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
             }
         }
         // 手动切换现货源（币安 / Gate）：容器清了现货缓存，首页停在同一市场时重载。
-        // 同时让下一次 refresh 重新同步清单 —— 容器那次失败时还有一次自愈机会。
         viewModelScope.launch {
             container.spotSourceChanges.collect {
                 lastTickers.clear()
                 trends.value = emptyMap()
-                // 清单由容器在切换时统一重同步；这里只拉报价，别把首屏价格排在 1MB 清单后面。
-                // 标记放开是为了容器那次同步失败时，用户手动刷新还能再试一次。
-                syncedMarkets.remove(MarketType.SPOT)
+                // 清单由容器在切换时统一重同步；这里只拉报价，别把首屏价格排在清单后面。
                 if (activeMarket.value == MarketType.SPOT) {
                     viewModelScope.launch {
                         repository.refreshTickers(MarketType.SPOT)
@@ -261,16 +261,17 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    /** 下拉/点击刷新：先补交易规则，再拉 24h 快照。 */
+    /**
+     * 下拉/点击刷新：先拉 24h 快照，交易规则清单在后台补。
+     *
+     * 清单是现货最大的一类响应（币安解压后约 18MB），不能挡在首屏价格前面；
+     * 仓库层有 TTL，命中时这次后台补只是一次本地查询，不会真的发请求。
+     */
     fun refresh() {
+        val market = activeMarket.value
         viewModelScope.launch {
-            val market = activeMarket.value
             flags.update { it.copy(refreshing = true, error = null) }
             try {
-                if (market !in syncedMarkets) {
-                    repository.syncInstruments(market)
-                    syncedMarkets += market
-                }
                 repository.refreshTickers(market)
                 flags.update { it.copy(offline = repository.isStale(market)) }
                 // K 线缓存可能刚被详情页写入，顺手刷新走势线
@@ -283,6 +284,34 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
                 flags.update { it.copy(refreshing = false, loading = false) }
             }
         }
+        viewModelScope.launch {
+            // 让首轮报价先拿到限频额度，再补清单
+            delay(INSTRUMENT_SYNC_DELAY_MS)
+            try {
+                repository.syncInstruments(market)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 清单没拉下来不致命：报价不依赖它，下次刷新还会再试
+            }
+        }
+    }
+
+    /**
+     * 首页可见性回调：只在页面真正可见时轮询。
+     *
+     * 离开首页（进详情 / 进搜索 / 切 tab）后继续 1 秒一轮，会和详情页共用同一个
+     * 现货限频预算 —— Gate 只有 160 次 / 10 秒，详情页的 K 线会被自选报价挤到后面。
+     * 从详情返回时先立刻补一拍，再恢复定时器。
+     */
+    fun onScreenVisible() {
+        // 首次显示时 init 里的 refresh() 已经拉过一轮；从详情/其他 tab 返回时立刻补一拍。
+        startPolling(immediate = hasBeenVisible)
+        hasBeenVisible = true
+    }
+
+    fun onScreenHidden() {
+        stopPolling()
     }
 
     /**
@@ -290,10 +319,10 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
      * 让价格随定时器自动变动，无需手动刷新。
      * 不置 refreshing，避免与下拉刷新的指示器互相干扰。
      */
-    private fun startAutoRefresh(refreshMs: Long = AUTO_REFRESH_MS) {
-        autoRefreshJob?.cancel()
+    private fun startPolling(refreshMs: Long = AUTO_REFRESH_MS, immediate: Boolean = false) {
+        if (autoRefreshJob?.isActive == true) return
         autoRefreshJob = viewModelScope.launch {
-            delay(refreshMs)
+            if (!immediate) delay(refreshMs)
             while (isActive) {
                 val market = activeMarket.value
                 try {
@@ -309,6 +338,11 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
                 delay(refreshMs)
             }
         }
+    }
+
+    private fun stopPolling() {
+        autoRefreshJob?.cancel()
+        autoRefreshJob = null
     }
 
     private fun MarketTicker.toRow(source: Source, watched: Set<SymbolId>): TickerRow {
@@ -352,6 +386,9 @@ class MarketViewModel(private val container: AppContainer) : ViewModel() {
  * 还会逼近它「200 次 / 10 秒」的公开限频。1 秒仍是「价格在动」的观感，负载减半。
  */
 private const val AUTO_REFRESH_MS = 1_000L
+
+/** 首屏先报价格，清单延后这么久再补（TTL 命中时只是一次本地查询，不会发请求）。 */
+private const val INSTRUMENT_SYNC_DELAY_MS = 1_500L
 
 /** 迷你走势线的取数周期与根数：24 根 1h = 最近一天，正好对应列表展示的 24h 涨跌。 */
 private val SPARKLINE_INTERVAL: CandleInterval = CandleInterval.of(OfficialInterval.H1)

@@ -12,7 +12,9 @@ import com.waxilo.marketmonitor.domain.model.MarketType
 import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SpotSource
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import okhttp3.Call
@@ -261,7 +263,11 @@ class BinanceMarketApi(
         }
         val adapter = spotAdapter
         val text = getSpot(adapter.exchangeInfoPath(), weight = 20)
-        val all = parseSpot("交易对清单") { adapter.parseExchangeInfo(text) }
+        // 清单解压后可达十几 MB（币安约 18MB），JSON 树构建是纯 CPU，
+        // 留在主线程会把首屏和图表卡住；解析完再回到原上下文。
+        val all = withContext(Dispatchers.Default) {
+            parseSpot("交易对清单") { adapter.parseExchangeInfo(text) }
+        }
         return symbol?.let { s -> all.filter { it.id.symbol == s } } ?: all
     }
 
@@ -308,7 +314,9 @@ class BinanceMarketApi(
             adapter.klinesPath(symbol, minutes, capped, startTime, endTime),
             weight = klineWeight(capped),
         )
-        return parseSpot("K 线") { adapter.parseKlines(text, minutes) }
+        return withContext(Dispatchers.Default) {
+            parseSpot("K 线") { adapter.parseKlines(text, minutes) }
+        }
     }
 
     private fun klineWeight(limit: Int): Int = when {

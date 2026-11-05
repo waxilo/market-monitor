@@ -36,6 +36,17 @@ import java.io.IOException
 private const val TICKER_TIMEOUT_MS = 8_000L
 
 /**
+ * 交易对清单的最长复用时长。
+ *
+ * 现货清单是最大的一类响应（币安解压后约 18MB），而 tick 位 / 报价币这些元数据
+ * 在几小时内不会变。冷启动与每次进详情都重拉，既把首屏价格排在十几 MB 的解析后面，
+ * 又白占一次限频预算；命中 TTL 时只做一次本地查询。
+ *
+ * 切源会先清空清单（count = 0），所以换源仍然会强制重新同步。
+ */
+private const val INSTRUMENT_TTL_MS = 6 * 60 * 60_000L
+
+/**
  * 行情仓库（PRD 3.2）。编排规则：
  * - 列表快照：REST 拉自选交易对 → Room；UI 通过 [tickerDao] 的 Room 流拿到更新。
  *   （WS 链路已整体移除：代理/弱网下 WS 长连接反而不如短请求稳。）
@@ -51,6 +62,14 @@ class MarketRepositoryImpl(
 ) : MarketRepository {
 
     override suspend fun syncInstruments(market: MarketType): Int {
+        val cachedCount = instrumentDao.count(market.key)
+        val cachedAt = instrumentDao.latestSyncedAt(market.key)
+        // 清单命中 TTL 就不再发请求：详情页每次打开都会调到这里，不能每次都重下十几 MB
+        if (cachedCount > 0 && cachedAt != null &&
+            System.currentTimeMillis() - cachedAt < INSTRUMENT_TTL_MS
+        ) {
+            return cachedCount
+        }
         val syncedAt = System.currentTimeMillis()
         val instruments = api.exchangeInfo(market)
         instrumentDao.upsertAll(instruments.map { it.toEntity(syncedAt) })

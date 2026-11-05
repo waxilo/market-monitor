@@ -671,7 +671,8 @@ class DetailViewModel(
                 reloadToken.update { it + 1 }
             }
         }
-        // 交易规则决定显示位数；首启可能还没落库，失败留给刷新兜底
+        // 交易规则决定显示位数；清单有 TTL，命中时这里只是一次本地查询，
+        // 只有首次进入 / 清单过期才会真的发请求（首页与搜索页会提前补上）。
         viewModelScope.launch { runCatching { repository.syncInstruments(id.market) } }
         // 报价头来自 ticker 流（Room 缓存视图）；未加自选的标的没人替它刷新，
         // 页面存活期间自己轮询单标的快照（weight 1），否则顶部永远挂着进页时的旧价
