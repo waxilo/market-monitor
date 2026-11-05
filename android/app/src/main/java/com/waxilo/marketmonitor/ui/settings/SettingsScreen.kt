@@ -48,7 +48,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.waxilo.marketmonitor.domain.model.FuturesEndpoint
 import com.waxilo.marketmonitor.domain.model.FuturesEndpoints
 import com.waxilo.marketmonitor.domain.model.SpotSource
 import com.waxilo.marketmonitor.domain.repository.ThemeMode
@@ -136,112 +135,9 @@ fun SettingsScreen(
             }
 
             item {
-                Section(title = "现货行情接口") {
-                    SegmentRow("数据源") {
-                        SegmentedControl(
-                            options = SpotSource.entries.toList(),
-                            selected = state.spotSource,
-                            labelOf = { it.label.removeSuffix("现货") },
-                            onSelect = viewModel::setSpotSource,
-                            fillWidth = false,
-                        )
-                    }
-                    Text(
-                        text = "${state.spotSource.primaryHost} · ${state.spotSource.note}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MarketTheme.colors.muted,
-                        modifier = Modifier.padding(
-                            start = Spacing.Gutter,
-                            end = Spacing.Gutter,
-                            bottom = Spacing.Xs,
-                        ),
-                    )
-                    Rule()
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "测速",
-                            modifier = Modifier.weight(1f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MarketTheme.colors.ink,
-                        )
-                        TextAction(
-                            text = if (state.spotProbing.isEmpty()) "检测全部" else "检测中…",
-                            onClick = viewModel::detectSpotSources,
-                            color = MarketTheme.colors.muted,
-                        )
-                    }
-                    SpotSource.entries.forEach { source ->
-                        val probing = source in state.spotProbing
-                        val outcome = state.spotProbeResults[source]
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = Spacing.Gutter, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                text = source.label,
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MarketTheme.colors.muted,
-                            )
-                            if (probing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MarketTheme.colors.muted,
-                                )
-                            } else {
-                                when (outcome) {
-                                    is ProbeOutcome.Reachable -> StatusPill(
-                                        text = "${outcome.latencyMs}ms",
-                                        tone = PillTone.Positive,
-                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
-                                    )
-                                    is ProbeOutcome.Failed -> StatusPill(
-                                        text = outcome.reason,
-                                        tone = PillTone.Negative,
-                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
-                                    )
-                                    null -> StatusPill(
-                                        text = "未检测",
-                                        tone = PillTone.Neutral,
-                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
-                                    )
-                                }
-                                TextAction(
-                                    text = "重测",
-                                    onClick = { viewModel.probeSpot(source) },
-                                    color = MarketTheme.colors.muted,
-                                )
-                            }
-                        }
-                    }
-                    Text(
-                        text = "移动网络下币安经常连不上或被墙，表现为「一直在加载」；这时切到 Gate 通常能直连。" +
-                            "测速会并行探测该源的整条域名链（币安 6 个镜像），结果只对当前网络有效，换网络或代理后请重新检测。" +
-                            "切换会清空现货缓存并重新同步交易对 —— 自选、预警按交易对保留，新源没有的标的会显示为暂无数据。" +
-                            "现货与合约的限频互不影响。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MarketTheme.colors.muted,
-                        modifier = Modifier.padding(
-                            start = Spacing.Gutter,
-                            end = Spacing.Gutter,
-                            bottom = Spacing.Sm,
-                        ),
-                    )
-                    Rule()
-                }
-            }
-
-            item {
-                Section(title = "合约行情接口") {
-                    val current = FuturesEndpoints.of(state.futuresHost)
+                Section(title = "行情数据源") {
+                    val spot = state.spotSource
+                    val futures = FuturesEndpoints.of(state.futuresHost)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -251,12 +147,12 @@ fun SettingsScreen(
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = current.label,
+                                text = "数据源",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MarketTheme.colors.ink,
                             )
                             Text(
-                                text = "${current.baseUrl.removePrefix("https://")} · ${current.note}",
+                                text = "${spot.label} · ${futures.label}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MarketTheme.colors.muted,
                                 maxLines = 1,
@@ -264,10 +160,13 @@ fun SettingsScreen(
                             )
                         }
                         Spacer(Modifier.width(Spacing.Sm))
-                        TextAction("更换 / 检测", onClick = { sourcePickerOpen = true })
+                        TextAction("查看 / 测速", onClick = { sourcePickerOpen = true })
                     }
                     Text(
-                        text = "候选接口在弹窗里并行实测连通性与延迟，点一行即切换；切换会清空合约缓存并重新同步交易对。",
+                        text = "现货与永续合约分别选择；弹窗打开即并行测速，点一行即切换。" +
+                            "测速结果只对当前网络有效，换网络或代理后请重新检测。" +
+                            "现货切换会清空现货缓存，合约切换会清空合约缓存并重新同步交易对；" +
+                            "自选、预警按交易对保留，新源没有的标的会显示为暂无数据。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -284,11 +183,11 @@ fun SettingsScreen(
                     )
                     Text(
                         text = if (state.autoFuturesSource) {
-                            "已开启：当前接口请求失败、或响应超过 500ms 时并行测速 —— 失败就切到最先响应的可用源，" +
+                            "已开启：当前合约接口请求失败、或响应超过 500ms 时并行测速 —— 失败就切到最先响应的可用源，" +
                                 "只是慢则仅当候选明显更快才切，避免来回跳源。换源会清空合约缓存并重拉。"
                         } else {
-                            "已关闭（默认）：只按上面选定的接口取数，失败或变慢都不会自己换源 —— " +
-                                "要换请回来手动点选。"
+                            "已关闭（默认）：只按你选定的合约接口取数，失败或变慢都不会自己换源 —— " +
+                                "要换请打开数据源弹窗手动点选。"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
@@ -433,7 +332,7 @@ fun SettingsScreen(
             item {
                 Section(title = "关于") {
                     Text(
-                        text = "行情监控 · 现货行情来自 ${state.spotSource.label}；永续合约行情来自上方选定的 ${FuturesEndpoints.of(state.futuresHost).label}。本应用不构成投资建议。",
+                        text = "行情监控 · 现货行情来自 ${state.spotSource.label}；永续合约行情来自数据源弹窗里选定的 ${FuturesEndpoints.of(state.futuresHost).label}。本应用不构成投资建议。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MarketTheme.colors.muted,
                         modifier = Modifier.padding(
@@ -446,14 +345,19 @@ fun SettingsScreen(
         }
 
         if (sourcePickerOpen) {
-            FuturesSourcePickerDialog(
+            DataSourcePickerDialog(
                 state = state,
-                onSelect = { url ->
+                onSelectSpot = { source ->
+                    viewModel.setSpotSource(source)
+                    sourcePickerOpen = false
+                },
+                onSelectFutures = { url ->
                     viewModel.setFuturesHost(url)
                     sourcePickerOpen = false
                 },
-                onDetectAll = viewModel::detectEndpoints,
-                onProbeOne = viewModel::probeOne,
+                onDetectAll = viewModel::detectAllSources,
+                onProbeSpot = viewModel::probeSpot,
+                onProbeFutures = viewModel::probeOne,
                 onDismiss = { sourcePickerOpen = false },
             )
         }
@@ -461,18 +365,20 @@ fun SettingsScreen(
 }
 
 /**
- * 合约行情接口选择弹窗。
+ * 数据源弹窗：现货 + 永续合约。
  *
- * 候选有 12 个，且连通性强依赖本机当前网络（代理/地区差异极大），平铺在设置页里
- * 只会把页面撑成一长列按钮。这里收进全屏弹窗：打开即**一次性并行**发起全部探测，
- * 每行独立回填自己的结论——哪个先回来哪个先亮，不排队等待。点一行即选定并关闭。
+ * 两边都是「在本机并行测速后点选」：候选数量多、连通性又强依赖当前网络（代理/地区），
+ * 平铺在设置页里只会把页面撑成一长列。收进全屏弹窗后，打开即**一次性并行**发起
+ * 现货与合约的全部探测，每行独立回填自己的结论——哪个先回来哪个先亮；点一行即选定并关闭。
  */
 @Composable
-private fun FuturesSourcePickerDialog(
+private fun DataSourcePickerDialog(
     state: SettingsUiState,
-    onSelect: (String) -> Unit,
+    onSelectSpot: (SpotSource) -> Unit,
+    onSelectFutures: (String) -> Unit,
     onDetectAll: () -> Unit,
-    onProbeOne: (String) -> Unit,
+    onProbeSpot: (SpotSource) -> Unit,
+    onProbeFutures: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -487,6 +393,7 @@ private fun FuturesSourcePickerDialog(
         // 单行「重测」不抢视口（用户正盯着那一行看结果，key 锚定会自然把那条留在原地）。
         val listState = rememberLazyListState()
         var pinToTop by remember { mutableStateOf(true) }
+        val anyProbing = state.probing || state.spotProbing.isNotEmpty()
 
         Column(
             modifier = Modifier
@@ -496,13 +403,13 @@ private fun FuturesSourcePickerDialog(
                 .navigationBarsPadding(),
         ) {
             AppBar(
-                title = "合约行情接口",
-                subtitle = "K 线 / 24h 行情来源 · 切换后清空合约缓存",
+                title = "数据源",
+                subtitle = "现货与永续合约 · 切换后清空对应缓存",
                 large = false,
                 onBack = onDismiss,
                 actions = {
                     TextAction(
-                        text = if (state.probing) "检测中…" else "全部重新检测",
+                        text = if (anyProbing) "检测中…" else "全部重新检测",
                         // 又是一轮批量检测 → 重新接管视口（若上一轮点过单行「重测」）
                         onClick = {
                             pinToTop = true
@@ -513,11 +420,11 @@ private fun FuturesSourcePickerDialog(
             )
             Text(
                 text = "检测结果只对当前网络有效，换个网络环境（如开关代理）请重新检测。" +
+                    "现货与合约是两条独立的限频/封禁线。" +
                     if (state.autoFuturesSource) {
-                        "当前源请求失败或响应超过 500ms 时会自动测速：失败时切到最先响应的可用源，" +
-                            "只是响应慢时仅当候选明显更快才切换，避免来回跳源。"
+                        "合约自动选择已开启：当前源失败或响应超过 500ms 时会自动测速换源。"
                     } else {
-                        "自动选择接口当前关闭：只按你选定的这一家取数，不会自己换源。"
+                        "合约自动选择当前关闭：只按你选定的这一家取数，不会自己换源。"
                     },
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
@@ -525,14 +432,18 @@ private fun FuturesSourcePickerDialog(
             )
             Rule()
 
-            val fastest = state.probeResults.values
+            val fastestSpot = state.spotProbeResults.values
+                .filterIsInstance<ProbeOutcome.Reachable>()
+                .minByOrNull { it.latencyMs }
+                ?.latencyMs
+            val fastestFutures = state.probeResults.values
                 .filterIsInstance<ProbeOutcome.Reachable>()
                 .minByOrNull { it.latencyMs }
                 ?.latencyMs
 
-            // 整体按检测结论排序：能连的按延迟升序在最上面，连不上的沉底，未检测其次。
+            // 合约整体按检测结论排序：能连的按延迟升序在最上面，连不上的沉底，未检测其次。
             // 探测结果逐条回填，快的域自然先浮上来，不被最慢的域拖住。
-            // 规则本体在 ProbeOrdering（纯函数，有单测）。
+            // 规则本体在 ProbeOrdering（纯函数，有单测）。现货只有两家，保持固定顺序。
             val ordered = remember(state.probeResults) {
                 ProbeOrdering.of(FuturesEndpoints.ALL, state.probeResults)
             }
@@ -550,20 +461,39 @@ private fun FuturesSourcePickerDialog(
                 contentPadding = PaddingValues(horizontal = Spacing.Sm, vertical = Spacing.Xs),
                 verticalArrangement = Arrangement.spacedBy(Spacing.Xs),
             ) {
+                item(key = "group-spot") { SourceGroupHeader("现货") }
+                items(SpotSource.entries, key = { "spot:${it.key}" }) { source ->
+                    SourceRow(
+                        label = source.label,
+                        subtitle = "${source.primaryHost} · ${source.note}",
+                        selected = source == state.spotSource,
+                        probing = source in state.spotProbing,
+                        outcome = state.spotProbeResults[source],
+                        isFastest = fastestSpot != null &&
+                            (state.spotProbeResults[source] as? ProbeOutcome.Reachable)?.latencyMs == fastestSpot,
+                        onSelect = { onSelectSpot(source) },
+                        onProbeOne = {
+                            pinToTop = false
+                            onProbeSpot(source)
+                        },
+                    )
+                }
+                item(key = "group-futures") { SourceGroupHeader("永续合约") }
                 items(ordered, key = { it.baseUrl }) { endpoint ->
-                    FuturesSourceRow(
-                        endpoint = endpoint,
+                    SourceRow(
+                        label = endpoint.label,
+                        subtitle = "${endpoint.baseUrl.removePrefix("https://")} · ${endpoint.note}",
                         selected = endpoint.baseUrl == state.futuresHost,
                         probing = endpoint.baseUrl in state.probingUrls,
                         outcome = state.probeResults[endpoint.baseUrl],
-                        isFastest = fastest != null &&
-                            (state.probeResults[endpoint.baseUrl] as? ProbeOutcome.Reachable)?.latencyMs == fastest,
+                        isFastest = fastestFutures != null &&
+                            (state.probeResults[endpoint.baseUrl] as? ProbeOutcome.Reachable)?.latencyMs == fastestFutures,
                         onSelect = {
-                            onSelect(endpoint.baseUrl)
+                            onSelectFutures(endpoint.baseUrl)
                         },
                         onProbeOne = {
                             pinToTop = false
-                            onProbeOne(endpoint.baseUrl)
+                            onProbeFutures(endpoint.baseUrl)
                         },
                     )
                 }
@@ -571,6 +501,17 @@ private fun FuturesSourcePickerDialog(
             }
         }
     }
+}
+
+/** 弹窗里的分组标题（现货 / 永续合约）：与卡片拉开层次，不抢注意力。 */
+@Composable
+private fun SourceGroupHeader(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = MarketTheme.colors.muted,
+        modifier = Modifier.padding(start = Spacing.Xs, top = Spacing.Sm, bottom = Spacing.Xxs),
+    )
 }
 
 /**
@@ -598,8 +539,9 @@ private val ProbePillMaxWidth = 112.dp
  * （[Spacing.Gutter]），与这一页其它行的文字左沿对齐，卡片化没有把正文往右推。
  */
 @Composable
-private fun FuturesSourceRow(
-    endpoint: FuturesEndpoint,
+private fun SourceRow(
+    label: String,
+    subtitle: String,
     selected: Boolean,
     probing: Boolean,
     outcome: ProbeOutcome?,
@@ -623,14 +565,14 @@ private fun FuturesSourceRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = endpoint.label,
+                text = label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.ink,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = "${endpoint.baseUrl.removePrefix("https://")} · ${endpoint.note}",
+                text = subtitle,
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
                 maxLines = 1,

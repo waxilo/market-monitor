@@ -174,6 +174,12 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** 数据源弹窗打开/「全部重新检测」：现货与合约一起并行探测。 */
+    fun detectAllSources() {
+        detectEndpoints()
+        detectSpotSources()
+    }
+
     /** 现货「检测全部」：两家并行探测，各自回来各自回填。 */
     fun detectSpotSources() {
         SpotSource.entries

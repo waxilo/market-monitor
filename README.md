@@ -18,7 +18,7 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除；关注列表报价**并发**刷新、单标的 8 秒超时，断网时一轮不会被串行超时拖住；**交易对清单 6 小时 TTL 复用**、JSON 解析在 Default 线程；列表轮询只随首页可见性启停，进详情后不再和详情页抢限频） | `data/remote`、`data/local` | 已实现 |
-| App 端现货多数据源（币安 / Gate，设置页点选即切换、可逐源测速——并行探测该源整条域名链取最快一条，5 秒不响应判超时；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试；**换网 / 开关 VPN 时整份记忆作废并清空连接池**，不靠重启恢复） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`data/remote/SpotHostHealth.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
+| App 端现货多数据源（币安 / Gate；设置页只有一个「数据源」入口，弹窗内现货与永续合约一起测速点选——现货并行探测该源整条域名链取最快一条，5 秒不响应判超时；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试；**换网 / 开关 VPN 时整份记忆作废并清空连接池**，不靠重启恢复） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`data/remote/SpotHostHealth.kt`、`data/remote/BinanceMarketApi.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，弹窗里切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
 | 合约行情多接口（9 个候选：Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力；Bitunix 也已下线（REST K 线只回已收盘蜡烛，图上最后一根永远落后一个周期） |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
