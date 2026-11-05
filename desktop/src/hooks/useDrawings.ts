@@ -95,7 +95,7 @@ export interface DrawingsApi {
    *
    * 与上面那些「一次改一个字段」的接口并列，专供**一次改动同时改好几个字段**的场合：
    * EMA 分析面板点一下会同时改价位 / 告警 / 来源 / 备注，逐条调用会落中间态存档
-   * （见 `lib/emaAnalysis.applyEmaLine`）。面板是这条路的唯一写入口，两下点击之间
+   * （见 `lib/maAnalysis.applyLevelLine`）。面板是这条路的唯一写入口，两下点击之间
    * 必然隔着一次渲染，所以不存在「读到上一帧线表把前一下冲掉」的问题。
    */
   setPriceLines: (lines: PriceLine[]) => void;

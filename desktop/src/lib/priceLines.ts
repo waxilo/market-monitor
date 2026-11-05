@@ -24,10 +24,10 @@ export const LINE_HIT_PX = 4;
  * 一条系统线在图上与用户手画的线没有任何区别。它的唯一用途是**回显**：
  * 面板再打开时据此认出「这一档我已经在图上划过线了」，而不是再叠一条。
  *
- * `kind` 做成联合而不是布尔：以后 MA / 布林带面板也可能代画线，多一个来源只加一支，
+ * `kind` 做成联合而不是布尔：以后布林带面板也可能代画线，多一个来源只加一支，
  * 不会出现「是不是系统线」与「哪个系统的线」两处判断各写一遍。
  */
-export type LineOrigin = { kind: 'ema'; interval: string; period: number };
+export type LineOrigin = { kind: 'ma' | 'ema'; interval: string; period: number };
 
 export interface PriceLine {
   price: number;

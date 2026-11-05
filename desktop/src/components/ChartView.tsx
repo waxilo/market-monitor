@@ -53,7 +53,12 @@ import {
   setAllMuted,
 } from '../lib/maPeriods';
 import { changeClass, displaySymbol, formatChange, formatCompact, formatPrice } from '../lib/format';
-import { alignEmaLines, applyEmaLine, emaWindow, isEmaSystemLine } from '../lib/emaAnalysis';
+import {
+  alignLevelLines,
+  analysisWindow,
+  applyLevelLine,
+  isSystemLine,
+} from '../lib/maAnalysis';
 import {
   isKlineFresh,
   klineCacheKey,
@@ -66,7 +71,7 @@ import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
 import { MaPanel } from './MaPanel';
-import { EmaAnalysisPanel } from './EmaAnalysisPanel';
+import { MaAnalysisPanel } from './MaAnalysisPanel';
 import { EyeIcon } from './EyeIcon';
 import { HLineIcon, NoteIcon, TrashIcon, TrendIcon } from './icons';
 import { LineNoteDialog } from './LineNoteDialog';
@@ -74,7 +79,7 @@ import { KlineCanvas } from './KlineCanvas';
 
 const RT_POLL_MS = 2000;
 /**
- * 往更早翻一页、持仓量整段重拉的根数。首屏**不用它**：首屏根数交给 `emaWindow`
+ * 往更早翻一页、持仓量整段重拉的根数。首屏**不用它**：首屏根数交给 `analysisWindow`
  * （与 EMA 面板同一口径），否则图上长档 EMA 的右端会与面板里的值对不上。
  */
 const PAGE_BARS = 300;
@@ -142,10 +147,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
   /**
-   * EMA 分析面板的显隐。入口在**周期条右端**（2026-10-30 从指标组挪过去）；
-   * 面板本体也在本组件里渲染，它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。
+   * 均线分析面板的显隐（`null` = 关着，否则是看哪一族：MA / EMA）。
+   * 入口在**周期条右端**（2026-10-30 从指标组挪过去）；面板本体也在本组件里渲染，
+   * 它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。两族共用一层面板
+   * （`MaAnalysisPanel`），同一时刻只开一族。
    */
-  const [emaOpen, setEmaOpen] = useState(false);
+  const [analysisKind, setAnalysisKind] = useState<MaKind | null>(null);
   const [candles, setCandles] = useState<Bar[]>([]);
   /**
    * 画布上这份蜡烛属于哪条缓存（见 `lib/klineCache`）。实时帧、翻旧页都在改写 `candles`，
@@ -159,10 +166,10 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    */
   const [warmGaveUp, setWarmGaveUp] = useState(false);
   /**
-   * 首屏根数：EMA 一族要「最长档位 × 4」根才收敛（见 `emaAnalysis.EMA_WARMUP_FACTOR`），
+   * 首屏根数：EMA 一族要「最长档位 × 4」根才收敛（见 `maAnalysis.WARMUP_FACTOR`），
    * 这一段是**后台补齐**的目标，不是首屏要等的量。
    */
-  const initialBars = emaWindow(families.EMA.catalog);
+  const initialBars = analysisWindow(families.EMA.catalog);
   /**
    * 首屏一次取多少根：**一屏多一点**（默认视窗 60 根 + 左缘提前量 120），
    * 再保证最长 MA 算得出来（+30 缓冲）；BOLL 只要 20 根。
@@ -803,18 +810,22 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
           >
             ＋
           </button>
-          {/* EMA 分析钉在周期条**右端**（2026-10-30 用户指定）：它是「换个视角看这段行情」的
-              **动作**，不是又一个指标开关 —— 放在指标组里会被读成 BOLL 的邻居。点开把
-              所有已配置 EMA 档位 × 所有已配置周期的当前值汇总成压力 / 支撑两栏。 */}
-          <button
-            type="button"
-            className={`chip ema-entry${emaOpen ? ' on' : ''}`}
-            aria-pressed={emaOpen}
-            title="EMA 指标分析：把所有已配置的 EMA 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
-            onClick={() => setEmaOpen((v) => !v)}
-          >
-            EMA分析
-          </button>
+          {/* 均线分析钉在周期条**右端**（2026-10-30 用户指定）：它是「换个视角看这段行情」的
+              **动作**，不是又一个指标开关 —— 放在指标组里会被读成 BOLL 的邻居。每族一枚
+              （MA / EMA 各看各的），点开把所有已配置档位 × 所有已配置周期的当前值汇总成
+              压力 / 支撑两栏。同一时刻只开一族，再点一次收起。 */}
+          {MA_KINDS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={`chip ema-entry${analysisKind === kind ? ' on' : ''}`}
+              aria-pressed={analysisKind === kind}
+              title={`${kind} 指标分析：把所有已配置的 ${kind} 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑`}
+              onClick={() => setAnalysisKind((prev) => (prev === kind ? null : kind))}
+            >
+              {kind}分析
+            </button>
+          ))}
         </div>
 
         <div className="interval-bar">
@@ -1152,26 +1163,27 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         />
       )}
 
-      {/* EMA 分析：范围取「EMA 族的目录 × 周期条的列表」（都算配置，不管图上画没画）。
-          点一行 = 把这一档落成图上一条**系统划线**（自动备注「1时EMA50」，带 origin 身份落盘，
-          面板不关，可连点几道）：没画就画、漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
+      {/* 均线分析（MA / EMA 共用一层）：范围取「那一族的目录 × 周期条的列表」（都算配置，
+          不管图上画没画）。点右栏按钮 = 把这一档落成图上一条**系统划线**（自动备注
+          「1时MA50」/「1时EMA50」，带 origin 身份落盘，面板不关，可连点几道）：没画就画、
+          漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
           带着身份落盘，面板重开时那几行才能回显（整行选中底色）。
-          每一轮取数回来（手动刷新 + 每分钟自动）都把系统划线拉到新值：EMA 是活的，
-          线得跟着走。手画的线一概不动。抬头「清空划线」只收这批带身份的系统线。
-          行内周期小方框只是标注，不可点 —— 点走会关面板，打断连画几道压力位。 */}
-      {emaOpen && (
-        <EmaAnalysisPanel
+          每一轮取数回来（手动刷新 + 每分钟自动）都只把**本族**的系统划线拉到新值：均线是活的，
+          线得跟着走；手画的线与另一族的线一概不动。抬头「清空划线」也只收本族这批线。 */}
+      {analysisKind && (
+        <MaAnalysisPanel
+          kind={analysisKind}
           market={item.market}
           symbol={item.symbol}
           price={ticker?.lastPrice ?? null}
           tickSize={instrument?.tickSize}
           intervals={intervals}
-          periods={families.EMA.catalog}
-          colors={families.EMA.colors}
+          periods={families[analysisKind].catalog}
+          colors={families[analysisKind].colors}
           sourceLabel={sourceLabel}
           priceLines={drawings.priceLines}
           onToggleLine={(row, note) => {
-            const plan = applyEmaLine(drawings.priceLines, row, note);
+            const plan = applyLevelLine(drawings.priceLines, analysisKind, row, note);
             if (plan.did === 'none') return;
             drawings.setPriceLines(plan.lines);
             // 画 / 对齐之后图上多了条看得见的东西：眼睛闭着就得自动睁开，否则这一下
@@ -1182,19 +1194,19 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             // 先用函数式写法读**提交那一刻**的线表：这一轮取数飞了一两秒，期间用户很可能
             // 刚拖过某条线，拿闭包里的旧表去覆盖会把那一拖连本带利抹掉。
             drawings.editPriceLines((current) => {
-              const plan = alignEmaLines(current, levels);
+              const plan = alignLevelLines(current, analysisKind, levels);
               return plan.moved > 0 ? plan.lines : current;
             });
           }}
           onClearLines={() => {
-            // 只收带 EMA 身份的线；手画的水平线 / 直线原样留着。
+            // 只收本族身份的线；手画的水平线 / 直线原样留着。
             // 原表返回 = 没有可清的（按钮此时本来也不显示），别造新数组触发重渲染。
             drawings.editPriceLines((current) => {
-              const next = current.filter((line) => !isEmaSystemLine(line));
+              const next = current.filter((line) => !isSystemLine(line, analysisKind));
               return next.length === current.length ? current : next;
             });
           }}
-          onClose={() => setEmaOpen(false)}
+          onClose={() => setAnalysisKind(null)}
         />
       )}
     </section>

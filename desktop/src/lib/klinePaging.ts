@@ -2,7 +2,7 @@
  * 单次请求取不满时「往前多翻几页」拼成一段（纯函数，不碰网络，便于单测）。
  *
  * 为什么需要：各家单次 K 线根数上限不同（OKX 300、Hyperliquid 500、币安 / Bybit 1000），
- * 而长档 EMA 要「最长档位 × 4」根预热（见 `emaAnalysis.EMA_WARMUP_FACTOR`）——
+ * 而长档 EMA 要「最长档位 × 4」根预热（见 `maAnalysis.WARMUP_FACTOR`）——
  * 上限低的源只取一页，长档 EMA 会被 SMA 种子拖偏。
  *
  * 口径：
