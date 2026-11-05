@@ -212,6 +212,40 @@ fun EmaAnalysisSheet(
         var selectedIv by rememberSaveable { mutableStateOf("") }
         var selectedPeriod by rememberSaveable { mutableStateOf(0) }
         val sideRows = if (side == Side.RESISTANCE) buckets.resistance else buckets.support
+        val otherSide = if (side == Side.RESISTANCE) Side.SUPPORT else Side.RESISTANCE
+        val otherRows = if (side == Side.RESISTANCE) buckets.support else buckets.resistance
+        /**
+         * 一侧为空时的解释：现价刚穿过**全部** EMA 时（单边急拉 / 急跌很常见），这一侧
+         * 一条都没有 —— 空表本身没错，但只写一句「还没有」看着像取数坏了。这里说清
+         * 「现价已在全部 N 档之上/之下」，并把另一侧最近的一道做成可点的入口。
+         */
+        val emptyHint = if (sideRows.isEmpty() && otherRows.isNotEmpty()) {
+            val nearest = otherRows.first()
+            EmptySideHint(
+                title = side.empty,
+                detail = buildString {
+                    append("现价 ${formatPrice(base, state.tickSize)} ")
+                    append("已在全部 ${buckets.resistance.size + buckets.support.size} 档 EMA ")
+                    append(if (side == Side.RESISTANCE) "之上" else "之下")
+                    append("；最近的一道在")
+                    append(if (side == Side.RESISTANCE) "下方" else "上方")
+                    append("：${nearest.interval.label} · EMA${nearest.period}（")
+                    append(PriceFormatter.formatChange(nearest.gapPercent))
+                    append("）")
+                },
+                jumpLabel = "看${otherSide.title}最近的一道",
+            )
+        } else {
+            null
+        }
+        /** 空态里的「看另一侧」：切页签 + 选中那一侧离现价最近的一条。 */
+        val jumpToOther: () -> Unit = {
+            otherRows.firstOrNull()?.let { nearest ->
+                picked = if (otherSide == Side.SUPPORT) 1 else 0
+                selectedIv = nearest.interval.storageKey
+                selectedPeriod = nearest.period
+            }
+        }
         val selectedRow = sideRows.firstOrNull {
             it.interval.storageKey == selectedIv && it.period == selectedPeriod
         }
@@ -289,6 +323,8 @@ fun EmaAnalysisSheet(
                                     color = selectedColor,
                                     tickSize = state.tickSize,
                                     resetKey = selectionKey,
+                                    emptyHint = emptyHint,
+                                    onJump = jumpToOther,
                                     modifier = Modifier.weight(1f).fillMaxHeight(),
                                     onToggle = { selectedRow?.let(onToggleLine) },
                                 )
@@ -308,6 +344,8 @@ fun EmaAnalysisSheet(
                                         refOf = refOf,
                                         selectedKey = selectionKey,
                                         onSelect = selectRow,
+                                        emptyHint = emptyHint,
+                                        onJump = jumpToOther,
                                         modifier = Modifier.weight(1f),
                                     )
                                 }
@@ -323,6 +361,8 @@ fun EmaAnalysisSheet(
                                     color = selectedColor,
                                     tickSize = state.tickSize,
                                     resetKey = selectionKey,
+                                    emptyHint = emptyHint,
+                                    onJump = jumpToOther,
                                     modifier = Modifier.weight(1f).fillMaxWidth(),
                                     onToggle = { selectedRow?.let(onToggleLine) },
                                 )
@@ -335,6 +375,8 @@ fun EmaAnalysisSheet(
                                     refOf = refOf,
                                     selectedKey = selectionKey,
                                     onSelect = selectRow,
+                                    emptyHint = emptyHint,
+                                    onJump = jumpToOther,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
@@ -382,8 +424,43 @@ fun EmaAnalysisSheet(
 private fun lineKey(interval: CandleInterval, period: Int): String = "${interval.storageKey}|$period"
 
 private enum class Side(val title: String, val empty: String) {
-    RESISTANCE("上方压力", "现价上方还没有已配置的 EMA"),
-    SUPPORT("下方支撑", "现价下方还没有已配置的 EMA"),
+    RESISTANCE("上方压力", "现价上方没有已配置的 EMA"),
+    SUPPORT("下方支撑", "现价下方没有已配置的 EMA"),
+}
+
+/** 一侧为空时的说明：现价已在全部 EMA 之上/之下，另附「另一侧最近的一道」跳转入口。 */
+private data class EmptySideHint(
+    val title: String,
+    val detail: String,
+    val jumpLabel: String,
+)
+
+/**
+ * 空侧提示（列表里 / 缩略图那一栏共用）。
+ *
+ * 空表本身是正确结果（急拉或急跌时现价会穿过全部 EMA），但只写一句「还没有」会被读成
+ * 「取数坏了」。这里把判据说清，并把另一侧最近的一道做成可点入口 —— 用户点一下就能
+ * 看到那一档的形态，不用自己切页签再翻。
+ */
+@Composable
+private fun EmptySideBlock(
+    hint: EmptySideHint,
+    onJump: () -> Unit,
+    modifier: Modifier = Modifier,
+    centered: Boolean = false,
+) {
+    val colors = MarketTheme.colors
+    val align = if (centered) TextAlign.Center else TextAlign.Start
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = if (centered) Alignment.CenterHorizontally else Alignment.Start,
+    ) {
+        Text(hint.title, style = MaterialTheme.typography.labelMedium, color = colors.ink, textAlign = align)
+        Spacer(Modifier.height(Spacing.Xxs))
+        Text(hint.detail, style = MaterialTheme.typography.labelSmall, color = colors.muted, textAlign = align)
+        Spacer(Modifier.height(Spacing.Xxs))
+        TextAction(text = hint.jumpLabel, onClick = onJump, color = colors.ink, style = InlineActionStyle)
+    }
 }
 
 /**
@@ -555,6 +632,9 @@ private fun TabbedColumn(
     refOf: (EmaLevelRow) -> EmaLineRef?,
     selectedKey: String,
     onSelect: (EmaLevelRow) -> Unit,
+    /** 这一侧为空时的解释（现价已在全部 EMA 之上/之下）；null = 没东西可解释。 */
+    emptyHint: EmptySideHint?,
+    onJump: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
@@ -576,7 +656,19 @@ private fun TabbedColumn(
                 onSelect = { onSelect(row) },
             )
         }
-        if (rows.isEmpty()) item(key = "empty") { EmptyRow(side.empty) }
+        if (rows.isEmpty()) {
+            item(key = "empty") {
+                if (emptyHint != null) {
+                    EmptySideBlock(
+                        hint = emptyHint,
+                        onJump = onJump,
+                        modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
+                    )
+                } else {
+                    EmptyRow(side.empty)
+                }
+            }
+        }
     }
 }
 
@@ -738,6 +830,9 @@ private fun EmaShapePane(
     tickSize: BigDecimal?,
     /** 选中的那一档（变化时缩放回到默认值）。 */
     resetKey: String,
+    /** 这一侧为空时的解释；有值就替代「点条目」那句通用提示。 */
+    emptyHint: EmptySideHint? = null,
+    onJump: () -> Unit = {},
     modifier: Modifier = Modifier,
     onToggle: () -> Unit,
 ) {
@@ -751,12 +846,16 @@ private fun EmaShapePane(
     ) {
         if (row == null || curve == null) {
             Box(Modifier.fillMaxSize().padding(Spacing.Md), contentAlignment = Alignment.Center) {
-                Text(
-                    text = "点列表里的条目，在这里看它的均线形态",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = colors.muted,
-                    textAlign = TextAlign.Center,
-                )
+                if (emptyHint != null) {
+                    EmptySideBlock(hint = emptyHint, onJump = onJump, centered = true)
+                } else {
+                    Text(
+                        text = "点列表里的条目，在这里看它的均线形态",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = colors.muted,
+                        textAlign = TextAlign.Center,
+                    )
+                }
             }
             return@Column
         }
