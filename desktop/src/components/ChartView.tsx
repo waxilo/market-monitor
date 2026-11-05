@@ -147,12 +147,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   /** 均线增删排序的弹窗开关（弹窗挂在指标栏末尾那枚「＋」上）。 */
   const [maPanelOpen, setMaPanelOpen] = useState(false);
   /**
-   * 均线分析面板的显隐（`null` = 关着，否则是看哪一族：MA / EMA）。
+   * 均线分析面板的显隐。
    * 入口在**周期条右端**（2026-10-30 从指标组挪过去）；面板本体也在本组件里渲染，
-   * 它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。两族共用一层面板
-   * （`MaAnalysisPanel`），同一时刻只开一族。
+   * 它要读图表的周期 / 均线 / 划线状态，状态放在这里最省事。MA / EMA 两族并进了
+   * 同一个面板（`MaAnalysisPanel`），看哪一族由面板抬头里的切换自己管。
    */
-  const [analysisKind, setAnalysisKind] = useState<MaKind | null>(null);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
   const [candles, setCandles] = useState<Bar[]>([]);
   /**
    * 画布上这份蜡烛属于哪条缓存（见 `lib/klineCache`）。实时帧、翻旧页都在改写 `candles`，
@@ -811,21 +811,19 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             ＋
           </button>
           {/* 均线分析钉在周期条**右端**（2026-10-30 用户指定）：它是「换个视角看这段行情」的
-              **动作**，不是又一个指标开关 —— 放在指标组里会被读成 BOLL 的邻居。每族一枚
-              （MA / EMA 各看各的），点开把所有已配置档位 × 所有已配置周期的当前值汇总成
-              压力 / 支撑两栏。同一时刻只开一族，再点一次收起。 */}
-          {MA_KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={`chip ema-entry${analysisKind === kind ? ' on' : ''}`}
-              aria-pressed={analysisKind === kind}
-              title={`${kind} 指标分析：把所有已配置的 ${kind} 档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑`}
-              onClick={() => setAnalysisKind((prev) => (prev === kind ? null : kind))}
-            >
-              {kind}分析
-            </button>
-          ))}
+              **动作**，不是又一个指标开关 —— 放在指标组里会被读成 BOLL 的邻居。入口只有
+              一枚（2026-11 用户要求把 MA / EMA 两枚并成一个）：族的选择收进面板抬头，
+              一次点开就是把当前那一族所有已配置档位 × 所有已配置周期的当前值汇总成
+              压力 / 支撑两栏。auto 外边距把它推到行尾。 */}
+          <button
+            type="button"
+            className={`chip analysis-entry${analysisOpen ? ' on' : ''}`}
+            aria-pressed={analysisOpen}
+            title="均线分析：把 MA / EMA 所有已配置档位在所有已配置周期上的当前值汇总，按最新价分成上方压力 / 下方支撑"
+            onClick={() => setAnalysisOpen((prev) => !prev)}
+          >
+            均线分析
+          </button>
         </div>
 
         <div className="interval-bar">
@@ -1163,50 +1161,49 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         />
       )}
 
-      {/* 均线分析（MA / EMA 共用一层）：范围取「那一族的目录 × 周期条的列表」（都算配置，
-          不管图上画没画）。点右栏按钮 = 把这一档落成图上一条**系统划线**（自动备注
+      {/* 均线分析（MA / EMA 共用一个入口）：范围取「面板里选中的那一族的目录 × 周期条的列表」
+          （都算配置，不管图上画没画）。点右栏按钮 = 把这一档落成图上一条**系统划线**（自动备注
           「1时MA50」/「1时EMA50」，带 origin 身份落盘，面板不关，可连点几道）：没画就画、
           漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
           带着身份落盘，面板重开时那几行才能回显（整行选中底色）。
           每一轮取数回来（手动刷新 + 每分钟自动）都只把**本族**的系统划线拉到新值：均线是活的，
           线得跟着走；手画的线与另一族的线一概不动。抬头「清空划线」也只收本族这批线。 */}
-      {analysisKind && (
+      {analysisOpen && (
         <MaAnalysisPanel
-          kind={analysisKind}
           market={item.market}
           symbol={item.symbol}
           price={ticker?.lastPrice ?? null}
           tickSize={instrument?.tickSize}
           intervals={intervals}
-          periods={families[analysisKind].catalog}
-          colors={families[analysisKind].colors}
+          catalogs={{ MA: families.MA.catalog, EMA: families.EMA.catalog }}
+          colorSlots={{ MA: families.MA.colors, EMA: families.EMA.colors }}
           sourceLabel={sourceLabel}
           priceLines={drawings.priceLines}
-          onToggleLine={(row, note) => {
-            const plan = applyLevelLine(drawings.priceLines, analysisKind, row, note);
+          onToggleLine={(kind, row, note) => {
+            const plan = applyLevelLine(drawings.priceLines, kind, row, note);
             if (plan.did === 'none') return;
             drawings.setPriceLines(plan.lines);
             // 画 / 对齐之后图上多了条看得见的东西：眼睛闭着就得自动睁开，否则这一下
             // 就是「点了没反应」。取消时不碰 —— 该保留用户自己那个开关。
             if (plan.did !== 'remove' && drawings.linesHidden) drawings.setLinesHidden(false);
           }}
-          onLevels={(levels) => {
+          onLevels={(kind, levels) => {
             // 先用函数式写法读**提交那一刻**的线表：这一轮取数飞了一两秒，期间用户很可能
             // 刚拖过某条线，拿闭包里的旧表去覆盖会把那一拖连本带利抹掉。
             drawings.editPriceLines((current) => {
-              const plan = alignLevelLines(current, analysisKind, levels);
+              const plan = alignLevelLines(current, kind, levels);
               return plan.moved > 0 ? plan.lines : current;
             });
           }}
-          onClearLines={() => {
+          onClearLines={(kind) => {
             // 只收本族身份的线；手画的水平线 / 直线原样留着。
             // 原表返回 = 没有可清的（按钮此时本来也不显示），别造新数组触发重渲染。
             drawings.editPriceLines((current) => {
-              const next = current.filter((line) => !isSystemLine(line, analysisKind));
+              const next = current.filter((line) => !isSystemLine(line, kind));
               return next.length === current.length ? current : next;
             });
           }}
-          onClose={() => setAnalysisKind(null)}
+          onClose={() => setAnalysisOpen(false)}
         />
       )}
     </section>

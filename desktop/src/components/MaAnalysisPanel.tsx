@@ -165,8 +165,6 @@ function LevelShapeChart({
 }
 
 interface Props {
-  /** 分析哪一族均线：MA（简单）或 EMA（指数）。 */
-  kind: LevelKind;
   market: MarketType;
   symbol: string;
   /** 实时最新价（行情没到 / 断线时给 null，改用最后一根收盘价）。 */
@@ -174,10 +172,10 @@ interface Props {
   tickSize?: string;
   /** 周期条上配置的全部 K 线周期（分析范围）。 */
   intervals: string[];
-  /** 均线面板里配置的全部档位（分析范围，含小眼睛藏起来的那些）。 */
-  periods: number[];
-  /** 期数 → 色槽（表里的色点与图上那条线同色）。 */
-  colors: MaColors;
+  /** 两族在均线面板里各自配置的全部档位（分析范围，含小眼睛藏起来的那些）。 */
+  catalogs: Record<LevelKind, number[]>;
+  /** 族 → (期数 → 色槽)（表里的色点与图上那条线同色）。 */
+  colorSlots: Record<LevelKind, MaColors>;
   /** 当前数据源名，写进抬头（换源后数值会变，得说清是跟谁取的）。 */
   sourceLabel: string;
   /** 当前标的上已有的水平线 —— 回显「这一档画过没有」全靠它。 */
@@ -185,21 +183,22 @@ interface Props {
   /**
    * 中间缩略图下方那枚动作按钮 = 把这一档落成图上的一条**系统划线**：
    * 没画就画、漂了拉回当前值、已对齐就删掉。`note` 是自动备注文案（新画时写上去）。
+   * `kind` 是这一行所属的族 —— 面板里切族只换视图，落线仍按各族的身份走。
    */
-  onToggleLine: (level: LevelRow, note: string) => void;
+  onToggleLine: (kind: LevelKind, level: LevelRow, note: string) => void;
   /**
    * 每一轮取数回来后回调一次（拿到的是**合并之后**的整份水位表）。
    *
    * 用途只有一个：让图上的系统划线跟着均线走（`lib/maAnalysis.alignLevelLines`）。
    * 挂在「刷新」而不是「面板打开」上 —— 线要跟的是数值，而数值只在刷新时变。
    */
-  onLevels: (levels: Level[]) => void;
+  onLevels: (kind: LevelKind, levels: Level[]) => void;
   /**
-   * 清空图上属于本面板的全部系统划线（`PriceLine.origin.kind` 与本族一致）。
+   * 清空图上属于本族的全部系统划线（`PriceLine.origin.kind` 与本族一致）。
    * 手画的水平线 / 直线 / 另一族的线一概不碰 —— 这是「把连点画下的那几道墙一次收掉」，
    * 不是清空画布。
    */
-  onClearLines: () => void;
+  onClearLines: (kind: LevelKind) => void;
   onClose: () => void;
 }
 
@@ -215,11 +214,14 @@ function clockText(at: number): string {
 }
 
 /**
- * 均线指标分析（MA / EMA 共用）：一次点击，把**所有已配置的档位 × 所有已配置的 K 线周期**
- * 的当前值全部取回来，按最新价分成「上方压力 / 下方支撑」两块。
+ * 均线指标分析（MA / EMA 同一个面板，抬头里切族）：一次点击，把**所有已配置的档位 ×
+ * 所有已配置的 K 线周期**的当前值全部取回来，按最新价分成「上方压力 / 下方支撑」两块。
  *
  * 几条设计取舍：
  *
+ * - **族的选择在面板里**：周期条上只有一枚「均线分析」（2026-11 用户要求把 MA / EMA 两枚
+ *   并成一个入口）。两族的档位目录、线色、落线身份都各走各的，切族 = 换整张表
+ *   （缓存键里带族，见 `scanKey`），不会把一族的水位算进另一族。
  * - **静默刷新**：打开时先用上次的结果把表铺出来（`scanCache`），同时在后台重取，
  *   拿到新值再整表替换 —— 不出现「先清空、再转圈、再重排」那段闪烁。刷新中只有右上角
  *   的按钮说话（文案变「刷新中」、禁用），表格照旧可读可点。
@@ -243,14 +245,13 @@ function clockText(at: number): string {
  *   选中是另一层底色（`.sel`），与「已画」的红底（`.on`）分开：选中的那条不一定画过线。
  */
 export function MaAnalysisPanel({
-  kind,
   market,
   symbol,
   price,
   tickSize,
   intervals,
-  periods,
-  colors,
+  catalogs,
+  colorSlots,
   sourceLabel,
   priceLines,
   onToggleLine,
@@ -258,6 +259,16 @@ export function MaAnalysisPanel({
   onClearLines,
   onClose,
 }: Props) {
+  /**
+   * 正在看哪一族（抬头那枚 MA / EMA 分段控件）。
+   * 初值取「配了档位的那一族」：只配了 EMA 的人点开不该先看到一句「MA 一档都没配置」。
+   */
+  const [kind, setKind] = useState<LevelKind>(() =>
+    catalogs.MA.length === 0 && catalogs.EMA.length > 0 ? 'EMA' : 'MA',
+  );
+  /** 当前这一族的档位目录与色槽 —— 分析范围与配色都跟着族走。 */
+  const periods = catalogs[kind];
+  const colors = colorSlots[kind];
   /** 换源 = 换盘口：整表重取（与 ChartView 的 K 线口径一致）。 */
   const source = useSourceKey(market);
   /** 周期列表 / 档位列表都是新数组引用的情况很多，依赖用拼出来的字符串判定。 */
@@ -419,13 +430,15 @@ export function MaAnalysisPanel({
       setRefreshing(false);
       // 数值到手了：让图上的系统划线跟着走（手画的线一概不碰，见 `alignLevelLines`）。
       // 手动「刷新」与每分钟的自动那一轮都经过这里 —— 它俩本来就是同一条路。
-      onLevelsRef.current(merged.levels);
+      onLevelsRef.current(kind, merged.levels);
     });
 
     return () => {
       alive = false;
     };
-  }, [market, symbol, source, intervalKey, periodKey, seq]);
+    // `kind` 必须进依赖：切换族不一定换档位（两族常见同一套 MA20/50/100），
+    // 只靠 periodKey 识别不出来，会让新族沿用上一族的取数结果。
+  }, [market, symbol, source, kind, intervalKey, periodKey, seq]);
 
   // 面板开着就一直自己换新：每分钟一轮（K 线最短一档就是 1 分钟，再密没有新东西）
   useEffect(() => {
@@ -661,7 +674,7 @@ export function MaAnalysisPanel({
             <button
               type="button"
               className="ema-shape-btn"
-              onClick={() => onToggleLine(selectedRow, autoNoteOf(selectedRow))}
+              onClick={() => onToggleLine(kind, selectedRow, autoNoteOf(selectedRow))}
             >
               {selectedLine
                 ? selectedLine.aligned && selectedLine.alert
@@ -685,20 +698,35 @@ export function MaAnalysisPanel({
         className="up-panel ema-panel"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label={`${kind} 指标分析`}
+        aria-label="均线指标分析"
       >
         <header className="up-head ema-head">
           <div className="ema-head-id">
-            <span className="ema-head-title">{kind} 压力支撑</span>
+            <span className="ema-head-title">均线压力支撑</span>
             <span className="ema-head-kicker">指标分析</span>
+          </div>
+          {/* 族的选择：两族共用一张表，一次只看一族（档位目录、线色、落线身份各走各的） */}
+          <div className="ema-kind-switch" role="tablist" aria-label="均线族">
+            {(['MA', 'EMA'] as const).map((value) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={kind === value}
+                className={`ema-tab${kind === value ? ' on' : ''}`}
+                onClick={() => setKind(value)}
+              >
+                {value}
+              </button>
+            ))}
           </div>
           <span className="grow" />
           {lineCount > 0 && (
             <button
               type="button"
               className="ema-clear"
-              title={`清空图上全部 ${lineCount} 条 ${kind} 划线（手画的线不受影响）`}
-              onClick={onClearLines}
+              title={`清空图上全部 ${lineCount} 条 ${kind} 划线（手画的线与另一族的线不受影响）`}
+              onClick={() => onClearLines(kind)}
             >
               清空划线
             </button>
