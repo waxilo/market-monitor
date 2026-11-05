@@ -37,16 +37,25 @@ const AUTO_REFRESH_MS = 60_000;
  * 11 个周期的 K 线，那几百毫秒里表是空的 —— 而这份表的用法恰恰是「点开看一眼就走」。
  * 有了这层，点开就能立刻看到上次的数值，同时后台静默换成新的。
  *
+ * 表与缩略曲线存同一份：右栏的形态图只认 `curves`，如果只缓存表，重开时左栏有数、
+ * 右栏却要等新一轮取数才画得出来 —— 那正是「已经加载过一次，还得再等刷新」。
+ *
  * 只留最近 6 份（切标的 / 换源会各占一格）：这是个「上次看到的」缓存，不是数据仓库，
  * 存太多既没用又会让内存里挂着一堆过期的价位。
  */
-const scanCache = new Map<string, LevelScan>();
+interface CachedScan {
+  scan: LevelScan;
+  /** 每一档的尾段曲线，键见 `curveKeyOf`。与 `scan` 出自同一轮扫描。 */
+  curves: Record<string, LevelCurve>;
+}
+
+const scanCache = new Map<string, CachedScan>();
 const SCAN_CACHE_MAX = 6;
 
-function rememberScan(key: string, scan: LevelScan): void {
+function rememberScan(key: string, scan: LevelScan, curves: Record<string, LevelCurve>): void {
   // 先删再塞：Map 的插入顺序才是淘汰顺序，覆盖写不会把它推到队尾
   scanCache.delete(key);
-  scanCache.set(key, scan);
+  scanCache.set(key, { scan, curves });
   while (scanCache.size > SCAN_CACHE_MAX) {
     const oldest = scanCache.keys().next();
     if (oldest.done) break;
@@ -281,7 +290,7 @@ export function MaAnalysisPanel({
   const scanKey = `${kind}|${market}|${symbol}|${source}|${intervalKey}|${periodKey}`;
 
   /** 当前这张表 —— 初值取上次看过的（读不到才是空表，见 `scanCache`）。 */
-  const [scan, setScan] = useState<LevelScan>(() => scanCache.get(scanKey) ?? EMPTY_SCAN);
+  const [scan, setScan] = useState<LevelScan>(() => scanCache.get(scanKey)?.scan ?? EMPTY_SCAN);
   /**
    * 与 `scan` 同源的一份镜像，只用来「并到上一轮上」。
    *
@@ -309,8 +318,13 @@ export function MaAnalysisPanel({
    *
    * 与 `scan.levels` 同源（同一次扫描算出来），但单独存一份：表只留末值，
    * 而缩略图要看整段形态。断网时与表同口径地**沿用上一轮**（见下面的合并）。
+   * 初值同样取上次看过的：右栏的形态图不该比左栏的表晚一轮才出现。
    */
-  const [curves, setCurves] = useState<Record<string, LevelCurve>>({});
+  const [curves, setCurves] = useState<Record<string, LevelCurve>>(
+    () => scanCache.get(scanKey)?.curves ?? {},
+  );
+  /** `curves` 的镜像，用来在取数回调里「并到上一轮上」（理由与 `scanRef` 相同）。 */
+  const curvesRef = useRef(curves);
   /** 左栏页签：一次只看一侧（压力 / 支撑），另一侧留在页签上的数字里。 */
   const [tab, setTab] = useState<'resistance' | 'support'>('resistance');
   /** 当前选中的那一档 —— 中间缩略图跟着它走。 */
@@ -321,12 +335,13 @@ export function MaAnalysisPanel({
   // 换族 / 换标的 / 换源 / 改配置：立刻换成那一份的缓存（没有就空表）并重新取。
   // 不这么做的话，切币的瞬间会先显示上一个币的价位 —— 那比空表更容易被当真。
   useEffect(() => {
-    const cached = scanCache.get(scanKey) ?? EMPTY_SCAN;
+    const cached = scanCache.get(scanKey);
     // 镜像必须跟着换：并到「上一个币的表」上会把别家的水位搬过来
-    scanRef.current = cached;
-    setScan(cached);
-    // 曲线缓存不跟着搬：换了表（标的 / 源 / 配置）之后上一张图的形态已经没意义
-    setCurves({});
+    scanRef.current = cached?.scan ?? EMPTY_SCAN;
+    setScan(scanRef.current);
+    // 曲线和表必须同一份缓存：只恢复表的话，右栏形态图要等这一轮取数回来才画得出
+    curvesRef.current = cached?.curves ?? {};
+    setCurves(curvesRef.current);
     setSelected(null);
     tabPicked.current = false;
     setRefreshing(true);
@@ -337,6 +352,7 @@ export function MaAnalysisPanel({
       setRefreshing(false);
       scanRef.current = EMPTY_SCAN;
       setScan(EMPTY_SCAN);
+      curvesRef.current = {};
       setCurves({});
       setSelected(null);
       setDone(0);
@@ -414,18 +430,18 @@ export function MaAnalysisPanel({
         fallbackPrice: finestClose,
       });
       scanRef.current = merged;
-      rememberScan(scanKey, merged);
-      setScan(merged);
       // 预览与表同口径：表里还留着这一档（整段没取回来 / 这轮根数差几根）就沿用上一轮的曲线，
       // 断网时悬浮仍看得出形态；表里已经没了的档位，曲线也一起丢掉
       const keptLevels = new Set(merged.levels.map((level) => curveKeyOf(level.interval, level.period)));
-      setCurves((prev) => {
-        const next: Record<string, LevelCurve> = {};
-        for (const [key, curve] of Object.entries(prev)) {
-          if (keptLevels.has(key)) next[key] = curve;
-        }
-        return Object.assign(next, nextCurves);
-      });
+      const mergedCurves: Record<string, LevelCurve> = {};
+      for (const [key, curve] of Object.entries(curvesRef.current)) {
+        if (keptLevels.has(key)) mergedCurves[key] = curve;
+      }
+      Object.assign(mergedCurves, nextCurves);
+      curvesRef.current = mergedCurves;
+      setCurves(mergedCurves);
+      rememberScan(scanKey, merged, mergedCurves);
+      setScan(merged);
       setUpdatedAt(Date.now());
       setRefreshing(false);
       // 数值到手了：让图上的系统划线跟着走（手画的线一概不碰，见 `alignLevelLines`）。
