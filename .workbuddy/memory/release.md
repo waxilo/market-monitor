@@ -898,3 +898,44 @@ Release run **41850938792** 绿（14:46 → 14:50Z）；main CI run **4185090808
   `.workbuddy/tmp/tag-0970.py <远端SHA> f76736a`（先断言 tree 一致）；推完 `git fetch origin main` +
   `update-ref refs/heads/main 72370fb`（没 reset）+ 本地 `tag -f -a` 重指。
 - 用掉的 tag 追加：`0.9.70`。
+
+## android 0.9.71 + desktop 0.1.63（双端同发，2026-11-05）
+
+新增 **MA（简单均线）压力支撑分析**，与 EMA 面板同一套实现（页签列表 + 缩略形态图 + 画线动作 + 缩放）。
+Android 这一版同时把此前**已推 main 但从未发版**的 0.9.71 修复带上（EMA 单侧为空时说明原因 + 一键跳到另一侧最近一道），
+所以 Android 版本号仍是 0.9.71 / versionCode 83 —— 通道里原本只有 0.9.70，严格递增成立，不必烧掉一个版本号。
+
+实现要点（两端对称）：
+1. 数据层泛化成族参数：桌面 `lib/maAnalysis.ts`（`LevelKind = 'MA' | 'EMA'`，`seriesOf` 选 `sma/ema`），
+   Android `domain/indicator/MaAnalysis.kt`（`family: MaFamily`）。`split / merge` 与族无关，保持原样。
+2. 系统划线身份泛化：桌面 `LineOrigin.kind` 扩成 `'ma' | 'ema'`；Android 靠规则名，自动名带族名
+   （`5分MA20` / `1时EMA50`）。MA 的自动名判据必须带 `(?<!E)`，否则 `1时EMA50` 会被 MA 当成自己的线。
+3. 回显 / 自动对齐 / 清空划线 / 孤儿线提示全部**按族过滤**：MA 面板不会把 EMA 的线算成「已画」，
+   刷新也只拉自己那一族；另一族的线一根不碰。
+4. 桌面入口为周期条右端两枚 chip（`MA分析` / `EMA分析`）；Android 为顶栏与全屏周期条各两枚文字动作。
+   同一时刻只开一族（Android 打开另一族时整份状态清空再取，避免先闪上一族价位）。
+5. Android 的族偏好复用已有 `DetailUiState.catalogOf(family) / colorsOf(family)`。
+
+两个 commit：`3dd5116` feat(desktop) → 远端 `ffd965c`；`03406a4` feat(android) → 远端 `066acc8`；
+`f04218f` chore(release) → 远端 `ff23ae4`。tag `0.9.71`（annotated `1d366ac`）与 `desktop-v0.1.63`
+（annotated `50cc296`）都指向远端 commit `ff23ae4`。
+Release run **41943806515**（Android）与 **41943813587**（Desktop）全绿；CI run **41943762366** 绿
+（被 `concurrency` 取消的两个中途 run 属正常）。
+
+- Android 通道 `android-latest`：id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z），
+  只有 `market-monitor-0.9.71.apk`（**11219588**）+ `.sha256`（asset digest `15888f13…` == 边车）；
+  CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、`本次版本号：0.9.71`。
+- 桌面通道 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.63
+  无旧版残留；`latest.json` 0.1.63（pub_date `2026-11-05T00:52:46.631Z`），两平台签名内 `version:0.1.63`；
+  exe **2824795** 字节（sidecar `db2162a1…` == digest）、dmg 4470883、mac app.tar.gz 4392767。
+- ✅ 打 tag 前：桌面 `tsc --noEmit` + `vite build` 绿（106 modules，`index-5RWOzVbR.js 336.18` /
+  `index-Dk37-5av.css 53.54`）；CDP 浅/深两套实测：MA 面板 14/26 档、点行换图、滚轮 120→68→复位 120、
+  画线落盘 `origin.kind='ma'` + note `1分MA10`、切 EMA 面板 `drawn=0`（MA 线不被认领）、切回 MA 仍 `drawn=1` 且价格随刷新自动对齐、再点删除。
+- ✅ Android 单测 **433 例全绿**（新增 5 例：MA 用 sma 末值 / SMA 无预热段 / 自动名互斥 /
+  回显·对齐·孤儿按族隔离 / tick 三态）；`:app:assembleDebug` 绿。MuMu 横屏 1920×1080 实测：
+  顶栏「MA分析」「EMA分析」两枚入口、MA 面板 17/28 档、画线后出现「清空划线」+「已画 1」、
+  画完 MA 线再开 EMA 面板仍显示「图上未画告警线」、清空 MA 划线后 EMA 的面板「清空划线」仍在（EMA 的旧线没被误删）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 三次（`--parent` 必须传**完整 40 位 SHA**，传短 SHA 会被脚本判成「parent 不在远端分支上」）
+  均带 `PYTHONIOENCODING=utf-8`；tag 用 `.workbuddy/tmp/tag-0971.py <远端SHA> f04218f`（先断言 tree 一致）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main ff23ae4`（没 reset）+ 本地 `tag -f -a` 重指。
+- 用掉的 tag 追加：`0.9.71`、`desktop-v0.1.63`。

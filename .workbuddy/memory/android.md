@@ -710,3 +710,18 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
   与已验过的 debug 包同观感。
 
 
+
+## MA 分析 + 族参数化（2026-11-05，随 0.9.71 发布）
+
+`EmaAnalysis.kt` → `MaAnalysis.kt`、`EmaAnalysisSheet.kt` → `MaAnalysisSheet.kt`，全链路加 `family: MaFamily`：
+`last / curve / note / legacyNote / lineOf / tick / alignments / orphanLineNames` 都按族取 `sma/ema` 与自动名前缀；
+`isAutoNote` 保持「任一族的自动名」（图上挂牌用），**按族收线**用 `isFamilyAutoNote(name, family)`。
+
+- 自动名 `5分MA20` / `1时EMA50`；MA 正则带 `(?<!E)`，避免把 `1时EMA50` 当成 MA 的线。
+- `DetailViewModel`：一份共用状态（`maScan/maCurves/...`、`maAnalysis`），`setMaPanelOpen(family?)`
+  打开另一族时整份清空再取；`refreshMaAnalysis/toggleMaLine(row, family)/clearMaLines(family)/alignMaRules(scan, family)`。
+  `DetailUiState` 新增 `catalogOf(family)` / `colorsOf(family)`。
+- `DetailScreen`：`analysisFamily: MaFamily?`（rememberSaveable）一个开关；顶栏与全屏周期条各两枚
+  `MA分析 / EMA分析` 文字动作；sheet 用 `family` 渲染标题、档位名、颜色、目录、空态与表尾。
+- 单测 433 例（+5 例 MA：sma 末值 / 无预热段 / 自动名互斥 / 两族隔离 / tick 三态）。
+- MuMu 实测：MA 17/28 档、画线、清空 MA 不影响 EMA 旧线；MA 线在 EMA 面板里不被认领。

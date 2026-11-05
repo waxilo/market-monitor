@@ -1225,3 +1225,17 @@ EMA 面板收回）→ 选中越界即清。**不要**用时间窗或「下次�
   ③ 幂等断言**不能写「价位与上一轮完全相等」**：EMA 是活的，两轮之间现价动一点它就动一点，线跟着动才是对的，
   正确口径是「仍然只有一条 且 仍等于面板此刻的值」。
 
+
+## MA 分析（2026-11-05，随 0.1.63 发布）
+
+EMA 面板泛化成**一族均线一处实现**，新增 MA 入口（周期条右端两枚 chip：`MA分析` / `EMA分析`，同一时刻只开一族）。
+
+- `lib/emaAnalysis.ts` → `lib/maAnalysis.ts`，`EmaAnalysisPanel` → `MaAnalysisPanel`：类型改 `Level*`，
+  函数加 `kind: LevelKind = 'MA' | 'EMA'`（`analysisWindow / lastLevel / levelCurve / levelNote / findLevelLine /
+  applyLevelLine / alignLevelLines / isSystemLine`），`splitLevels / mergeScan` 与族无关保持原样。
+- `PriceLine.origin.kind` 扩成 `'ma' | 'ema'`；自动备注 `1时MA20` / `1时EMA50`。MA 的自动名正则必须带
+  `(?<!E)MA\d+`，否则 `1时EMA50` 会被 MA 当成自己的线（清空划线会误收另一族）。
+- 回显、自动跟随、清空划线、孤儿提示全部按 `origin.kind` 过滤：两族互不认领、互不挪线。
+- 面板扫描缓存 key 加上族名（`kind|market|symbol|source|intervals|periods`），否则 MA 面板会先读到 EMA 的缓存价。
+- CDP 验收脚本 `.workbuddy/tmp/check-ma.mjs`：浅/深两套；断言画线落盘 `origin.kind='ma'`、EMA 面板 `drawn=0`、
+  切回 MA 仍 `drawn=1` 且价格随刷新自动对齐。截图 `ma-analysis-light/dark.png`。
