@@ -939,3 +939,39 @@ Release run **41943806515**（Android）与 **41943813587**（Desktop）全绿�
   均带 `PYTHONIOENCODING=utf-8`；tag 用 `.workbuddy/tmp/tag-0971.py <远端SHA> f04218f`（先断言 tree 一致）；
   推完 `git fetch origin main` + `update-ref refs/heads/main ff23ae4`（没 reset）+ 本地 `tag -f -a` 重指。
 - 用掉的 tag 追加：`0.9.71`、`desktop-v0.1.63`。
+
+## desktop 0.1.64 + android 0.9.72（双端同发，2026-11-05）
+
+桌面：均线分析**合并成单入口**。周期条右端只剩一枚「均线分析」chip（`.analysis-entry`，`margin-left:auto` 推到行尾），
+族的选择收进面板抬头（`.ema-kind-switch`，MA / EMA 分段控件），抬头标题改成「均线压力支撑」。
+`ChartView` 的 `analysisKind: MaKind | null` 换成 `analysisOpen: boolean`；面板 props 从 `kind/periods/colors`
+换成 `catalogs/colorSlots`，`onToggleLine / onLevels / onClearLines` 都多带一个 `kind` 参数。
+`scanKey` 与取数 effect 的依赖都加了 `kind`（两族常配同一套档位，只靠 `periodKey` 认不出切族）。
+Android：① `syncInstruments` 加 **6 小时 TTL**（`InstrumentDao.latestSyncedAt`），详情页每次进入不再重下十几 MB 清单；
+② `exchangeInfo` / `parseKlines` 的 JSON 解析移到 `Dispatchers.Default`；③ 首页轮询改成 `LifecycleResumeEffect`
+驱动（`onScreenVisible/onScreenHidden`），进详情 / 切 tab 停掉，从详情返回先立刻补一拍；④ 首屏先拉报价，
+清单延后 1.5 秒后台补（`INSTRUMENT_SYNC_DELAY_MS`），`MarketViewModel` 里的 `syncedMarkets` 集合删除。
+
+两个 fix 提交：`e25390b` feat(desktop) → 远端 `a3776e0`；`07ebe44` perf(android) → 远端 `4f8181a`；
+`9061997` chore(release) → 远端 `0a3dd05`。tag `0.9.72`（annotated `7f352c69`）与 `desktop-v0.1.64`
+（annotated `e370efb3`）都指向远端 commit `0a3dd05`。Release run **41954784706**（Android）与
+**41954790535**（Desktop）全绿；CI run **41954737946** 绿（同分支连推时的两个 cancelled run 属正常）。
+
+- Android 通道 `android-latest`：id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z），
+  只有 `market-monitor-0.9.72.apk`（**11219592**）+ `.sha256`（asset digest `ab8127797b24…` == 边车）；
+  CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、`本次版本号：0.9.72`。
+- 桌面通道 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.64
+  无旧版残留；`latest.json` 0.1.64（pub_date `2026-11-05T02:27:58.521Z`），两平台签名内 `version:0.1.64`；
+  exe **2823661**（sidecar `ae667d0d…` == digest）、dmg 4469822、mac app.tar.gz 4391262；
+  `verify-channel.mjs 0.1.64` → **34/34 PASS**。
+- ✅ 打 tag 前：桌面 `npm run build` 绿（106 modules，`index-wUs6Bws1.js 336.52` / `index-CdduQyBs.css 53.92`）；
+  CDP 浅/深两套实测：周期条只有 1 枚「均线分析」（旧 `.ema-entry` 0 枚、距右端 20px）、
+  抬头标题「均线压力支撑」+ MA/EMA 两格、MA 默认选中、切 EMA 后行数据整表更换、切回 MA 命中缓存直接铺表
+  （11 行，无「刷新中」）。
+- ✅ Android 单测 **433 例全绿**（本轮无新增用例：改动集中在 TTL / 线程 / 生命周期）；
+  `:app:assembleDebug` 绿。**本轮未上 MuMu 实机**（改动不是视觉项，时间线按用户「推送并发版」直接走）。
+- push 走 `.workbuddy/tmp/api-push-0948.py` 三次（`--parent` 传完整 40 位 SHA，均带 `PYTHONIOENCODING=utf-8`）；
+  tag 用 `.workbuddy/tmp/tag-0972.py <远端SHA> 9061997`（先断言 tree 一致）；
+  推完 `git fetch origin main` + `update-ref refs/heads/main 0a3dd05`（没 reset）；
+  `git fetch origin --tags` 后本地 `desktop-v0.1.64` 自动建好（旧 0.1.6x tag 的 clobber 提示是本地附注 tag 与远端轻量 ref 的差异，可忽略）。
+- 用掉的 tag 追加：`0.9.72`、`desktop-v0.1.64`。
