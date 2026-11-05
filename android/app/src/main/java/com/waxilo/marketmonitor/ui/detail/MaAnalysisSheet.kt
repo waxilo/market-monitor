@@ -67,12 +67,12 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
-import com.waxilo.marketmonitor.domain.indicator.EmaAnalysis
-import com.waxilo.marketmonitor.domain.indicator.EmaBuckets
-import com.waxilo.marketmonitor.domain.indicator.EmaCurve
-import com.waxilo.marketmonitor.domain.indicator.EmaLevelRow
-import com.waxilo.marketmonitor.domain.indicator.EmaLineRef
-import com.waxilo.marketmonitor.domain.indicator.EmaScan
+import com.waxilo.marketmonitor.domain.indicator.MaAnalysis
+import com.waxilo.marketmonitor.domain.indicator.MaBuckets
+import com.waxilo.marketmonitor.domain.indicator.MaCurve
+import com.waxilo.marketmonitor.domain.indicator.MaLevelRow
+import com.waxilo.marketmonitor.domain.indicator.MaLineRef
+import com.waxilo.marketmonitor.domain.indicator.MaScan
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.ui.chart.maRoleForSlot
@@ -92,13 +92,13 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * EMA 压力支撑分析面板（桌面端 `EmaAnalysisPanel` 的 Android 版）。
+ * 均线压力支撑分析面板（桌面端 `MaAnalysisPanel` 的 Android 版；MA / EMA 共用）。
  *
- * 一张对照最新价的表：所有已配置 EMA 档位 × 所有已配置周期，按现价分成上方压力 / 下方支撑。
+ * 一张对照最新价的表：当前一族所有已配置档位 × 所有已配置周期，按现价分成上方压力 / 下方支撑。
  *
  * 与桌面端一致的几条取舍：
  *
- * - **静默刷新**：面板打开时先用上次的结果铺出来（状态在 ViewModel 里，见 `emaAnalysis`），
+ * - **静默刷新**：面板打开时先用上次的结果铺出来（状态在 ViewModel 里，见 `maAnalysis`），
  *   后台重取，拿到新值整表替换 —— 不出现「先清空、再转圈、再重排」那段闪烁。刷新中只有
  *   右上角那个「刷新」说话（文案变「刷新中」、不可点），表格照旧可读可点。
  *   面板一直开着时每 1 分钟自动刷新（定时器在 ViewModel，旋屏不中断）。
@@ -108,33 +108,35 @@ import kotlin.math.roundToInt
  * - **点一行 = 选中**：缩略图跟着换成那一档的形态（见下），行铺淡黄底 + 右缘黄条。
  *   「已画」是另一层状态：已有图上的告警线 → 告警红底 + 左缘红条（两层互不覆盖）。
  * - **画告警线是缩略图那一栏的按钮**：选中一条后按「画告警线 / 对齐到当前值 / 删除告警线」。
- *   这条线是普通告警规则（名字 = `1时EMA50`），面板靠这个名字回显。EMA 每分钟都在动，
- *   所以**每轮刷新都会把这些自动线拉到新值**（见 `DetailViewModel.alignEmaRules` →
- *   `EmaAnalysis.alignments`）—— 线是用来看的一道墙，得长在 EMA 现在的位置上。
- *   手画的线一概不动。
+ *   这条线是普通告警规则（名字 = `1时MA20` / `1时EMA50`），面板靠这个名字回显。均线每分钟
+ *   都在动，所以**每轮刷新都会把这些自动线拉到新值**（见 `DetailViewModel.alignMaRules` →
+ *   `MaAnalysis.alignments`）—— 线是用来看的一道墙，得长在均线现在的位置上。
+ *   手画的线、另一族画的线一概不动。
  *
  * 版式：一栏缩略图 + 一栏页签列表。「上方压力 / 下方支撑」两个页签一次只呈现一侧
  * （早先两侧叠在一列里，压力十几道时支撑被顶到屏幕外）；**竖屏缩略图在上半屏**、
  * **横屏缩略图在左半屏**（屏高只有 360dp 上下时竖着叠两边都矮）。
  *
- * 缩略图：收盘价淡灰 + 这一档 EMA（色槽色）共用一根纵轴，**双指缩放**可见根数
+ * 缩略图：收盘价淡灰 + 这一档均线（色槽色）共用一根纵轴，**双指缩放**可见根数
  * （16 ～ 曲线全长 240，默认 120）、双击复位，「− / ＋」兜底。数据来自
- * `EmaAnalysisState.curves`（与表同一次递推算出来的尾段）。
+ * `MaAnalysisState.curves`（与表同一次递推算出来的尾段）。
  *
  * 排序：**两侧都按「离现价由近到远」**（压力从低到高、支撑从高到低）。表的第一行
- * 应当是最有用的那一条（最近的一道），也与表头写的「最近 X · EMA Y」对得上。
+ * 应当是最有用的那一条（最近的一道），也与表头写的「最近 X · MA Y」对得上。
  */
 @Composable
-fun EmaAnalysisSheet(
+fun MaAnalysisSheet(
+    /** 分析哪一族均线：MA（简单）/ EMA（指数）。 */
+    family: MaFamily,
     state: DetailUiState,
-    analysis: EmaAnalysisState,
+    analysis: MaAnalysisState,
     /** 本标的的全部告警规则（回显用：名字 = 自动备注的那条就是「这一档画过」）。 */
     rules: List<AlertRule>,
     /** 一次性提示（画上 / 对齐 / 取消的结果）。竖屏详情页不显示 notice，所以面板自己带一条。 */
     notice: String?,
     onRefresh: () -> Unit,
-    onToggleLine: (EmaLevelRow) -> Unit,
-    /** 一键清掉本标的图上全部 EMA 划线（面板自动名的那批告警规则）。 */
+    onToggleLine: (MaLevelRow) -> Unit,
+    /** 一键清掉本标的图上全部本族分析划线（面板自动名的那批告警规则）。 */
     onClearLines: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -165,21 +167,22 @@ fun EmaAnalysisSheet(
         // 比较基准：实时价优先（行情一来就跟着动），没有才用末根收盘
         val live = state.lastPrice?.takeIf { it.isFinite() && it > 0 }
         val base = live ?: scan.fallbackPrice
-        val buckets = remember(scan.levels, base) { EmaAnalysis.split(scan.levels, base) }
+        val buckets = remember(scan.levels, base) { MaAnalysis.split(scan.levels, base) }
         /**
          * 一档 → 图上那条线。整张表一次算好：行标记、列头「已画 N」都读它，
          * 别让同一个匹配在一帧里跑几十遍。
          */
-        val refs = remember(rules, scan.levels) {
+        val refs = remember(rules, scan.levels, family) {
             buildMap {
                 for (level in scan.levels) {
-                    put(lineKey(level.interval, level.period), EmaAnalysis.lineOf(rules, level))
+                    put(lineKey(level.interval, level.period), MaAnalysis.lineOf(rules, family, level))
                 }
             }
         }
-        val refOf: (EmaLevelRow) -> EmaLineRef? = { row -> refs[lineKey(row.interval, row.period)] }
-        val orphans = remember(rules, state.intervals, state.emaCatalog) {
-            EmaAnalysis.orphanLineNames(rules, state.intervals, state.emaCatalog)
+        val refOf: (MaLevelRow) -> MaLineRef? = { row -> refs[lineKey(row.interval, row.period)] }
+        val catalog = state.catalogOf(family)
+        val orphans = remember(rules, state.intervals, catalog, family) {
+            MaAnalysis.orphanLineNames(rules, family, state.intervals, catalog)
         }
         val hasTable = scan.levels.isNotEmpty()
 
@@ -204,7 +207,7 @@ fun EmaAnalysisSheet(
         /**
          * 当前看的那一档 —— 缩略图跟着它。
          *
-         * 存（周期 storageKey, 档位）而不是行对象：每分钟刷新都会重建 `EmaLevelRow`，
+         * 存（周期 storageKey, 档位）而不是行对象：每分钟刷新都会重建 `MaLevelRow`，
          * 存行会让选中项被替换成上一轮的那个快照。没存过 / 那一档已不在当前页签里时，
          * 落到这一侧**离现价最近**的一条（列表本来就是这么排的），所以切页签、现价穿档
          * 都能自动跟到一条有效的水位。
@@ -222,14 +225,18 @@ fun EmaAnalysisSheet(
         val emptyHint = if (sideRows.isEmpty() && otherRows.isNotEmpty()) {
             val nearest = otherRows.first()
             EmptySideHint(
-                title = side.empty,
+                title = if (side == Side.RESISTANCE) {
+                    "现价上方没有已配置的 ${family.label}"
+                } else {
+                    "现价下方没有已配置的 ${family.label}"
+                },
                 detail = buildString {
                     append("现价 ${formatPrice(base, state.tickSize)} ")
-                    append("已在全部 ${buckets.resistance.size + buckets.support.size} 档 EMA ")
+                    append("已在全部 ${buckets.resistance.size + buckets.support.size} 档 ${family.label} ")
                     append(if (side == Side.RESISTANCE) "之上" else "之下")
                     append("；最近的一道在")
                     append(if (side == Side.RESISTANCE) "下方" else "上方")
-                    append("：${nearest.interval.label} · EMA${nearest.period}（")
+                    append("：${nearest.interval.label} · ${family.lineLabel(nearest.period)}（")
                     append(PriceFormatter.formatChange(nearest.gapPercent))
                     append("）")
                 },
@@ -267,6 +274,7 @@ fun EmaAnalysisSheet(
             Box(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                     PanelHead(
+                        family = family,
                         title = state.title,
                         base = base,
                         live = live != null,
@@ -275,19 +283,21 @@ fun EmaAnalysisSheet(
                         done = analysis.done,
                         total = state.intervals.size,
                         updatedAt = analysis.updatedAt,
-                        marked = remember(rules) { rules.count { EmaAnalysis.isAutoNote(it.name) } },
+                        marked = remember(rules, family) {
+                            rules.count { MaAnalysis.isFamilyAutoNote(it.name, family) }
+                        },
                         onRefresh = onRefresh,
                         onClearLines = onClearLines,
                         onDismiss = onDismiss,
                     )
                     Rule(inset = Spacing.Gutter)
 
-                    // 选中那一档的色槽（缩略图的 EMA 线用它）
+                    // 选中那一档的色槽（缩略图的均线用它）
                     val selectedColor = selectedRow
-                        ?.let { ChartLineColors[maRoleForSlot(MaFamily.EMA, state.emaColors[it.period] ?: 0).ordinal] }
+                        ?.let { ChartLineColors[maRoleForSlot(family, state.colorsOf(family)[it.period] ?: 0).ordinal] }
                         ?: colors.muted
                     val selectTab: (Side) -> Unit = { picked = if (it == Side.SUPPORT) 1 else 0 }
-                    val selectRow: (EmaLevelRow) -> Unit = {
+                    val selectRow: (MaLevelRow) -> Unit = {
                         selectedIv = it.interval.storageKey
                         selectedPeriod = it.period
                     }
@@ -300,9 +310,9 @@ fun EmaAnalysisSheet(
                                 "先在周期那一行的「＋」里加一个，再来分析",
                             )
 
-                            state.emaCatalog.isEmpty() -> EmptyHint(
-                                "EMA 一档都没配置",
-                                "先在指标栏「＋」里加几档 EMA，再来分析",
+                            catalog.isEmpty() -> EmptyHint(
+                                "${family.label} 一档都没配置",
+                                "先在指标栏「＋」里加几档 ${family.label}，再来分析",
                             )
 
                             !hasTable && analysis.refreshing -> EmptyHint(
@@ -311,11 +321,12 @@ fun EmaAnalysisSheet(
                                 numeric = true,
                             )
 
-                            !hasTable -> EmptyHint("所有周期都没能算出 EMA", "原因见下方提示")
+                            !hasTable -> EmptyHint("所有周期都没能算出 ${family.label}", "原因见下方提示")
 
                             // 横屏：左半屏缩略图、右半屏页签 + 列表
                             landscape -> Row(modifier = Modifier.fillMaxSize()) {
-                                EmaShapePane(
+                                MaShapePane(
+                                    family = family,
                                     row = selectedRow,
                                     curve = selectedCurve,
                                     side = side,
@@ -337,6 +348,7 @@ fun EmaAnalysisSheet(
                                 Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
                                     SideTabs(side = side, buckets = buckets, onSelect = selectTab)
                                     TabbedColumn(
+                                        family = family,
                                         side = side,
                                         rows = sideRows,
                                         listState = listState,
@@ -353,7 +365,8 @@ fun EmaAnalysisSheet(
 
                             // 竖屏：上半屏缩略图、下半屏页签 + 列表
                             else -> Column(modifier = Modifier.fillMaxSize()) {
-                                EmaShapePane(
+                                MaShapePane(
+                                    family = family,
                                     row = selectedRow,
                                     curve = selectedCurve,
                                     side = side,
@@ -368,6 +381,7 @@ fun EmaAnalysisSheet(
                                 )
                                 SideTabs(side = side, buckets = buckets, onSelect = selectTab)
                                 TabbedColumn(
+                                    family = family,
                                     side = side,
                                     rows = sideRows,
                                     listState = listState,
@@ -384,6 +398,7 @@ fun EmaAnalysisSheet(
                     }
 
                     Footnotes(
+                        family = family,
                         scan = scan,
                         orphans = orphans,
                         tickSize = state.tickSize,
@@ -420,12 +435,18 @@ fun EmaAnalysisSheet(
     }
 }
 
-/** 一档 (周期, 档位) 的稳定键 —— 只在这一层做映射，别和 `EmaAnalysis` 内部的口径混用。 */
+/** 一档 (周期, 档位) 的稳定键 —— 只在这一层做映射，别和 `MaAnalysis` 内部的口径混用。 */
 private fun lineKey(interval: CandleInterval, period: Int): String = "${interval.storageKey}|$period"
 
-private enum class Side(val title: String, val empty: String) {
-    RESISTANCE("上方压力", "现价上方没有已配置的 EMA"),
-    SUPPORT("下方支撑", "现价下方没有已配置的 EMA"),
+private enum class Side(val title: String) {
+    RESISTANCE("上方压力"),
+    SUPPORT("下方支撑"),
+}
+
+/** 空侧的一句话说明（族名随面板走）。 */
+private fun emptySideText(side: Side, family: MaFamily): String = when (side) {
+    Side.RESISTANCE -> "现价上方没有已配置的 ${family.label}"
+    Side.SUPPORT -> "现价下方没有已配置的 ${family.label}"
 }
 
 /** 一侧为空时的说明：现价已在全部 EMA 之上/之下，另附「另一侧最近的一道」跳转入口。 */
@@ -477,6 +498,7 @@ private fun EmptySideBlock(
  */
 @Composable
 private fun PanelHead(
+    family: MaFamily,
     title: String,
     base: Double,
     /** 基准是真·实时价（false = 用的是末根收盘，得说清）。 */
@@ -486,7 +508,7 @@ private fun PanelHead(
     done: Int,
     total: Int,
     updatedAt: Long,
-    /** 图上有几条 EMA 划线（自动名的那批告警规则）：0 时不给「清空」入口。 */
+    /** 图上有几条本族划线（自动名的那批告警规则）：0 时不给「清空」入口。 */
     marked: Int,
     onRefresh: () -> Unit,
     onClearLines: () -> Unit,
@@ -499,7 +521,7 @@ private fun PanelHead(
     // 就只留节奏与时刻 —— 身份本来也不用写，竖屏这两行上面就是「上方压力 / 下方支撑」页签
     val meta = if (roomy) {
         buildString {
-            append("EMA · 压力支撑分析 · 每 1 分钟自动刷新")
+            append("${family.label} · 压力支撑分析 · 每 1 分钟自动刷新")
             // 刷新中不报「上次」：那一秒里它正被新值取代，写出来反而让人去核对一个将过期的时刻
             if (!refreshing && updatedAt > 0) append(" · 上次 ${clockText(updatedAt)}")
         }
@@ -604,7 +626,7 @@ private fun PriceBlock(base: Double, live: Boolean, tickSize: BigDecimal?) {
 
 /** 页签（竖屏在缩略图下方、横屏在右栏顶部）：两个等宽、各带条数 —— 切过去前就知道另一侧有几道。 */
 @Composable
-private fun SideTabs(side: Side, buckets: EmaBuckets, onSelect: (Side) -> Unit) {
+private fun SideTabs(side: Side, buckets: MaBuckets, onSelect: (Side) -> Unit) {
     SegmentedControl(
         options = listOf(Side.RESISTANCE, Side.SUPPORT),
         selected = side,
@@ -625,14 +647,15 @@ private fun SideTabs(side: Side, buckets: EmaBuckets, onSelect: (Side) -> Unit) 
  */
 @Composable
 private fun TabbedColumn(
+    family: MaFamily,
     side: Side,
-    rows: List<EmaLevelRow>,
+    rows: List<MaLevelRow>,
     listState: LazyListState,
     state: DetailUiState,
-    refOf: (EmaLevelRow) -> EmaLineRef?,
+    refOf: (MaLevelRow) -> MaLineRef?,
     selectedKey: String,
-    onSelect: (EmaLevelRow) -> Unit,
-    /** 这一侧为空时的解释（现价已在全部 EMA 之上/之下）；null = 没东西可解释。 */
+    onSelect: (MaLevelRow) -> Unit,
+    /** 这一侧为空时的解释（现价已在全部均线之上/之下）；null = 没东西可解释。 */
     emptyHint: EmptySideHint?,
     onJump: () -> Unit,
     modifier: Modifier = Modifier,
@@ -640,6 +663,7 @@ private fun TabbedColumn(
     LazyColumn(state = listState, modifier = modifier.fillMaxSize()) {
         item(key = "head") {
             ColumnHead(
+                family = family,
                 side = side,
                 rows = rows,
                 marked = rows.count { refOf(it) != null },
@@ -647,7 +671,8 @@ private fun TabbedColumn(
             )
         }
         items(rows, key = { lineKey(it.interval, it.period) }) { row ->
-            EmaRow(
+            MaRow(
+                family = family,
                 row = row,
                 line = refOf(row),
                 side = side,
@@ -665,7 +690,7 @@ private fun TabbedColumn(
                         modifier = Modifier.padding(horizontal = Spacing.Gutter, vertical = Spacing.Sm),
                     )
                 } else {
-                    EmptyRow(side.empty)
+                    EmptyRow(emptySideText(side, family))
                 }
             }
         }
@@ -681,8 +706,9 @@ private fun TabbedColumn(
  */
 @Composable
 private fun ColumnHead(
+    family: MaFamily,
     side: Side,
-    rows: List<EmaLevelRow>,
+    rows: List<MaLevelRow>,
     marked: Int,
     showTitle: Boolean = true,
 ) {
@@ -721,7 +747,7 @@ private fun ColumnHead(
             Spacer(Modifier.weight(1f))
             if (nearest != null) {
                 Text(
-                    text = "最近 ${nearest.interval.label} · EMA${nearest.period}",
+                    text = "最近 ${nearest.interval.label} · ${family.lineLabel(nearest.period)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = colors.muted,
                 )
@@ -740,17 +766,18 @@ private fun ColumnHead(
  * 行内的周期小方框**只是标注**，不可点 —— 点了会切周期并把面板关掉。
  */
 @Composable
-private fun EmaRow(
-    row: EmaLevelRow,
-    line: EmaLineRef?,
+private fun MaRow(
+    family: MaFamily,
+    row: MaLevelRow,
+    line: MaLineRef?,
     side: Side,
     state: DetailUiState,
     selected: Boolean,
     onSelect: () -> Unit,
 ) {
     val colors = MarketTheme.colors
-    val slot = state.emaColors[row.period] ?: 0
-    val dot = ChartLineColors[maRoleForSlot(MaFamily.EMA, slot).ordinal]
+    val slot = state.colorsOf(family)[row.period] ?: 0
+    val dot = ChartLineColors[maRoleForSlot(family, slot).ordinal]
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -780,7 +807,7 @@ private fun EmaRow(
         Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(dot))
         Spacer(Modifier.width(Spacing.Xs))
         Text(
-            text = "EMA${row.period}",
+            text = family.lineLabel(row.period),
             style = MaterialTheme.typography.labelMedium,
             color = colors.ink,
             modifier = Modifier.width(52.dp),
@@ -815,17 +842,18 @@ private const val SHAPE_MIN_BARS = 16
 /**
  * 缩略形态图那一栏（竖屏在上半屏、横屏在左半屏）。
  *
- * 收盘价淡灰 + 这一档 EMA（色槽同色），**共用一根纵轴** —— 要看的就是
+ * 收盘价淡灰 + 这一档均线（色槽同色），**共用一根纵轴** —— 要看的就是
  * 「均线相对价格是抬还是压、拐点在哪」，分开归一化会把这条信息抹掉。
  * 双指缩放可见根数、双击复位；「− / ＋」给没有多指或想微调的场景兜底。
  * 画线动作也在这里：选中一条 → 按按钮，图上落 / 对齐 / 删掉那条告警线。
  */
 @Composable
-private fun EmaShapePane(
-    row: EmaLevelRow?,
-    curve: EmaCurve?,
+private fun MaShapePane(
+    family: MaFamily,
+    row: MaLevelRow?,
+    curve: MaCurve?,
     side: Side,
-    line: EmaLineRef?,
+    line: MaLineRef?,
     color: Color,
     tickSize: BigDecimal?,
     /** 选中的那一档（变化时缩放回到默认值）。 */
@@ -873,7 +901,7 @@ private fun EmaShapePane(
             Box(Modifier.size(7.dp).clip(CircleShape).background(color))
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "EMA${row.period}",
+                text = family.lineLabel(row.period),
                 style = MaterialTheme.typography.labelMedium,
                 color = colors.ink,
                 fontWeight = FontWeight.SemiBold,
@@ -906,7 +934,7 @@ private fun EmaShapePane(
                 maxLines = 1,
             )
         }
-        EmaCurveChart(
+        MaCurveChart(
             curve = curve,
             color = color,
             bars = shown,
@@ -923,7 +951,7 @@ private fun EmaShapePane(
         ) {
             LegendSwatch(color = colors.muted.copy(alpha = 0.5f), text = "收盘")
             Spacer(Modifier.width(Spacing.Xs))
-            LegendSwatch(color = color, text = "EMA")
+            LegendSwatch(color = color, text = family.label)
             Spacer(Modifier.weight(1f))
             Text(
                 text = "$shown / $total 根",
@@ -973,7 +1001,7 @@ private fun EmaShapePane(
     }
 }
 
-/** 图例小横线 + 名字（收盘 / EMA）。 */
+/** 图例小横线 + 名字（收盘 / 均线）。 */
 @Composable
 private fun LegendSwatch(color: Color, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1004,12 +1032,12 @@ private fun ZoomButton(text: String, enabled: Boolean, onClick: () -> Unit) {
 }
 
 /**
- * 缩略形态图本体：收盘（淡灰）+ EMA（色槽色），共用一根纵轴；
+ * 缩略形态图本体：收盘（淡灰）+ 均线（色槽色），共用一根纵轴；
  * 双指缩放改**可见根数**（右端始终贴着最新一根），双击复位。
  */
 @Composable
-private fun EmaCurveChart(
-    curve: EmaCurve,
+private fun MaCurveChart(
+    curve: MaCurve,
     color: Color,
     /** 当前可见根数（已按上下限夹过）。 */
     bars: Int,
@@ -1146,7 +1174,8 @@ private fun EmptyHint(title: String, subtitle: String?, numeric: Boolean = false
  */
 @Composable
 private fun Footnotes(
-    scan: EmaScan,
+    family: MaFamily,
+    scan: MaScan,
     orphans: List<String>,
     tickSize: BigDecimal?,
 ) {
@@ -1180,7 +1209,7 @@ private fun Footnotes(
             Text(
                 text = buildString {
                     append("${scan.missing.size} 档根数不够算不出：")
-                    append(scan.missing.take(6).joinToString(" / ") { "${it.interval.label}·EMA${it.period}" })
+                    append(scan.missing.take(6).joinToString(" / ") { "${it.interval.label}·${family.lineLabel(it.period)}" })
                     if (scan.missing.size > 6) append(" …")
                 },
                 style = MaterialTheme.typography.labelSmall,
@@ -1189,7 +1218,7 @@ private fun Footnotes(
             )
             Text(
                 text = scan.missing.joinToString("\n") {
-                    "${it.interval.label} 的 EMA${it.period}：只取到 ${it.bars} 根，至少要 ${it.period} 根"
+                    "${it.interval.label} 的 ${family.lineLabel(it.period)}：只取到 ${it.bars} 根，至少要 ${it.period} 根"
                 },
                 style = MaterialTheme.typography.labelSmall,
                 color = colors.muted,
@@ -1200,7 +1229,7 @@ private fun Footnotes(
         if (orphans.isNotEmpty()) {
             Text(
                 text = buildString {
-                    append("图上还有 ${orphans.size} 条 EMA 划线不在当前配置里（档位或周期被删掉了）：")
+                    append("图上还有 ${orphans.size} 条 ${family.label} 划线不在当前配置里（档位或周期被删掉了）：")
                     append(orphans.take(4).joinToString(" / "))
                     if (orphans.size > 4) append(" …")
                     append("（改回配置即可回显，或在图上删掉）")

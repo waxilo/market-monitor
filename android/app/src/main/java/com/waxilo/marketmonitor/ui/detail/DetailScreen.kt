@@ -169,8 +169,8 @@ fun DetailScreen(
     // 视觉画线（水平线/直线）：竖屏只显不可编，全屏可编辑 —— 两种视图同一份数据
     val chartLines by viewModel.chartLines.collectAsStateWithLifecycle()
     val drawDraft by viewModel.drawDraftLine.collectAsStateWithLifecycle()
-    // EMA 分析的面板状态与操作回执：面板是叠加层，竖屏也要能显示它（notice 原先只喂全屏）
-    val emaAnalysis by viewModel.emaAnalysis.collectAsStateWithLifecycle()
+    // 均线分析面板的状态与操作回执：面板是叠加层，竖屏也要能显示它（notice 原先只喂全屏）
+    val maAnalysis by viewModel.maAnalysis.collectAsStateWithLifecycle()
     val notice by viewModel.notice.collectAsStateWithLifecycle()
     // 每次现折：时间戳→下标依赖「这份序列的头一根」，翻页/切周期都要整体重折
     val drawLines = remember(chartLines, drawDraft, state.candles, state.interval) {
@@ -187,8 +187,9 @@ fun DetailScreen(
     var intervalManagerOpen by rememberSaveable { mutableStateOf(false) }
     // 均线周期管理对话框同理：入口在竖屏与全屏的指标条上各有一个「＋」
     var maManagerOpen by rememberSaveable { mutableStateOf(false) }
-    // EMA 压力支撑分析面板：竖屏顶栏与全屏周期条各有一枚「EMA分析」，共用一个开关
-    var emaSheetOpen by rememberSaveable { mutableStateOf(false) }
+    // 均线压力支撑分析面板：竖屏顶栏与全屏周期条各有一枚「MA分析 / EMA分析」，共用一个开关。
+    // null = 关着，否则是正在看的那一族（同一时刻只开一族）。
+    var analysisFamily by rememberSaveable { mutableStateOf<MaFamily?>(null) }
     // 铃铛预警整页：旋屏丢了重开即是（同周期管理草稿）
     var alertsPageOpen by rememberSaveable { mutableStateOf(false) }
     /**
@@ -202,7 +203,7 @@ fun DetailScreen(
     // 预警整页盖在详情页之上，系统返回键要先退这一层而不是整个详情页路由
     BackHandler(enabled = alertsPageOpen) { alertsPageOpen = false }
     // 面板开 = 取一轮 + 开始每分钟自动刷新；关 = 停掉定时器（静默刷新的定时器归 ViewModel 管）
-    LaunchedEffect(emaSheetOpen) { viewModel.setEmaPanelOpen(emaSheetOpen) }
+    LaunchedEffect(analysisFamily) { viewModel.setMaPanelOpen(analysisFamily) }
 
     Box(modifier = Modifier.fillMaxSize().background(MarketTheme.colors.paper)) {
         if (fullscreen) {
@@ -217,7 +218,7 @@ fun DetailScreen(
                 viewModel = viewModel,
                 onManageIntervals = { intervalManagerOpen = true },
                 onManageMa = { maManagerOpen = true },
-                onOpenEmaAnalysis = { emaSheetOpen = true },
+                onOpenAnalysis = { analysisFamily = it },
                 onExit = { fullscreen = false },
             )
         } else {
@@ -230,7 +231,7 @@ fun DetailScreen(
                     state = state,
                     sourceLabel = sourceLabel,
                     onBack = onBack,
-                    onOpenEmaAnalysis = { emaSheetOpen = true },
+                    onOpenAnalysis = { analysisFamily = it },
                     onToggleWatch = viewModel::toggleWatch,
                     onShowAlerts = { alertsPageOpen = true },
                 )
@@ -331,18 +332,19 @@ fun DetailScreen(
             )
         }
 
-        // EMA 分析面板：Dialog 自成一层，压在详情页与全屏图之上。
+        // 均线分析面板：Dialog 自成一层，压在详情页与全屏图之上。
         // 取数与每分钟自动刷新的开关由上方的 LaunchedEffect 交给 ViewModel。
-        if (emaSheetOpen) {
-            EmaAnalysisSheet(
+        analysisFamily?.let { family ->
+            MaAnalysisSheet(
+                family = family,
                 state = state,
-                analysis = emaAnalysis,
+                analysis = maAnalysis,
                 rules = symbolRules,
                 notice = notice,
-                onRefresh = viewModel::refreshEmaAnalysis,
-                onToggleLine = viewModel::toggleEmaLine,
-                onClearLines = viewModel::clearEmaLines,
-                onDismiss = { emaSheetOpen = false },
+                onRefresh = viewModel::refreshMaAnalysis,
+                onToggleLine = { row -> viewModel.toggleMaLine(row, family) },
+                onClearLines = { viewModel.clearMaLines(family) },
+                onDismiss = { analysisFamily = null },
             )
         }
 
@@ -442,7 +444,7 @@ private fun FullscreenChart(
     viewModel: DetailViewModel,
     onManageIntervals: () -> Unit,
     onManageMa: () -> Unit,
-    onOpenEmaAnalysis: () -> Unit,
+    onOpenAnalysis: (MaFamily) -> Unit,
     onExit: () -> Unit,
 ) {
     val colors = MarketTheme.colors
@@ -515,9 +517,11 @@ private fun FullscreenChart(
             onManage = onManageIntervals,
             compact = true,
             actions = {
-                // 「EMA分析」从指标条搬到了这里（与竖屏顶栏同一处语义：右上角）。
+                // 「MA / EMA 分析」从指标条搬到了这里（与竖屏顶栏同一处语义：右上角）。
                 // 全屏没有顶栏，周期条这一行就是它的「右上角」。
-                EmaAnalysisAction(compact = true, onClick = onOpenEmaAnalysis)
+                MaFamily.entries.forEach { family ->
+                    MaAnalysisAction(family = family, compact = true, onClick = { onOpenAnalysis(family) })
+                }
                 // 划线工具不在这里：它们搬到了图右侧的竖栏（DrawToolRail），顶栏只留「退出」
                 IconButton(onClick = onExit, modifier = Modifier.size(30.dp)) {
                     Icon(
@@ -1378,7 +1382,7 @@ private fun DetailTopBar(
     state: DetailUiState,
     sourceLabel: String,
     onBack: () -> Unit,
-    onOpenEmaAnalysis: () -> Unit,
+    onOpenAnalysis: (MaFamily) -> Unit,
     onToggleWatch: () -> Unit,
     onShowAlerts: () -> Unit,
 ) {
@@ -1389,7 +1393,9 @@ private fun DetailTopBar(
         onBack = onBack,
         large = false,
         actions = {
-            EmaAnalysisAction(onClick = onOpenEmaAnalysis)
+            MaFamily.entries.forEach { family ->
+                MaAnalysisAction(family = family, onClick = { onOpenAnalysis(family) })
+            }
             IconButton(onClick = onToggleWatch, modifier = Modifier.size(44.dp)) {
                 Icon(
                     imageVector = if (state.watched) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -1411,21 +1417,21 @@ private fun DetailTopBar(
 }
 
 /**
- * 「EMA分析」入口：一段带点击区的文字。
+ * 「MA分析 / EMA分析」入口：一段带点击区的文字。
  *
  * 用文字不用图标：图标集只引了 material-icons-core，里面没有能一眼表达「压力支撑」的
  * （Insights / ShowChart 都在 extended 包里，为一个入口拉整包依赖不划算）；
- * 而「EMA分析」四个字本身就说清了它是什么，塞进 44dp 的图标里反而要人猜。
+ * 而「MA分析」「EMA分析」几个字本身就说清了它是什么，塞进 44dp 的图标里反而要人猜。
  *
  * **最小高度给容器（Box），不给 Text**：Compose 的 Text 拿到比行高更大的约束时是从顶部
  * 开始画的（它只有水平对齐，没有垂直对齐），直接把 `defaultMinSize` 挂在 Text 上，
- * 四个字的视觉中心会比旁边 44dp 的图标按钮高出小半行 —— 顶栏看着像歪的（2026-10-24 修）。
+ * 几个字的视觉中心会比旁边 44dp 的图标按钮高出小半行 —— 顶栏看着像歪的（2026-10-24 修）。
  * 高度也与旁边那两枚 IconButton 取齐（顶栏 44dp / 全屏窄带 30dp），一排动作才在一根线上。
  *
  * [compact] 给全屏那条窄带用（那行只有 30dp 出头，40dp 的点击区会把整行顶高）。
  */
 @Composable
-private fun EmaAnalysisAction(compact: Boolean = false, onClick: () -> Unit) {
+private fun MaAnalysisAction(family: MaFamily, compact: Boolean = false, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .clip(Radius.xsShape)
@@ -1435,7 +1441,7 @@ private fun EmaAnalysisAction(compact: Boolean = false, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "EMA分析",
+            text = "${family.label}分析",
             style = if (compact) MaterialTheme.typography.labelSmall
             else MaterialTheme.typography.labelMedium,
             color = MarketTheme.colors.ink,

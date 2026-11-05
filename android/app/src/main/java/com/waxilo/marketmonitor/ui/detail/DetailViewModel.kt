@@ -10,14 +10,14 @@ import com.waxilo.marketmonitor.domain.alert.AlertState
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_EMA_CATALOG
 import com.waxilo.marketmonitor.domain.indicator.DEFAULT_MA_CATALOG
-import com.waxilo.marketmonitor.domain.indicator.EmaAnalysis
-import com.waxilo.marketmonitor.domain.indicator.EmaCurve
-import com.waxilo.marketmonitor.domain.indicator.EmaFailure
-import com.waxilo.marketmonitor.domain.indicator.EmaLevel
-import com.waxilo.marketmonitor.domain.indicator.EmaLevelRow
-import com.waxilo.marketmonitor.domain.indicator.EmaMissing
-import com.waxilo.marketmonitor.domain.indicator.EmaScan
-import com.waxilo.marketmonitor.domain.indicator.EmaTick
+import com.waxilo.marketmonitor.domain.indicator.MaAnalysis
+import com.waxilo.marketmonitor.domain.indicator.MaCurve
+import com.waxilo.marketmonitor.domain.indicator.MaFailure
+import com.waxilo.marketmonitor.domain.indicator.MaLevel
+import com.waxilo.marketmonitor.domain.indicator.MaLevelRow
+import com.waxilo.marketmonitor.domain.indicator.MaMissing
+import com.waxilo.marketmonitor.domain.indicator.MaScan
+import com.waxilo.marketmonitor.domain.indicator.MaTick
 import com.waxilo.marketmonitor.domain.indicator.MaFamily
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.domain.kline.KlineAggregator
@@ -293,18 +293,30 @@ data class DetailUiState(
             MaFamily.EMA -> drawnPeriods(emaCatalog, emaMuted)
         }
     }
+
+    /** 一族的**目录**（含眼睛闭着的）；分析面板的范围取它，不取「图上画了哪几条」。 */
+    fun catalogOf(family: MaFamily): List<Int> = when (family) {
+        MaFamily.MA -> maCatalog
+        MaFamily.EMA -> emaCatalog
+    }
+
+    /** 一族的期数 → 色槽（分析面板的色点与缩略图同色）。 */
+    fun colorsOf(family: MaFamily): Map<Int, Int> = when (family) {
+        MaFamily.MA -> maColors
+        MaFamily.EMA -> emaColors
+    }
 }
 
 /**
- * EMA 分析面板的一次扫描状态。
+ * 均线分析面板（MA / EMA 共用）的一次扫描状态。
  *
  * 单独一个 StateFlow 而不是塞进 [DetailUiState]：面板是叠加层，它的刷新节奏（每分钟）
  * 与图表完全不同，合进主 state 会让整张图跟着重组。扫描结果本身打包在 [scan] 里 ——
  * 静默刷新要求「旧值一直可用、新值一次换到位」，分开 set 会渲染出「新表配旧异常」的中间态。
  */
 @Immutable
-data class EmaAnalysisState(
-    val scan: EmaScan = EmaScan(),
+data class MaAnalysisState(
+    val scan: MaScan = MaScan(),
     /** 有取数在飞。**只喂给按钮与首次加载文案**，不拿来遮表（遮了就回到「清空刷新」）。 */
     val refreshing: Boolean = false,
     /** 已回来几个周期（只在首次取数、表还空着时看得到）。 */
@@ -312,12 +324,12 @@ data class EmaAnalysisState(
     /** 上次拿到新值的时间（0 = 还没成功过），面板的刷新按钮据此报「上次更新」。 */
     val updatedAt: Long = 0L,
     /**
-     * 每一档的尾段曲线（缩略图的数据源），键 = `EmaAnalysis.curveKey`。
+     * 每一档的尾段曲线（缩略图的数据源），键 = `MaAnalysis.curveKey`。
      *
      * 与 [scan] 同源、单独存一份：表只留末值，缩略图要看整段形态。断网时与表同口径地
-     * **沿用上一轮**（见 `refreshEmaAnalysis` 的合并）。
+     * **沿用上一轮**（见 `refreshMaAnalysis` 的合并）。
      */
-    val curves: Map<String, EmaCurve> = emptyMap(),
+    val curves: Map<String, MaCurve> = emptyMap(),
 )
 
 /**
@@ -397,7 +409,7 @@ class DetailViewModel(
                     ruleId = rule.id,
                     price = threshold.toDouble(),
                     // 用户写的备注优先；EMA 面板自动画的线没有 note，自动名（8时EMA50）直接顶上
-                    label = rule.note ?: rule.name.takeIf(EmaAnalysis::isAutoNote),
+                    label = rule.note ?: rule.name.takeIf(MaAnalysis::isAutoNote),
                 )
             }
         if (drag == null) own
@@ -611,9 +623,9 @@ class DetailViewModel(
         viewModelScope.launch {
             // 先恢复上次使用的周期与指标开关，再开始加载：顺序反了会被首次加载的 copy 覆盖
             restoreChartPreferences()
-            // 首屏根数与 EMA 面板同一口径（EmaAnalysis.window，按整个 EMA 目录算）：
+            // 首屏根数与 EMA 面板同一口径（MaAnalysis.window，按整个 EMA 目录算）：
             // 只在最长档位变化时才变 ⇒ 改颜色 / 开关小眼睛不会触发重拉
-            val emaBars = chart.map { EmaAnalysis.window(it.emaCatalog) }.distinctUntilChanged()
+            val emaBars = chart.map { MaAnalysis.window(it.emaCatalog) }.distinctUntilChanged()
             combine(interval, reloadToken, emaBars) { selected, _, bars -> selected to bars }
                 // 「正在取」这条标志由取数的链**独占**：实时增量不再顺手把它清掉
                 // （那会让手上的重载被误判成已就绪），换周期的那一瞬也要先立起来 ——
@@ -965,121 +977,140 @@ class DetailViewModel(
         }
     }
 
-    // ---- EMA 压力支撑分析（桌面端 EmaAnalysisPanel 的 Android 版） ----
+    // ---- 均线压力支撑分析（桌面端 MaAnalysisPanel 的 Android 版；MA / EMA 共用一套管线） ----
 
     /*
-     * 一次扫描 = 「周期条上配置的每个周期」各取一段 K 线，算出「EMA 目录里每一档」的末值，
-     * 再按最新价分成上方压力 / 下方支撑。范围取**配置**（[DetailUiState.intervals] ×
-     * [DetailUiState.emaCatalog]）而不是「图上画了哪几条」：被小眼睛藏起来的档位也该在表里，
+     * 一次扫描 = 「周期条上配置的每个周期」各取一段 K 线，算出「当前这一族目录里每一档」的
+     * 末值，再按最新价分成上方压力 / 下方支撑。范围取**配置**（[DetailUiState.intervals] ×
+     * [DetailUiState.catalogOf]）而不是「图上画了哪几条」：被小眼睛藏起来的档位也该在表里，
      * 这张表的用途正是「我现在该盯哪几道」。
+     *
+     * 两族**共用一份状态**（同一时刻只开一个面板）：打开另一族时整份清空再取，
+     * 否则会先闪一下上一族的价位。
      *
      * 状态放在 ViewModel 而不是面板内部：面板一关就整个卸载，state 全丢，下次点开又得从头
      * 取十来个周期的 K 线 —— 那几百毫秒里表是空的，而这份表的用法恰恰是「点开看一眼就走」。
      * 存在这里，关掉再开能立刻看到上次的数值，同时后台静默换成新的。
      */
-    private val emaScan = MutableStateFlow(EmaScan())
-    private val emaCurves = MutableStateFlow<Map<String, EmaCurve>>(emptyMap())
-    private val emaRefreshing = MutableStateFlow(false)
-    private val emaDone = MutableStateFlow(0)
-    private val emaUpdatedAt = MutableStateFlow(0L)
-    private var emaJob: Job? = null
-    private var emaAutoJob: Job? = null
+    private var analysisFamily = MaFamily.EMA
+    private val maScan = MutableStateFlow(MaScan())
+    private val maCurves = MutableStateFlow<Map<String, MaCurve>>(emptyMap())
+    private val maRefreshing = MutableStateFlow(false)
+    private val maDone = MutableStateFlow(0)
+    private val maUpdatedAt = MutableStateFlow(0L)
+    private var maJob: Job? = null
+    private var maAutoJob: Job? = null
 
-    val emaAnalysis: StateFlow<EmaAnalysisState> = combine(
-        emaScan,
-        emaRefreshing,
-        emaDone,
-        emaUpdatedAt,
-        emaCurves,
+    val maAnalysis: StateFlow<MaAnalysisState> = combine(
+        maScan,
+        maRefreshing,
+        maDone,
+        maUpdatedAt,
+        maCurves,
     ) { scan, refreshing, done, updatedAt, curves ->
-        EmaAnalysisState(scan, refreshing, done, updatedAt, curves)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), EmaAnalysisState())
+        MaAnalysisState(scan, refreshing, done, updatedAt, curves)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MaAnalysisState())
 
     /**
-     * 取一轮各周期 K 线并重算整表。
+     * 取一轮各周期 K 线并重算整表（族 = 当前面板打开的那一族）。
      *
-     * **不清旧值**：结果经 [EmaAnalysis.merge] 并到上一轮上（某周期没取到时沿用它的旧数）。
+     * **不清旧值**：结果经 [MaAnalysis.merge] 并到上一轮上（某周期没取到时沿用它的旧数）。
      * 上一轮还在飞就先取消 —— 两轮结果交错落盘会让表在新旧之间跳。
      *
-     * 拿到新值的最后一件事是**让图上的自动线跟着走**（[alignEmaRules]）：手动「刷新」与
+     * 拿到新值的最后一件事是**让图上的自动线跟着走**（[alignMaRules]）：手动「刷新」与
      * 每分钟的自动那一轮都经过这里 —— 它俩本来就是同一条路，对齐也该只挂在一处。
      */
-    fun refreshEmaAnalysis() {
+    fun refreshMaAnalysis() {
+        val family = analysisFamily
         val intervals = state.value.intervals
-        val periods = state.value.emaCatalog
+        val periods = state.value.catalogOf(family)
         if (intervals.isEmpty() || periods.isEmpty()) {
-            emaJob?.cancel()
-            emaJob = null
-            emaScan.value = EmaScan()
-            emaCurves.value = emptyMap()
-            emaRefreshing.value = false
-            emaDone.value = 0
+            maJob?.cancel()
+            maJob = null
+            maScan.value = MaScan()
+            maCurves.value = emptyMap()
+            maRefreshing.value = false
+            maDone.value = 0
             return
         }
-        emaJob?.cancel()
-        emaJob = viewModelScope.launch {
-            emaRefreshing.value = true
-            emaDone.value = 0
-            val barCount = EmaAnalysis.window(periods)
+        maJob?.cancel()
+        maJob = viewModelScope.launch {
+            maRefreshing.value = true
+            maDone.value = 0
+            val barCount = MaAnalysis.window(periods)
             val outcomes = coroutineScope {
                 intervals.map { iv ->
                     // 每个周期各自 +1，面板据此说「正在取 3 / 9」（只喂首次加载的文案）
-                    async { scanOneEmaInterval(iv, barCount).also { emaDone.update { n -> n + 1 } } }
+                    async { scanOneInterval(iv, barCount).also { maDone.update { n -> n + 1 } } }
                 }.awaitAll()
             }
-            val tally = tallyEma(outcomes, periods)
-            val merged = EmaAnalysis.merge(emaScan.value, tally.scan)
-            emaScan.value = merged
+            val tally = tallyMa(outcomes, periods, family)
+            val merged = MaAnalysis.merge(maScan.value, tally.scan)
+            maScan.value = merged
             // 曲线与表同口径：表里还留着这一档（整段没取回来 / 这轮根数差几根）就沿用上一轮，
             // 断网时缩略图仍看得出形态；表里已经没了的档位，曲线也一起丢掉
-            val kept = merged.levels.map { EmaAnalysis.curveKey(it.interval, it.period) }.toSet()
-            emaCurves.value = emaCurves.value.filterKeys { it in kept } + tally.curves
-            emaUpdatedAt.value = System.currentTimeMillis()
-            emaRefreshing.value = false
-            // 数值到手：图上的自动线跟着走（与桌面端 onLevels → alignEmaLines 同一时刻）。
+            val kept = merged.levels.map { MaAnalysis.curveKey(it.interval, it.period) }.toSet()
+            maCurves.value = maCurves.value.filterKeys { it in kept } + tally.curves
+            maUpdatedAt.value = System.currentTimeMillis()
+            maRefreshing.value = false
+            // 数值到手：图上的自动线跟着走（与桌面端 onLevels → alignLevelLines 同一时刻）。
             // 放在 refreshing 落下之后 —— 对齐要写库，别让按钮多转那一会儿。
-            alignEmaRules(merged)
+            alignMaRules(merged, family)
         }
     }
 
     /**
-     * 面板开 / 关：开就立刻取一轮并开始每分钟自动刷新，关就停掉定时器。
+     * 面板开 / 关（[family] = null 即关闭）：开就立刻取一轮并开始每分钟自动刷新，关就停掉定时器。
+     *
+     * [family] 换了（先看 EMA、关掉后又点 MA）时**整份清空再取**：两族的表与曲线互不相干，
+     * 留着上一族的旧值只会让新面板先闪一下错价。
      *
      * 定时器放在 ViewModel 而不是面板的 `LaunchedEffect`：旋屏重建不该让「每分钟自己变新」
      * 断在一半（重建后面板会再 open 一次，但那两次之间的计时是白丢的）。
      */
-    fun setEmaPanelOpen(open: Boolean) {
-        if (open) {
-            refreshEmaAnalysis()
-            if (emaAutoJob == null) {
-                emaAutoJob = viewModelScope.launch {
+    fun setMaPanelOpen(family: MaFamily?) {
+        if (family != null) {
+            if (analysisFamily != family) {
+                analysisFamily = family
+                maJob?.cancel()
+                maJob = null
+                maScan.value = MaScan()
+                maCurves.value = emptyMap()
+                maRefreshing.value = false
+                maDone.value = 0
+                maUpdatedAt.value = 0L
+            }
+            refreshMaAnalysis()
+            if (maAutoJob == null) {
+                maAutoJob = viewModelScope.launch {
                     while (isActive) {
                         delay(EMA_AUTO_REFRESH_MS)
-                        refreshEmaAnalysis()
+                        refreshMaAnalysis()
                     }
                 }
             }
         } else {
-            emaAutoJob?.cancel()
-            emaAutoJob = null
+            maAutoJob?.cancel()
+            maAutoJob = null
         }
     }
 
     /**
-     * 面板里点一行：把这一档落成 / 对齐 / 撤掉一条告警线（判据见 [EmaAnalysis.tick]）。
+     * 面板里点一行：把这一档落成 / 对齐 / 撤掉一条告警线（判据见 [MaAnalysis.tick]）。
      *
      * 画出来的就是**普通告警线**（`alert_rule`）—— 与拖出来的是同一种东西，所以在图上能拖、
-     * 能在预警列表里看到、也能在预警页关掉或删掉。名字用自动备注（`1时EMA50`），面板靠它回显。
+     * 能在预警列表里看到、也能在预警页关掉或删掉。名字用自动备注（`1时MA20` / `1时EMA50`），
+     * 面板靠它回显。
      */
-    fun toggleEmaLine(row: EmaLevelRow) {
-        val note = EmaAnalysis.note(row.interval, row.period)
+    fun toggleMaLine(row: MaLevelRow, family: MaFamily) {
+        val note = MaAnalysis.note(family, row.interval, row.period)
         viewModelScope.launch {
             try {
-                when (val tick = EmaAnalysis.tick(symbolRules.value, row.level, note)) {
-                    EmaTick.None -> showNotice("这一档还没算出来，稍后再试")
-                    EmaTick.Add -> saveEmaRule(row, note)
-                    is EmaTick.Align -> alignEmaRule(tick.ruleId, row, note)
-                    is EmaTick.Remove -> {
+                when (val tick = MaAnalysis.tick(symbolRules.value, family, row.level, note)) {
+                    MaTick.None -> showNotice("这一档还没算出来，稍后再试")
+                    MaTick.Add -> saveMaRule(row, note)
+                    is MaTick.Align -> alignMaRule(tick.ruleId, row, note)
+                    is MaTick.Remove -> {
                         alerts.deleteRule(tick.ruleId)
                         showNotice("已取消 $note 的告警线")
                     }
@@ -1093,18 +1124,24 @@ class DetailViewModel(
     }
 
     /**
-     * 一键清掉本标的图上**全部 EMA 分析画的线**（= 名字是面板自动名的那批告警规则）。
+     * 一键清掉本标的图上**这一族分析画的线**（= 名字是这一族面板自动名的那批告警规则）。
      *
-     * 只按名字收（`8时EMA50` / 旧名 `1hEMA50`，见 [EmaAnalysis.isAutoNote]）：
-     * 用户手拖的告警线、手画的划线一概不碰。画没了随时回面板点行补回来，
+     * 只按名字收（`8时MA20` / `8时EMA50`，见 [MaAnalysis.isFamilyAutoNote]）：
+     * 用户手拖的告警线、手画的划线、另一族的线一概不碰。画没了随时回面板点行补回来，
      * 所以不设二次确认 —— 回执里说了清了几条。
      */
-    fun clearEmaLines() {
+    fun clearMaLines(family: MaFamily) {
         viewModelScope.launch {
             try {
-                val targets = symbolRules.value.filter { EmaAnalysis.isAutoNote(it.name) }
+                val targets = symbolRules.value.filter { MaAnalysis.isFamilyAutoNote(it.name, family) }
                 targets.forEach { alerts.deleteRule(it.id) }
-                showNotice(if (targets.isEmpty()) "图上没有 EMA 划线" else "已清空 ${targets.size} 条 EMA 划线")
+                showNotice(
+                    if (targets.isEmpty()) {
+                        "图上没有 ${family.label} 划线"
+                    } else {
+                        "已清空 ${targets.size} 条 ${family.label} 划线"
+                    },
+                )
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1118,10 +1155,10 @@ class DetailViewModel(
      *
      * 两个理由：① 桌面端也是原样落，两边数值才对得上；② 一旦四舍五入，「已对齐」这个判据
      * 就永远不成立（线价被改过，与下一轮的 EMA 值不可能再相等），面板会满屏「待对齐」，
-     * 而且每轮刷新都判成「漂了」，[alignEmaRules] 会不停写库（写得还是同一个价）。
+     * 而且每轮刷新都判成「漂了」，[alignMaRules] 会不停写库（写得还是同一个价）。
      * 规则表本身不校验刻度（那条校验只在预警编辑器里）。
      */
-    private suspend fun saveEmaRule(row: EmaLevelRow, note: String) {
+    private suspend fun saveMaRule(row: MaLevelRow, note: String) {
         val price = BigDecimal.valueOf(row.value)
         alerts.saveRule(
             AlertRule(
@@ -1137,7 +1174,7 @@ class DetailViewModel(
         showNotice("已画 $note · 穿越 ${priceLabel(price)} 提醒")
     }
 
-    private suspend fun alignEmaRule(ruleId: Long, row: EmaLevelRow, note: String) {
+    private suspend fun alignMaRule(ruleId: Long, row: MaLevelRow, note: String) {
         val existing = alerts.rule(ruleId) ?: return
         val price = BigDecimal.valueOf(row.value)
         val moved = existing.threshold?.compareTo(price) != 0
@@ -1158,9 +1195,9 @@ class DetailViewModel(
     }
 
     /**
-     * 每轮扫描结束后把图上的 EMA 自动线拉到新值（判据见 [EmaAnalysis.alignments]）。
+     * 每轮扫描结束后把图上**这一族**的自动线拉到新值（判据见 [MaAnalysis.alignments]）。
      *
-     * 与上面的人工对齐 [alignEmaRule] 有两处**故意不同**：
+     * 与上面的人工对齐 [alignMaRule] 有两处**故意不同**：
      *
      *  - **不改 `enabled`**：用户可能在预警页特意关掉了这条线，每分钟自动打开一次就成了
      *    骚扰；人工点那一下是「我要它盯着」，自动这一趟不是。
@@ -1171,8 +1208,8 @@ class DetailViewModel(
      * 写库是**逐条、静默**的：一条失败不该拖住其余几条，也不该弹提示 —— 这是背景动作，
      * 下一轮（60 秒后）还会再试。取消失常照样往上抛，别把 cancel 吞成「对齐失败」。
      */
-    private suspend fun alignEmaRules(scan: EmaScan) {
-        val moves = EmaAnalysis.alignments(symbolRules.value, scan.levels)
+    private suspend fun alignMaRules(scan: MaScan, family: MaFamily) {
+        val moves = MaAnalysis.alignments(symbolRules.value, family, scan.levels)
         for (move in moves) {
             try {
                 val rule = alerts.rule(move.ruleId) ?: continue
@@ -1185,31 +1222,31 @@ class DetailViewModel(
         }
     }
 
-    private suspend fun scanOneEmaInterval(interval: CandleInterval, bars: Int): EmaOutcome = try {
+    private suspend fun scanOneInterval(interval: CandleInterval, bars: Int): MaOutcome = try {
         // 排序是幂等的保险：只依赖「最后一根是此刻」这一条，不赌数据源返回的方向
-        EmaOutcome.Ok(interval, repository.klines(id, interval, bars).klines.sortedBy { it.openTime })
+        MaOutcome.Ok(interval, repository.klines(id, interval, bars).klines.sortedBy { it.openTime })
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        EmaOutcome.Bad(interval, e.displayMessage())
+        MaOutcome.Bad(interval, e.displayMessage())
     }
 
-    private fun tallyEma(outcomes: List<EmaOutcome>, periods: List<Int>): EmaTally {
-        val levels = mutableListOf<EmaLevel>()
-        val failures = mutableListOf<EmaFailure>()
-        val missing = mutableListOf<EmaMissing>()
-        val curves = mutableMapOf<String, EmaCurve>()
+    private fun tallyMa(outcomes: List<MaOutcome>, periods: List<Int>, family: MaFamily): MaTally {
+        val levels = mutableListOf<MaLevel>()
+        val failures = mutableListOf<MaFailure>()
+        val missing = mutableListOf<MaMissing>()
+        val curves = mutableMapOf<String, MaCurve>()
         // 兜底基准取**最细**那个周期：周期越细，最后一根离「此刻」越近
         var finest = Long.MAX_VALUE
         var finestClose = Double.NaN
         for (outcome in outcomes) {
             when (outcome) {
-                is EmaOutcome.Bad -> failures += EmaFailure(outcome.interval, outcome.reason)
+                is MaOutcome.Bad -> failures += MaFailure(outcome.interval, outcome.reason)
 
-                is EmaOutcome.Ok -> {
+                is MaOutcome.Ok -> {
                     val bars = outcome.bars
                     if (bars.isEmpty()) {
-                        failures += EmaFailure(outcome.interval, "这个周期没有取到 K 线")
+                        failures += MaFailure(outcome.interval, "这个周期没有取到 K 线")
                         continue
                     }
                     val closes = DoubleArray(bars.size) { bars[it].closeDouble() }
@@ -1220,20 +1257,20 @@ class DetailViewModel(
                     }
                     for (period in periods) {
                         // 曲线与末值出自同一次递推：表里的价与缩略图右端不可能对不上
-                        val curve = EmaAnalysis.curve(outcome.interval, closes, period)
+                        val curve = MaAnalysis.curve(family, outcome.interval, closes, period)
                         val value = curve?.values?.lastOrNull() ?: Double.NaN
                         if (curve != null && value.isFinite() && value > 0) {
-                            levels += EmaLevel(outcome.interval, period, value)
-                            curves[EmaAnalysis.curveKey(outcome.interval, period)] = curve
+                            levels += MaLevel(outcome.interval, period, value)
+                            curves[MaAnalysis.curveKey(outcome.interval, period)] = curve
                         } else {
-                            missing += EmaMissing(outcome.interval, period, closes.size)
+                            missing += MaMissing(outcome.interval, period, closes.size)
                         }
                     }
                 }
             }
         }
-        return EmaTally(
-            scan = EmaScan(levels, failures, missing, emptyList(), finestClose),
+        return MaTally(
+            scan = MaScan(levels, failures, missing, emptyList(), finestClose),
             curves = curves,
         )
     }
@@ -1312,7 +1349,7 @@ class DetailViewModel(
      *
      * 两类线分属两个存储域，各写各的列：
      * · 告警线 → `alert_rule.note`，**不动 name** —— 自动画的线名字形如 `8时EMA50`，
-     *   它是 EMA 压力支撑面板按名字认领那条线的键（见 [EmaAnalysis.lineOf]）；
+     *   它是 EMA 压力支撑面板按名字认领那条线的键（见 [MaAnalysis.lineOf]）；
      * · 水平线 / 直线 → `chart_line.note`。
      *
      * 空白（含全空格）统一按「删掉备注」写 null：库里不该同时躺着 "" 与 null 两种
@@ -1493,7 +1530,7 @@ class DetailViewModel(
 
     /**
      * 取一段完整的序列（至少 [BASE_PAGE] 根基础周期蜡烛，长档 EMA 需要时按
-     * [EmaAnalysis.window] 加长）+ 它归属的基础周期。
+     * [MaAnalysis.window] 加长）+ 它归属的基础周期。
      *
      * **`rawBase` 与 `raw` 必须同时更新**：这一对就是「哪一段序列是就绪的」的答案。
      * 取失败时两者一起作废（不能只清 raw 留着 rawBase，也不能反过来）。
@@ -1633,13 +1670,13 @@ private fun List<SubPaneKind>.toSubPaneKeys(): String = joinToString(",") { it.n
 
 /** 单个周期取数的结果：拿到 K 线，或一句**原样留着**的失败原因（见面板的异常提示）。 */
 /** 一轮扫描的产物：整表 + 每档曲线（缩略图数据源）。 */
-private data class EmaTally(
-    val scan: EmaScan,
-    val curves: Map<String, EmaCurve>,
+private data class MaTally(
+    val scan: MaScan,
+    val curves: Map<String, MaCurve>,
 )
 
-private sealed interface EmaOutcome {
-    data class Ok(val interval: CandleInterval, val bars: List<Kline>) : EmaOutcome
+private sealed interface MaOutcome {
+    data class Ok(val interval: CandleInterval, val bars: List<Kline>) : MaOutcome
 
-    data class Bad(val interval: CandleInterval, val reason: String) : EmaOutcome
+    data class Bad(val interval: CandleInterval, val reason: String) : MaOutcome
 }
