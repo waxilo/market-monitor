@@ -975,3 +975,56 @@ Android：① `syncInstruments` 加 **6 小时 TTL**（`InstrumentDao.latestSync
   推完 `git fetch origin main` + `update-ref refs/heads/main 0a3dd05`（没 reset）；
   `git fetch origin --tags` 后本地 `desktop-v0.1.64` 自动建好（旧 0.1.6x tag 的 clobber 提示是本地附注 tag 与远端轻量 ref 的差异，可忽略）。
 - 用掉的 tag 追加：`0.9.72`、`desktop-v0.1.64`。
+
+## desktop 0.1.65 + android 0.9.73 → 0.9.74（双端，2026-11-05 下午）
+
+两项功能：
+1. **网络代理两态（两端）**：设置里可选「跟随系统（默认）/ 强制直连」。桌面宿主侧 reqwest 与
+   updater 都按开关加 `no_proxy`，切换即重建连接池；WebSocket 无法单独绕过系统代理，直连时不开 WS、
+   实时行情回退 REST。Android 的 `SystemProxySelector` 直连时直接 `NO_PROXY`，切换作废连接池并广播重载，
+   DataStore 持久化。桌面设置侧栏新增「网络」分类，Android 设置新增「网络」分组。
+2. **现货源测速（两端）+ Android 数据源入口合并**：桌面数据源弹窗里现货两行与合约一起并行测速
+   （一个现货源是一串域名，并行取最先答上的耗时；全挂时显示首选域原因，可单行重测）。
+   Android 最终把现货与合约选择**合并成一个「数据源」入口**：设置页只显示当前
+   `现货 · 合约`，点开弹窗分「现货 / 永续合约」两组，打开即并行测速，点一行即切换并关闭。
+
+⚠️ **版本插曲**：`0.9.73` / `desktop-v0.1.65` 的 tag 在 Android 合并弹窗那一版落地**之前**就被创建
+（都指向 `be6e93a`），Android 通道一度发出了旧 UI 的 0.9.73。为不强改已发布 tag，Android 顺延
+**0.9.74（versionCode 86）**重新发布，通道里的 0.9.73 被原地换掉；`0.9.73` tag 保留仅作触发器历史。
+桌面侧在 `be6e93a` 与后续 commit 的桌面树完全一致，0.1.65 产物不受影响。
+
+提交链（本地 → 远端）：
+- `5ea6d62` feat(desktop) → `dd182ac`
+- `79f948b` feat(android) → `1b3476b`
+- `a32f0fa` chore(release) → `be6e93a`（tag `0.9.73` + `desktop-v0.1.65`，均指向此 commit）
+- `7fc7971` feat(android 数据源合并) → `8cdfc6e`
+- `cdd4143` chore(release 0.9.74) → `08d1e64`（tag `0.9.74` 指向此 commit）
+
+工作流：
+- Desktop Release **41990528254** 全绿（~6 min），Release Android 0.9.73 **41990518755** 绿（后作废）；
+  Android 0.9.74 Release **41991273734** 绿；CI：**41990451975** 绿、**41991244883** 绿
+  （`41991013865` 被同分支连推的 concurrency 取消，属正常）。
+
+通道验收：
+- 桌面 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.65
+  无旧版残留；`latest.json` 0.1.65（pub_date `2026-11-05T08:00:18.826Z`）；
+  `verify-channel.mjs 0.1.65` → **34/34 PASS**；exe **2821907**（sidecar `c3ef2a91…` == digest）、
+  dmg 4471305、mac app.tar.gz 4390205。
+- Android `android-latest`：id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z），
+  只有 `market-monitor-0.9.74.apk`（**11235972**）+ `.sha256`（asset digest `61699100…` == 边车）；
+  CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、`本次版本号：0.9.74`。
+- 包内证据：桌面 CI vite 指纹 `index-BwiSfO8T.js 340.02` / `index-CdduQyBs.css 53.92`（108 modules）
+  == 本地 `npm run build`。
+
+✅ 打 tag 前：桌面 `npm run build` 绿；Android 单测 **433 例全绿**、`:app:assembleDebug` 绿。
+✅ 真机走查（MuMu 横屏 1920×1080，debug 包）：
+- 网络 → 代理：跟随系统 / 强制直连可切，选强制直连后杀进程重启仍保持；再切回跟随系统。
+- 行情数据源：设置页单入口显示 `币安现货 · Aster 官方`；点开弹窗自动测速——
+  现货组 币安 **180ms（最快）** / Gate 2806ms，合约组 Aster 292ms（最快）/ OKX 323ms / 币安合约 628ms…
+  点 Gate 行后弹窗关闭、设置页副标题变为 `Gate 现货 · Aster 官方`；再切回币安。
+- 桌面浏览器预览：数据源弹窗现货行显示「最快 1329ms / 连接超时」+ 重测，头部「重新检测现货」可用；
+  设置 → 网络两态可切。
+
+推送仍走 `.workbuddy/tmp/api-push-0948.py`（5 次，`--parent` 传完整 40 位远端 SHA，均带
+`PYTHONIOENCODING=utf-8`）；tag 用 `tag-0973-0165.py` 与 `tag-0974.py`（先断言 tree 一致）。
+- 用掉的 tag 追加：`0.9.73`、`desktop-v0.1.65`、`0.9.74`。
