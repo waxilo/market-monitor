@@ -4,11 +4,12 @@
 //! `Access-Control-Allow-Origin`）。多数据源之后这条不成立：实测 Aster、币安合约、
 //! OKX、Bybit、Bitget、MEXC 的响应里都没有放行头，webview 的 fetch 一概读不到 ——
 //! 取数统一改走宿主侧 reqwest（与更新下载同一条 TLS 栈，`system-proxy` 跟随系统代理，
-//! 行为与浏览器一致），前端只拿回状态码与响应体。
+//! 行为与浏览器一致；设置里也可改成强制直连），前端只拿回状态码与响应体。
 //!
 //! 这里刻意只做「发请求」：各家的 URL 构造与响应归一化在前端的 lib/dialects.ts
 //! （对应 App 的 data/remote/dialect），Rust 侧不感知任何盘口协议。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -35,13 +36,40 @@ pub struct MarketResponse {
     used_weight_1m: Option<u32>,
 }
 
+/// 用户是否选择「强制直连」（false = 跟随系统代理）。
+static DIRECT_CONNECTION: AtomicBool = AtomicBool::new(false);
+
 fn build_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .timeout(REQUEST_TIMEOUT);
+    if DIRECT_CONNECTION.load(Ordering::Relaxed) {
+        builder = builder.no_proxy();
+    }
+    builder
         .build()
         .expect("构造行情 HTTP 客户端失败")
+}
+
+/// 更新检查与下载共用这一口径（见 update.rs）。
+pub(crate) fn direct_connection() -> bool {
+    DIRECT_CONNECTION.load(Ordering::Relaxed)
+}
+
+/// 切换「跟随系统代理 / 强制直连」，并立刻重建客户端。
+///
+/// 只改标志不重建是不够的：池子里已有的连接是经代理建起来的，会被继续复用，
+/// 用户看到的就是「开关拨了但没效果」。这里不走 [reset_client] 的冷却 —— 主动操作必须立即生效。
+#[tauri::command]
+pub fn set_direct_connection(enabled: bool) {
+    if DIRECT_CONNECTION.swap(enabled, Ordering::SeqCst) == enabled {
+        return;
+    }
+    let mut slot = slot().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    slot.client = build_client();
+    slot.generation = slot.generation.wrapping_add(1);
+    slot.last_reset = Some(Instant::now());
 }
 
 /// 行情 HTTP 客户端 + 重建代次。

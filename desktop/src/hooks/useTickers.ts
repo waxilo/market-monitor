@@ -4,6 +4,7 @@ import type { TickerSnapshot } from '../lib/dialects';
 import { endpointOf, useFuturesSourceUrl, useSpotSource } from '../lib/sources';
 import { isCoolingDown } from '../lib/rateGate';
 import { openBinanceSpotStream, openBinanceStream, streamHostOf, streamSymbolOf } from '../lib/stream';
+import { useDirectConnection } from './useDirectConnection';
 import { watchKey, type WatchItem } from './useWatchlist';
 
 export interface TickerCell {
@@ -46,6 +47,8 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
   // 任一源变了都要作废旧价格（否则两家盘口的价格会混在一个格子里）
   const futuresUrl = useFuturesSourceUrl();
   const spotSource = useSpotSource();
+  // 参与 effect 依赖：切到强制直连时 WS 不再开，需要重排成 REST 轮询（反之亦然）
+  const direct = useDirectConnection();
   const hasFutures = items.some((i) => i.market === 'FUTURES');
   const hasSpot = items.some((i) => i.market === 'SPOT');
   const source = `${hasFutures ? futuresUrl : ''}|${hasSpot ? spotSource : ''}`;
@@ -217,7 +220,7 @@ export function useTickers(items: WatchItem[], pollMs: number = POLL_MS) {
       stopSpotStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey, source]);
+  }, [itemsKey, source, direct]);
 
   return { cells, online };
 }

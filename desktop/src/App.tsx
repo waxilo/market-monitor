@@ -250,7 +250,7 @@ export default function App() {
             title={
               update.ready
                 ? `设置：v${update.readyVersion} 已下载好，点这里进去安装`
-                : '设置：主题 / 悬浮窗列表 / 快捷键 / 告警通知 / 更新'
+                : '设置：主题 / 网络 / 悬浮窗列表 / 快捷键 / 告警通知 / 更新'
             }
           >
             设置

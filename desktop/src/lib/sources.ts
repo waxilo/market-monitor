@@ -141,8 +141,8 @@ export function useFuturesSourceUrl(): string {
 // —————————————————————————— 现货源（可选，默认币安） ——————————————————————————
 
 /**
- * 现货候选。与合约不同，这里**不做本机测速**：两家真正的区别只有「大陆能不能直连」，
- * 用户按自己的网络常识点一下即可，没必要为两个选项再打一轮探测。
+ * 现货候选。与合约一样**在本机测速**：两家在不同网络下的可达性差异很大，
+ * 弹窗里的耗时/失败结论交给用户自己判断（探测定时见 [probeSpotEndpoint]）。
  *
  * **出厂是币安**（2026-10-30 用户指定，与 App 端同口径）：`data-api.binance.vision` 优先
  * （实测大陆可直连），再退到 api1~4 与主域。这些域共享同一个 IP 限频池，所以这层只解决
@@ -270,6 +270,38 @@ export interface ProbeOutcome {
  * （K 线一次 300 根）在慢网直连上需要的时间比这长，不能吃这个口径。
  */
 const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * 对指定现货源发一轮探测：**并行**打它的整条域名链，取最先答上的那个耗时。
+ *
+ * 为什么不只打首选域：现货源是一串主机（币安 6 个），首选挂了不代表这个源不可用；
+ * 为什么不串行：6 个域名各等 5 秒最坏要 30 秒，弹窗里那一行会一直转圈。
+ * 探测用 24h 行情（两家都有的最小请求之一），5 秒不响应即判超时。
+ */
+export async function probeSpotEndpoint(endpoint: SpotEndpoint): Promise<ProbeOutcome> {
+  const call = spotDialectOf(endpoint.id).ticker('BTC_USDT');
+  const results = await Promise.all(
+    endpoint.hosts.map(async (host): Promise<ProbeOutcome> => {
+      const started = performance.now();
+      try {
+        const res = await httpRequest(call.method, `${host}${call.url}`, call.body, PROBE_TIMEOUT_MS);
+        const latencyMs = Math.round(performance.now() - started);
+        return res.status >= 200 && res.status < 300
+          ? { ok: true, latencyMs }
+          : { ok: false, reason: `HTTP ${res.status}` };
+      } catch (error) {
+        const reason =
+          typeof error === 'string' ? error : error instanceof Error ? error.message : '探测失败';
+        return { ok: false, reason };
+      }
+    }),
+  );
+  const reachable = results
+    .filter((r): r is ProbeOutcome & { ok: true; latencyMs: number } => r.ok && r.latencyMs != null)
+    .sort((a, b) => a.latencyMs - b.latencyMs);
+  // 全挂时回首选域那条的原因：用户看到的应是「首选为什么不通」，而不是随机一个镜像
+  return reachable[0] ?? results[0] ?? { ok: false, reason: '探测失败' };
+}
 
 /** 对指定候选发一次探活请求（弹窗「全部重新检测」并行调用）。 */
 export async function probeEndpoint(endpoint: FuturesEndpoint): Promise<ProbeOutcome> {

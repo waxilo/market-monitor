@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { ensureDirectConnectionApplied } from './netPrefs';
 import { IS_TAURI } from './tauri';
 
 /** 加速站下拉项：key 与 Rust 侧 `Mirror` 一一对应（前缀、候选链规则都在 Rust）。 */
@@ -80,10 +81,13 @@ export async function fetchAppVersion(): Promise<string> {
 /** 检查更新；返回 null 表示已是最新（含更新通道还没发布过比当前更新的版本）。失败时抛出原因。 */
 export async function checkUpdate(mirror: string): Promise<UpdateInfo | null> {
   if (!IS_TAURI) throw new Error('浏览器预览不检查更新');
+  // 宿主侧在调用瞬间读代理模式，先把这个开关推上去
+  await ensureDirectConnectionApplied();
   return await invoke<UpdateInfo | null>('check_update', { mirror });
 }
 
 export async function startDownload(mirror: string): Promise<void> {
+  await ensureDirectConnectionApplied();
   await invoke('start_update_download', { mirror });
 }
 

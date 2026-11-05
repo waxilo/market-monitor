@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import App from './App';
 import { MiniApp } from './MiniApp';
 import { installAltGuard } from './lib/altGuard';
+import { ensureDirectConnectionApplied } from './lib/netPrefs';
 import './styles/theme.css';
 
 // 不用 StrictMode：图表手动管理 canvas，dev 双挂载会反复 init/dispose
@@ -9,6 +10,9 @@ import './styles/theme.css';
 
 // Alt 的默认动作两个窗口都不要（按下去输入会被宿主截走，见 lib/altGuard）
 installAltGuard();
+
+// 代理模式要在首批请求（含启动时的更新检查）之前交给宿主
+void ensureDirectConnectionApplied();
 
 const isMini = window.location.hash.startsWith('#/mini');
 createRoot(document.getElementById('root')!).render(isMini ? <MiniApp /> : <App />);

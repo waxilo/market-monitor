@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { ensureDirectConnectionApplied } from './netPrefs';
 import { IS_TAURI } from './tauri';
 
 export interface HttpResult {
@@ -31,6 +32,8 @@ export async function httpRequest(
   timeoutMs?: number,
 ): Promise<HttpResult> {
   if (IS_TAURI) {
+    // 代理模式必须先于首批请求生效，否则冷启动第一拍仍会走系统代理
+    await ensureDirectConnectionApplied();
     return await invoke<HttpResult>('market_request', {
       method,
       url,

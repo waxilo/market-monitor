@@ -3,6 +3,7 @@ import {
   FUTURES_ENDPOINTS,
   SPOT_ENDPOINTS,
   probeEndpoint,
+  probeSpotEndpoint,
   setFuturesSource,
   setSpotSource,
   useFuturesSourceUrl,
@@ -21,7 +22,7 @@ interface RowState {
 const domainOf = (baseUrl: string) => baseUrl.replace('https://', '');
 
 /**
- * 合约数据源弹窗：打开即**并行**检测全部候选（结果只对本机当前网络有效），点一行即选定。
+ * 数据源弹窗（现货 + 合约）：打开即**并行**检测全部候选（结果只对本机当前网络有效），点一行即选定。
  * 交互与文案照 App 的 FuturesSourcePickerDialog：每行独立回填，哪个先回来哪个先亮。
  *
  * 另有一枚**自动选择接口**的开关（出厂关闭）：关着时选定的源就是唯一真相，失败只会
@@ -38,10 +39,13 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
   const selectedUrl = useFuturesSourceUrl();
   const spotSource = useSpotSource();
   const [states, setStates] = useState<Record<string, RowState>>({});
+  /** 现货两行的测速结果（键是 SpotSourceId）。 */
+  const [spotStates, setSpotStates] = useState<Record<string, RowState>>({});
   /** 自动选择开关：初值取存档（缺省关），改动即时落盘 —— 关掉弹窗再开不会回弹。 */
   const [auto, setAuto] = useState(isAutoSourceEnabled);
   /** 每行独立的一代计数：重测没回来前又点一次，旧响应不许覆盖新结果。 */
   const genRef = useRef<Record<string, number>>({});
+  const spotGenRef = useRef<Record<string, number>>({});
 
   async function probeOne(endpoint: FuturesEndpoint) {
     const gen = (genRef.current[endpoint.baseUrl] ?? 0) + 1;
@@ -55,9 +59,22 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
     setStates((prev) => ({ ...prev, [endpoint.baseUrl]: { probing: false, outcome } }));
   }
 
+  async function probeSpotOne(endpoint: SpotEndpoint) {
+    const gen = (spotGenRef.current[endpoint.id] ?? 0) + 1;
+    spotGenRef.current[endpoint.id] = gen;
+    setSpotStates((prev) => ({
+      ...prev,
+      [endpoint.id]: { probing: true, outcome: prev[endpoint.id]?.outcome ?? null },
+    }));
+    const outcome = await probeSpotEndpoint(endpoint);
+    if (spotGenRef.current[endpoint.id] !== gen) return;
+    setSpotStates((prev) => ({ ...prev, [endpoint.id]: { probing: false, outcome } }));
+  }
+
   // 弹窗打开就先拉一轮：用户不必先点「全部重新检测」才知道哪个能用
   useEffect(() => {
     for (const endpoint of FUTURES_ENDPOINTS) void probeOne(endpoint);
+    for (const endpoint of SPOT_ENDPOINTS) void probeSpotOne(endpoint);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -70,6 +87,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
   }, [onClose]);
 
   const probing = Object.values(states).some((s) => s.probing);
+  const spotProbing = Object.values(spotStates).some((s) => s.probing);
   const fastest = useMemo(() => {
     const latencies = Object.values(states)
       .map((s) => s.outcome)
@@ -77,6 +95,13 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
       .map((o) => o.latencyMs ?? Number.POSITIVE_INFINITY);
     return latencies.length > 0 ? Math.min(...latencies) : null;
   }, [states]);
+  const fastestSpot = useMemo(() => {
+    const latencies = Object.values(spotStates)
+      .map((s) => s.outcome)
+      .filter((o): o is ProbeOutcome => o != null && o.ok)
+      .map((o) => o.latencyMs ?? Number.POSITIVE_INFINITY);
+    return latencies.length > 0 ? Math.min(...latencies) : null;
+  }, [spotStates]);
 
   // 整体按检测结论排序：能连的按延迟升序排最上面，连不上的沉底，未检测其次。
   // 结果逐条回填，快的域自然先浮上来；重测中的行沿用上一轮结论，位置不跳。
@@ -91,10 +116,24 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
     return [...FUTURES_ENDPOINTS].sort((a, b) => rank(a) - rank(b) || latency(a) - latency(b));
   }, [states]);
 
-  /** 现货行：只有两家、不测速 —— 区别是「大陆能否直连」，用户自己判断即可。 */
+  /** 现货行：与合约行同一套列位，多一枚测速胶囊与「重测」。 */
   const renderSpotRow = (endpoint: SpotEndpoint) => {
+    const state = spotStates[endpoint.id];
+    const outcome = state?.outcome ?? null;
     const isSelected = endpoint.id === spotSource;
     const title = `${isSelected ? '使用中' : '切换到'} ${endpoint.label} · ${endpoint.hosts.join(' → ')}`;
+    const pill = state?.probing
+      ? { cls: 'flat', text: '检测中…', title: '正在探测该源的首选域与镜像' }
+      : outcome?.ok
+        ? {
+            cls: 'up',
+            text: `${outcome.latencyMs === fastestSpot ? '最快 ' : ''}${outcome.latencyMs}ms`,
+            title: `${outcome.latencyMs}ms 往返`,
+          }
+        : outcome
+          ? { cls: 'down', text: outcome.reason ?? '失败', title: outcome.reason ?? '探测失败' }
+          : { cls: 'flat', text: '未检测', title: '本次还没探测到结果' };
+    const sub = `${domainOf(endpoint.hosts[0])} · ${endpoint.note}`;
     return (
       <div
         key={endpoint.id}
@@ -108,9 +147,24 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
         {/* 与合约行同一套列位：勾号位宽固定，切换时文字不横跳 */}
         <span className="src-mark">{isSelected ? '✓' : ''}</span>
         <span className="src-label">{endpoint.label}</span>
-        <span className="src-sub" title={title}>
-          {endpoint.note}
+        <span className={`pill ${pill.cls} src-pill`} title={pill.title}>
+          {pill.text}
         </span>
+        <span className="src-sub" title={sub}>
+          {sub}
+        </span>
+        {!state?.probing && (
+          <button
+            className="src-retry"
+            title={`重新探测 ${endpoint.label}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              void probeSpotOne(endpoint);
+            }}
+          >
+            重测
+          </button>
+        )}
       </div>
     );
   };
@@ -175,6 +229,15 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
           <span className="grow" />
           <button
             className="icon-btn"
+            disabled={spotProbing}
+            onClick={() => {
+              for (const endpoint of SPOT_ENDPOINTS) void probeSpotOne(endpoint);
+            }}
+          >
+            {spotProbing ? '检测中…' : '重新检测现货'}
+          </button>
+          <button
+            className="icon-btn"
             disabled={probing}
             onClick={() => {
               for (const endpoint of FUTURES_ENDPOINTS) void probeOne(endpoint);
@@ -193,7 +256,7 @@ export function SourcePanel({ onClose }: { onClose: () => void }) {
           <p className="up-hint">
             想要 USDC 现货或想避开合约封禁时选币安：现货与合约是两条独立的限频/封禁线。
             币安现货优先走 <span className="num">data-api.binance.vision</span>（大陆通常可直连），
-            其余镜像域名依次兜底。
+            其余镜像域名依次兜底；测速会并行探测整条域名链，取最快的一条。
           </p>
 
           <p className="src-group">永续合约</p>

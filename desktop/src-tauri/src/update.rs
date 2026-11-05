@@ -280,11 +280,16 @@ pub async fn check_update(app: AppHandle, mirror: String) -> Result<Option<Updat
         .map(|url| Url::parse(url).map_err(|e| format!("更新地址无效：{e}")))
         .collect::<Result<_, _>>()?;
 
-    let updater = app
+    let mut builder = app
         .updater_builder()
         .endpoints(endpoints)
         .map_err(|e| format!("更新通道配置无效：{e}"))?
-        .timeout(CHECK_TIMEOUT)
+        .timeout(CHECK_TIMEOUT);
+    // 与行情请求同一口径：设置里选了强制直连，更新检查也不该再经系统代理
+    if crate::market::direct_connection() {
+        builder = builder.no_proxy();
+    }
+    let updater = builder
         .build()
         .map_err(|e| format!("更新检查初始化失败：{e}"))?;
     let update = updater
@@ -534,10 +539,14 @@ async fn download_and_verify(
     gen: u64,
 ) -> Result<Vec<u8>, String> {
     let pubkey = release_pubkey(app)?;
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_TIMEOUT)
+        .read_timeout(READ_TIMEOUT);
+    if crate::market::direct_connection() {
+        builder = builder.no_proxy();
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("网络客户端初始化失败：{e}"))?;
 

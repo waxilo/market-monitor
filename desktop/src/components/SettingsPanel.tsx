@@ -17,6 +17,7 @@ import {
   readGlobalShortcutStatus,
   type GlobalKeyStatus,
 } from '../lib/globalKey';
+import { readDirectConnection, setDirectConnection } from '../lib/netPrefs';
 import { UpdateSection } from './UpdateSection';
 import { WebhookSection } from './WebhookSection';
 import { MiniListSection } from './MiniListSection';
@@ -27,11 +28,12 @@ import type { UpdateController } from '../hooks/useUpdate';
 
 type Theme = 'dark' | 'light';
 
-type SectionId = 'appearance' | 'mini' | 'shortcuts' | 'webhook' | 'update';
+type SectionId = 'appearance' | 'network' | 'mini' | 'shortcuts' | 'webhook' | 'update';
 
 /** 左栏分类：点哪一类，右栏显示哪一类的内容（互斥，不分段混排）。 */
 const SECTIONS: { id: SectionId; label: string }[] = [
   { id: 'appearance', label: '外观' },
+  { id: 'network', label: '网络' },
   { id: 'mini', label: '悬浮窗' },
   { id: 'shortcuts', label: '快捷键' },
   { id: 'webhook', label: '告警通知' },
@@ -46,7 +48,7 @@ interface Props {
 }
 
 /**
- * 设置：外观、悬浮窗、快捷键、告警通知、更新。
+ * 设置：外观、网络、悬浮窗、快捷键、告警通知、更新。
  *
  * 2026-10-29 起是**整页视图**而不是弹窗：铺满整个窗口，自己的顶栏（返回 / 拖窗口 /
  * 窗口控件）+ 左侧分类 + 右侧内容。行情在底下保持挂载，返回时不用重拉。
@@ -81,6 +83,14 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
   /** 顶栏拖窗口 / 双击最大化：整页视图没有主顶栏了，拖拽区跟着设置页走。 */
   const drag = useWindowDrag({ dblClickMaximize: true });
   const currentLabel = SECTIONS.find((s) => s.id === section)?.label ?? '';
+  /** 代理模式：false = 跟随系统（默认），true = 强制直连。 */
+  const [direct, setDirect] = useState(readDirectConnection);
+
+  function chooseDirect(next: boolean) {
+    if (next === direct) return;
+    setDirect(next);
+    void setDirectConnection(next);
+  }
 
   useEffect(() => {
     void readGlobalShortcutStatus().then(setGlobal);
@@ -188,6 +198,45 @@ export function SettingsPanel({ theme, onTheme, update, onClose }: Props) {
                     onClick={() => onTheme('light')}
                   >
                     浅色
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {section === 'network' && (
+            <div className="set-block">
+              <div className="up-label">网络代理</div>
+              <div className="set-row">
+                <div className="set-name">
+                  代理
+                  <span className="set-sub">
+                    跟随系统：与浏览器一致，使用 Windows 设置里的代理；强制直连：忽略系统代理
+                  </span>
+                  {direct && (
+                    <span className="set-sub">
+                      强制直连时实时行情改用 REST 轮询（网页内的 WebSocket 无法单独绕过系统代理）
+                    </span>
+                  )}
+                </div>
+                <div className="set-seg" role="radiogroup" aria-label="代理">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!direct}
+                    className={!direct ? 'on' : ''}
+                    onClick={() => chooseDirect(false)}
+                  >
+                    跟随系统
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={direct}
+                    className={direct ? 'on' : ''}
+                    onClick={() => chooseDirect(true)}
+                  >
+                    强制直连
                   </button>
                 </div>
               </div>

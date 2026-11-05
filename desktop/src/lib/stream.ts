@@ -13,6 +13,7 @@
  * **为什么在 webview 里开而不是宿主侧**：WebSocket 不是 fetch，不受 CORS 约束；
  * WebView2 / WKWebView 自己跟随系统代理，省掉在 Rust 里手写 CONNECT 隧道与
  * 三平台代理探测。Rust 侧只在 REST 上把关（见 lib/http.ts）。
+ * 代价是**没法单独绕过系统代理**：设置里选了强制直连就不开 WS（见 openBinanceStream）。
  *
  * 一条连接承载多个流（组合流 `/stream?streams=a/b`）：所有开着的 `@ticker` 合成一条，
  * 图表的 `@kline_<周期>` 另开一条。断线按指数退避重连；15 秒收不到任何帧就当作
@@ -30,6 +31,7 @@
 
 import type { Bar } from './api';
 import type { TickerSnapshot } from './dialects';
+import { readDirectConnection } from './netPrefs';
 
 /** 断线重连的退避上限。 */
 const RECONNECT_CAP_MS = 30_000;
@@ -131,6 +133,9 @@ export function openBinanceStream(
 ): () => void {
   const host = streamHostOf(restBase);
   if (host == null || streams.length === 0) return () => {};
+  // 强制直连时不在这里开 WS：WebSocket 只跟随系统代理，没法单独绕过，
+  // 硬开会让「强制直连」名不副实。返回空操作，消费方会回退 REST 轮询。
+  if (readDirectConnection()) return () => {};
   return openStream(host, streams, handlers);
 }
 
@@ -143,6 +148,8 @@ export function openBinanceSpotStream(
   handlers: StreamHandlers,
 ): () => void {
   if (streams.length === 0) return () => {};
+  // 同 openBinanceStream：强制直连只用 REST 兜底
+  if (readDirectConnection()) return () => {};
   return openStream(BINANCE_SPOT_STREAM_HOST, streams, handlers);
 }
 

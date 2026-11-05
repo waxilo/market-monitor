@@ -286,6 +286,7 @@ pub fn run() {
             global_key::set_global_shortcut,
             global_key::global_shortcut_status,
             market::market_request,
+            market::set_direct_connection,
             update::check_update,
             update::start_update_download,
             update::get_update_download_state,

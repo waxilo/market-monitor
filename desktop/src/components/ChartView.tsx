@@ -67,6 +67,7 @@ import {
   rememberKlines,
 } from '../lib/klineCache';
 import { Sparkline } from '../hooks/useSparks';
+import { useDirectConnection } from '../hooks/useDirectConnection';
 import { useDrawings } from '../hooks/useDrawings';
 import { watchKey, type WatchItem } from '../hooks/useWatchlist';
 import { IntervalPanel } from './IntervalPanel';
@@ -122,6 +123,8 @@ interface Props {
 }
 
 export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
+  // 参与实时通道 effect 的依赖：强制直连时 WS 不开，需要重排成 REST 兜底
+  const direct = useDirectConnection();
   /** 周期条上放哪些周期、按什么顺序 —— 用户在「周期」弹窗里改，存 localStorage。 */
   const [intervals, setIntervals] = useState<string[]>(() =>
     parseIntervals(localStorage.getItem(INTERVALS_KEY)),
@@ -557,7 +560,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       clearInterval(timer);
       stopStream();
     };
-  }, [market, symbol, interval, source, natives]);
+  }, [market, symbol, interval, source, natives, direct]);
 
   // 持仓量：选了 OI 副图且当前源支持才取；10s 整段重拉（见 OI_POLL_MS 的注释）
   useEffect(() => {
