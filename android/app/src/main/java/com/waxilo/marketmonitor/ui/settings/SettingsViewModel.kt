@@ -40,6 +40,12 @@ data class SettingsUiState(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     /** 现货行情来源（币安 / Gate）。 */
     val spotSource: SpotSource = SpotSource.DEFAULT,
+    /** 现货测速：source → 结论；不在表里的即「未检测」。 */
+    val spotProbeResults: Map<SpotSource, ProbeOutcome> = emptyMap(),
+    /** 正在检测中的现货源（逐源回填，慢的那家不拖另一家）。 */
+    val spotProbing: Set<SpotSource> = emptySet(),
+    /** 是否强制直连（false = 跟随系统代理）。 */
+    val directConnection: Boolean = false,
     /** 用户选定的合约行情接口（FuturesEndpoints 之一）。 */
     val futuresHost: String = FuturesEndpoints.DEFAULT_URL,
     /** 合约源自动选择开关（出厂关闭）：开着才会在失败/慢响应时自动测速换源。 */
@@ -92,6 +98,7 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
                     s.copy(
                         themeMode = it.themeMode,
                         spotSource = it.spotSource,
+                        directConnection = it.directConnection,
                         futuresHost = it.futuresRestHost,
                         autoFuturesSource = it.autoFuturesSource,
                         notificationEnabled = it.notificationEnabled,
@@ -167,6 +174,38 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    /** 现货「检测全部」：两家并行探测，各自回来各自回填。 */
+    fun detectSpotSources() {
+        SpotSource.entries
+            .filterNot { it in state.value.spotProbing }
+            .forEach(::probeSpot)
+    }
+
+    /** 单源重测：只发这一家的探测（并行打它的整条域名链）。 */
+    fun probeSpot(source: SpotSource) {
+        if (source in state.value.spotProbing) return
+        backing.update { it.copy(spotProbing = it.spotProbing + source) }
+        viewModelScope.launch { probeSpotOutcome(source) }
+    }
+
+    private suspend fun probeSpotOutcome(source: SpotSource) {
+        val outcome = runCatching { container.probeSpotSource(source) }
+            .fold(
+                onSuccess = { ProbeOutcome.Reachable(it) as ProbeOutcome },
+                onFailure = { e ->
+                    // 与合约探测同口径：取消不是失败，别给正在离开的页面写一条假结论
+                    if (e is CancellationException) throw e
+                    ProbeOutcome.Failed(probeFailure(e))
+                },
+            )
+        backing.update { s ->
+            s.copy(
+                spotProbeResults = s.spotProbeResults + (source to outcome),
+                spotProbing = s.spotProbing - source,
+            )
+        }
+    }
+
     /** 单行重测：只发这一个接口的探测，不牵动其他行。 */
     fun probeOne(baseUrl: String) {
         if (baseUrl in state.value.probingUrls) return
@@ -202,6 +241,16 @@ class SettingsViewModel(private val container: AppContainer) : ViewModel() {
         if (source == state.value.spotSource) return
         backing.update { it.copy(spotSource = source) }
         viewModelScope.launch { container.selectSpotSource(source) }
+    }
+
+    /**
+     * 切换「跟随系统代理 / 强制直连」：交给容器统一切换（作废连接池、广播重载、持久化）。
+     * 立即回填选中态；写盘失败不会把界面留在旧选项上。
+     */
+    fun setDirectConnection(v: Boolean) {
+        if (v == state.value.directConnection) return
+        backing.update { it.copy(directConnection = v) }
+        container.setDirectConnection(v)
     }
 
     /**

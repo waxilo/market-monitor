@@ -71,6 +71,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             webhookEnabled = this[Keys.WEBHOOK] ?: d.webhookEnabled,
             allowInsecureWebhook = this[Keys.INSECURE] ?: d.allowInsecureWebhook,
             spotSource = SpotSource.normalize(this[Keys.SPOT_SOURCE] ?: d.spotSource.key),
+            directConnection = this[Keys.DIRECT_CONNECTION] ?: d.directConnection,
             futuresRestHost = FuturesEndpoints.normalize(this[Keys.FUTURES_HOST]),
             autoFuturesSource = this[Keys.AUTO_FUTURES_SOURCE] ?: d.autoFuturesSource,
             updateMirror = UpdateMirror.fromStored(this[Keys.UPDATE_PROXY]),
@@ -172,6 +173,7 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
         prefs[Keys.WEBHOOK] = webhookEnabled
         prefs[Keys.INSECURE] = allowInsecureWebhook
         prefs[Keys.SPOT_SOURCE] = spotSource.key
+        prefs[Keys.DIRECT_CONNECTION] = directConnection
         prefs[Keys.FUTURES_HOST] = futuresRestHost
         prefs[Keys.AUTO_FUTURES_SOURCE] = autoFuturesSource
         prefs[Keys.UPDATE_PROXY] = updateMirror.key
@@ -222,6 +224,8 @@ class SettingsDataStore(private val store: DataStore<Preferences>) : SettingsRep
             val INSECURE = booleanPreferencesKey("allow_insecure_webhook")
             /** 现货行情来源（SpotSource.key）；缺 key 即出厂币安。 */
             val SPOT_SOURCE = stringPreferencesKey("spot_source")
+            /** 强制直连开关；缺 key 即跟随系统代理。 */
+            val DIRECT_CONNECTION = booleanPreferencesKey("direct_connection")
             val FUTURES_HOST = stringPreferencesKey("futures_rest_host")
             /** 合约源自动选择开关（出厂关：缺 key 即关，见 AppSettings.autoFuturesSource）。 */
             val AUTO_FUTURES_SOURCE = booleanPreferencesKey("auto_futures_source")

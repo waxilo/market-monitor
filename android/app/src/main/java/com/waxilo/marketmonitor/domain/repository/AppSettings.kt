@@ -80,6 +80,11 @@ data class AppSettings(
      */
     val spotSource: SpotSource = SpotSource.DEFAULT,
     /**
+     * 是否强制直连：`true` = 忽略系统（Wi‑Fi 高级设置）里的代理，所有请求直接连出；
+     * `false`（默认）= 跟随系统代理，系统没配代理时同样是直连。
+     */
+    val directConnection: Boolean = false,
+    /**
      * 用户选定的合约行情接口（[com.waxilo.marketmonitor.domain.model.FuturesEndpoints] 之一）。
      * 合约行情只发往这一个域名，不再逐域回退试探；设置页一键检测后点选。
      */

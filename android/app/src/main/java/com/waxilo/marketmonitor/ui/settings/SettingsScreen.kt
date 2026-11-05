@@ -108,6 +108,34 @@ fun SettingsScreen(
             }
 
             item {
+                Section(title = "网络") {
+                    SegmentRow("代理") {
+                        SegmentedControl(
+                            options = listOf(false, true),
+                            selected = state.directConnection,
+                            labelOf = { if (it) "强制直连" else "跟随系统" },
+                            onSelect = viewModel::setDirectConnection,
+                            fillWidth = false,
+                        )
+                    }
+                    Text(
+                        text = if (state.directConnection) {
+                            "强制直连：忽略系统（Wi‑Fi 高级设置）里的代理，所有请求直接连出。"
+                        } else {
+                            "跟随系统（默认）：使用系统设置里的代理；没配代理时就是直连。"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MarketTheme.colors.muted,
+                        modifier = Modifier.padding(
+                            start = Spacing.Gutter,
+                            end = Spacing.Gutter,
+                            bottom = Spacing.Sm,
+                        ),
+                    )
+                }
+            }
+
+            item {
                 Section(title = "现货行情接口") {
                     SegmentRow("数据源") {
                         SegmentedControl(
@@ -128,8 +156,75 @@ fun SettingsScreen(
                             bottom = Spacing.Xs,
                         ),
                     )
+                    Rule()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = Spacing.Gutter, vertical = Spacing.Xs),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "测速",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MarketTheme.colors.ink,
+                        )
+                        TextAction(
+                            text = if (state.spotProbing.isEmpty()) "检测全部" else "检测中…",
+                            onClick = viewModel::detectSpotSources,
+                            color = MarketTheme.colors.muted,
+                        )
+                    }
+                    SpotSource.entries.forEach { source ->
+                        val probing = source in state.spotProbing
+                        val outcome = state.spotProbeResults[source]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.Gutter, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = source.label,
+                                modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MarketTheme.colors.muted,
+                            )
+                            if (probing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MarketTheme.colors.muted,
+                                )
+                            } else {
+                                when (outcome) {
+                                    is ProbeOutcome.Reachable -> StatusPill(
+                                        text = "${outcome.latencyMs}ms",
+                                        tone = PillTone.Positive,
+                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
+                                    )
+                                    is ProbeOutcome.Failed -> StatusPill(
+                                        text = outcome.reason,
+                                        tone = PillTone.Negative,
+                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
+                                    )
+                                    null -> StatusPill(
+                                        text = "未检测",
+                                        tone = PillTone.Neutral,
+                                        modifier = Modifier.widthIn(max = ProbePillMaxWidth),
+                                    )
+                                }
+                                TextAction(
+                                    text = "重测",
+                                    onClick = { viewModel.probeSpot(source) },
+                                    color = MarketTheme.colors.muted,
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = "移动网络下币安经常连不上或被墙，表现为「一直在加载」；这时切到 Gate 通常能直连。" +
+                            "测速会并行探测该源的整条域名链（币安 6 个镜像），结果只对当前网络有效，换网络或代理后请重新检测。" +
                             "切换会清空现货缓存并重新同步交易对 —— 自选、预警按交易对保留，新源没有的标的会显示为暂无数据。" +
                             "现货与合约的限频互不影响。",
                         style = MaterialTheme.typography.labelSmall,

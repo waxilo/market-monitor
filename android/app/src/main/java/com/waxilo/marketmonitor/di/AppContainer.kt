@@ -155,14 +155,48 @@ class AppContainer(private val context: Context) {
         networkChangeJob?.cancel()
         networkChangeJob = appScope.launch {
             delay(NETWORK_CHANGE_SETTLE_MS)
-            Log.i(TAG, "网络路径变更：作废连接池与域名链记忆")
-            // 先换代：在途请求被取消后剩下那点收尾错误，不该记到新路径的域名链上
-            marketApi.onNetworkChanged()
-            marketApi.cancelInFlightRequests()
-            // 取消是异步的，等调用线程把连接还回池里再清，才真的关得掉
-            delay(CONNECTION_DRAIN_MS)
-            restClient.connectionPool.evictAll()
-            _networkChanges.tryEmit(Unit)
+            invalidateConnections("网络路径变更")
+        }
+    }
+
+    /**
+     * 换网 / 开关 VPN / 切换代理模式之后，旧连接必须整批作废。
+     *
+     * 池子里的连接是沿旧路径建起来的（经代理或直连），继续复用会让新设置看起来没生效。
+     */
+    private suspend fun invalidateConnections(reason: String) {
+        Log.i(TAG, "$reason：作废连接池与域名链记忆")
+        // 先换代：在途请求被取消后剩下那点收尾错误，不该记到新路径的域名链上
+        marketApi.onNetworkChanged()
+        marketApi.cancelInFlightRequests()
+        // 取消是异步的，等调用线程把连接还回池里再清，才真的关得掉
+        delay(CONNECTION_DRAIN_MS)
+        restClient.connectionPool.evictAll()
+        _networkChanges.tryEmit(Unit)
+    }
+
+    /**
+     * 内存覆盖：DataStore 写入与 [settingsSnapshot] 传播都有延迟，
+     * 切换后紧跟的请求必须立刻按新模式走，否则用户会看到「开关拨了没效果」。
+     */
+    @Volatile
+    private var directConnectionOverride: Boolean? = null
+
+    private fun currentDirectConnection(): Boolean =
+        directConnectionOverride ?: settingsSnapshot.value.directConnection
+
+    /**
+     * 切换「跟随系统代理 / 强制直连」（设置页调用）。
+     *
+     * 先写内存覆盖再落盘；写完立刻作废连接池并广播，让页面按新路径重取。
+     */
+    fun setDirectConnection(enabled: Boolean) {
+        if (enabled == currentDirectConnection()) return
+        directConnectionOverride = enabled
+        networkChangeJob?.cancel()
+        networkChangeJob = appScope.launch {
+            settings.edit { it.copy(directConnection = enabled) }
+            invalidateConnections("代理模式切换")
         }
     }
 
@@ -183,6 +217,8 @@ class AppContainer(private val context: Context) {
     }
 
     private fun systemProxy(): Proxy? {
+        // 用户选了强制直连：系统属性与 Wi‑Fi 代理都不看，直接连出去
+        if (currentDirectConnection()) return null
         // 1) 显式系统属性（http.proxyHost），少数环境通过命令行/debug 注入
         System.getProperty("http.proxyHost")?.takeIf { it.isNotBlank() }?.let { host ->
             val port = System.getProperty("http.proxyPort")?.toIntOrNull() ?: 80
@@ -213,6 +249,12 @@ class AppContainer(private val context: Context) {
     /** 域名等设置以快照形式提供给网络层，避免在同步路径里挂起读盘。 */
     private val settingsSnapshot by lazy {
         settings.settings.stateIn(appScope, SharingStarted.Eagerly, AppSettings())
+    }
+
+    init {
+        // 容器一建好就开始收设置：代理模式要在第一批连接之前就位，
+        // 不能等第一次 systemProxy() 才懒启动（那样冷启动的头几个请求仍按默认的跟随系统发）。
+        settingsSnapshot.value
     }
 
     /**
@@ -338,6 +380,9 @@ class AppContainer(private val context: Context) {
 
     /** 设置页「一键检测」入口：在本机实测指定合约行情接口，返回往返毫秒，失败抛 IOException。 */
     suspend fun probeFuturesEndpoint(baseUrl: String): Long = marketApi.probeFutures(baseUrl)
+
+    /** 设置页现货测速入口：并行探测该源的整条域名链，返回最快往返毫秒，失败抛 IOException。 */
+    suspend fun probeSpotSource(source: SpotSource): Long = marketApi.probeSpot(source)
 
     val alertRepository: AlertRepository by lazy { AlertRepositoryImpl(database.alertDao()) }
 

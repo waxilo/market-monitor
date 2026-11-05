@@ -13,6 +13,9 @@ import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SpotSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -250,6 +253,36 @@ class BinanceMarketApi(
         withTimeoutOrNull(PROBE_TIMEOUT_MS) { executeText(request) }
             ?: throw SocketTimeoutException("探测超时")
         return System.currentTimeMillis() - started
+    }
+
+    /**
+     * 对**指定现货源**做一次性连通探测（设置页「检测」并行调用），返回往返毫秒数。
+     *
+     * 一个现货源是**一串主机**（币安 6 个，首选挂了不代表源不可用），所以这里并行打整条链、
+     * 取最先答上的那个耗时；串行最坏要 6 × 5 秒，设置页那一行会一直转。
+     * 探测用各家的 ping 路径（币安 `/api/v3/ping`、Gate `/api/v4/spot/time`），不计权重、
+     * 不碰 [spotHostHealth]：测的是「这个源现在通不通、多快」，不是当前取数链路的状态。
+     * 全挂时抛**首选域**那条失败（超时/DNS/HTTP 码由调用方折成一行文案）。
+     */
+    suspend fun probeSpot(source: SpotSource): Long = coroutineScope {
+        val path = SpotDialects.of(source).pingPath()
+        val started = System.currentTimeMillis()
+        val attempts = source.hosts.map { host ->
+            async {
+                try {
+                    val url = buildUrl(host, path) ?: throw IOException("域名无效")
+                    withTimeoutOrNull(PROBE_TIMEOUT_MS) { executeSpot(url) }
+                        ?: throw SocketTimeoutException("探测超时")
+                    System.currentTimeMillis() - started
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    e
+                }
+            }
+        }.awaitAll()
+        attempts.filterIsInstance<Long>().minOrNull()
+            ?: throw (attempts.firstOrNull() as? Exception ?: IOException("探测失败"))
     }
 
     suspend fun exchangeInfo(market: MarketType, symbol: String? = null): List<InstrumentMeta> {
