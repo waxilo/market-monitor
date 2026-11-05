@@ -64,8 +64,8 @@ android {
         applicationId = "com.waxilo.marketmonitor"
         minSdk = 26
         targetSdk = 36
-        versionCode = 84
-        versionName = "0.9.72"
+        versionCode = 85
+        versionName = "0.9.73"
 
         buildConfigField("String", "UPDATE_OWNER", "\"waxilo\"")
         buildConfigField("String", "UPDATE_REPO", "\"market-monitor\"")

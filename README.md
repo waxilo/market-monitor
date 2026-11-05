@@ -18,7 +18,7 @@
 | 行情列表 / 自选 / 搜索 | `ui/market`、`ui/search` | 已实现 |
 | 详情页与 K 线图表（自研 Canvas） | `ui/detail`、`ui/chart` | 已实现 |
 | 数据层（REST 轮询 + Room 缓存；WS 链路已移除；关注列表报价**并发**刷新、单标的 8 秒超时，断网时一轮不会被串行超时拖住；**交易对清单 6 小时 TTL 复用**、JSON 解析在 Default 线程；列表轮询只随首页可见性启停，进详情后不再和详情页抢限频） | `data/remote`、`data/local` | 已实现 |
-| App 端现货多数据源（币安 / Gate，设置页点选即切换；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试；**换网 / 开关 VPN 时整份记忆作废并清空连接池**，不靠重启恢复） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`data/remote/SpotHostHealth.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
+| App 端现货多数据源（币安 / Gate，设置页点选即切换、可逐源测速——并行探测该源整条域名链取最快一条，5 秒不响应判超时；内部交易对统一币安写法，切换**不清空**自选/预警；域名链记住最近可用主机、失败主机冷却、单主机 8 秒上限、全链失败短暂停试；**换网 / 开关 VPN 时整份记忆作废并清空连接池**，不靠重启恢复） | `domain/model/SpotSource.kt`、`data/remote/SpotDialects.kt`、`data/remote/SpotHostHealth.kt`、`ui/settings` | 已实现；默认币安。移动网络下币安常被墙，设置页切 Gate 通常可直连；Gate 限频按 200 次/10 秒折算成 1000 次/分预算排队，不靠 429 兜底 |
 | 合约行情多接口（9 个候选：Aster/币安主域/OKX/Bybit/Bitget/Gate/MEXC/Hyperliquid/HTX，设置页弹窗并行检测后点选，结果整体按延迟排序） | `data/remote/dialect`、`ui/settings` | 已实现；切换接口会清合约缓存并重同步交易对。币安镜像 1/2/3 与老镜像已移除 —— 它们与主域同后端、同生共死，占着席位却不增加容灾能力；Bitunix 也已下线（REST K 线只回已收盘蜡烛，图上最后一根永远落后一个周期） |
 | 我的仓位（币安签名接口 + API 凭据） | 原 `ui/positions` | **已移除**（含 `BinanceSigner`、`EncryptedBinanceCredentialStore` 与底栏第四个 tab）|
 | 价格预警（通知栏 + 前台保活 + 消息中心） | `data/alert`、`ui/alerts` | 已实现，待真机验证 |
@@ -26,7 +26,7 @@
 | 设置页与应用内更新 | `ui/settings`、`domain/repository/UpdateRepository` | 已实现；更新读取路径见下 |
 | 桌面端（**浏览器式标签页**（一标签 = 一个市场+标的的图，可锁定 / 一键关闭全部）、跨市场搜索下拉浮层、自绘 K 线、托盘常驻、可自撑高度的迷你悬浮窗、自绘标题栏、应用内更新） | `desktop/src`、`desktop/src-tauri` | 已实现；发版流程见下 |
 | 桌面端标签页（浏览器的样子：点搜索结果/悬浮窗即开一个，切市场 = 切标签；**用户不关就一直留着**，重启也在；每枚可锁定（锁定后连「关闭全部」都动不了），右侧「关闭全部」一次收掉未锁定的） | `desktop/src/hooks/useTabs.ts`、`components/TabStrip.tsx` | 已实现；存 `mm.tabs` / `mm.tabActive` / `mm.tabLocked`；主窗**没有自选**了（0.1.48 起），图表的去留由标签页自己决定 |
-| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有币安 / Gate 两个候选（存 `mm.spotSource`，默认币安，与 App 端同口径）；**实时价走 WS**：合约的币安系（含 Aster）与币安现货各一条，断线指数退避重连、15 秒无帧判假死（由看门狗自己收尾，不等 onclose）；WS 没帧时回退 REST，Gate 现货仍按拍轮询 |
+| 桌面端合约多数据源（与 App 同一份 9 候选清单，顶栏「数据源」弹窗并行测速后点选（5 秒不响应即判超时），结果整体按延迟排序） | `desktop/src/lib/sources.ts`、`dialects.ts`、`components/SourcePanel.tsx` | 已实现；合约选中项存 `mm.futuresSource`，现货另有币安 / Gate 两个候选（同样并行测速、结果只对当前网络有效；存 `mm.spotSource`，默认币安，与 App 端同口径）；**实时价走 WS**：合约的币安系（含 Aster）与币安现货各一条，断线指数退避重连、15 秒无帧判假死（由看门狗自己收尾，不等 onclose）；WS 没帧时回退 REST，Gate 现货仍按拍轮询 |
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于主窗标签页） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会落一份出厂名单（BTC / ETH × 现货/永续） |
 | 桌面端均线指标分析（MA / EMA 共用**周期条右端唯一一枚「均线分析」chip**，族在面板抬头里切，一次只看一族；点一下就汇总「所选族所有已配置档位 × 所有已配置 K 线周期」的当前值，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**；周期小方框只是标注、不可点；行内不写状态字，画过的档用整行告警红底 + 左缘色条标出，列头另有「已画 N」） | `desktop/src/components/MaAnalysisPanel.tsx`、`lib/maAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时MA50」/「1时EMA50」这样的备注**；抬头「清空划线」只收当前族的系统线（手画线与另一族不动）；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
@@ -68,7 +68,7 @@ cd android
 ./gradlew testDebugUnitTest         # 纯逻辑单测（指标、聚合、判定、模板）
 ```
 
-桌面端（Tauri v2 + Vite/React，现货在币安 / Gate 里选（默认币安），合约在 9 个候选接口里测速点选）：
+桌面端（Tauri v2 + Vite/React，现货在币安 / Gate 里测速选（默认币安），合约在 9 个候选接口里测速点选）：
 
 ```bash
 cd desktop
@@ -107,7 +107,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 
 桌面端的行情请求**全走宿主侧** `market_request`（`src-tauri/src/market.rs`），不用 webview 的 `fetch`：
 除 Gate、Hyperliquid 与币安现货镜像外，其余接口都不回 `Access-Control-Allow-Origin`，webview 里读到的
-一定是 CORS 报错（宿主侧 reqwest 跟随系统代理，路由与浏览器一致）。Rust 只做搬运，周期映射、
+一定是 CORS 报错（宿主侧 reqwest 默认跟随系统代理，路由与浏览器一致；设置 → 网络可改为强制直连，
+此时更新检查与下载同样不走代理，实时行情退回 REST 轮询）。Rust 只做搬运，周期映射、
 字段解析、业务码判定这些方言逻辑都在 `src/lib/dialects.ts`，判定结论与 App 的 `FuturesDialects.kt` 对齐。
 ⚠️ **客户端是可重建的**：连接池与「系统代理」都是建客户端时确定的，关掉 VPN / 换代理后旧连接只会一直
 超时 —— 传输层失败（超时/连不上/收发中断）即整批换池（按代次只换一次、3 秒冷却），业务错误不换。
@@ -230,7 +231,7 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
   悬浮窗是另一套 React 实例，只在它那 4s 的 localStorage 轮询里跟进（记得保留 `syncFuturesSource()`）。
 - **数据源测速 5 秒不响应即判超时**（两端同口径，0.1.16 起）：只掐探测 —— 探测请求自带 5s 时限
   （桌面：`lib/sources.ts` 的 `PROBE_TIMEOUT_MS` → `httpRequest(…)` 第四参 → 宿主 `market_request`
-  的 `timeout_ms`（reqwest 请求级覆盖）；App：`probeFutures` 的 `withTimeoutOrNull`），到点那一行
+  的 `timeout_ms`（reqwest 请求级覆盖）；App：`probeFutures` / `probeSpot` 的 `withTimeoutOrNull`），到点那一行
   直接落「连接超时」，不再挂到数据请求的时限上。K 线这类数据请求不吃这个口径（桌面仍 20s、App 仍 30s）。
 - **设置 = 整页视图（不是弹窗）**（`components/SettingsPanel.tsx`）：铺满整个窗口，自带顶栏
   （返回 / 拖窗口 / 窗口控件）+ 左栏分类 / 右栏内容；行情在底下保持挂载，返回时不用重拉。
@@ -343,8 +344,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.72` |
-| versionCode | `84` |
+| versionName | `0.9.73` |
+| versionCode | `85` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
@@ -401,7 +402,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.64`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.65`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
