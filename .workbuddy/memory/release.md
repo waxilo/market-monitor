@@ -1028,3 +1028,42 @@ Android：① `syncInstruments` 加 **6 小时 TTL**（`InstrumentDao.latestSync
 推送仍走 `.workbuddy/tmp/api-push-0948.py`（5 次，`--parent` 传完整 40 位远端 SHA，均带
 `PYTHONIOENCODING=utf-8`）；tag 用 `tag-0973-0165.py` 与 `tag-0974.py`（先断言 tree 一致）。
 - 用掉的 tag 追加：`0.9.73`、`desktop-v0.1.65`、`0.9.74`。
+
+## desktop 0.1.66（单发桌面，2026-11-06 10:40 CST / 02:40 UTC）
+
+一项修复：**整段 K 线一屏放得下时画布拖不动**。`clampViewport` 在 `barCount ≤ visibleBars` 时
+把右偏移上限收成 `visible - barCount`，缩到「整段刚好铺满」那一刻上限恰为 0，横向拖拽零行程。
+改为拖动/绘制恒按 `maxRightBlank(visible)` 收口（整段可见时也能往左拖进右侧空白）；
+缩放单独走 `maxZoomOffset`，保留旧上限，缩到底仍是「数据靠右、左侧留空」的取景。
+
+验证：
+- 纯逻辑算例（`node --experimental-strip-types` 直跑 `chartMath`）：修复前 `visible=barCount=95`
+  左右各拖 20 根 `rightOffset` 恒 0；修复后左拖 20 根有行程，缩小落点与旧版逐档一致。
+- 真实界面（Chrome + CDP；现货 BTCUSDT / 4天，拦 `endTime=` 补页把 `visibleBars` 精确对齐
+  `barCount`，复现整段铺满）：左拖 300px 画布实移 300px（坐标轴 2024-09-10 → 2025-02-13），
+  右拖回数据起点停住；缩到最大的取景未变。截图留在 `.workbuddy/tmp/pan-4x-*.png`。
+- `tsc --noEmit` 与本地 `npm run build` 绿。
+
+提交链（本地 → 远端）：
+- `24eda28` fix(desktop/chart) → `4e1c90c`
+- `caf933d` chore(release) → `553bb79`（tag `desktop-v0.1.66` → `eeada13`）
+
+工作流：Desktop Release **42150786551** 三 job 全绿；CI **42150736830** 绿
+（`42150642293` 被同分支连推的 concurrency 取消，属正常）。
+
+通道验收：
+- 桌面 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.66
+  无旧版残留；`latest.json` 0.1.66（pub_date `2026-11-06T02:38:25.721Z`）；
+  exe **2821441**（边车 `da78eb6f…` == digest）、dmg 4471304（边车 `8c2eee1a…`）、mac app.tar.gz 4390144；
+  两平台 `.sig` base64 解出 keyid `RUQiawMZLl32C7BY`（win）/ `RUQiawMZLl32Cxsu`（mac），
+  manifest 内联签名 == `.sig` 文件内容。
+- 包内证据：CI vite 指纹 `index-C9ejTYR9.js 340.08` / `index-CdduQyBs.css 53.92`（108 modules）
+  == 本地 `npm run build`；exe `FileVersion` / `ProductVersion` 均 `0.1.66`。
+- ⚠️ 官方 `verify-channel.mjs 0.1.66` 这次在「拉 releases 列表」就 403（匿名限流），
+  改用 `gh api` 逐项核对 id/created_at/资产清单/边车/签名 + 上述指纹与版本资源断言。
+- Android 通道本轮未动。
+
+推送仍走 `.workbuddy/tmp/api-push-0948.py`（2 次，`--parent` 传完整 40 位远端 SHA，均带
+`PYTHONIOENCODING=utf-8`；第 2 次首跑 TLS handshake timeout，重跑幂等通过）；
+tag 用 `tag-0166.py`（先断言 tree 一致）。
+- 用掉的 tag 追加：`desktop-v0.1.66`。
