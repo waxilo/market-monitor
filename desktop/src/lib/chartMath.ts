@@ -314,17 +314,26 @@ function maxRightBlank(visible: number): number {
   return Math.max(0, visible * (1 - MIN_VISIBLE_SHARE));
 }
 
+/**
+ * 缩放取景的右偏移上限：序列比窗口窄（整段一屏放得下）时收成 `visible - barCount`
+ * —— 最老一根不许被挤出左边界，缩小的取景保持「数据靠右、左侧留空」的观感。
+ *
+ * **只给缩放用**：拖动/绘制走 [clampViewport]，那里的右界恒为 [maxRightBlank]。
+ */
+function maxZoomOffset(visible: number, barCount: number): number {
+  return barCount <= visible
+    ? clampNum(visible - barCount, 0, maxRightBlank(visible))
+    : maxRightBlank(visible);
+}
+
 export function clampViewport(v: Viewport, barCount: number): Viewport {
   const visible = clampNum(v.visibleBars, minVisible(barCount), maxVisible());
   const minOffset = -Math.max(0, barCount - visible);
-  // 序列比窗口窄（barCount ≤ visible）时，窗口不收窄去撑满数据；右侧留白以
-  // 「不把最老一根挤出左边界」为限 —— 偏移到 `visible - barCount` 时最老一根
-  // 恰好贴左边缘，再大就被挤出去了（默认的 3 根留白在这个上限内，原样保留）。
-  // 序列比窗口宽时仍按 maxRightBlank（数据区至少占 MIN_VISIBLE_SHARE）。
-  const maxOffset =
-    barCount <= visible
-      ? clampNum(visible - barCount, 0, maxRightBlank(visible))
-      : maxRightBlank(visible);
+  // 右界**恒为** maxRightBlank（数据区至少占 MIN_VISIBLE_SHARE），与序列长短无关。
+  // 旧口径在序列比窗口窄时收紧成 `visible - barCount`，代价是缩到整段刚好铺满那一刻
+  // 上限恰好等于 0：画布一点拖不动（2026-11-06 用户报）。整段可见时同样要留出
+  // 拖进右侧空白的行程，才和放大后一样随手可拖。
+  const maxOffset = maxRightBlank(visible);
   return { visibleBars: visible, rightOffset: clampNum(v.rightOffset, minOffset, maxOffset) };
 }
 
@@ -400,10 +409,8 @@ export function zoomViewport(
   const ratio = clampNum(anchorRatio, 0, 1);
   const anchor = start + c.visibleBars * ratio;
   const newStart = anchor - target * ratio;
-  return clampViewport(
-    { visibleBars: target, rightOffset: newStart + target - barCount },
-    barCount,
-  );
+  const rightOffset = Math.min(newStart + target - barCount, maxZoomOffset(target, barCount));
+  return clampViewport({ visibleBars: target, rightOffset }, barCount);
 }
 
 /** 归一化横坐标（0..1）反查蜡烛下标，结果夹回序列内。 */
