@@ -1067,3 +1067,46 @@ Android：① `syncInstruments` 加 **6 小时 TTL**（`InstrumentDao.latestSync
 `PYTHONIOENCODING=utf-8`；第 2 次首跑 TLS handshake timeout，重跑幂等通过）；
 tag 用 `tag-0166.py`（先断言 tree 一致）。
 - 用掉的 tag 追加：`desktop-v0.1.66`。
+
+## desktop 0.1.67 + android 0.9.75（双端同发，2026-11-07 16:21 CST / 08:21 UTC）
+
+两端各一项界面调整，均已在真机 / 真实浏览器里走过：
+
+- **Android：均线分析合并单入口**。详情页顶栏与全屏周期条从两枚「MA分析 / EMA分析」收成一枚
+  「均线分析」，族的选择挪进面板抬头（MA / EMA 两枚 compact chip，选中填墨底）。
+  `DetailScreen` 的开关从 `analysisFamily: MaFamily?` 改成 `analysisOpen + analysisFamily`：
+  切族仍走 `setMaPanelOpen`（ViewModel 整份清空重取），关掉再开保留上次那族，初值取配了档位的那族。
+  MuMu 1920×1080 横屏实测：单入口 → MA 面板 17/28 档 → 切 EMA 后整表换成 EMA12/26/50、缩略图与计数同步；
+  再把屏宽压到 426dp（`wm size 720x1280` + `wm density 480`）验窄屏档：价格落第二行，
+  标的名 + MA/EMA chip + 刷新 / 关闭仍在一行。截图 `mm-6/7/16-*.png`。
+- **桌面：面板两栏对调**。缩略图在左、条目列表在右；列宽同步换成 1.25fr / 0.95fr，
+  保持「图宽、列表窄」的原有比例（不是让列表平白变宽）；窄窗（<760px）单列改成图在上、列表在下。
+  CDP 浅 / 深两套 1280×820：首列 `.ema-shape` 526px 在左、`.ema-col` 400px 在右，点条目第二行左栏形态图同步换；
+  700px 窄窗：图 212px 在上、列表 177px 在下。截图 `ma-cols-order-*.png`。
+
+提交链（本地 → 远端）：
+- `c60a159` feat(android) → `af11b38`
+- `728018c` feat(desktop) → `5d0f0cf`
+- `3716359` chore(release) → `9c94a3e`（tag `0.9.75` → `b24cf77` 与 `desktop-v0.1.67` → `375e835`，均指向此 commit）
+
+工作流：Release（Android）**42354547032** 绿、Desktop Release **42354551735** 三 job 全绿、
+CI **42354514794** 绿（同分支连推的前两条 CI 被 concurrency 取消，属正常）。
+
+通道验收：
+- 桌面 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.67
+  无旧版残留；`latest.json` 0.1.67（pub_date `2026-11-07T08:21:23.959Z`）；
+  exe **2823465**、dmg 4471360（边车 == asset digest）、mac app.tar.gz 4390274；
+  两平台 `.sig` 与 `latest.json` 内联签名逐字一致，解出 minisign keyid `226b03192e5df60b`（`ED` 头 + 8 字节）。
+- Android `android-latest`：id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z），
+  只有 `market-monitor-0.9.75.apk`（**11235972**）+ `.sha256`（asset digest `6ee764f8…` == 边车）；
+  CI 日志 `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥、`本次版本号：0.9.75`。
+- 包内证据：桌面 CI vite 指纹 `index-4PGnxyCk.js 340.08` / `index-DcE0kAte.css 53.92`（108 modules）
+  == 本地 `npm run build`（两平台 job 一致）。
+- ⚠️ `verify-channel.mjs 0.1.67` 再次在「拉 releases 列表」403（匿名限流），沿用 0.1.66 的办法：
+  `gh api` 逐项核对 id/created_at/资产清单/边车哈希/签名，外加上述指纹断言。
+
+✅ 打 tag 前：桌面 `tsc --noEmit` + `npm run build` 绿；Android 单测 **433 例全绿**、`:app:assembleDebug` 绿。
+
+推送仍走 `.workbuddy/tmp/api-push-0948.py`（3 次，`--parent` 传完整 40 位远端 SHA，均带
+`PYTHONIOENCODING=utf-8`）；tag 用 `tag-0975-0167.py`（先断言 tree 一致，双 tag 一个脚本打完）。
+- 用掉的 tag 追加：`0.9.75`、`desktop-v0.1.67`。
