@@ -78,6 +78,7 @@ import com.waxilo.marketmonitor.domain.kline.CandleInterval
 import com.waxilo.marketmonitor.ui.chart.maRoleForSlot
 import com.waxilo.marketmonitor.ui.common.Banner
 import com.waxilo.marketmonitor.ui.common.BannerTone
+import com.waxilo.marketmonitor.ui.common.FilterChip
 import com.waxilo.marketmonitor.ui.common.Rule
 import com.waxilo.marketmonitor.ui.common.SegmentedControl
 import com.waxilo.marketmonitor.ui.common.TextAction
@@ -95,6 +96,9 @@ import kotlin.math.roundToInt
  * 均线压力支撑分析面板（桌面端 `MaAnalysisPanel` 的 Android 版；MA / EMA 共用）。
  *
  * 一张对照最新价的表：当前一族所有已配置档位 × 所有已配置周期，按现价分成上方压力 / 下方支撑。
+ * **族的选择在抬头里**（2026-11 与桌面端同步：入口只剩一枚「均线分析」）。两族的档位目录、
+ * 线色、落线身份各走各的，切族 = 换整张表（由 ViewModel 整份清空重取，不会把一族的水位算进另一族）。
+ * 初值取「配了档位的那一族」（在 `DetailScreen` 里定），只配了 EMA 的人不该先看到空表。
  *
  * 与桌面端一致的几条取舍：
  *
@@ -135,6 +139,8 @@ fun MaAnalysisSheet(
     /** 一次性提示（画上 / 对齐 / 取消的结果）。竖屏详情页不显示 notice，所以面板自己带一条。 */
     notice: String?,
     onRefresh: () -> Unit,
+    /** 抬头里切族：两族共用一个面板（档位目录 / 线色 / 自动名各走各的）。 */
+    onFamilyChange: (MaFamily) -> Unit,
     onToggleLine: (MaLevelRow) -> Unit,
     /** 一键清掉本标的图上全部本族分析划线（面板自动名的那批告警规则）。 */
     onClearLines: () -> Unit,
@@ -287,6 +293,7 @@ fun MaAnalysisSheet(
                             rules.count { MaAnalysis.isFamilyAutoNote(it.name, family) }
                         },
                         onRefresh = onRefresh,
+                        onFamilyChange = onFamilyChange,
                         onClearLines = onClearLines,
                         onDismiss = onDismiss,
                     )
@@ -492,9 +499,12 @@ private fun EmptySideBlock(
  * 抬头只该是一道边，不该占掉近半个屏。压成两行后一屏能多看出四五道 EMA。
  *
  * 两行怎么分按**可用宽度**决定（`screenWidthDp`，不是方向）：
- * - 宽屏一行装得下：标的名 · 现价 · 刷新 · 关闭全在第一行，第二行只有元信息；
- * - 窄屏（竖屏 360dp）一行装不下：第一行只放标的名与两个操作（标的名绝不能被价格挤成
+ * - 宽屏一行装得下：标的名 · MA/EMA 切换 · 现价 · 刷新 · 关闭全在第一行，第二行只有元信息；
+ * - 窄屏（竖屏 360dp）一行装不下：第一行只放标的名、族切换与两个操作（标的名绝不能被价格挤成
  *   「BTC/U…」—— 这块面板说的就是它），现价与元信息挪到第二行。
+ *
+ * 族切换是两枚 compact chip（选中填墨底），不是第三枚页签：它紧贴标的名，回答「这张表是哪一族的」，
+ * 与下面「上方压力 / 下方支撑」那对页签（这张表的两个筐）语义不同，用不同控件才不混。
  */
 @Composable
 private fun PanelHead(
@@ -511,6 +521,8 @@ private fun PanelHead(
     /** 图上有几条本族划线（自动名的那批告警规则）：0 时不给「清空」入口。 */
     marked: Int,
     onRefresh: () -> Unit,
+    /** 切族：MA / EMA 共用一个面板（行数据、画线身份、清空范围都随族走）。 */
+    onFamilyChange: (MaFamily) -> Unit,
     onClearLines: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -521,7 +533,7 @@ private fun PanelHead(
     // 就只留节奏与时刻 —— 身份本来也不用写，竖屏这两行上面就是「上方压力 / 下方支撑」页签
     val meta = if (roomy) {
         buildString {
-            append("${family.label} · 压力支撑分析 · 每 1 分钟自动刷新")
+            append("均线分析 · 每 1 分钟自动刷新")
             // 刷新中不报「上次」：那一秒里它正被新值取代，写出来反而让人去核对一个将过期的时刻
             if (!refreshing && updatedAt > 0) append(" · 上次 ${clockText(updatedAt)}")
         }
@@ -545,6 +557,19 @@ private fun PanelHead(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
+            // 族的选择（MA / EMA）：两族共用一张表，一次只看一族。紧贴标的名 ——
+            // 它回答的是「这张表是哪一族的」，与右边「刷新 / 清空 / 关闭」不是一类动作。
+            // 已选中的那枚不响应点击：切到同一族会白清一次状态、多取一轮 K 线。
+            Spacer(Modifier.width(Spacing.Sm))
+            MaFamily.entries.forEach { option ->
+                FilterChip(
+                    text = option.label,
+                    selected = option == family,
+                    onClick = { if (option != family) onFamilyChange(option) },
+                    compact = true,
+                )
+                if (option != MaFamily.entries.last()) Spacer(Modifier.width(Spacing.Xxs))
+            }
             if (roomy) {
                 Spacer(Modifier.width(Spacing.Sm))
                 PriceBlock(base = base, live = live, tickSize = tickSize)
