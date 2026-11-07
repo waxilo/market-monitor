@@ -30,7 +30,7 @@
 | 桌面端告警线通知（穿越 → 系统通知 + webhook 推送；设置页「告警通知」管地址，接 notify_hub 的 hook） | `desktop/src/lib/webhooks.ts`、`hooks/usePriceAlerts.ts`、`components/WebhookSection.tsx` | 已实现；地址存 `mm.webhooks`，只发 https（宿主 `market_request` 只放行 https） |
 | 桌面端悬浮窗列表（设置页「悬浮窗」：现货/永续混搜添加 + 拖动排序，独立于主窗标签页） | `desktop/src/components/MiniListSection.tsx`、`hooks/useWatchlist.ts`、`lib/search.ts` | 已实现；存 `mm.miniWatchlist`，没存过的机器首次读取会落一份出厂名单（BTC / ETH × 现货/永续） |
 | 桌面端均线指标分析（MA / EMA 共用**周期条右端唯一一枚「均线分析」chip**，族在面板抬头里切，一次只看一族；点一下就汇总「所选族所有已配置档位 × 所有已配置 K 线周期」的当前值，对照最新价分成上方压力 / 下方支撑；**点一行＝在该价位画/取消告警线**；周期小方框只是标注、不可点；行内不写状态字，画过的档用整行告警红底 + 左缘色条标出，列头另有「已画 N」） | `desktop/src/components/MaAnalysisPanel.tsx`、`lib/maAnalysis.ts` | 已实现；取数根数与图上一段历史同口径（300 起、封顶 1000），算不出的档位（粗周期上的长档）单独报，不与取数失败混为一谈；同价已有普通线时点一下是**升级成告警线**而不是再画一根，**画出的线自动带上「1时MA50」/「1时EMA50」这样的备注**；抬头「清空划线」只收当前族的系统线（手画线与另一族不动）；**静默刷新**（重开时先用上次的结果铺表，只有右上角按钮变「刷新中」，拿到新值再整表替换）＋ 面板开着时**每 1 分钟自动重算**，某个周期这次没取到就沿用上一轮的值并标明 |
-| App 端均线指标分析（MA / EMA 各一枚入口：**详情页顶栏右上角**的「MA分析」「EMA分析」，全屏则在顶部周期条右端；同一时刻只开一族；**竖屏「上方压力 / 下方支撑」页签切换**，各带条数、各记各的滚动位置，页签内与横屏两列都按「离现价由近到远」排（压力低→高、支撑高→低）；横屏两列并排各滚各的） | `ui/detail/MaAnalysisSheet.kt`、`domain/indicator/MaAnalysis.kt` | 已实现并真机验收；**回显靠规则名**（`1时MA50` / `1时EMA50`，自动名是 (周期, 族, 档位) 的双射 —— App 的线由 `alert_rule` 派生，规则表没有结构化身份字段；MA 判据带 `(?<!E)` 以免认领 EMA 的线），行内不写状态字（画过的档用告警红底 + 左缘色条，列头另有「已画 N」）、点行＝画 / 对齐 / 取消、周期小方框只是标注不可点；均线原值不对齐刻度（对齐了「已对齐」判据就永远不成立）；**周期短名与桌面端同源（`1h → 1时`、`1w → 1周`），升级前画的 `1hEMA50` 老线仍按旧名认领，对齐时顺手迁移成新名** |
+| App 端均线指标分析（MA / EMA 共用**详情页顶栏右上角唯一一枚「均线分析」**，全屏则是顶部周期条右端那一枚；族在面板抬头里切（两枚 MA / EMA chip），一次只看一族；**竖屏「上方压力 / 下方支撑」页签切换**，各带条数、各记各的滚动位置，页签内与横屏两列都按「离现价由近到远」排（压力低→高、支撑高→低）；横屏两列并排各滚各的） | `ui/detail/MaAnalysisSheet.kt`、`domain/indicator/MaAnalysis.kt` | 已实现并真机验收；**回显靠规则名**（`1时MA50` / `1时EMA50`，自动名是 (周期, 族, 档位) 的双射 —— App 的线由 `alert_rule` 派生，规则表没有结构化身份字段；MA 判据带 `(?<!E)` 以免认领 EMA 的线），行内不写状态字（画过的档用告警红底 + 左缘色条，列头另有「已画 N」）、点行＝画 / 对齐 / 取消、周期小方框只是标注不可点；均线原值不对齐刻度（对齐了「已对齐」判据就永远不成立）；**周期短名与桌面端同源（`1h → 1时`、`1w → 1周`），升级前画的 `1hEMA50` 老线仍按旧名认领，对齐时顺手迁移成新名** |
 | 桌面端画线备注（右键水平线 / 直线 →「加个备注」，图上在**线的左端把一块与右轴价签同款的实色牌串在线上**——黄底＝普通画线、红底＝告警，牌心压在线 y 上、线从牌底下穿过，压在 K 线/网格上也读得清；菜单文案随有没有备注变「改一下备注」，弹窗里可一键删掉） | `desktop/src/components/LineNoteDialog.tsx`、`lib/lineNote.ts`、`KlineCanvas` 的 `drawLineNote` | 已实现；备注就存在线对象里（`mm.priceLines` / `mm.trendLines` 的 `note`，空 = 不落字段），上限 60 字、换行压成一个空格，删线即删备注 |
 
 Android 端的应用内更新读取 `api.github.com/repos/waxilo/market-monitor/releases/latest`，要求**匿名可读**。
@@ -344,8 +344,8 @@ dev 模式跑的是本地 Vite dev server（`devUrl` 指 `http://localhost:5173`
 
 | 项 | 值 |
 | --- | --- |
-| versionName | `0.9.74` |
-| versionCode | `86` |
+| versionName | `0.9.75` |
+| versionCode | `87` |
 | 更新通道 | 固定 tag `android-latest` 的 Release（**只有这一个**，发新版只换里面的产物） |
 | 安装包 | 通道 Release 里的 `market-monitor-<version>.apk`（CI 用**固定 release 密钥**签名，见下），边车 `<apk>.sha256` |
 
@@ -402,7 +402,7 @@ git push origin main 0.2.0
 
 | 项 | 值 |
 | --- | --- |
-| version | `0.1.66`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
+| version | `0.1.67`（`desktop/src-tauri/tauri.conf.json`，应用内比较的就是它） |
 | 更新通道 | 固定 tag `desktop-latest` 的 Release（**只有这一个**，发新版只换里面的产物），应用只读它的 `latest.json` |
 | 产物 | `market-monitor_<version>_macos.dmg`、`market-monitor_<version>_windows.exe`（各带 `.sha256`） |
 | 发版方式 | 打 tag `desktop-v<版本>` 推送触发 `Desktop Release`；也可在 Actions 里手动 dispatch |
