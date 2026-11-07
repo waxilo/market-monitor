@@ -37,8 +37,8 @@ const AUTO_REFRESH_MS = 60_000;
  * 11 个周期的 K 线，那几百毫秒里表是空的 —— 而这份表的用法恰恰是「点开看一眼就走」。
  * 有了这层，点开就能立刻看到上次的数值，同时后台静默换成新的。
  *
- * 表与缩略曲线存同一份：右栏的形态图只认 `curves`，如果只缓存表，重开时左栏有数、
- * 右栏却要等新一轮取数才画得出来 —— 那正是「已经加载过一次，还得再等刷新」。
+ * 表与缩略曲线存同一份：左栏的形态图只认 `curves`，如果只缓存表，重开时右栏有数、
+ * 左栏却要等新一轮取数才画得出来 —— 那正是「已经加载过一次，还得再等刷新」。
  *
  * 只留最近 6 份（切标的 / 换源会各占一格）：这是个「上次看到的」缓存，不是数据仓库，
  * 存太多既没用又会让内存里挂着一堆过期的价位。
@@ -240,11 +240,11 @@ function clockText(at: number): string {
  *   并把这些周期标成「上次的值」。断网时一道压力线凭空消失，比显示略旧的数危险得多。
  * - **失败与「算不出」分开报**：前者是网络/数据源不通（该重试），后者是这个周期取回的根数
  *   不够算这一档均线（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
- * - **左列表 / 右缩略图**：左栏是「上方压力 / 下方支撑」两个页签（同一时刻只看一侧），
- *   点一条 = **选中**它，右栏立刻画出这一档均线的形态（收盘价淡灰、均线用色槽色，
- *   共用一根纵轴），滚轮缩放可见根数、双击复位。悬浮不再弹原生文字提示 ——
- *   详细信息都在右栏里，tooltip 只会挡着下面几行。
- * - **画线是右栏的动作按钮**：选中一条后，右栏底部那枚按钮把它落成图上的**系统划线**
+ * - **左缩略图 / 右列表**：左栏是选中那一档的形态图（收盘价淡灰、均线用色槽色，
+ *   共用一根纵轴），滚轮缩放可见根数、双击复位；右栏是「上方压力 / 下方支撑」两个页签
+ *   （同一时刻只看一侧），点一条 = **选中**它，左栏立刻换成那一档的形态。悬浮不再弹原生
+ *   文字提示 —— 详细信息都在左栏里，tooltip 只会挡着下面几行。
+ * - **画线是左栏的动作按钮**：选中一条后，左栏底部那枚按钮把它落成图上的**系统划线**
  *   （没画就画、漂了拉回、已对齐就删）。这条线带**身份**落盘（`PriceLine.origin` =
  *   周期 + 档位），打开面板时那一行带「已画」底色回显。均线每分钟都在动，所以每一轮取数
  *   回来都会把这些系统划线**自动拉到**各自的新值（`onLevels` → `alignLevelLines`）——
@@ -318,14 +318,14 @@ export function MaAnalysisPanel({
    *
    * 与 `scan.levels` 同源（同一次扫描算出来），但单独存一份：表只留末值，
    * 而缩略图要看整段形态。断网时与表同口径地**沿用上一轮**（见下面的合并）。
-   * 初值同样取上次看过的：右栏的形态图不该比左栏的表晚一轮才出现。
+   * 初值同样取上次看过的：左栏的形态图不该比右栏的表晚一轮才出现。
    */
   const [curves, setCurves] = useState<Record<string, LevelCurve>>(
     () => scanCache.get(scanKey)?.curves ?? {},
   );
   /** `curves` 的镜像，用来在取数回调里「并到上一轮上」（理由与 `scanRef` 相同）。 */
   const curvesRef = useRef(curves);
-  /** 左栏页签：一次只看一侧（压力 / 支撑），另一侧留在页签上的数字里。 */
+  /** 右栏页签：一次只看一侧（压力 / 支撑），另一侧留在页签上的数字里。 */
   const [tab, setTab] = useState<'resistance' | 'support'>('resistance');
   /** 当前选中的那一档 —— 中间缩略图跟着它走。 */
   const [selected, setSelected] = useState<{ interval: string; period: number } | null>(null);
@@ -339,7 +339,7 @@ export function MaAnalysisPanel({
     // 镜像必须跟着换：并到「上一个币的表」上会把别家的水位搬过来
     scanRef.current = cached?.scan ?? EMPTY_SCAN;
     setScan(scanRef.current);
-    // 曲线和表必须同一份缓存：只恢复表的话，右栏形态图要等这一轮取数回来才画得出
+    // 曲线和表必须同一份缓存：只恢复表的话，左栏形态图要等这一轮取数回来才画得出
     curvesRef.current = cached?.curves ?? {};
     setCurves(curvesRef.current);
     setSelected(null);
@@ -549,7 +549,7 @@ export function MaAnalysisPanel({
   ).length;
 
   /**
-   * 左栏：页签（上方压力 / 下方支撑）+ 这一侧的条目。
+   * 右栏：页签（上方压力 / 下方支撑）+ 这一侧的条目。
    *
    * 点一条 = **选中**它（中间缩略图跟着换），不再直接画线 —— 画线是中间那一栏的动作按钮。
    * 行上的「已画」仍然只靠底色 + 左缘色条表达（`.on`），选中是另一层底色（`.sel`）：
@@ -628,7 +628,7 @@ export function MaAnalysisPanel({
     </section>
   );
 
-  /** 右栏：选中那一档的缩略形态图 + 画线动作（滚轮缩放）。 */
+  /** 左栏：选中那一档的缩略形态图 + 画线动作（滚轮缩放）。 */
   const shapePane = (
     <section className="ema-shape">
       {selectedRow && selectedCurve ? (
@@ -702,7 +702,7 @@ export function MaAnalysisPanel({
         </>
       ) : (
         <p className="ema-shape-empty">
-          {hasTable ? '点左侧的条目，在这里看它的均线形态' : '等这一轮取数回来…'}
+          {hasTable ? '点右侧的条目，在这里看它的均线形态' : '等这一轮取数回来…'}
         </p>
       )}
     </section>
@@ -806,8 +806,8 @@ export function MaAnalysisPanel({
             <p className="ema-empty">{kind} 一档都没配置 —— 先在指标栏「＋」里加几档再来分析。</p>
           ) : hasTable ? (
             <div className="ema-cols">
-              {listPane}
               {shapePane}
+              {listPane}
             </div>
           ) : refreshing ? (
             <p className="ema-empty num">

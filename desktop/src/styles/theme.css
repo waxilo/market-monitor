@@ -3040,13 +3040,13 @@ body {
   font-size: 10px;
   color: var(--muted);
 }
-/* 两栏：左 = 页签列表（压力 / 支撑），右 = 选中那一档的缩略形态图。
-   列表占小半、图占大半 —— 图是「看形态」的主角，列表只是选它。 */
+/* 两栏：左 = 选中那一档的缩略形态图，右 = 页签列表（压力 / 支撑）。
+   图占大半、列表占小半 —— 图是「看形态」的主角，列表只是选它。 */
 .ema-cols {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.25fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.95fr);
   gap: var(--sp-sm);
   align-items: stretch;
 }
@@ -3478,11 +3478,11 @@ body {
   line-height: 1.6;
   color: var(--muted);
 }
-/* 极窄窗口：列表在上、图在下（图仍占大头） */
+/* 极窄窗口：图在上、列表在下（图仍占大头） */
 @media (max-width: 760px) {
   .ema-cols {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1.2fr);
+    grid-template-rows: minmax(0, 1.2fr) minmax(0, 1fr);
   }
 }
 
