@@ -464,6 +464,8 @@ interface Props {
   onAddTrend: (a: TrendAnchor, b: TrendAnchor) => void;
   /** 工具落点划出一条水平线（价位由画布按落点反算，精度不在画布这侧定）。 */
   onAddPriceLine: (price: number) => void;
+  /** 双击已选中的那条线：打开它的备注框（改哪条线由落点命中决定）。 */
+  onEditNote: (selection: LineSelection) => void;
   /** 一条线画完了：让划线区把工具收回去（一次一个动作，别让它一直举着）。 */
   onDrawn: () => void;
   /** 整张图的画线是否锁定（默认解锁）：锁上后画布不抓线、不画把手，拖动落点一律还给「拖画布」。 */
@@ -497,6 +499,7 @@ export function KlineCanvas({
   onSelect,
   onAddTrend,
   onAddPriceLine,
+  onEditNote,
   onDrawn,
   linesLocked,
   onMovePriceLine,
@@ -599,6 +602,7 @@ export function KlineCanvas({
     onSelect,
     onAddTrend,
     onAddPriceLine,
+    onEditNote,
     onDrawn,
     onMovePriceLine,
     onMoveTrendBy,
@@ -1776,7 +1780,9 @@ export function KlineCanvas({
     };
 
     /**
-     * 双击 = 在落点画一条水平线（与划线区的「水平线」工具同一个动作，普通画线、不告警）。
+     * 双击的两种意思，按落点分开：
+     * - 落在**已选中的那条线**上 → 打开它的备注框（第一次单击已经完成「选中」，双击接着就是「改」）；
+     * - 其余落点 → 在价格上画一条水平线（与划线区的「水平线」工具同一个动作，普通画线、不告警）。
      * 只认主图：副图的双击没有价位含义，复位小标与工具态的双击各有各的意思。
      * 同价已有线时 `addPriceLine` 自己会挡掉，不会两根重合。
      */
@@ -1788,6 +1794,17 @@ export function KlineCanvas({
       if (x > plotW || y < top || y > bottom) return;
       if (modelRef.current.tool !== 'none') return;
       if (hitBadge(e)) return;
+      const sel = modelRef.current.selection;
+      if (sel) {
+        const onSelected =
+          sel.kind === 'trend'
+            ? nearestTrendBody(trendBodies(plotW), x, y) === sel.index
+            : hitLine(y) === sel.index;
+        if (onSelected) {
+          modelRef.current.onEditNote(sel);
+          return;
+        }
+      }
       const price = priceOfY(y);
       if (!Number.isFinite(price)) return;
       modelRef.current.onAddPriceLine(price);

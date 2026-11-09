@@ -1117,6 +1117,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             if (drawings.linesHidden) drawings.setLinesHidden(false);
           }}
           onDrawn={() => setTool('none')}
+          onEditNote={openNote}
           linesLocked={drawings.linesLocked}
           onMovePriceLine={drawings.movePriceLine}
           onMoveTrendBy={drawings.moveTrendBy}
