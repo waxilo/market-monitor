@@ -1110,3 +1110,39 @@ CI **42354514794** 绿（同分支连推的前两条 CI 被 concurrency 取消�
 推送仍走 `.workbuddy/tmp/api-push-0948.py`（3 次，`--parent` 传完整 40 位远端 SHA，均带
 `PYTHONIOENCODING=utf-8`）；tag 用 `tag-0975-0167.py`（先断言 tree 一致，双 tag 一个脚本打完）。
 - 用掉的 tag 追加：`0.9.75`、`desktop-v0.1.67`。
+
+## desktop 0.1.68（单发桌面，2026-11-09 18:23 CST / 10:23 UTC）
+
+一项交互修复：**选中划线后再双击 = 编辑备注，不再新画一根水平线**。
+
+- `KlineCanvas` 的 dblclick 先看当前 `selection`：落点命中**选中那条线**（水平线 `hitLine`、
+  直线 `nearestTrendBody`，与单击选中同一容差）→ `onEditNote(selection)`；落空才沿用
+  「双击落水平线」。第一次单击已完成选中，所以直接双击一根没选中的线也能一步到位。
+  备注框复用划线区已有的 `openNote` → `LineNoteDialog`（水平线报价位、直线报序号）。
+- 验证（headless Chrome + CDP，Vite 5173）：双击落线 → 单击选中（划线区显示 `74904.89`）→
+  再双击弹「备注 · 水平线 74904.89」且线数仍 1；输入「缺口上沿」回车后落盘
+  `note:"缺口上沿"`；点空白取消选中后再直接双击该线仍弹备注、线数不变；空白双击照旧新增第二根。
+  直线同路径：两下成线 → 单击选中「直线 1」→ 双击弹「备注 · 直线 1」，直线 1 / 水平线 0。
+  脚本 `desktop/.workbuddy/tmp/check-dblclick-note.mjs`、`check-dblclick-note-trend.mjs`，
+  截图 `dblclick-note-1..4-*.png`。Android 没有双击手势，本轮不动。
+
+提交链（本地 → 远端）：
+- `2015222` fix(desktop) → `c5a4f2c`
+- `a84130c` chore(release) → `716e340`（tag `desktop-v0.1.68` → `5c71267`）
+
+工作流：Desktop Release **42599868599** 三 job 全绿；CI **42599831032** 绿
+（`42599805455` 被同分支连推的 concurrency 取消，属正常）。
+
+通道验收：
+- `verify-channel.mjs 0.1.68` 本次直接跑通：**34 通过 / 0 失败**（没再撞 403）。
+- 桌面 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、
+  8 产物全 0.1.68 无旧版残留；`latest.json` 0.1.68（pub_date `2026-11-09T10:23:14.023Z`）；
+  exe **2823036**（边车 `c693a4fc…` == asset digest）、dmg **4471360**、mac app.tar.gz **4390342**；
+  两平台 `.sig` == manifest 内联签名，keyid `226B03192E5DF60B`。
+- Android `android-latest`：本轮未动，仍只有 `market-monitor-0.9.75.apk`（11235972）+ `.sha256`。
+- 包内证据：CI vite 指纹 `index-DqpAf7YM.js 340.26` / `index-DcE0kAte.css 53.92`（108 modules）
+  == 本地 `npm run build`；exe `FileVersion` / `ProductVersion` 均 `0.1.68`。
+
+推送走 `.workbuddy/tmp/api-push-0948.py`（2 次，`--parent` 传完整 40 位远端 SHA，均带
+`PYTHONIOENCODING=utf-8`）；tag 用 `tag-0168.py`（先断言 tree 一致）。
+- 用掉的 tag 追加：`desktop-v0.1.68`。
