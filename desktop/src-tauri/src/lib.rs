@@ -4,6 +4,7 @@ mod browser_keys;
 mod frame;
 mod global_key;
 mod market;
+mod restore;
 mod taskbar;
 mod update;
 
@@ -39,11 +40,111 @@ const MINI_MAX_H: f64 = 166.0;
 /// 距屏幕右侧 / 下侧的边距（逻辑像素）。
 const MINI_MARGIN_X: f64 = 24.0;
 const MINI_MARGIN_Y: f64 = 96.0;
+/// 主窗出厂尺寸（逻辑像素），必须与 `tauri.conf.json` 的 `width`/`height` 一致。
+/// 只在这一处兜底用：窗口位置被系统/换屏写坏、需要重新摆回来时按它恢复。
+const MAIN_W: f64 = 1280.0;
+const MAIN_H: f64 = 820.0;
+/// 主窗的尺寸下界，必须不高于 `tauri.conf.json` 的 `minWidth`/`minHeight`。
+/// 小于它说明拿到的不是正常窗口，而是最小化时系统给的图标占位块（实测 58×26）。
+const MAIN_MIN_W: f64 = 1024.0;
+const MAIN_MIN_H: f64 = 680.0;
+
+/// 主窗当前的几何是否已经“丢了”：尺寸小到不可能是正常窗口，或整个窗口与所有显示器
+/// 都不相交（落在已断开副屏的坐标上）。
+///
+/// 为什么会丢：Windows 在最小化时会用一块占位矩形（本机 150% 缩放下是
+/// `-18286,-18286, 58×26`）承载窗口；显示拓扑变化 / 最小化状态下被挪动时，
+/// 这块占位矩形可能被写进「正常位置」。此后 `unminimize()` + `show()` 都返回成功，
+/// 但窗口回到的是屏幕外那条 58×26 的缝里 —— 用户看到的就是「启了，但主屏幕不出来」。
+///
+/// `monitors` 是物理像素的 `(x, y, width, height)`。查不到显示器信息时只按尺寸判断，
+/// 不做“不相交”推断（宁可不动，也不要把正常窗口瞎挪）。
+fn main_geometry_lost(
+    pos: (i32, i32),
+    size: (u32, u32),
+    monitors: &[(i32, i32, u32, u32)],
+    scale: f64,
+) -> bool {
+    let too_small = (size.0 as f64) < MAIN_MIN_W * scale || (size.1 as f64) < MAIN_MIN_H * scale;
+    if too_small {
+        return true;
+    }
+    if monitors.is_empty() {
+        return false;
+    }
+    !monitors.iter().any(|&(mx, my, mw, mh)| {
+        let left = pos.0.max(mx);
+        let top = pos.1.max(my);
+        let right = (pos.0 + size.0 as i32).min(mx + mw as i32);
+        let bottom = (pos.1 + size.1 as i32).min(my + mh as i32);
+        right > left && bottom > top
+    })
+}
+
+/// 把主窗摆回主显示器中央（只在几何丢失时调用）。
+fn reset_main_geometry(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let Ok(Some(monitor)) = app.primary_monitor() else {
+        return;
+    };
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let scale = monitor.scale_factor();
+    let w = ((MAIN_W * scale).round() as u32).min(ms.width);
+    let h = ((MAIN_H * scale).round() as u32).min(ms.height);
+    let x = mp.x + ms.width.saturating_sub(w) as i32 / 2;
+    let y = mp.y + ms.height.saturating_sub(h) as i32 / 2;
+    let _ = window.unmaximize();
+    let _ = window.set_size(PhysicalSize::new(w, h));
+    let _ = window.set_position(PhysicalPosition::new(x, y));
+}
+
+/// 主窗此刻是否真的摊在用户眼前：可见、没有最小化、且几何没有丢。
+///
+/// 热键 / 托盘用这个判据决定「收成悬浮窗」还是「唤回主窗」；只看 `is_visible()`
+/// 会把最小化（甚至屏幕外）的主窗当成已经在前台，于是热键把它藏起来、弹出悬浮窗。
+pub(crate) fn main_on_screen(app: &AppHandle) -> bool {
+    let Some(window) = app.get_webview_window(MAIN) else {
+        return false;
+    };
+    if !window.is_visible().unwrap_or(false) || window.is_minimized().unwrap_or(false) {
+        return false;
+    }
+    let pos = window
+        .outer_position()
+        .unwrap_or(PhysicalPosition::new(0, 0));
+    let size = window.outer_size().unwrap_or(PhysicalSize::new(0, 0));
+    let monitors: Vec<(i32, i32, u32, u32)> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(|m| {
+            let p = m.position();
+            let s = m.size();
+            (p.x, p.y, s.width, s.height)
+        })
+        .collect();
+    !main_geometry_lost(
+        (pos.x, pos.y),
+        (size.width, size.height),
+        &monitors,
+        window.scale_factor().unwrap_or(1.0),
+    )
+}
 
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN) {
-        let _ = window.show();
+        // 先还原再显示：`show()` 对最小化窗口只是「按当前状态显示」（Win32 的 SW_SHOW
+        // 不会还原），单独先调它在这里没有意义。
         let _ = window.unminimize();
+        let _ = window.show();
+        // 系统把「正常位置」写成最小化占位块时，上面两步都成功但窗口仍在屏幕外，
+        // 这里把它捞回主显示器（判据与恢复尺寸见 `main_geometry_lost`）。
+        if !main_on_screen(app) {
+            // `unminimize()` 可能因窗口状态标志失真而空转；先补一次 Win32 的 SW_RESTORE
+            // 把最小化真正解开，再改几何（最小化状态下改尺寸只会改到占位块上）。
+            restore::force_restore(&window);
+            reset_main_geometry(app, &window);
+        }
         let _ = window.set_focus();
     }
 }
@@ -421,5 +522,53 @@ mod tests {
         assert_eq!(MINI_H, mini_height_for_rows(MINI_MAX_ROWS));
         assert!(MINI_MIN_H <= mini_height_for_rows(1));
         assert!(MINI_H <= MINI_MAX_H);
+    }
+
+    /// 主显示器 1463×823（本机实测），窗口正常摆在 (60,40,1280,780)。
+    const MONITORS: &[(i32, i32, u32, u32)] = &[(0, 0, 1463, 823)];
+
+    #[test]
+    fn normal_geometry_is_kept() {
+        assert!(!main_geometry_lost((60, 40), (1280, 780), MONITORS, 1.0));
+        // 部分出屏也算在屏上（只露出一角仍然是可用的窗口）
+        assert!(!main_geometry_lost((-400, -200), (1280, 780), MONITORS, 1.0));
+    }
+
+    #[test]
+    fn minimized_placeholder_is_lost() {
+        // 本机看到的就是这组：150% 缩放下的最小化占位块
+        assert!(main_geometry_lost(
+            (-18286, -18286),
+            (58, 26),
+            MONITORS,
+            1.5
+        ));
+        // 尺寸合法但整块落在屏幕外（副屏拔掉后的残留坐标）
+        assert!(main_geometry_lost((5000, 5000), (1280, 780), MONITORS, 1.0));
+        // 负方向同理
+        assert!(main_geometry_lost((-5000, 0), (1280, 780), MONITORS, 1.0));
+    }
+
+    #[test]
+    fn missing_monitor_list_only_judges_size() {
+        // 查不到显示器时不要因为「不相交」乱挪正常窗口
+        let none: &[(i32, i32, u32, u32)] = &[];
+        assert!(!main_geometry_lost((5000, 5000), (1280, 780), none, 1.0));
+        // 但小到不可能是正常窗口时仍要救
+        assert!(main_geometry_lost((5000, 5000), (58, 26), none, 1.5));
+    }
+
+    #[test]
+    fn multi_monitor_side_by_side_is_kept() {
+        // 主屏右侧接一块副屏，窗口在副屏上不算丢
+        let monitors = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        assert!(!main_geometry_lost((2000, 100), (1280, 800), &monitors, 1.0));
+        // 副屏被拔掉后同一坐标就丢了
+        assert!(main_geometry_lost(
+            (2000, 100),
+            (1280, 800),
+            &[(0, 0, 1920, 1080)],
+            1.0
+        ));
     }
 }

@@ -134,13 +134,13 @@ fn publish(app: &AppHandle, store: &Store) -> Status {
 ///
 /// 判据看**大窗**而不是悬浮窗（2026-10-14 改）：「在后台」（大窗已收进托盘，悬浮窗开没开都算）
 /// 按热键要的是全功能大窗，不是先弹一块小面板。悬浮窗可见时大窗必然不可见（两窗互斥），
-/// 所以「大窗可见 → 收成悬浮窗」这一支与旧逻辑里「悬浮窗可见 → 换大窗」不冲突。
+/// 所以「大窗在眼前 → 收成悬浮窗」这一支与旧逻辑里「悬浮窗可见 → 换大窗」不冲突。
+///
+/// 「在眼前」不能只看 `is_visible()`：最小化的窗口同样报可见，位置被系统写坏、
+/// 落在屏幕外的窗口也报可见。旧判据在这两种状态下会把它当成前台，按一下热键反而
+/// 把大窗藏起来去弹悬浮窗 —— 用户报的「主屏打不开、按热键只出小窗」就是这条路。
 fn toggle_view(app: &AppHandle) {
-    let main_visible = app
-        .get_webview_window(crate::MAIN)
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
-    if main_visible {
+    if crate::main_on_screen(app) {
         crate::to_mini(app);
     } else {
         crate::to_main(app);
