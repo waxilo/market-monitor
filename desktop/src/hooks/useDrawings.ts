@@ -5,6 +5,7 @@ import {
   parseLineStore,
   removePriceLine,
   setLineAlert,
+  setLineBadge,
   setLineNote,
   type LineStore,
   type PriceLine,
@@ -76,6 +77,8 @@ export interface DrawingsApi {
   removePriceLine: (index: number) => void;
   /** 开关某条水平线的价格告警（穿越时弹系统通知）。 */
   setPriceLineAlert: (index: number, alert: boolean) => void;
+  /** 开关某条水平线的价位牌（缺省按来源：用户线显示、均线分析的线隐藏）。 */
+  setPriceLineBadge: (index: number, show: boolean) => void;
   /** 改某条水平线的备注（空串 = 删掉备注）。 */
   setPriceLineNote: (index: number, note: string) => void;
   /** 改某条直线的备注（空串 = 删掉备注）。 */
@@ -193,6 +196,10 @@ export function useDrawings(key: string | null): DrawingsApi {
     (index: number, alert: boolean) => editLines((cur) => setLineAlert(cur, index, alert)),
     [editLines],
   );
+  const badgeLine = useCallback(
+    (index: number, show: boolean) => editLines((cur) => setLineBadge(cur, index, show)),
+    [editLines],
+  );
   const moveLine = useCallback(
     (index: number, price: number) => editLines((cur) => movePriceLine(cur, index, price)),
     [editLines],
@@ -248,6 +255,7 @@ export function useDrawings(key: string | null): DrawingsApi {
     addPriceLine: addLine,
     removePriceLine: removeLine,
     setPriceLineAlert: alertLine,
+    setPriceLineBadge: badgeLine,
     setPriceLineNote: noteLine,
     setTrendLineNote: noteTrend,
     movePriceLine: moveLine,

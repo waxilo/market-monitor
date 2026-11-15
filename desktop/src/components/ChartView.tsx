@@ -41,6 +41,7 @@ import {
   minutesOf,
 } from '../lib/intervals';
 import type { DrawTool, LineSelection } from '../lib/lineSelection';
+import { lineBadgeVisible } from '../lib/priceLines';
 import { useSourceKey, endpointOf, spotEndpointOf, useSpotSource } from '../lib/sources';
 import { openBinanceSpotStream, openBinanceStream, streamSymbolOf } from '../lib/stream';
 import {
@@ -916,7 +917,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
               两种面孔（互斥）：
               · 平时 = 选线型（水平线 / 直线，点一次进入、再点一次退出）+ 清空 + 锁定 + 眼睛 + 告警数；
-              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 删除 / ✕）。
+              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 价签 / 删除 / ✕）。
                 整块换掉而不是并排，是因为这两组动作天生冲突：一边在画新线、一边在改旧线，
                 并排放只会让人在同一行里同时看到两件不相干的事。 */}
           <div className="sep" />
@@ -952,6 +953,23 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                     onClick={() => drawings.setPriceLineAlert(selection.index, !selectedLine?.alert)}
                   >
                     {selectedLine?.alert ? '取消告警' : '告警'}
+                  </button>
+                )}
+                {selection.kind === 'price' && selectedLine && (
+                  <button
+                    type="button"
+                    className={`chip${lineBadgeVisible(selectedLine) ? ' on' : ''}`}
+                    aria-pressed={lineBadgeVisible(selectedLine)}
+                    title={
+                      lineBadgeVisible(selectedLine)
+                        ? '隐藏这条线的价位牌（右轴那一列的价格签；只藏价签，线本身还在）'
+                        : '显示这条线的价位牌（右轴那一列的价格签）'
+                    }
+                    onClick={() =>
+                      drawings.setPriceLineBadge(selection.index, !lineBadgeVisible(selectedLine))
+                    }
+                  >
+                    价签
                   </button>
                 )}
                 <button

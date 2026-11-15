@@ -66,7 +66,7 @@ import {
 } from '../lib/chartViewPrefs';
 import { minutesOf } from '../lib/intervals';
 import { isSameLine, type DrawTool, type LineSelection } from '../lib/lineSelection';
-import { nearestLineWithin, type PriceLine } from '../lib/priceLines';
+import { lineBadgeVisible, nearestLineWithin, type PriceLine } from '../lib/priceLines';
 import {
   clipLineToRect,
   nearestTrendBody,
@@ -85,6 +85,7 @@ import {
  * 副图每块固定高。**唯一不同的是主图会把剩余空间吃满**（有副图则让位、没副图则自己占满）
  * —— App 在手机上靠页面滚动，桌面端窗口高度固定、滚动条又被隐藏，见 chartLayout.ts 里 chartHeights 的注释。
  */
+/** 读数带距绘图区左右边缘的留白（两侧同值）。 */
 const READOUT_X = 8;
 /** 悬浮读数里段与段之间的间距（与 App 的读数带同口径）。 */
 const READOUT_GAP = 10;
@@ -164,9 +165,11 @@ function roleColor(role: LineRole, p: Palette): string {
 }
 
 function hline(ctx: CanvasRenderingContext2D, x0: number, x1: number, y: number) {
+  // 奇偶宽度分别落在半像素 / 整像素上：1px 走 0.5 才实，2px 走整数才不会被抗锯齿拉成 3px
+  const center = Math.round(y) + (Math.round(ctx.lineWidth) % 2 === 1 ? 0.5 : 0);
   ctx.beginPath();
-  ctx.moveTo(x0, Math.round(y) + 0.5);
-  ctx.lineTo(x1, Math.round(y) + 0.5);
+  ctx.moveTo(x0, center);
+  ctx.lineTo(x1, center);
   ctx.stroke();
 }
 
@@ -361,7 +364,6 @@ function drawLineNote(
   top: number,
   bottom: number,
   font = NOTE_FONT,
-  rightAlign = false,
 ): { left: number; width: number } {
   if (!text) return { left: x, width: 0 };
   const padX = 4;
@@ -370,8 +372,7 @@ function drawLineNote(
   ctx.font = font;
   ctx.textBaseline = 'middle';
   const w = ctx.measureText(text).width + padX * 2;
-  // rightAlign：把 x 当「牌子的右缘」用 —— 划线价牌要贴着价格轴左侧右对齐
-  const nx = clampNum(rightAlign ? x - w : x - padX, 2, Math.max(2, plotW - w - 2));
+  const nx = clampNum(x - padX, 2, Math.max(2, plotW - w - 2));
   const ny = clampNum(y, top + h / 2, Math.max(top + h / 2, bottom - h / 2));
   // **牌面照右轴那枚价签做**：实色块 + 高反差字，不是「纸色半透明」——
   // 纸色底板跟图底本来就同一个颜色，压在密集 K 线/网格上时字被底下的东西拖着读不清
@@ -732,7 +733,7 @@ export function KlineCanvas({
       return { left: Math.round(x) - (w - 1) / 2, w };
     };
     const dec = decimalsFor(ts);
-    /** 价格读数（轴上的价签与画布左端的划线价牌共用一套小数位）。 */
+    /** 价格读数（轴上的价签与划线价牌共用一套小数位）。 */
     const priceText = (price: number) =>
       price.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
     /** 一根 K 线的时长（直线锚点的时间 ⇄ 下标换算用）。 */
@@ -821,7 +822,7 @@ export function KlineCanvas({
      * 所以**任何线都不许从牌面上穿过去**，只能在所有线之后画。
      */
     const noteChips: { text: string; x: number; y: number; fg: string; bg: string }[] = [];
-    /** 选中的那条线：加粗 + 一层同色光晕（不换色 —— 红/黄本身就是语义，选中只是临时状态）。 */
+    /** 选中的线不换色、不加粗：红/黄本身是语义，粗细与位置要和未选中时完全一致才对齐得准。 */
     const selPrice = sel?.kind === 'price' ? sel.index : -1;
     const selTrend = sel?.kind === 'trend' ? sel.index : -1;
     if (pl.length > 0) {
@@ -831,17 +832,20 @@ export function KlineCanvas({
         const color = line.alert ? p.down : p.line;
         const selected = index === selPrice;
         if (selected) {
-          ctx.globalAlpha = 0.22;
+          // 选中标记：**两端各一道短竖线**，线本身保持同一粗细。
+          // 原先加粗到 2px + 一层光晕（未选中却只有 1px），用户对价时会被画宽的那一圈带偏
+          // （2026-11-15）。现在所有划线本来就是 2px，选中只加两端刻度，粗细不再变化。
+          const ly = Math.round(y) + 0.5;
           ctx.strokeStyle = color;
-          ctx.lineWidth = 7;
-          hline(ctx, 0, plotW, y);
-          ctx.globalAlpha = 1;
+          ctx.lineWidth = 2;
+          vline(ctx, 0, ly - 5, ly + 5);
+          vline(ctx, plotW - 1, ly - 5, ly + 5);
         }
         ctx.strokeStyle = color;
-        ctx.lineWidth = selected ? 2 : 1;
+        ctx.lineWidth = 2;
         hline(ctx, 0, plotW, y);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
-        // 告警线红底纸色字、普通画线黄底深字。价位另有一块浮在画布右端（见盖章那段）。
+        // 告警线红底纸色字、普通画线黄底深字。价位牌在右轴那一列（见「价格标」那段）。
         if (line.note) {
           noteChips.push({
             text: line.note,
@@ -858,20 +862,14 @@ export function KlineCanvas({
     // 斜线读作「一条斜率」，颜色不必再分工。端点把手**只画在选中的那条上**：把手是
     // 「这条线现在能拖」的信号，没选中就没有能拖的理由（0.1.x 起先选中、后拖动）。
     ctx.strokeStyle = p.line;
-    ctx.lineWidth = 1;
-    tl.forEach((line, index) => {
+    ctx.lineWidth = 2;
+    tl.forEach((line) => {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
-      const selected = index === selTrend;
-      if (selected) {
-        ctx.globalAlpha = 0.22;
-        ctx.strokeStyle = p.line;
-        ctx.lineWidth = 7;
-        infiniteLine(a.x, a.y, b.x, b.y);
-        ctx.globalAlpha = 1;
-      }
+      // 选中不改粗细、不加光晕：对齐靠的就是线本来的位置（见上面水平线同一口径），
+      // 选中信号交给锚点把手（下面 `drawTrendHandle`），没选中就没有能拖的理由。
       ctx.strokeStyle = p.line;
-      ctx.lineWidth = selected ? 2 : 1;
+      ctx.lineWidth = 2;
       infiniteLine(a.x, a.y, b.x, b.y);
       // 备注挂在**看得见的那个锚点**旁：A 被判出绘图区（线画到未来/过去很远）就换 B ——
       // 否则「给这条直线写了备注但图上找不到」。
@@ -883,7 +881,7 @@ export function KlineCanvas({
       // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）
       noteChips.push({ text: line.note, x: spot.x + 8, y: spot.y, fg: p.onAccent, bg: p.line });
     });
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 2;
     const selectedTrend = selTrend >= 0 ? tl[selTrend] : undefined;
     if (!lock && selectedTrend) {
       for (const anchor of [selectedTrend.a, selectedTrend.b]) {
@@ -909,10 +907,11 @@ export function KlineCanvas({
     /** 最新价的涨跌色：与 App 同口径，跟着**最新这一根**的收盘 vs 开盘走（实时跳动时也会翻面）。 */
     const lastColor = last.close >= last.open ? p.up : p.down;
     if (lastY >= mainTop && lastY <= mainBottom) {
-      // 最新价线走涨跌色（与 App 一致）：它是「现在在哪儿」，而这一根的颜色就是最近的答案
+      // 最新价线走涨跌色（与 App 一致）：它是「现在在哪儿」，而这一根的颜色就是最近的答案。
+      // 与划线同粗（2px）：这一条是现价的参照线，1px 时压在 K 线上容易看丢（2026-11-15 用户）。
       ctx.strokeStyle = lastColor;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 4]);
       hline(ctx, 0, plotW, lastY);
       ctx.setLineDash([]);
     }
@@ -934,29 +933,12 @@ export function KlineCanvas({
     };
     for (const mark of extremes) drawExtremeLevel(mark.index, mark.price);
 
-    // 备注牌 / 划线价牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
+    // 备注牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
     // 放在最新价虚线之后，是为了让牌面永远干净（牌上不许有别的线划过去）。
     //
-    // 划线自己的**价牌浮在画布右端**（2026-11-04 用户）：不进右轴那一列 —— 那一列只答
-    // 「现在多少钱 / 这段最高最低」，划线是用户自己的记号，价位贴着轴左侧浮在图上，
-    // 右对齐、上下跟着线走；备注牌仍在左端（图上一眼从左边读起）。
-    for (const line of pl) {
-      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
-      if (y < mainTop || y > mainBottom) continue;
-      drawLineNote(
-        ctx,
-        priceText(line.price),
-        plotW - 6,
-        y,
-        line.alert ? p.paper : p.onAccent,
-        line.alert ? p.down : p.line,
-        plotW,
-        mainTop,
-        mainBottom,
-        FONT,
-        true,
-      );
-    }
+    // 划线自己的价位牌**不在这里**：它和最新价 / 极值 / 十字光标一起画进右轴那一列
+    // （2026-11-15 用户：不和其他价签分开放），见下面「价格标」那段。
+    // 备注牌仍在左端（图上一眼从左边读起）。
     for (const chip of noteChips) {
       drawLineNote(ctx, chip.text, chip.x, chip.y, chip.fg, chip.bg, plotW, mainTop, mainBottom);
     }
@@ -1030,18 +1012,10 @@ export function KlineCanvas({
     }
 
     // ── 价格刻度 ──
-    ctx.fillStyle = p.label;
-    let lastAxisY = -Infinity;
-    for (const value of gridLines(mainR)) {
-      const y = yOf(toFraction(mainR, value), mainTop, mh);
-      if (y < mainTop || y > mainBottom) continue;
-      if (Math.abs(y - lastAxisY) < AXIS_MIN_GAP) continue;
-      lastAxisY = y;
-      ctx.fillText(value.toLocaleString('en-US', {
-        minimumFractionDigits: dec,
-        maximumFractionDigits: dec,
-      }), plotW + 4, y);
-    }
+    // 右侧价格轴**不画固定档位的数字**（2026-11-15 用户）：这一列只留动态价签
+    // （最新价 / 极值 / 十字光标）。网格线照旧（见上面的 `gridLines(mainR)`），
+    // 档位本身还能看见，只是不再拿一串跟着缩放重排的数字去挤右轴。
+    // 副图的指标刻度不在此列，见下。
 
     // 副图刻度：每块只取首尾两条，块本来就矮
     s.subPanes.forEach((pane, k) => {
@@ -1063,7 +1037,8 @@ export function KlineCanvas({
       }
     });
 
-    // ── 价格标（最新价 / 极值 / 十字光标）：贴在右轴上，与线同高；排在刻度之后，盖住同高刻度 ──
+    // ── 价格标（划线价牌 / 极值 / 最新价 / 十字光标）：全贴在右轴这一列，与线同高 ──
+    // 排在刻度之后，盖住同高刻度。
     const drawBadge = (text: string, centerY: number, bg: string, fg: string) => {
       const w = ctx.measureText(text).width + 8;
       const h = 14;
@@ -1073,15 +1048,32 @@ export function KlineCanvas({
       ctx.fillStyle = fg;
       ctx.fillText(text, plotW + 5, y + h / 2 + 0.5);
     };
-    // 右轴这一列只放**行情自己**的读数（划线自己的价牌在画布左端，见下面「盖章」那段）。
     // **不在可视区里的不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
     // 看着像就在那个价上。
+    //
+    // 划线自己的价位牌也进这一列（2026-11-15 用户：不和其他价签分开放），颜色照旧：
+    // 告警线红底、普通画线黄底。**先画划线、后画行情读数** —— 同一高度时由极值 /
+    // 最新价 / 十字光标压在它上面（行情本身比用户的记号重要，且读数常常是同一个数）。
+    // 每条线单独显隐，见 `lineBadgeVisible`。
+    for (const line of pl) {
+      if (!lineBadgeVisible(line)) continue;
+      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) continue;
+      drawBadge(
+        priceText(line.price),
+        y,
+        line.alert ? p.down : p.line,
+        line.alert ? p.paper : p.onAccent,
+      );
+    }
     // 可见区间的最高 / 最低价：靠那条虚线对回极值那根；最新价后画，同高时由它盖住
     // （行情本身比注释重要，且那时读数是同一个数）。
+    // 极值线与价签统一用灰（`p.label`）：它们是「这段行情的上下沿」这类注释，
+    // 不该抢最新价（涨跌色）与十字光标读数的注意力（2026-11-15 用户）。
     for (const mark of extremes) {
       const y = yOf(toFraction(mainR, mark.price), mainTop, mh);
       if (y < mainTop || y > mainBottom) continue;
-      drawBadge(priceText(mark.price), y, p.ink, p.paper);
+      drawBadge(priceText(mark.price), y, p.label, p.paper);
     }
     if (lastY >= mainTop && lastY <= mainBottom) {
       // 价签与线同色（涨绿 / 跌红），一眼对得上「这条虚线说的是这个数」
@@ -1138,10 +1130,12 @@ export function KlineCanvas({
       }
     }
 
-    // ── 读数（主图左上角）──
+    // ── 读数（主图右上角）──
     // 不占版面：主图从画布顶端开始画，读数叠在图上；**常在** —— 指针落在有数据的某一列
     // 就读那一根（只认横坐标，纵坐标不参与，2026-11-03 用户拍板），其余时候读最新一根。
     // 右侧留白 / 价格轴 / 指针离开画布都算「不在任何一根上」，读最新。
+    // 整块靠绘图区右缘（紧邻价格轴）：左半边让给 K 线本身，最近的行情读数在视线落点处
+    // （2026-11-15 用户要求从左上挪到右侧）。
     // 底下垫一层 86% 纸色的圆角薄垫，压在蜡烛 / 布林线上也读得清 ——
     // 无描边、无阴影，它是浮在图上的一块读数，不是卡片。
     const reading = !!cross && cross.onBar && cross.index >= rs && cross.index <= re;
@@ -1157,24 +1151,26 @@ export function KlineCanvas({
     }
     const padX = 6;
     const padY = READOUT_PAD / 2;
-    const plateX = READOUT_X - padX;
+    const plateRight = plotW - READOUT_X;
     const plateY = mainTop + 4;
     const plateW = Math.min(
       Math.max(...rows.map((row) => textSegmentsWidth(ctx, row))) + padX * 2,
-      plotW - plateX,
+      plateRight - (READOUT_X - padX),
     );
+    const plateX = plateRight - plateW;
+    const textX = plateX + padX;
     const plateH = padY * 2 + READOUT_LINE * rows.length;
 
     ctx.save();
     ctx.beginPath();
-    ctx.rect(0, plateY, plateX + plateW, plateH);
+    ctx.rect(plateX, plateY, plateW, plateH);
     ctx.clip();
     ctx.globalAlpha = 0.86;
     ctx.fillStyle = p.paper;
     roundRect(ctx, plateX, plateY, plateW, plateH, 6);
     ctx.globalAlpha = 1;
     rows.forEach((row, r) => {
-      drawTextSegments(ctx, row, READOUT_X, plateY + padY + READOUT_LINE * r + READOUT_LINE / 2);
+      drawTextSegments(ctx, row, textX, plateY + padY + READOUT_LINE * r + READOUT_LINE / 2);
     });
     ctx.restore();
     s.subPanes.forEach((pane, k) => {
@@ -1391,6 +1387,19 @@ export function KlineCanvas({
       return fromFraction(currentMainRange(), height > 0 ? (y - top) / height : 0);
     };
 
+    /**
+     * 落点取价用的 y：以**屏上已经显示的十字光标**为准（看到多少就画多少）。
+     *
+     * `dblclick` / `pointerdown` 的 y 与最后一次 `pointermove` 的 y 在 Retina 上能差
+     * 半个 CSS 像素，直接用事件 y，价签会在点击瞬间跳成另一个价（2026-11-15 用户报的
+     * 双击跳价）。光标不在主图内（已离开 / 刚被缩放收走）时才退回事件落点。
+     */
+    const shownPriceY = (y: number) => {
+      const { top, bottom } = mainBounds();
+      const cross = crossRef.current;
+      return cross && cross.y >= top && cross.y <= bottom ? cross.y : y;
+    };
+
     /** 离落点最近的那条水平线的下标（4px 容差），没有则 -1。 */
     const hitLine = (y: number) =>
       nearestLineWithin(modelRef.current.priceLines.map((l) => yOfPrice(l.price)), y);
@@ -1527,7 +1536,7 @@ export function KlineCanvas({
     const addPointAt = (x: number, y: number, plotW: number, tool: DrawTool) => {
       const model = modelRef.current;
       if (tool === 'hline') {
-        const price = priceOfY(y);
+        const price = priceOfY(shownPriceY(y));
         if (Number.isFinite(price)) model.onAddPriceLine(price);
         model.onDrawn();
         crossRef.current = null;
@@ -1785,6 +1794,9 @@ export function KlineCanvas({
      * - 其余落点 → 在价格上画一条水平线（与划线区的「水平线」工具同一个动作，普通画线、不告警）。
      * 只认主图：副图的双击没有价位含义，复位小标与工具态的双击各有各的意思。
      * 同价已有线时 `addPriceLine` 自己会挡掉，不会两根重合。
+     *
+     * 落点价走 [shownPriceY]：用户看到的价格签是几，画出来的线就是几 ——
+     * 不能直接拿 `dblclick` 的 y 反算，否则双击瞬间价签会跳成另一个价。
      */
     const onDblClick = (e: MouseEvent) => {
       const { rect, plotW } = geom();
@@ -1805,7 +1817,7 @@ export function KlineCanvas({
           return;
         }
       }
-      const price = priceOfY(y);
+      const price = priceOfY(shownPriceY(y));
       if (!Number.isFinite(price)) return;
       modelRef.current.onAddPriceLine(price);
       draw();

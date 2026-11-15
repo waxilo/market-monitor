@@ -375,9 +375,10 @@ export function buildSeries(
   if (bollData) {
     // 三条都要画：只加上下轨的话中轨（SMA）就没了。
     // 三线同色：BOLL 读作「一条通道」，不像 MA 那样按线分色；OCTONARY 是 MA / EMA 都不用的中性色。
+    // 顺序即读数带里的显示顺序：上、中、下（2026-11-15 用户指定）。
     overlayLines.push(
-      { label: 'BOLL.MB', role: 'OCTONARY', values: bollData.middle },
       { label: 'BOLL.UP', role: 'OCTONARY', values: bollData.upper },
+      { label: 'BOLL.MB', role: 'OCTONARY', values: bollData.middle },
       { label: 'BOLL.DN', role: 'OCTONARY', values: bollData.lower },
     );
   }

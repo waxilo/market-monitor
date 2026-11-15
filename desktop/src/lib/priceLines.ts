@@ -52,6 +52,13 @@ export interface PriceLine {
    * 不要指望有一个 `origin: 'user'` 的显式取值（那会让每条老线在解析时被补一次字段）。
    */
   origin?: LineOrigin;
+  /**
+   * 右轴那一列里那块价位牌的显隐。**字段缺失 = 按来源取默认**（见 [lineBadgeVisible]）：
+   * 用户画的线默认显示，均线分析代画的线默认隐藏 —— 面板里刚落下一排均线，右端再挂上
+   * 一排价牌会把图挤满，而那些价位在面板里本来就能读到（2026-11-15 用户）。
+   * 存显式值是为了「每条线单独设置」：同是系统线，用户也可能只想留下其中一条的价牌。
+   */
+  showBadge?: boolean;
 }
 
 /** 按标的索引的价目表（键 = `市场:标的`）。 */
@@ -82,15 +89,39 @@ function withLineFields(
 function parseOrigin(v: unknown): LineOrigin | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as { kind?: unknown; interval?: unknown; period?: unknown };
-  if (o.kind !== 'ema') return null;
+  // 两族都要认：只放行 `ema` 会把 MA 面板画下的线在重启后当成用户线（身份、自动对齐、
+  // 价签默认显隐全跟着丢），而它落盘时写的正是 `kind: 'ma'`。
+  if (o.kind !== 'ema' && o.kind !== 'ma') return null;
   if (typeof o.interval !== 'string' || o.interval === '') return null;
   if (typeof o.period !== 'number' || !Number.isFinite(o.period) || o.period <= 0) return null;
-  return { kind: 'ema', interval: o.interval, period: o.period };
+  return { kind: o.kind, interval: o.interval, period: o.period };
 }
 
 /** 这条线是不是系统画的（缺省 `origin` = 用户画的）。 */
 export function isSystemLine(line: PriceLine): boolean {
   return line.origin != null;
+}
+
+/**
+ * 均线面板自动起的备注（`1时MA50` / `1时EMA50`，老存档 `1hEMA50`）。
+ *
+ * 与 `lib/maAnalysis` 的 `AUTO_NOTE` 同口径，单独写一份是因为本文件是零依赖模型，
+ * 而 maAnalysis 反过来依赖它。用在价签默认值上：旧版本存下的系统划线已经丢了 `origin`
+ * （当时的解析只认 `ema`，见 `parseOrigin`），只能按备注把它们认出来。
+ */
+const AUTO_NOTE = /^\S+(?:EMA|(?<!E)MA)\d+$/;
+
+/**
+ * 这条线的价位牌该不该画。
+ *
+ * 默认值跟着来源走而不是一律显示：系统划线（均线分析代画）一落就是好几条，
+ * 右端排一排价牌会盖住行情自己的读数；用户手画的线通常只有一两条，默认露出价位才合用。
+ * [PriceLine.showBadge] 有值就按它 —— 每条线都可以单独反过来设。
+ */
+export function lineBadgeVisible(line: PriceLine): boolean {
+  if (line.showBadge != null) return line.showBadge;
+  if (line.origin != null) return false;
+  return !AUTO_NOTE.test(line.note ?? '');
 }
 
 /** 读一份价目表：坏数据一律丢弃而不是抛错 —— 它是用户右键点出来的，重建成本极低。 */
@@ -111,13 +142,21 @@ export function parseLineStore(raw: string | null): LineStore {
       .map((v): PriceLine | null => {
         if (typeof v === 'number') return Number.isFinite(v) ? { price: v, alert: false } : null;
         if (v && typeof v === 'object') {
-          const o = v as { price?: unknown; alert?: unknown; note?: unknown; origin?: unknown };
+          const o = v as {
+            price?: unknown;
+            alert?: unknown;
+            note?: unknown;
+            origin?: unknown;
+            showBadge?: unknown;
+          };
           if (typeof o.price !== 'number' || !Number.isFinite(o.price)) return null;
           const line: PriceLine = { price: o.price, alert: o.alert === true };
           const note = normalizeLineNote(o.note);
           if (note) line.note = note;
           const origin = parseOrigin(o.origin);
           if (origin) line.origin = origin;
+          // 只有显式的布尔才算「用户设过」；缺失留给来源默认（见 lineBadgeVisible）
+          if (o.showBadge === true || o.showBadge === false) line.showBadge = o.showBadge;
           return line;
         }
         return null;
@@ -173,6 +212,16 @@ export function setLineAlert(
 ): PriceLine[] {
   if (index < 0 || index >= lines.length) return [...lines];
   return lines.map((l, i) => (i === index ? { ...l, alert } : l));
+}
+
+/** 开关第 index 条的价位牌（默认值见 [lineBadgeVisible]；这里存的是显式选择）。 */
+export function setLineBadge(
+  lines: readonly PriceLine[],
+  index: number,
+  show: boolean,
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  return lines.map((l, i) => (i === index ? { ...l, showBadge: show } : l));
 }
 
 /**
