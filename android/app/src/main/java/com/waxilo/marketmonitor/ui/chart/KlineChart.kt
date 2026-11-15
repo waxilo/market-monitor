@@ -1081,18 +1081,22 @@ fun KlineChart(
             // 三种标共用右轴那一列：最新价（虚拟的当前价线）、十字光标横线、划线
             // （告警线 / 水平画线）。它们经常压在同一高度，谁盖谁就成了唯一要回答的问题。
             //
-            // **最新价永远优先**：它回答的是「现在多少钱」，被一条随手划的线压住等于把它
-            // 藏起来 —— 而右侧刻度是 1-2-5 阶梯，最近的一条离现价往往还差一段，靠目测估价
-            // 没有意义。所以这里不再用 Composable 的书写顺序隐式决定层级（那是最脆弱的做法：
-            // 谁后写谁在上，加一枚标就可能把现价盖掉），而是收成一张带优先级的清单：
-            // 落位只裁边、**太近就原地叠住**，再按优先级**从低到高绘制** —— 高的后落笔、
-            // 压在上面。挤动式的避让已撤（2026-10-30）：标签离了它那条线，读数看着就像别的价位。
+            // **长按读数优先于最新价**（2026-11-15 用户）：长按看价时，用户要的就是手指
+            // 指着的那个价位；它被现价签盖住，等于这次查看白做。十字光标只在查看时存在、
+            // 平时自动让开，所以让它压在上面不会把「现在多少钱」长期藏起来 —— 没在查看时
+            // 最新价照旧是那一列里最上面的。
+            //
+            // 这里不用 Composable 的书写顺序隐式决定层级（那是最脆弱的做法：谁后写谁在上，
+            // 加一枚标就可能把现价盖掉），而是收成一张带优先级的清单：落位只裁边、
+            // **太近就原地叠住**，再按优先级**从低到高绘制** —— 高的后落笔、压在上面。
+            // 挤动式的避让已撤（2026-10-30）：标签离了它那条线，读数看着就像别的价位。
             //
             // 线不画时标签也不画 —— 只藏线不藏数字，右侧会凭空挂着一串来路不明的价位。
             val rightPriceTags = buildList {
                 lastPriceTag(series, mainRange, geo, upColor, downColor)?.let { add(it) }
                 // 十字光标的横向读数：长按只画一条线而不给价位，用户无从知道线落在哪，
                 // 而「这是哪个价位」正是划线的全部意义（全屏里还要据此建预警线）。
+                // 它优先级高于最新价，长按时压在上面（见上方清单说明）。
                 crosshairPriceTag(crosshair, geo)?.let { add(it) }
                 // 可见区间的最高 / 最低价：与其余价标同住右轴那一列，靠那条虚线对回极值那根。
                 extremes.forEach { mark ->
@@ -2044,15 +2048,15 @@ private fun CrosshairTimeBadge(
  * 右轴价格标的绘制优先级。数值越大越**后绘制**（压在上面）。
  *
  * 太近就原地叠住、不互相挪 —— 让谁露出来只由这一层决定：
- * · 最新价 —— 现在多少钱，任何时刻都得看得见；
- * · 十字光标 —— 手指正在指的那一格，跟着手动、抬手就消失；
+ * · 十字光标 —— 长按正在查看的价位，用户此刻要读的就是它，必须压在最上面；
+ * · 最新价 —— 平时那一列的主读数，没有长按读数盖着时它总在上面；
  * · 可见区间最高 / 最低 —— 图上这段的极值，辅助读图。
  *
  * **划线（告警线 / 水平画线）不在这张清单里**（2026-11-04 用户）：它的价位浮在画布左端，
  * 与右轴这一列行情读数分开，见 [LineBadges]。
  */
+private const val PRICE_BADGE_PRIORITY_CROSSHAIR = 5
 private const val PRICE_BADGE_PRIORITY_LAST = 4
-private const val PRICE_BADGE_PRIORITY_CROSSHAIR = 3
 private const val PRICE_BADGE_PRIORITY_EXTREME = 2
 
 /**
@@ -2185,7 +2189,7 @@ private fun extremePriceTag(mark: ExtremeMark, range: ValueRange, geo: ChartGeo)
  * 右轴那一列价格标的总绘制口。
  *
  * 落位只裁边不避让（[placeAxisTags]）：太近就原地叠住，**按优先级从低到高绘制** ——
- * 同一个 Box 的子节点按声明顺序绘制、后声明的在上，所以反过来遍历就等于
+ * 同一个 Box 的子节点按声明顺序绘制、后声明的在上，所以按 priority 升序遍历就等于
  * 「优先级高的压在上面」。标签与它所指的线永远同高，读数按 [RightPriceTag.yPx] 反算。
  */
 @Composable
@@ -2210,8 +2214,8 @@ private fun BoxScope.RightPriceBadges(
         topPx = geo.mainTopPx,
         bottomPx = geo.mainTopPx + geo.mainHeightPx,
     )
-    // 清单是高 → 低，绘制要从低到高（后落笔的在上面）
-    for (index in tags.indices.reversed()) {
+    // 按优先级从低到高绘制（后落笔的在上面）；清单自身顺序都不影响层级
+    for (index in tags.indices.sortedBy { tags[it].priority }) {
         val tag = tags[index]
         PriceTag(
             priceYPx = tag.yPx,
