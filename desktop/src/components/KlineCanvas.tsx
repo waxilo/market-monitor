@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Bar, OpenInterestSeries } from '../lib/api';
 import {
   axisLock,
+  candleBodyRect,
   clampNum,
   clampPriceView,
   clampViewport,
@@ -89,7 +90,6 @@ import {
 const READOUT_X = 8;
 /** 悬浮读数里段与段之间的间距（与 App 的读数带同口径）。 */
 const READOUT_GAP = 10;
-const BODY_SHARE = 0.66;
 const MAX_TIME_LABELS = 6;
 const TIME_LABEL_GAP = 12;
 const AXIS_MIN_GAP = 13;
@@ -732,20 +732,10 @@ export function KlineCanvas({
     const slot = plotW / Math.max(1, vp.visibleBars);
     const xOf = (i: number) => (i - start + 0.5) * slot;
     const yOf = (fraction: number, top: number, height: number) => top + fraction * height;
-    // 实体随槽宽等比。曾钳 26px 上限：放大/短序列撑满后实体不再变宽、间距继续拉大，
-    // 就是「实体偏窄、间距巨大」那个散开观感的来源（2026-10-03 去上限）。
-    const bodyW = Math.max(1, slot * BODY_SHARE);
-    /**
-     * 柱体矩形：**从影线的圆整中心反推**，不许自己对 `x - bodyW/2` 和 `bodyW` 分别取整 ——
-     * 那两个小数部分各丢各的，柱心会偏离影线 ±1px；平移时 x 的小数部分连续变化、
-     * 两处跳变方向还不一致，就是「影线与柱体不居中、拖动画布左右偏」的来源。
-     * 影线落在 `Math.round(x) + 0.5`（vline 内部），宽度取**奇数**才能让整数左缘的
-     * 柱心精确落回这个半像素上（偶数宽的中心只能落在整数上，必然偏半像素）。
-     */
-    const bodyRect = (x: number) => {
-      const w = Math.max(1, Math.round(bodyW)) | 1;
-      return { left: Math.round(x) - (w - 1) / 2, w };
-    };
+    // 实体随槽宽等比，**但槽里必须留缝**（规则与取值见 chartMath.candleBodyRect）：
+    // 曾用 `Math.max(1, round(slot * 0.66)) | 1`，缩到槽宽 3~4px 时会算出 3px，
+    // 相邻两根只剩不到 0.5px 缝，整排 K 线糊成一条连续色带（2026-11-21 用户）。
+    const bodyRect = (x: number) => candleBodyRect(x, slot);
     const dec = decimalsFor(ts);
     /** 价格读数（轴上的价签与划线价牌共用一套小数位）。 */
     const priceText = (price: number) =>

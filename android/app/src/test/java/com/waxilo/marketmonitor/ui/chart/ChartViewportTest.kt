@@ -186,4 +186,57 @@ class ChartViewportTest {
         // 重开详情的取景：宽度保留、右端回默认 ⇒ 缩放过就仍亮复位
         assertFalse(ChartViewport(80f, -24f).copy(rightOffset = ChartViewport.DEFAULT_RIGHT_BLANK).isInitial())
     }
+
+    // ── 蜡烛实体宽度（candleBodyWidth）：缩放变密时必须留缝 ────────────────────
+    //
+    // 2026-11-21 用户报「缩放时 K 线贴在一起」。旧公式 `max(1f, slot * 0.66f)` 在
+    // 槽宽 3~7px 时实体占去大半，相邻两根只剩零点几像素 ⇒ 整排糊成一条色带。
+    // 判据一律是「缝」而不是「宽度」：宽度可以随槽宽变，缝不能没有。
+
+    @Test
+    fun `密档 槽宽 3_4px 时实体只有 1px 缝剩 2px 以上`() {
+        val slot = 3.4f
+        val body = candleBodyWidth(slot)
+        assertEquals(1f, body, 0.001f)
+        assertTrue("缝必须 >= 2px", slot - body >= 2f)
+    }
+
+    @Test
+    fun `中密档 槽宽 7px 时实体 4px 缝 3px`() {
+        val slot = 7f
+        val body = candleBodyWidth(slot)
+        // 0.58 × 7 = 4.06（不做像素取整，Compose 是浮点绘制）
+        assertEquals(4.06f, body, 0.001f)
+        assertTrue("缝必须 >= 2px", slot - body >= 2f)
+    }
+
+    @Test
+    fun `常规档 槽宽 24px 时实体随占比走 缝仍然充足`() {
+        val slot = 24f
+        val body = candleBodyWidth(slot)
+        // 0.58 × 24 = 13.92，不受上限约束（cap = 22）
+        assertEquals(13.92f, body, 0.001f)
+        assertTrue("缝必须 >= 2px", slot - body >= 2f)
+    }
+
+    @Test
+    fun `极限档 槽宽不足 3px 时退成 1px 也不越界`() {
+        listOf(0.8f, 1.2f, 1.6f, 2f, 2.4f).forEach { slot ->
+            val body = candleBodyWidth(slot)
+            assertEquals("slot=$slot 只画 1px", 1f, body, 0.001f)
+            // 槽宽 < 1px 时 1px 是物理下限，允许超出（否则等于不画）
+            assertTrue("slot=$slot 不许超出槽宽", body <= maxOf(1f, slot))
+        }
+    }
+
+    @Test
+    fun `任何槽宽下缝都不会消失（2px 以上）`() {
+        // 3px 是能同时放下「1px 实体 + 2px 缝」的最小槽宽
+        var slot = 3f
+        while (slot <= 200f) {
+            val body = candleBodyWidth(slot)
+            assertTrue("slot=$slot body=$body 缝不足", slot - body >= 2f)
+            slot += 0.37f
+        }
+    }
 }

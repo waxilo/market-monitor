@@ -540,3 +540,25 @@ data class ValueRange(val low: Double, val high: Double) {
             of(values.filterNot { it.isNaN() }.toDoubleArray())
     }
 }
+
+/** 实体宽度占槽宽的比例（与桌面 `chartMath.BODY_SHARE` 同口径）。 */
+const val CANDLE_BODY_SHARE = 0.58f
+
+/**
+ * 一根蜡烛的实体宽度（px）—— 与桌面 `chartMath.candleBodyRect(...).w` 同口径。
+ *
+ * 两条规则，按优先级：
+ *
+ * 1. **槽里必须留出看得见的缝**：上限是 `floor(slot) - 2`。旧写法 `max(1f, slot * 0.66f)`
+ *    在槽宽 3~7px 时实体占去大半，相邻两根糊成一条连续色带
+ *    （2026-11-21 用户报「缩放时 K 线贴在一起」）。名义留 2px 是有原因的 —— 绘制边缘
+ *    有抗锯齿，实测（桌面 `verify-candle-gap-cdp.mjs`）2px 的缝屏幕上只剩约 1px。
+ * 2. 其余情况随槽宽等比（[CANDLE_BODY_SHARE]）。
+ *
+ * 不做像素取整：Compose 的矩形是浮点绘制，`x - width / 2` 已让柱体与影线同轴居中；
+ * 桌面 canvas 那边要奇数宽 + 整数左缘，是因为 fillRect 只在整数坐标下才锐利。
+ */
+internal fun candleBodyWidth(slot: Float, share: Float = CANDLE_BODY_SHARE): Float {
+    val cap = max(1f, floor(slot) - 2f)
+    return max(1f, min(slot * share, cap))
+}

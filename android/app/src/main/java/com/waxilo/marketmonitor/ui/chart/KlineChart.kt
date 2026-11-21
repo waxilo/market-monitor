@@ -1503,9 +1503,10 @@ private data class ChartGeo(
 
     fun yOf(fraction: Float, top: Float, height: Float): Float = top + fraction * height
 
-    // 实体随槽宽等比。曾钳 26px 上限：放大/短序列撑满后实体不再变宽、间距继续拉大，
-    // 就是「实体偏窄、间距巨大」那个散开观感的来源（2026-10-03 去上限）。
-    fun bodyWidth(visibleBars: Float): Float = max(1f, slot(visibleBars) * BODY_SHARE)
+    // 实体随槽宽等比，**但槽里必须留缝**（规则见 ChartViewport.kt 的 candleBodyWidth）。
+    // 旧写法 `max(1f, slot * 0.66f)` 在槽宽 3~7px 时实体占去大半，相邻两根糊成一条色带
+    // （2026-11-21 用户报「缩放时 K 线贴在一起」）。
+    fun bodyWidth(visibleBars: Float): Float = candleBodyWidth(slot(visibleBars))
 
     /**
      * 主图顶边：读数带之下。`yOf(..., topPx = mainTopPx, ...)` 是唯一正确的用法，
@@ -1537,7 +1538,6 @@ private data class ChartGeo(
          * 占比保底会反过来把主图抬高，「主图大小与副图数量无关」就破了。
          */
         const val MAIN_MIN_DP = 150f
-        const val BODY_SHARE = 0.66f
         const val AXIS_LABEL_WIDTH_DP = 58f
         const val TIME_AXIS_HEIGHT_DP = 18f
 
