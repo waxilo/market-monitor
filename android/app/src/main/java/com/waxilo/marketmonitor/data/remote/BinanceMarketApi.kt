@@ -13,9 +13,6 @@ import com.waxilo.marketmonitor.domain.model.OpenInterestSeries
 import com.waxilo.marketmonitor.domain.model.SpotSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -259,30 +256,26 @@ class BinanceMarketApi(
      * 对**指定现货源**做一次性连通探测（设置页「检测」并行调用），返回往返毫秒数。
      *
      * 一个现货源是**一串主机**（币安 6 个，首选挂了不代表源不可用），所以这里并行打整条链、
-     * 取最先答上的那个耗时；串行最坏要 6 × 5 秒，设置页那一行会一直转。
+     * **谁先答上谁算数**（见 [firstSuccess]）：打不通的那几个要跑满 5 秒超时，等齐再取 min
+     * 会让这一行恒定 5 秒后才回填，显示的却是最快那条的耗时 —— 视觉上就成了「Gate 先测完、
+     * 币安最后测完延迟却不高」。串行更糟：最坏 6 × 5 秒。
      * 探测用各家的 ping 路径（币安 `/api/v3/ping`、Gate `/api/v4/spot/time`），不计权重、
      * 不碰 [spotHostHealth]：测的是「这个源现在通不通、多快」，不是当前取数链路的状态。
      * 全挂时抛**首选域**那条失败（超时/DNS/HTTP 码由调用方折成一行文案）。
      */
-    suspend fun probeSpot(source: SpotSource): Long = coroutineScope {
+    suspend fun probeSpot(source: SpotSource): Long {
         val path = SpotDialects.of(source).pingPath()
         val started = System.currentTimeMillis()
-        val attempts = source.hosts.map { host ->
-            async {
-                try {
+        return firstSuccess(
+            source.hosts.map { host ->
+                {
                     val url = buildUrl(host, path) ?: throw IOException("域名无效")
                     withTimeoutOrNull(PROBE_TIMEOUT_MS) { executeSpot(url) }
                         ?: throw SocketTimeoutException("探测超时")
                     System.currentTimeMillis() - started
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    e
                 }
-            }
-        }.awaitAll()
-        attempts.filterIsInstance<Long>().minOrNull()
-            ?: throw (attempts.firstOrNull() as? Exception ?: IOException("探测失败"))
+            },
+        )
     }
 
     suspend fun exchangeInfo(market: MarketType, symbol: String? = null): List<InstrumentMeta> {
