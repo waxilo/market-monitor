@@ -24,6 +24,13 @@ export interface SpotDialect {
   intervalLadder: Record<number, string>;
   /** 单次 K 线请求根数上限。 */
   maxKlineLimit: number;
+  /**
+   * 连通性探测：只要一个最小响应（币安 `/api/v3/ping`、Gate `/api/v4/spot/time`）。
+   *
+   * 与 App 的 `SpotDialects.pingPath()` 同口径 —— 测速测的是「这台机器到这台机器通不通、
+   * 多快」，拿 24h 行情（还要解析响应体）当探针会把 DNS/TLS 之外的成本也算进延迟。
+   */
+  probe(): SpotCall;
   ticker(symbol: string): SpotCall;
   klines(symbol: string, minutes: number, limit: number, endMs?: number | null): SpotCall;
   exchangeInfo(): SpotCall;
@@ -109,6 +116,7 @@ const gate: SpotDialect = (() => {
   return {
     intervalLadder: GATE_LADDER,
     maxKlineLimit: 1000,
+    probe: () => ({ url: '/api/v4/spot/time', method: 'GET' }),
     ticker: (symbol) => ({
       url: `/api/v4/spot/tickers?currency_pair=${encodeURIComponent(symbol)}`,
       method: 'GET',
@@ -217,6 +225,7 @@ const binance: SpotDialect = (() => {
   return {
     intervalLadder: BINANCE_LADDER,
     maxKlineLimit: 1000,
+    probe: () => ({ url: '/api/v3/ping', method: 'GET' }),
     ticker: (symbol) => ({
       url: `/api/v3/ticker/24hr?symbol=${binanceSymbol(symbol)}`,
       method: 'GET',
