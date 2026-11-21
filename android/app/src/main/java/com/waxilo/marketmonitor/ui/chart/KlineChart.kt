@@ -81,6 +81,7 @@ import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
@@ -1745,6 +1746,9 @@ private fun DrawScope.drawAlertLines(
                 end = Offset(geo.plotWidthPx, y),
                 strokeWidth = LINE_SELECTED_HALO_WIDTH,
             )
+            // 两端把手 = **改价位唯一的入口**（见 FLAT_GRIP_INSET）：选中态必须把「能抓哪儿」
+            // 画出来，否则用户还是会去按线身，然后抱怨「拖图表把线拖走了」。
+            drawFlatGrips(geo.plotWidthPx, y, palette.down)
         }
         drawLine(
             color = palette.down,
@@ -1783,6 +1787,8 @@ private fun DrawScope.drawDrawLines(
                 if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
                 if (picked) {
                     drawLine(halo, Offset(0f, y), Offset(geo.plotWidthPx, y), LINE_SELECTED_HALO_WIDTH)
+                    // 与告警线同一套把手（见 FLAT_GRIP_INSET）：线身只选中，改价抓这两枚点。
+                    drawFlatGrips(geo.plotWidthPx, y, color)
                 }
                 drawLine(color, Offset(0f, y), Offset(geo.plotWidthPx, y), width)
             }
@@ -1829,6 +1835,24 @@ private fun DrawScope.drawDrawLines(
 private fun DrawScope.drawTrendSeedDot(center: Offset, palette: ChartPalette) {
     if (!center.x.isFinite() || !center.y.isFinite()) return
     drawCircle(palette.mark, radius = TREND_SEED_DOT.toPx(), center = center)
+}
+
+/**
+ * 水平类线两端那枚把手（**只在选中态画**，见 [FLAT_GRIP_INSET]）。
+ *
+ * 本色实心圆 + 中心白点：把手大半压在**同色**的线上，纯实心圆会跟线融成一体 ——
+ * 桌面端实测 3.5px 的实心圆在 6 倍放大截图里根本看不出是个点，用户因此不知道线还能拖。
+ * 中间那点白是「这里能抓」的唯一形状依据，深浅两套主题下都读得出来。
+ */
+private fun DrawScope.drawFlatGrips(plotWidthPx: Float, yPx: Float, color: Color) {
+    if (!yPx.isFinite() || !plotWidthPx.isFinite()) return
+    val inset = FLAT_GRIP_INSET.toPx()
+    val r = FLAT_GRIP_DOT.toPx()
+    for (cx in floatArrayOf(inset, plotWidthPx - inset)) {
+        if (!cx.isFinite()) continue
+        drawCircle(color, radius = r, center = Offset(cx, yPx))
+        drawCircle(Color.White.copy(alpha = 0.92f), radius = r * 0.46f, center = Offset(cx, yPx))
+    }
 }
 
 /**
@@ -2732,6 +2756,10 @@ private suspend fun PointerInputScope.detectChartGestures(
     onPricePan: (deltaFraction: Float) -> Unit,
     onCrosshair: (Offset?) -> Unit,
 ) {
+    // 水平类线两端把手的几何（见 FLAT_GRIP_INSET / onFlatGrip）：只跟屏幕密度有关，
+    // 每场手势都重算一次没有意义，upstream 直接取一次。
+    val flatGripInsetPx = FLAT_GRIP_INSET.toPx()
+    val flatGripHitPx = FLAT_GRIP_HIT.toPx()
     awaitEachGesture {
         val first = awaitFirstDown(requireUnconsumed = false)
         // 起点落在右侧价格刻度区：纵向拖动在那里是「缩放价格刻度」而不是「平移」。
@@ -2823,7 +2851,23 @@ private suspend fun PointerInputScope.detectChartGestures(
                 val nearestTrendHit =
                     if (trend != null && (flat == null || trend.second < flat.second)) trend else null
                 val hit = nearestTrendHit?.let { LineRef.Guide(it.first.id) } ?: flat?.first
-                when (lineTouch(hit, currentSelection())) {
+                /**
+                 * 命中水平类线时它在屏幕上的高度（`null` = 命中的是直线）。
+                 *
+                 * 用 `anchors` 反查而不是从 `nearestHorizontal` 拿，是因为 `hit` 已经过
+                 * 「谁更近」的取舍 —— 两处各自判一次就会分叉（点在交叉点附近时尤其明显）。
+                 */
+                val flatY = hit?.let { target -> anchors.firstOrNull { it.ref == target }?.yPx }
+                /**
+                 * 已选中的那条水平类线，这一下是否**抓住了两端的把手**。
+                 *
+                 * 抓把手才算「拖线」（见 [onFlatGrip]）；按在线身只是选中 ——
+                 * 否则上下平移图表时起手压到线就会把线拖走（2026-11-21 用户报的现象）。
+                 * 直线（`flatY == null`）不受此限：它的抓取按线段判，不横贯全宽。
+                 */
+                val grip = flatY != null && hit == currentSelection() &&
+                    onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
+                when (lineTouch(hit, currentSelection(), dragAllowed = flatY == null || grip)) {
                     LineTouch.Drag -> {
                         if (nearestTrendHit != null) {
                             trendGrabbedId = nearestTrendHit.first.id
@@ -3194,11 +3238,44 @@ internal fun LineRef.selectable(): Boolean = when (this) {
  * 判据只有两条：**只有点到已选中的那条才直接拖**，其余命中一律先「选中」。
  * 拖动因此不再要求长按（长按还给十字光标），但也必须先点一下 ——
  * 一次平移的起手不会再顺手把路过的线拖走。
+ *
+ * [dragAllowed] 是「这条命中算不算真的抓到了可拖的地方」，默认 true。
+ * 水平类线（告警线 / 水平线）**只有两端把手算抓到**（见 [onFlatGrip]）：
+ * 线身横贯整个绘图区，若按住线身就算抓到，上下平移图表时起手压到线就会把线拖走 ——
+ * 2026-11-21 用户报的「上下移动图表，直线穿过的位置变了」正是这个。
+ * 传 false 时降级成 [LineTouch.Select]（本场只当点击，拖动交给画布平移）。
  */
-internal fun lineTouch(hit: LineRef?, selected: LineRef?): LineTouch = when {
+internal fun lineTouch(
+    hit: LineRef?,
+    selected: LineRef?,
+    dragAllowed: Boolean = true,
+): LineTouch = when {
     hit == null || !hit.selectable() -> LineTouch.None
-    hit == selected -> LineTouch.Drag
+    hit == selected && dragAllowed -> LineTouch.Drag
     else -> LineTouch.Select
+}
+
+/**
+ * 落点是否抓住了水平类线两端那枚把手（圆心在 [insetPx] 与 `plotWidthPx - insetPx`，同高 [yPx]）。
+ *
+ * 纯函数、不碰 Compose：这是「拖动线」唯一的入口，判错了要么「拖图表把线拖走」、
+ * 要么「抓半天拖不动」，两种故障方向相反、用户都很难描述清楚，值得直接单测
+ * （见 `FlatGripTest`）。半径按欧氏距离判，不是方形，指尖斜着落下也算抓到。
+ */
+internal fun onFlatGrip(
+    point: Offset,
+    yPx: Float,
+    plotWidthPx: Float,
+    insetPx: Float,
+    hitPx: Float,
+): Boolean {
+    if (!point.x.isFinite() || !point.y.isFinite() || !yPx.isFinite()) return false
+    if (!plotWidthPx.isFinite() || !insetPx.isFinite() || !hitPx.isFinite()) return false
+    if (hitPx <= 0f || plotWidthPx <= 0f) return false
+    val dy = point.y - yPx
+    if (abs(dy) > hitPx) return false
+    if (hypot(point.x - insetPx, dy) <= hitPx) return true
+    return hypot(point.x - (plotWidthPx - insetPx), dy) <= hitPx
 }
 
 /**
@@ -3373,6 +3450,24 @@ private val TREND_ANCHOR_DOT = 3.dp
 
 /** 第一敲种子点的半径（dp）：比锚点大一档，提示「已经敲过一下了」。 */
 private val TREND_SEED_DOT = 4.5.dp
+
+/**
+ * 选中一条**水平类**线（告警线 / 水平线）之后，两端那枚把手的位置与大小。
+ *
+ * 为什么必须有把手、而不许「按住线身拖」（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
+ * 水平线横贯整个绘图区，[ALERT_GRAB_WIDTH]（24dp）的抓取带等于把画布横切成一条带子 ——
+ * 已选中的线上下拖动时，起手落在带子里就把线拖走了，用户却以为自己在平移图表
+ * （桌面端同一处实测：线价 57500 → 56288.84，而纵向平移量一格没动）。
+ * 现在**线身只负责「选中」**，改价只有抓住两端这枚点这一条路 ——
+ * 于是「按在图上的任何位置拖动」都只平移画布。与桌面 `PRICE_HANDLE_INSET` 同一口径。
+ */
+private val FLAT_GRIP_INSET = 10.dp
+
+/** 把手的圆点半径（dp）：比直线锚点（3dp）大一档，它就是「这里能抓」的形状。 */
+private val FLAT_GRIP_DOT = 5.dp
+
+/** 把手的命中半径（dp）。触摸比鼠标慷慨：指尖落点本身就有 ~8dp 误差。 */
+private val FLAT_GRIP_HIT = 18.dp
 
 /**
  * 选中一条线时的外发光：半透明同色、更宽，铺在本色线**下面**。
