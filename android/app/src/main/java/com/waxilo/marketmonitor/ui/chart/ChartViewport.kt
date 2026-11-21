@@ -486,10 +486,18 @@ data class ValueRange(val low: Double, val high: Double) {
         return high - fraction.toDouble() * span
     }
 
-    /** 纵轴刻度：取 1-2-5 阶梯，保证任何量级下都是 4~6 条网格线。 */
-    fun gridLines(count: Int = 5): List<Double> {
-        if (low.isNaN() || high.isNaN() || high <= low) return emptyList()
+    /**
+     * 纵轴刻度的步长（1-2-5 阶梯，随量程自动换档）。
+     *
+     * 单独暴露是因为刻度文字的**小数位要跟着 step 走**：step ≥ 1 时写整数
+     * （8000、9000 这种），step 小于 1 才带小数。此前小数位跟着 tickSize 走，
+     * BTC 的 0.1 会把刻度渲染成「8000.0 / 8500.0」，读起来不像刻度
+     * （2026-11-22 用户「纵坐标不显示 8000，9000 这种间隔」）。
+     */
+    fun gridStep(count: Int = 5): Double {
+        if (low.isNaN() || high.isNaN() || high <= low) return Double.NaN
         val rough = (high - low) / max(1, count)
+        if (!rough.isFinite() || rough <= 0) return Double.NaN
         val magnitude = Math.pow(10.0, floor(Math.log10(rough)))
         val normalized = rough / magnitude
         val step = when {
@@ -498,7 +506,14 @@ data class ValueRange(val low: Double, val high: Double) {
             normalized < 7.5 -> 5.0
             else -> 10.0
         } * magnitude
-        if (step <= 0 || step.isInfinite() || step.isNaN()) return listOf(low, high)
+        return if (step <= 0 || step.isInfinite() || step.isNaN()) Double.NaN else step
+    }
+
+    /** 纵轴刻度：取 1-2-5 阶梯，保证任何量级下都是 4~6 条网格线。 */
+    fun gridLines(count: Int = 5): List<Double> {
+        if (low.isNaN() || high.isNaN() || high <= low) return emptyList()
+        val step = gridStep(count)
+        if (step.isNaN()) return listOf(low, high)
         val first = ceil(low / step) * step
         val lines = mutableListOf<Double>()
         var value = first

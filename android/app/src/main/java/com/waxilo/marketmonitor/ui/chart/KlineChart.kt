@@ -81,7 +81,9 @@ import kotlinx.coroutines.flow.first
 import java.math.BigDecimal
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToLong
@@ -763,6 +765,19 @@ fun KlineChart(
         }
 
     /**
+     * 按 id 取一条直线两端的**数据坐标**（拖端点改角度时要把不动的那端钉回去）。
+     *
+     * 与 [trendPixels] 同住 composable 作用域、同样读 [liveDrawLines]：
+     * `pointerInput` 协程捕获的是旧闭包，直接在里面引那个委托属性编译器不放行。
+     */
+    fun trendAnchorsOf(id: Long): Pair<TrendAnchor, TrendAnchor>? =
+        liveDrawLines.firstOrNull { it.id == id && it.kind == ChartLineKind.TREND }?.let { line ->
+            val a1 = line.anchor1
+            val a2 = line.anchor2
+            if (a1 != null && a2 != null) a1 to a2 else null
+        }
+
+    /**
      * 图内浮层（左下角「全屏」角标、右上角「复位」小标、右下角的显隐开关组）距绘图区边缘的内缩距离。
      * 几处浮层同用 [CORNER_BUTTON_INSET] 一档值，贴角才对称。
      */
@@ -900,6 +915,7 @@ fun KlineChart(
                             }
                         },
                         trendPixels = ::trendPixels,
+                        trendAnchors = ::trendAnchorsOf,
                         trendAnchorAt = { xPx, yPx ->
                             val index = indexAt(xPx)
                             val price = pixelToPrice(yPx)
@@ -1076,7 +1092,7 @@ fun KlineChart(
         }
 
         if (isReady) {
-            PriceAxisLabels(mainRange, geo, density, tickSize, Modifier.align(Alignment.TopStart))
+            PriceAxisLabels(mainRange, geo, density, Modifier.align(Alignment.TopStart))
             // ---- 右轴价格标：所有「这条线多少钱」的读数都在这一处落位 ----
             //
             // 三种标共用右轴那一列：最新价（虚拟的当前价线）、十字光标横线、划线
@@ -1822,12 +1838,34 @@ private fun DrawScope.drawDrawLines(
                     }
                     drawLine(color, span.first, span.second, width)
                 }
-                // 锚点实心小圆：直线被延长后端点不在线段可见范围内，不点个点抓取没有着落
-                val dot = TREND_ANCHOR_DOT.toPx() * if (picked) 1.7f else 1f
-                drawCircle(color, radius = dot, center = p1)
-                drawCircle(color, radius = dot, center = p2)
+                // 把手**只在选中态出现**（2026-11-22 用户「两个点没选中时不展示」）：
+                // 两端改角度、中点整体平移，与水平类线那两枚（drawFlatGrips）同一套语义。
+                if (picked) drawTrendGrips(p1, p2, color)
             }
         }
+    }
+}
+
+/**
+ * 选中直线后的三枚把手：两端大、中点小一号。
+ *
+ * 都由**本色实心圆 + 中心白点**组成：把手大半压在**同色**的斜线上，纯实心圆会跟线融成一体
+ * （桌面端 6 倍放大截图为证），白心是「这里能抓」的唯一形状依据。
+ *
+ * 中点画小一号、且先落笔：整体平移是次要操作，不该在视觉上跟「改角度」抢。
+ */
+private fun DrawScope.drawTrendGrips(p1: Offset, p2: Offset, color: Color) {
+    val ring = Color.White.copy(alpha = 0.92f)
+    val r = TREND_GRIP_DOT.toPx()
+    val midR = r * 0.78f
+    val mid = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
+    if (mid.x.isFinite() && mid.y.isFinite()) {
+        drawCircle(color, radius = midR, center = mid)
+        drawCircle(ring, radius = midR * 0.46f, center = mid)
+    }
+    for (p in listOf(p1, p2)) {
+        drawCircle(color, radius = r, center = p)
+        drawCircle(ring, radius = r * 0.46f, center = p)
     }
 }
 
@@ -1965,29 +2003,40 @@ private fun linePath(
 /**
  * 主图右侧价格刻度。
  *
- * 两条边界规则：
+ * 三条边界规则：
  * - 文字**垂直居中**到网格线上（旧版用 `y - 6f` 硬编码，字高变了就偏）；
- * - 相邻刻度挨太近时**丢掉下面那条**——价格区间被压得很窄时网格线会挤成一堆，
- *   逐一画出来就是重叠的乱码。
+ * - 条数按可用高度自适应（见下方 [tickCount]），不再固定 5 条；
+ * - 相邻刻度仍挨太近时丢掉下面那条 —— 那是兜底，正常不会再触发全丢。
  */
 @Composable
 private fun PriceAxisLabels(
     range: ValueRange,
     geo: ChartGeo,
     density: Density,
-    tickSize: BigDecimal?,
     modifier: Modifier = Modifier,
 ) {
-    val decimals = PriceFormatter.decimalsFor(tickSize)
     val style = rememberAxisTextStyle()
     val measurer = rememberTextMeasurer()
     val labelHeightPx = remember(style, density) {
         measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
     }
     val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
+    /**
+     * 刻度条数按**可用高度**自适应（2026-11-22）。
+     *
+     * 原先固定 5 条：主图被压矮时（横屏 + 读数带多行 + 两块副图）每条之间的像素间距
+     * 可能小于 [minGapPx]，[lastDrawnY] 那道判据会把它们**逐条丢掉** —— 表现为右轴一条刻度都没有，
+     * 用户看到的正是「纵坐标不显示 8000、9000 这种间隔」。
+     * 现在先按高度定条数，保证每条都放得下；矮图宁可只给 2~3 条，也不给 0 条。
+     */
+    val tickCount = remember(geo.mainHeightPx, minGapPx) {
+        (geo.mainHeightPx / minGapPx).toInt().coerceIn(2, 8)
+    }
+    // 小数位跟着步长走：step ≥ 1 一律整数，刻度读起来才是「8000 / 9000」
+    val decimals = remember(range, tickCount) { decimalsForStep(range.gridStep(tickCount)) }
 
     var lastDrawnY = Float.NEGATIVE_INFINITY
-    range.gridLines().forEach { value ->
+    range.gridLines(tickCount).forEach { value ->
         val y = geo.yOf(range.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
         if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
         // 必须取绝对值：gridLines 按数值升序，而像素 y 随数值增大而减小（屏幕 y 轴向下）。
@@ -2479,10 +2528,11 @@ private fun SubAxisLabels(
     panes.forEachIndexed { index, pane ->
         val range = ranges.getOrNull(index) ?: return@forEachIndexed
         val top = geo.subTopOf(index)
-        // 取首尾两条刻度：副图块普遍矮，画满会糊；挨太近时同样丢掉下面那条
-        // （间距判断同样必须取绝对值，理由见 PriceAxisLabels）
-        val lines = range.gridLines(count = 2)
-        val picks = listOfNotNull(lines.firstOrNull(), lines.lastOrNull()).distinct()
+        // 条数按这块副图的高度定（矮块 2 条、高块 3 条）：副图普遍矮，画满会糊；
+        // 原先固定「首尾两条」，块一矮第二条就被 minGap 丢掉，只剩孤零零一个数字
+        // （与主图同一个病，2026-11-22）。间距判断同必须取绝对值，理由见 PriceAxisLabels。
+        val count = (geo.subHeightPx / minGapPx).toInt().coerceIn(2, 3)
+        val picks = range.gridLines(count = count)
         var lastDrawnY = Float.NEGATIVE_INFINITY
         picks.forEach { value ->
             val y = geo.yOf(range.toFraction(value), top, geo.subHeightPx)
@@ -2717,6 +2767,11 @@ private suspend fun PointerInputScope.detectChartGestures(
     onSelectLine: (LineRef?) -> Unit = {},
     /** 已有直线的两端**像素**落点，按下那一刻用它就近抓取。 */
     trendPixels: () -> List<TrendLinePixels>,
+    /**
+     * 按 id 取一条直线两端的**数据坐标**：拖端点改角度时，要把不动的那端原样钉回去。
+     * 返回 null（线已不在 / 锚点缺失）则退回整体平移。
+     */
+    trendAnchors: (Long) -> Pair<TrendAnchor, TrendAnchor>? = { null },
     /** 落点像素 → 直线锚点（下标+价格）；换算失败（量程/尺寸异常）返回 null。 */
     trendAnchorAt: (Float, Float) -> TrendAnchor?,
     /** 直线锚点 → 像素：松手时判「第二下是否落得太近」用。 */
@@ -2760,6 +2815,7 @@ private suspend fun PointerInputScope.detectChartGestures(
     // 每场手势都重算一次没有意义，upstream 直接取一次。
     val flatGripInsetPx = FLAT_GRIP_INSET.toPx()
     val flatGripHitPx = FLAT_GRIP_HIT.toPx()
+    val trendGripHitPx = TREND_GRIP_HIT.toPx()
     awaitEachGesture {
         val first = awaitFirstDown(requireUnconsumed = false)
         // 起点落在右侧价格刻度区：纵向拖动在那里是「缩放价格刻度」而不是「平移」。
@@ -2797,6 +2853,9 @@ private suspend fun PointerInputScope.detectChartGestures(
         var trendGrabbedId = 0L
         /** 抓取那一刻线两端的像素与按下手指位置：平移按「端点 + 手指位移」整根走。 */
         var trendBase: Pair<Offset, Offset>? = null
+        /** [TrendMode.ANCHOR] 抓的是哪一端（true = 第一点），以及钉住不动的另一端（数据坐标）。 */
+        var trendGripIsA = true
+        var trendFixedAnchor: TrendAnchor? = null
         var trendDown = Offset.Zero
         /** 本场最近一次落点（已夹进绘图区）；第二敲靠它判「是不是落得太近」。 */
         var trendLast = Offset.Zero
@@ -2858,22 +2917,44 @@ private suspend fun PointerInputScope.detectChartGestures(
                  * 「谁更近」的取舍 —— 两处各自判一次就会分叉（点在交叉点附近时尤其明显）。
                  */
                 val flatY = hit?.let { target -> anchors.firstOrNull { it.ref == target }?.yPx }
+                /** 已选中的那条直线（两端像素），只有它才判把手。 */
+                val selectedTrend = nearestTrendHit?.takeIf { hit == currentSelection() }?.first
                 /**
-                 * 已选中的那条水平类线，这一下是否**抓住了两端的把手**。
+                 * 这一下是否**抓住了把手** —— 水平类看两端（[onFlatGrip]），直线看三点
+                 * （[onTrendGrip]：两端改角度、中点整体平移）。
                  *
-                 * 抓把手才算「拖线」（见 [onFlatGrip]）；按在线身只是选中 ——
-                 * 否则上下平移图表时起手压到线就会把线拖走（2026-11-21 用户报的现象）。
-                 * 直线（`flatY == null`）不受此限：它的抓取按线段判，不横贯全宽。
+                 * 抓把手才算「拖线」；按在线身只是选中。水平线横贯全宽、直线向两侧沿无限延长，
+                 * 线身命中带等于把画布切片 —— 上下平移量程时起手压上去就会把线拖走
+                 * （2026-11-21 水平线、2026-11-22 直线，用户两次报的是同一个病）。
                  */
-                val grip = flatY != null && hit == currentSelection() &&
-                    onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
-                when (lineTouch(hit, currentSelection(), dragAllowed = flatY == null || grip)) {
+                val grip = if (flatY != null) {
+                    hit == currentSelection() &&
+                        onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
+                } else {
+                    selectedTrend?.let {
+                        onTrendGrip(first.position, it.p1, it.p2, trendGripHitPx)
+                    } != null
+                }
+                when (lineTouch(hit, currentSelection(), dragAllowed = grip)) {
                     LineTouch.Drag -> {
-                        if (nearestTrendHit != null) {
-                            trendGrabbedId = nearestTrendHit.first.id
-                            trendBase = nearestTrendHit.first.p1 to nearestTrendHit.first.p2
+                        if (selectedTrend != null) {
+                            trendGrabbedId = selectedTrend.id
                             trendDown = first.position
-                            trendMode = TrendMode.MOVE
+                            val ends = trendAnchors(selectedTrend.id)
+                            val a1 = ends?.first
+                            val a2 = ends?.second
+                            val kind = onTrendGrip(first.position, selectedTrend.p1, selectedTrend.p2, trendGripHitPx)
+                            if (kind == TrendGrip.ANCHOR_A || kind == TrendGrip.ANCHOR_B) {
+                                if (a1 != null && a2 != null) {
+                                    // 单端跟手、另一端钉住 = 改角度
+                                    trendGripIsA = kind == TrendGrip.ANCHOR_A
+                                    trendFixedAnchor = if (trendGripIsA) a2 else a1
+                                    trendMode = TrendMode.ANCHOR
+                                }
+                            } else {
+                                trendBase = selectedTrend.p1 to selectedTrend.p2
+                                trendMode = TrendMode.MOVE
+                            }
                         } else {
                             // 抓取半径有 24dp，手指未必正落在线上：记下「线在手指上下多少」，
                             // 拖动时补回去，线只跟位移走、不往手指上跳。
@@ -3040,6 +3121,15 @@ private suspend fun PointerInputScope.detectChartGestures(
                                 if (a1 != null && a2 != null) onTrendDrag(trendGrabbedId, a1, a2)
                             }
                         }
+                        // 抓端点改角度：只有这一端跟手，另一端用抓取那一刻的锚点原样钉住
+                        TrendMode.ANCHOR -> {
+                            val fixed = trendFixedAnchor
+                            val moving = trendAnchorAt(x, y)
+                            if (fixed != null && moving != null) {
+                                if (trendGripIsA) onTrendDrag(trendGrabbedId, moving, fixed)
+                                else onTrendDrag(trendGrabbedId, fixed, moving)
+                            }
+                        }
                     }
                     continue
                 }
@@ -3185,7 +3275,8 @@ private suspend fun PointerInputScope.detectChartGestures(
                     onTrendSeed(null)
                 }
             }
-            TrendMode.MOVE -> onTrendCommit(trendGrabbedId)
+            // 平移与改角度都以「松手落库」收尾（拖动过程中只发预览，见 onTrendDrag）
+            TrendMode.MOVE, TrendMode.ANCHOR -> onTrendCommit(trendGrabbedId)
         }
         // 单击落定（2026-10-24）：命中一条还没选中的线 → 选中它；按在空白 → 取消选中。
         // 循环里那道作废判定用的是**上一帧**的 travelled，快速一滑（只有一帧 MOVE 就抬手）
@@ -3278,6 +3369,42 @@ internal fun onFlatGrip(
     return hypot(point.x - (plotWidthPx - insetPx), dy) <= hitPx
 }
 
+/** 抓到的是直线上的哪一处：两端改角度，中点整体平移。 */
+internal enum class TrendGrip {
+    ANCHOR_A,
+    ANCHOR_B,
+    MID,
+}
+
+/**
+ * 落点是否抓住了选中直线的把手（两端锚点 + 中点），以及抓的是哪个。
+ *
+ * 与 [onFlatGrip] 同一口径：**这是直线唯一的编辑入口**。直线在屏幕上向左右沿无限延长
+ * （见 `drawDrawLines`），按线身判命中等于给整张图斜切一条带子 —— 已在选中态时
+ * 纵向拖动量程、起手压在带上就会把线拖走（2026-11-22 用户「缩放纵坐标直线会漂移」，
+ * 桌面端同一处此前已按把手化修过）。
+ *
+ * 端点优先于中点：两点挨得很近（短线段）时中点必然也落在命中圈里，
+ * 而「改角度」比「整体挪」常用，也让重画一句的成本更低。
+ */
+internal fun onTrendGrip(
+    point: Offset,
+    p1: Offset,
+    p2: Offset,
+    hitPx: Float,
+): TrendGrip? {
+    if (hitPx <= 0f || !hitPx.isFinite()) return null
+    if (!point.x.isFinite() || !point.y.isFinite()) return null
+    if (!p1.x.isFinite() || !p1.y.isFinite() || !p2.x.isFinite() || !p2.y.isFinite()) return null
+    val da = hypot(point.x - p1.x, point.y - p1.y)
+    val db = hypot(point.x - p2.x, point.y - p2.y)
+    if (da <= hitPx && da <= db) return TrendGrip.ANCHOR_A
+    if (db <= hitPx) return TrendGrip.ANCHOR_B
+    val midX = (p1.x + p2.x) / 2f
+    val midY = (p1.y + p2.y) / 2f
+    return if (hypot(point.x - midX, point.y - midY) <= hitPx) TrendGrip.MID else null
+}
+
 /**
  * 一条已有**水平类**的线（告警线 / 水平线）在主图上的纵向像素落点，手势按它决定抓哪根。
  *
@@ -3291,8 +3418,10 @@ private enum class TrendMode {
     SEED,
     /** 已有种子：拖动只挪准星（预览线跟着走）；**轻点**才成交（准星压在种子上则撤销）。 */
     PLACE2,
-    /** 就近抓到已有直线：整根随手指平移。 */
+    /** 抓住已有直线的**中点把手**：整根随手指平移。 */
     MOVE,
+    /** 抓住已有直线**某一端把手**：这一端跟手、另一端钉住 —— 改角度。 */
+    ANCHOR,
 }
 
 /** 一条已有直线当前的两端像素落点，手势按它就近抓取与平移。 */
@@ -3405,6 +3534,18 @@ private val READOUT_FONT_SIZE = 9.sp
 /** 右侧纵轴文字的字号：与读数带同档，刻度数字不该在视觉上与蜡烛抢地方。 */
 private val AXIS_FONT_SIZE = 9.sp
 
+/**
+ * 刻度文字的小数位：**由步长决定**，与 tickSize 无关。
+ *
+ * step = 1000 → 0 位（8000、9000）；step = 0.5 → 1 位；step = 0.000002 → 6 位。
+ * 纯函数，直接单测（见 `AxisDecimalsTest`）：这一步决定「刻度看起来像不像刻度」。
+ */
+internal fun decimalsForStep(step: Double): Int {
+    if (!step.isFinite() || step <= 0) return 0
+    val exponent = floor(log10(step)).toInt()
+    return (-exponent).coerceIn(0, 8)
+}
+
 /** 纵轴刻度与价格标的共用文字样式（价格轴、副图轴、十字光标/最新价/告警线标）。 */
 @Composable
 private fun rememberAxisTextStyle(): TextStyle =
@@ -3445,8 +3586,21 @@ private const val PRICE_BADGE_PAD_V_DP = 1f
  * 「手里那根最实」改用**加粗**表达（见 drawAlertLines / drawDrawLines）。
  */
 
-/** 直线两端锚点的圆点半径（dp）。 */
-private val TREND_ANCHOR_DOT = 3.dp
+/**
+ * 直线把手（**只在选中态画**，见 [drawTrendGrips]）：两端圆点的半径。
+ *
+ * 未选中时一个点都不画（2026-11-22 用户）：两点是「这根线能编辑」的信号，
+ * 平时挂着看着像数据标记，也让人以为可以直接拖 —— 而拖动线身拖走线正是要修的病。
+ */
+private val TREND_GRIP_DOT = 4.5.dp
+
+/**
+ * 直线把手的命中半径（dp）。
+ *
+ * 比水平类那两枚（[FLAT_GRIP_HIT] 18dp）放宽一档：斜线上的点没有横向的线身可借力，
+ * 指尖按偏一点就滑到线身上去了（那里只选中、不编辑）。
+ */
+private val TREND_GRIP_HIT = 20.dp
 
 /** 第一敲种子点的半径（dp）：比锚点大一档，提示「已经敲过一下了」。 */
 private val TREND_SEED_DOT = 4.5.dp

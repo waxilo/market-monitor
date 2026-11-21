@@ -84,10 +84,15 @@ class FlatGripTest {
         assertEquals(LineTouch.Select, lineTouch(line, line, dragAllowed = false))
     }
 
+    /**
+     * 直线同样只认把手（2026-11-22）：它的命中按线段判，而直线会向左右沿无限延长 ——
+     * 缩放纵坐标时起手压在线身上就会把线拖走，与水平线是同一个病。
+     */
     @Test
-    fun `直线不受把手限制——dragAllowed 默认仍为真`() {
+    fun `直线也受把手限制——抓把手才拖，按线段只当点击`() {
         val trend = LineRef.Guide(7L)
-        assertEquals(LineTouch.Drag, lineTouch(trend, trend))
+        assertEquals(LineTouch.Drag, lineTouch(trend, trend, dragAllowed = true))
+        assertEquals(LineTouch.Select, lineTouch(trend, trend, dragAllowed = false))
         assertEquals(LineTouch.None, lineTouch(null, trend))
     }
 }
