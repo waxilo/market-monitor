@@ -792,3 +792,33 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 **单测**：`TrendGripTest` 7 + `AxisDecimalsTest` 6（含 8000~9000 区间在 2~8 条下必须整数），
 `FlatGripTest` 那条「直线不受把手限制」改成「同样只认把手」。合计 **467 项全过**。
 ⚠️ 仍无真机验收（`adb devices` 为空）。
+
+## 0.9.79：直线选不中 / 漂移未解 / 纵轴刻度（2026-11-22 第二轮，用户退回三条）
+
+用户原话：「直线漂移问题没解决。直线无法点击选中。我要的是不显示纵轴价格间隔，现在还有」。
+
+**① 选不中 = 命中用的是锚点段，而画的是延长线。**
+`drawDrawLines` 把直线延长到 `x=0..plotWidthPx`，命中却走
+`nearestTrend` → `distanceToSegment(point, p1, p2)`（两个锚点之间）。点在延长段上算落空 ⇒
+**一次都选不中**；锚点被横向平移到屏幕外时，把手也画在屏幕外 ⇒ 抓不着。
+⇒ 新增 `clipLineToRect(a, b, l, t, r, btm)`（Liang–Barsky，**t 初值 ±∞ = 无限直线**），
+绘制段 / 命中带 / 把手位置**全部**从它出来。`trendPixels()` 返回裁剪后的可见段。
+❗小心：第一版写成 t∈[0,1]（裁线段），于是「看不见锚点之外的部分」—— 单测直接抓到。
+
+**② 漂移还剩两处入口。**
+(a) 双指落下只清了 `pendingSelect`，`trendMode`(MOVE/ANCHOR) 没清 ⇒ 抬掉一根手指后
+`owned && pressed.size==1` 立刻接着拖线，松手还 `onTrendCommit` 落库。现在双指一出现就
+作废（`trendMode=null` / `horizontalActive=false` / `owned=false`），**不发 commit**
+（锚点没改过，丢弃干净）。⚠️ 水平类只停 `horizontalActive`，**不清 `horizontalGrab`**
+—— 收尾 commit 还指着原线，清成 null 会被当「草稿落库」凭空多落一根。
+(b) `TREND_GRIP_HIT` 20dp≈55px，中点那枚在屏幕正中，而「主图中央上下拖」正是调量程的
+常用起手位 ⇒ 一按就进整体平移。收到 **12dp**，中点再乘 `MID_HIT_SHARE = 0.72`。
+端点改角度的固定端改用**可见另一端**反算（原锚点可能在屏外，当旋转轴会有杠杆，线跑得比手指快）。
+
+**③ 纵轴刻度整列删掉。** 上一版把「不显示间隔」听成「小数位要整数」还留着刻度 ——
+`PriceAxisLabels` / `SubAxisLabels` / `AxisLabel` / `AXIS_LABEL_MIN_GAP_DP` 全删，
+主图与副图右缘都不再挂价位列（网格线仍在 Canvas 里画）。价位由长按十字光标 / 最新价牌 /
+划线牌给。`decimalsForStep` / `ValueRange.gridStep` 保留（纯函数，AxisDecimalsTest 仍测）。
+
+单测：`TrendClipTest` 8 项；`./gradlew :app:testDebugUnitTest` **475 项全过**。
+⚠️ 无真机验收（adb 无设备）。0.9.79 / vc 91。
