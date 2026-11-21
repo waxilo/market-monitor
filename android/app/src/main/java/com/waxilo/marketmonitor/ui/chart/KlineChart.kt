@@ -755,26 +755,31 @@ fun KlineChart(
         return if (slot > 0f) xPx / slot + p.start.toDouble() - 0.5 else Double.NaN
     }
 
-    /** 已有直线的两端像素落点，供手势就近抓取与整体平移。 */
+    /**
+     * 已有直线**在当前绘图区里看得见的那一段**（两端都已被裁到主图矩形内）。
+     *
+     * ❗这里给的是**裁剪后的可见段**，不是原始两个锚点。三条理由（2026-11-22 真机反馈）：
+     * ① 直线在屏幕上向左右沿延长到绘图区边界，用户点的是**看得见的那条线** ——
+     *    按锚点段判命中时，点在延长段上算落空，于是一次都选不中；
+     * ② 锚点可能早被横向平移推到屏幕外，把手画在那里就等于没有把手；
+     * ③ 命中带、把手位置、绘制段三者必须同源，否则「看得见」与「点得着」永远对不上。
+     */
     fun trendPixels(): List<TrendLinePixels> =
         liveDrawLines.mapNotNull { line ->
             val a1 = line.anchor1
             val a2 = line.anchor2
             if (line.kind != ChartLineKind.TREND || a1 == null || a2 == null) null
-            else TrendLinePixels(line.id, anchorPx(a1), anchorPx(a2))
-        }
-
-    /**
-     * 按 id 取一条直线两端的**数据坐标**（拖端点改角度时要把不动的那端钉回去）。
-     *
-     * 与 [trendPixels] 同住 composable 作用域、同样读 [liveDrawLines]：
-     * `pointerInput` 协程捕获的是旧闭包，直接在里面引那个委托属性编译器不放行。
-     */
-    fun trendAnchorsOf(id: Long): Pair<TrendAnchor, TrendAnchor>? =
-        liveDrawLines.firstOrNull { it.id == id && it.kind == ChartLineKind.TREND }?.let { line ->
-            val a1 = line.anchor1
-            val a2 = line.anchor2
-            if (a1 != null && a2 != null) a1 to a2 else null
+            else {
+                val g = liveGeo
+                clipLineToRect(
+                    a = anchorPx(a1),
+                    b = anchorPx(a2),
+                    left = 0f,
+                    top = g.mainTopPx,
+                    right = g.plotWidthPx,
+                    bottom = g.mainTopPx + g.mainHeightPx,
+                )?.let { TrendLinePixels(line.id, it.first, it.second) }
+            }
         }
 
     /**
@@ -915,7 +920,6 @@ fun KlineChart(
                             }
                         },
                         trendPixels = ::trendPixels,
-                        trendAnchors = ::trendAnchorsOf,
                         trendAnchorAt = { xPx, yPx ->
                             val index = indexAt(xPx)
                             val price = pixelToPrice(yPx)
@@ -1092,7 +1096,10 @@ fun KlineChart(
         }
 
         if (isReady) {
-            PriceAxisLabels(mainRange, geo, density, Modifier.align(Alignment.TopStart))
+            // 纵轴**不挂刻度数字**（2026-11-22 用户三次明确：「不显示纵轴价格间隔，8000、9000 这种」）。
+            // 网格线仍由 Canvas 画（drawGridAndAxes），只是不再往右缘贴一列价位 ——
+            // 需要读具体价位时用长按十字光标 / 最新价牌 / 划线牌，那几枚是「指着哪就是哪」的读数，
+            // 而右缘那列固定刻度既挡图又容易被误读成「当前价」。
             // ---- 右轴价格标：所有「这条线多少钱」的读数都在这一处落位 ----
             //
             // 三种标共用右轴那一列：最新价（虚拟的当前价线）、十字光标横线、划线
@@ -1137,7 +1144,8 @@ fun KlineChart(
                 density = density,
                 tickSize = tickSize,
             )
-            SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
+            // 副图纵轴同样不挂刻度数字（与主图统一，见上）：副图块矮，两三个数字本来也
+            // 挤在块角上，读起来更像噪点；量级看曲线形状，具体值交给十字光标。
             TimeAxisLabels(
                 series, plot, geo, interval, density,
                 Modifier.align(Alignment.TopStart),
@@ -1812,35 +1820,25 @@ private fun DrawScope.drawDrawLines(
             ChartLineKind.TREND -> {
                 val a1 = line.anchor1 ?: return@forEach
                 val a2 = line.anchor2 ?: return@forEach
-                val p1 = anchorPx(a1)
-                val p2 = anchorPx(a2)
-                if (!p1.x.isFinite() || !p1.y.isFinite() || !p2.x.isFinite() || !p2.y.isFinite()) {
-                    return@forEach
+                // 两点定线后向绘图区边界延长，只保留**主图矩形内**那一段：
+                // 与手势侧的 trendPixels() 同一个裁剪函数，所以「画出来的线」与
+                // 「点得着的线」、「把手落在哪」三者天然一致（2026-11-22）。
+                val span = clipLineToRect(
+                    a = anchorPx(a1),
+                    b = anchorPx(a2),
+                    left = 0f,
+                    top = geo.mainTopPx,
+                    right = geo.plotWidthPx,
+                    bottom = geo.mainTopPx + geo.mainHeightPx,
+                ) ?: return@forEach
+                if (picked) {
+                    drawLine(halo, span.first, span.second, LINE_SELECTED_HALO_WIDTH)
                 }
-                val dx = p2.x - p1.x
-                // 两点定线后**向绘图区左右沿延长**：趋势线看的是走向，不该断在锚点上
-                val span: Pair<Offset, Offset>? = if (abs(dx) < 0.5f) {
-                    // 近似竖直的直线：沿 x 画满绘图区高度（斜率除法在这种角度会炸）
-                    Offset(p1.x, geo.plotTopPx) to Offset(p1.x, geo.plotHeightPx)
-                } else {
-                    val m = (p2.y - p1.y) / dx
-                    val y0 = p1.y - m * p1.x
-                    val yW = y0 + m * geo.plotWidthPx
-                    if (y0.isFinite() && yW.isFinite()) {
-                        Offset(0f, y0) to Offset(geo.plotWidthPx, yW)
-                    } else {
-                        null
-                    }
-                }
-                if (span != null) {
-                    if (picked) {
-                        drawLine(halo, span.first, span.second, LINE_SELECTED_HALO_WIDTH)
-                    }
-                    drawLine(color, span.first, span.second, width)
-                }
+                drawLine(color, span.first, span.second, width)
                 // 把手**只在选中态出现**（2026-11-22 用户「两个点没选中时不展示」）：
                 // 两端改角度、中点整体平移，与水平类线那两枚（drawFlatGrips）同一套语义。
-                if (picked) drawTrendGrips(p1, p2, color)
+                // 位置就是可见段的两端 —— 锚点在屏幕外时也一定看得见、抓得着。
+                if (picked) drawTrendGrips(span.first, span.second, color)
             }
         }
     }
@@ -1998,61 +1996,6 @@ private fun linePath(
         if (current == null) path = Path().apply { moveTo(x, y) } else current.lineTo(x, y)
     }
     return path
-}
-
-/**
- * 主图右侧价格刻度。
- *
- * 三条边界规则：
- * - 文字**垂直居中**到网格线上（旧版用 `y - 6f` 硬编码，字高变了就偏）；
- * - 条数按可用高度自适应（见下方 [tickCount]），不再固定 5 条；
- * - 相邻刻度仍挨太近时丢掉下面那条 —— 那是兜底，正常不会再触发全丢。
- */
-@Composable
-private fun PriceAxisLabels(
-    range: ValueRange,
-    geo: ChartGeo,
-    density: Density,
-    modifier: Modifier = Modifier,
-) {
-    val style = rememberAxisTextStyle()
-    val measurer = rememberTextMeasurer()
-    val labelHeightPx = remember(style, density) {
-        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
-    }
-    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
-    /**
-     * 刻度条数按**可用高度**自适应（2026-11-22）。
-     *
-     * 原先固定 5 条：主图被压矮时（横屏 + 读数带多行 + 两块副图）每条之间的像素间距
-     * 可能小于 [minGapPx]，[lastDrawnY] 那道判据会把它们**逐条丢掉** —— 表现为右轴一条刻度都没有，
-     * 用户看到的正是「纵坐标不显示 8000、9000 这种间隔」。
-     * 现在先按高度定条数，保证每条都放得下；矮图宁可只给 2~3 条，也不给 0 条。
-     */
-    val tickCount = remember(geo.mainHeightPx, minGapPx) {
-        (geo.mainHeightPx / minGapPx).toInt().coerceIn(2, 8)
-    }
-    // 小数位跟着步长走：step ≥ 1 一律整数，刻度读起来才是「8000 / 9000」
-    val decimals = remember(range, tickCount) { decimalsForStep(range.gridStep(tickCount)) }
-
-    var lastDrawnY = Float.NEGATIVE_INFINITY
-    range.gridLines(tickCount).forEach { value ->
-        val y = geo.yOf(range.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
-        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
-        // 必须取绝对值：gridLines 按数值升序，而像素 y 随数值增大而减小（屏幕 y 轴向下）。
-        // 不取绝对值的话 y - lastDrawnY 恒为负，除第一条外全被当成「挨太近」丢掉。
-        if (abs(y - lastDrawnY) < minGapPx) return@forEach
-        lastDrawnY = y
-        AxisLabel(
-            text = PriceFormatter.localeNumber(value, decimals),
-            rightPx = geo.plotWidthPx,
-            centerYPx = y,
-            labelHeightPx = labelHeightPx,
-            density = density,
-            style = style,
-            modifier = modifier,
-        )
-    }
 }
 
 /**
@@ -2470,97 +2413,14 @@ private fun PriceTag(
 }
 
 /**
- * 右端刻度文字：**右对齐贴画布右缘**（右轴不再占一列，见 [AXIS_GUTTER_DP]），
- * 以 [centerYPx] 垂直居中。
- * 用固定 [labelHeightPx] 折半来定位，避免依赖 TextStyle 的行高推断。
- */
-@Composable
-private fun AxisLabel(
-    text: String,
-    rightPx: Float,
-    centerYPx: Float,
-    labelHeightPx: Float,
-    density: Density,
-    style: TextStyle,
-    modifier: Modifier = Modifier,
-) {
-    val measurer = rememberTextMeasurer()
-    val widthPx = remember(text, style, density) {
-        measurer.measure(AnnotatedString(text), style, density = density).size.width.toFloat()
-    }
-    val gutterPx = with(density) { AXIS_GUTTER_DP.dp.toPx() }
-    Text(
-        text = text,
-        modifier = modifier.offset(
-            x = with(density) { (rightPx - gutterPx - widthPx).coerceAtLeast(0f).toDp() },
-            y = with(density) { (centerYPx - labelHeightPx / 2f).toDp() },
-        ),
-        style = style,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        maxLines = 1,
-    )
-}
-
-/**
- * 副图的右侧纵轴刻度。
+ * 副图的右侧纵轴刻度：**已停用**（2026-11-22）。
  *
- * 每块副图自己的名字与参数（`MACD(12,26,9)`）不再画在这里 —— 它已经并进左上角
- * 那条读数行了（见 [IndicatorReadout]）。刻度只在每块副图自己的高度里取 2 条，
- * 避免小块副图被数字塞满。
+ * 与主图同一口径 —— 用户要的是「不显示纵轴价格间隔」，副图那两三个数字同样属于刻度，
+ * 一起收掉。保留本注释是为了让后来者知道这里曾经有过一列数字、以及为什么拿掉：
+ * 副图块矮，数字挤在块角更像噪点，量级看曲线形状即可，具体值由十字光标给。
+ *
+ * 主图那一列同批删除（连 `PriceAxisLabels` / `AxisLabel` / `AXIS_LABEL_MIN_GAP_DP`）。
  */
-@Composable
-private fun SubAxisLabels(
-    panes: List<SubPaneData>,
-    ranges: List<ValueRange>,
-    geo: ChartGeo,
-    density: Density,
-    modifier: Modifier = Modifier,
-) {
-    if (panes.isEmpty() || geo.subHeightPx <= 1f) return
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val style = rememberAxisTextStyle()
-    val measurer = rememberTextMeasurer()
-    val labelHeightPx = remember(style, density) {
-        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
-    }
-    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
-
-    panes.forEachIndexed { index, pane ->
-        val range = ranges.getOrNull(index) ?: return@forEachIndexed
-        val top = geo.subTopOf(index)
-        // 条数按这块副图的高度定（矮块 2 条、高块 3 条）：副图普遍矮，画满会糊；
-        // 原先固定「首尾两条」，块一矮第二条就被 minGap 丢掉，只剩孤零零一个数字
-        // （与主图同一个病，2026-11-22）。间距判断同必须取绝对值，理由见 PriceAxisLabels。
-        val count = (geo.subHeightPx / minGapPx).toInt().coerceIn(2, 3)
-        val picks = range.gridLines(count = count)
-        var lastDrawnY = Float.NEGATIVE_INFINITY
-        picks.forEach { value ->
-            val y = geo.yOf(range.toFraction(value), top, geo.subHeightPx)
-            if (abs(y - lastDrawnY) < minGapPx) return@forEach
-            lastDrawnY = y
-            val label = if (pane.compactAxis) PriceFormatter.formatCompact(value)
-            else PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS)
-            // 与主图价签同一套：右对齐、贴画布右缘（右轴不再占一列）。刻度没有底牌，
-            // 淡淡地压在柱子上 —— 读数优先于柱子，桌面端也是这个取舍。
-            val labelWidthPx = remember(label, style, density) {
-                measurer.measure(AnnotatedString(label), style, density = density).size.width.toFloat()
-            }
-            val gutterPx = with(density) { AXIS_GUTTER_DP.dp.toPx() }
-            Text(
-                text = label,
-                modifier = modifier.offset(
-                    x = with(density) {
-                        (geo.plotWidthPx - gutterPx - labelWidthPx).coerceAtLeast(0f).toDp()
-                    },
-                    y = with(density) { (y - labelHeightPx / 2f).toDp() },
-                ),
-                style = style,
-                color = labelColor,
-                maxLines = 1,
-            )
-        }
-    }
-}
 
 /**
  * 时间轴刻度。
@@ -2765,13 +2625,12 @@ private suspend fun PointerInputScope.detectChartGestures(
     currentSelection: () -> LineRef? = { null },
     /** 写入选中态（`null` = 取消选中）。调用方持有它，并交给绘制端画「已选中」的高亮。 */
     onSelectLine: (LineRef?) -> Unit = {},
-    /** 已有直线的两端**像素**落点，按下那一刻用它就近抓取。 */
-    trendPixels: () -> List<TrendLinePixels>,
     /**
-     * 按 id 取一条直线两端的**数据坐标**：拖端点改角度时，要把不动的那端原样钉回去。
-     * 返回 null（线已不在 / 锚点缺失）则退回整体平移。
+     * 已有直线**在当前绘图区里可见的那一段**两端（裁剪后的像素），按下那一刻用它就近抓取。
+     *
+     * 给可见段而不是原始锚点：锚点可能被平移到屏幕外，那时既点不中也画不出把手。
      */
-    trendAnchors: (Long) -> Pair<TrendAnchor, TrendAnchor>? = { null },
+    trendPixels: () -> List<TrendLinePixels>,
     /** 落点像素 → 直线锚点（下标+价格）；换算失败（量程/尺寸异常）返回 null。 */
     trendAnchorAt: (Float, Float) -> TrendAnchor?,
     /** 直线锚点 → 像素：松手时判「第二下是否落得太近」用。 */
@@ -2917,38 +2776,43 @@ private suspend fun PointerInputScope.detectChartGestures(
                  * 「谁更近」的取舍 —— 两处各自判一次就会分叉（点在交叉点附近时尤其明显）。
                  */
                 val flatY = hit?.let { target -> anchors.firstOrNull { it.ref == target }?.yPx }
-                /** 已选中的那条直线（两端像素），只有它才判把手。 */
+                /** 已选中的那条直线（**可见段**两端），只有它才判把手。 */
                 val selectedTrend = nearestTrendHit?.takeIf { hit == currentSelection() }?.first
+                /** 水平类：这一下是否抓住了两端把手（[onFlatGrip]）。 */
+                val flatGrip = flatY != null && hit == currentSelection() &&
+                    onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
                 /**
-                 * 这一下是否**抓住了把手** —— 水平类看两端（[onFlatGrip]），直线看三点
-                 * （[onTrendGrip]：两端改角度、中点整体平移）。
+                 * 直线：抓到的是哪枚把手（[onTrendGrip]：两端改角度、中点整体平移）。
                  *
-                 * 抓把手才算「拖线」；按在线身只是选中。水平线横贯全宽、直线向两侧沿无限延长，
-                 * 线身命中带等于把画布切片 —— 上下平移量程时起手压上去就会把线拖走
-                 * （2026-11-21 水平线、2026-11-22 直线，用户两次报的是同一个病）。
+                 * 抓把手才算「拖线」；按在线身只是选中。直线在屏幕上贯穿整个绘图区，
+                 * 若按线身就算抓到，双指缩放时第一根手指压在线上就会把线拖走
+                 * （2026-11-22 用户「纵坐标缩放，直线会漂移」）。
                  */
-                val grip = if (flatY != null) {
-                    hit == currentSelection() &&
-                        onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
-                } else {
+                val trendGrip = if (flatY == null) {
                     selectedTrend?.let {
                         onTrendGrip(first.position, it.p1, it.p2, trendGripHitPx)
-                    } != null
+                    }
+                } else {
+                    null
                 }
-                when (lineTouch(hit, currentSelection(), dragAllowed = grip)) {
+                when (lineTouch(hit, currentSelection(), dragAllowed = flatGrip || trendGrip != null)) {
                     LineTouch.Drag -> {
-                        if (selectedTrend != null) {
+                        if (selectedTrend != null && trendGrip != null) {
                             trendGrabbedId = selectedTrend.id
                             trendDown = first.position
-                            val ends = trendAnchors(selectedTrend.id)
-                            val a1 = ends?.first
-                            val a2 = ends?.second
-                            val kind = onTrendGrip(first.position, selectedTrend.p1, selectedTrend.p2, trendGripHitPx)
-                            if (kind == TrendGrip.ANCHOR_A || kind == TrendGrip.ANCHOR_B) {
-                                if (a1 != null && a2 != null) {
-                                    // 单端跟手、另一端钉住 = 改角度
-                                    trendGripIsA = kind == TrendGrip.ANCHOR_A
-                                    trendFixedAnchor = if (trendGripIsA) a2 else a1
+                            if (trendGrip == TrendGrip.ANCHOR_A || trendGrip == TrendGrip.ANCHOR_B) {
+                                // 固定端 = **另一端可见点**对应的锚点（不是原始 anchor1/2）：
+                                // 原始锚点可能早被平移到屏幕外，拿它当旋转轴会让跟手端与手指
+                                // 之间多出一段杠杆，拖起来线跑得比手指快。
+                                val fixedPx = if (trendGrip == TrendGrip.ANCHOR_A) {
+                                    selectedTrend.p2
+                                } else {
+                                    selectedTrend.p1
+                                }
+                                val fixed = trendAnchorAt(fixedPx.x, fixedPx.y)
+                                if (fixed != null) {
+                                    trendGripIsA = trendGrip == TrendGrip.ANCHOR_A
+                                    trendFixedAnchor = fixed
                                     trendMode = TrendMode.ANCHOR
                                 }
                             } else {
@@ -3072,6 +2936,24 @@ private suspend fun PointerInputScope.detectChartGestures(
                 // 双指落下 = 这场手势是缩放：上一次留下的十字光标到此为止。
                 // 长按中加第二根手指（十字光标仍在跟手）不在此列 —— 那场手势还是它。
                 if (pressed.size >= 2 && !longPressActive) onCrosshair(null)
+                // ❗双指 = 缩放，从这一刻起**不再是「拖线」**（2026-11-22）。
+                // 不清的话，抬掉一根手指后 pressed.size 回到 1，`owned && size==1` 那一支
+                // 立刻接着把线拖走 —— 用户两只手缩放纵轴，看到的就是「直线漂移」；
+                // 松手时还会 `onTrendCommit` 落库，把漂移记死。
+                // 此时锚点一次都没改过（拖动只在 MOVE/ANCHOR 的逐帧分支里发预览），
+                // 所以直接丢弃、不发 commit 就是干净的。
+                if (pressed.size >= 2 && !longPressActive) {
+                    if (trendMode == TrendMode.MOVE || trendMode == TrendMode.ANCHOR) {
+                        trendMode = null
+                        trendBase = null
+                        trendFixedAnchor = null
+                    }
+                    // 水平类只停「继续跟手」，**不清 horizontalGrab**：收尾的 commit 还指着
+                    // 原来那条线，价格一格没动过就是一次空写；清成 null 会被当成「草稿落库」，
+                    // 凭空多落一根线。
+                    horizontalActive = false
+                    owned = false
+                }
             }
 
             // 单击候选（2026-10-24）：滑出 slop 或落下第二根手指就作废 ——
@@ -3402,8 +3284,17 @@ internal fun onTrendGrip(
     if (db <= hitPx) return TrendGrip.ANCHOR_B
     val midX = (p1.x + p2.x) / 2f
     val midY = (p1.y + p2.y) / 2f
-    return if (hypot(point.x - midX, point.y - midY) <= hitPx) TrendGrip.MID else null
+    // 中点再收一档：它落在图中央，而「在主图中央上下拖」正是调价格量程的常用起手位，
+    // 命中圈给太大等于把半个屏幕变成「一按就拖线」（2026-11-22 用户「纵坐标缩放直线漂移」）。
+    return if (hypot(point.x - midX, point.y - midY) <= hitPx * MID_HIT_SHARE) {
+        TrendGrip.MID
+    } else {
+        null
+    }
 }
+
+/** 中点把手的命中半径相对两端把手的比例（见 [onTrendGrip]）。 */
+private const val MID_HIT_SHARE = 0.72f
 
 /**
  * 一条已有**水平类**的线（告警线 / 水平线）在主图上的纵向像素落点，手势按它决定抓哪根。
@@ -3428,10 +3319,63 @@ private enum class TrendMode {
 internal data class TrendLinePixels(val id: Long, val p1: Offset, val p2: Offset)
 
 /**
+ * 把过 [a]、[b] 的**无限长直线**裁进矩形，返回矩形内那一段的两个端点；不相交返回 null。
+ *
+ * 注意是**无限直线**，不是线段：趋势线在屏幕上是贯穿到底的（两个锚点只是定斜率），
+ * 所以 t 的初值取 ±∞ 而不是 [0,1] —— 这是上一版最大的错处（裁线段 ⇒ 线只画到第二个锚点，
+ * 与「向两侧延长」的绘制语义打架，命中带也跟着错）。
+ *
+ * 用 Liang–Barsky 参数裁剪：不必先把斜率算出来，所以**近竖直的线也不会炸**（旧实现里
+ * `(p2.y - p1.y) / dx` 在 `dx ≈ 0` 时得单独走一支，那一支又只按高度延长、与横向延长不同源）。
+ *
+ * 这一条是直线几何的唯一来源 —— 绘制段、命中带、把手位置全都从它出来。
+ * 三者各算一次是过去几轮反复出错的根子（画得到点不着、把手画在屏幕外）。
+ */
+internal fun clipLineToRect(
+    a: Offset,
+    b: Offset,
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+): Pair<Offset, Offset>? {
+    if (!a.x.isFinite() || !a.y.isFinite() || !b.x.isFinite() || !b.y.isFinite()) return null
+    if (!(right > left) || !(bottom > top)) return null
+    val dx = b.x - a.x
+    val dy = b.y - a.y
+    if (abs(dx) < 1e-6f && abs(dy) < 1e-6f) return null
+
+    var t0 = Float.NEGATIVE_INFINITY
+    var t1 = Float.POSITIVE_INFINITY
+    // p < 0 是「从这个边界走出去」，p > 0 是「从这个边界走进来」
+    fun clip(p: Float, q: Float): Boolean {
+        if (abs(p) < 1e-6f) return q >= 0f
+        val r = q / p
+        if (p < 0f) {
+            if (r > t1) return false
+            if (r > t0) t0 = r
+        } else {
+            if (r < t0) return false
+            if (r < t1) t1 = r
+        }
+        return true
+    }
+    if (!clip(-dx, a.x - left)) return null
+    if (!clip(dx, right - a.x)) return null
+    if (!clip(-dy, a.y - top)) return null
+    if (!clip(dy, bottom - a.y)) return null
+    if (!(t1 > t0) || t0.isInfinite() || t1.isInfinite()) return null
+    val s = Offset(a.x + dx * t0, a.y + dy * t0)
+    val e = Offset(a.x + dx * t1, a.y + dy * t1)
+    if (!s.x.isFinite() || !s.y.isFinite() || !e.x.isFinite() || !e.y.isFinite()) return null
+    return s to e
+}
+
+/**
  * 按「点到线段的距离」就近取一条直线，超出 [slopPx] 返回 null（= 落一颗新种子）。
  *
- * 抓**线段**而不是无限延长线：延长部分是趋势的示意，可拖的锚段才是用户画的那一笔 ——
- * 在延长线上按一下就抓走整根会莫名其妙。
+ * 传进来的 [TrendLinePixels] 是**裁剪到主图矩形的可见段**（见 `trendPixels`），
+ * 所以「点在延长段上」也算命中 —— 那一段本来就画在屏幕上，点它理应有回执。
  */
 internal fun List<TrendLinePixels>.closestTrend(point: Offset, slopPx: Float): TrendLinePixels? =
     nearestTrend(point, slopPx)?.first
@@ -3507,19 +3451,17 @@ private const val MAX_TIME_LABELS = 4
 /** 时间轴相邻标签之间至少要留的水平间隙（dp）。 */
 private const val TIME_LABEL_MIN_GAP_DP = 10f
 
-/** 纵轴相邻刻度之间至少要留的垂直间隙（dp）。 */
 /**
  * 右端价签的贴边留白（dp）。
  *
  * ❗**右侧不再单独留一列给价签**（2026-11-21 用户，与桌面端同一口径 ——
  * 「右侧不再空出一块放价格签，将图表填充过来，价格签是悬浮在图表上」）：
- * 绘图宽 = 画布宽（`ChartGeo.plotWidthPx` 就是画布宽），价签 / 划线牌 / 刻度全部
- * 右对齐浮在图上（`PriceTag` / `LineBadges` / `AxisLabel` / `SubAxisLabels`）。
+ * 绘图宽 = 画布宽（`ChartGeo.plotWidthPx` 就是画布宽），价签 / 划线牌全部
+ * 右对齐浮在图上（`PriceTag` / `LineBadges`）。
+ * 纵轴刻度数字同批取消（2026-11-22 用户：「不显示纵轴价格间隔」）。
  * 历史：这里是 `AXIS_LABEL_WIDTH_DP = 58f`，那 58dp 曾在 `plotWidthPx` 里扣掉。
  */
 private const val AXIS_GUTTER_DP = 2f
-
-private const val AXIS_LABEL_MIN_GAP_DP = 4f
 
 /**
  * 单族指标读数固定一行（如一整排 MA 挤在一行、BOLL 三条挤在一行）。
@@ -3597,10 +3539,13 @@ private val TREND_GRIP_DOT = 4.5.dp
 /**
  * 直线把手的命中半径（dp）。
  *
- * 比水平类那两枚（[FLAT_GRIP_HIT] 18dp）放宽一档：斜线上的点没有横向的线身可借力，
- * 指尖按偏一点就滑到线身上去了（那里只选中、不编辑）。
+ * ❗**故意比水平类那两枚（[FLAT_GRIP_HIT] 18dp）更小**（2026-11-22 真机第二轮）。
+ * 20dp 时半径约 55px，中点那枚又正好落在屏幕中央 —— 「在主图中央上下拖」本是调价格
+ * 量程的常用起手位，结果一按就进「整体平移」，用户看到的就是「纵坐标缩放，直线会漂移」。
+ * 把手本来就有白心圆做视觉目标，12dp（直径约 7mm）足够指尖找到，宁可贵在「抓不住就再点一次」，
+ * 也不要贵在「想缩量程却把线拖走了」。
  */
-private val TREND_GRIP_HIT = 20.dp
+private val TREND_GRIP_HIT = 12.dp
 
 /** 第一敲种子点的半径（dp）：比锚点大一档，提示「已经敲过一下了」。 */
 private val TREND_SEED_DOT = 4.5.dp
