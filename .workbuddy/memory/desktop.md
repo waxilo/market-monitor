@@ -1257,3 +1257,30 @@ EMA 面板泛化成**一族均线一处实现**，新增 MA 入口（周期条�
 - 面板扫描缓存 key 加上族名（`kind|market|symbol|source|intervals|periods`），否则 MA 面板会先读到 EMA 的缓存价。
 - CDP 验收脚本 `.workbuddy/tmp/check-ma.mjs`：浅/深两套；断言画线落盘 `origin.kind='ma'`、EMA 面板 `drawn=0`、
   切回 MA 仍 `drawn=1` 且价格随刷新自动对齐。截图 `ma-analysis-light/dark.png`。
+
+## 周期条后台预热（2026-11-21，切周期不再等一次往返）
+
+**症状**：切周期明显慢，尤其切到「一阵子没看过」的周期 —— 骨架 + 遮罩 + 一次完整往返。
+**根因不是网络**：`lib/klineCache` 的 LRU 只留 **6 条**，而默认周期条就有 **8 个** chip，
+一轮扫过去互相挤掉，于是大多数切换其实是冷启动。
+
+**改法**：新增 `lib/klineWarm.ts`（纯函数 `planWarm(slots, now, current)`），`ChartView` 里一个 effect 驱动：
+- 只暖**周期条里的**周期；当前周期永远跳过（它有 2s 末根链路）；
+- 每条按 `WARM_FRESH_MS = 60s` 轮转重暖；相邻两个请求至少隔 `WARM_GAP_MS = 1.5s`，同一时刻只有 1 个在飞；
+- 从没暖过的（`fetchedAt = 0`）到期时间算 0 ⇒ 冷启按周期条顺序铺开，8 个约 12s 铺完；
+- 失败记 `WARM_FAIL_BACKOFF_MS = 30s` 退避（**取回空数组也算失败**，否则它会一直最饿 ⇒ 1.5s 打一次的死循环）；
+- 窗口不可见**照跑**（用户 2026-11-21 明确要求：宁可多几个请求，也要随时切回来都是现成的）；
+- 落缓存走 `mergeRefreshedKlines(bars, recallKlines(key))` —— 只换重叠段，**别把翻旧页补出来的长历史截短**；
+  effect 卸载（人切走了）也照样落库，只是不再排下一个。
+
+**配套**：`klineCache` 的 `MAX_ENTRIES` 6 → **16**（≥ 一整条周期条），新增 `klineFetchedAt(key)`（只读、
+不刷 LRU）；`KLINE_FRESH_MS` 15s → **60s**（与预热同口径 ⇒ 切到暖过的周期一个请求都不发）。
+
+**验证**（真链路，无头 Chrome + CDP，脚本 `desktop/.workbuddy/tmp/verify-kline-warm-cdp.mjs`）：
+Gate 永续 BTC_USDT，8 个 chip：冷启 0.37s 首屏 15m → 1.98s 起每 1.5s 一个周期，11.5s 铺完 1m/5m/30m/1h/4h/1d/7d，
+**15m 全程只被首屏取过一次**；第二轮每个周期 **60.0~60.2s** 后重暖（`WAIT_MS=80000` 那次实测）；
+点「1m」→ **没有整段请求**（命中缓存）、只出现 `limit=1` 的末根轮询。8 条断言全过。
+纯逻辑用例：`.workbuddy/tmp/verify-kline-warm.mjs`（12 条，含退避/并列/容量/不截短历史）。
+
+⚠️ 脚本坑：`const URL = ...` 会**遮蔽全局 `URL` 类** ⇒ `new URL(u)` 抛错被自己的 try/catch 吞掉，
+现象是「一条请求都没记到」。常量改名 `PAGE_URL` 即可。
