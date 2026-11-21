@@ -86,6 +86,12 @@
   ⇒ 设置页 `probeFailure` 折成「连接超时」。取消链：withTimeout → `awaitText` 的
   `invokeOnCancellation { cancel() }` → OkHttp `call.cancel()`。**只动探测**：数据请求仍是
   OkHttp 的 30s callTimeout（`ping()` 借道 probeFutures、会顺带吃到 5s —— 它当前无生产调用点）。
+- ❗**现货探测是「首答即回填」**（2026-11-21，与桌面端同）：`probeSpot` 不再 `awaitAll()` 等齐取 min，改用
+  `data/remote/ProbeRace.kt` 的 `firstSuccess(attempts)` —— supervisorScope + Channel，**首个成功立刻返回**、
+  其余 job 取消（取消经 `awaitText` 的 `invokeOnCancellation` 落到 OkHttp `call.cancel()`）；**全挂抛第 0 个**
+  （首选域）的异常；空清单抛 IAE。单测 `SpotProbeRaceTest` 7 例，用虚拟时钟断「整行耗时 = 最快那条，不是最慢那条」。
+  ⚠️ 两个坑：`TestScope.currentTime` 要 `import kotlinx.coroutines.test.currentTime` + `@OptIn(ExperimentalCoroutinesApi::class)`；
+  **别断言异常 `===` 原对象**（协程的栈回溯恢复会复制异常），断类型与 message。
 
 ## 持仓量副图（OI，0.1.16 批）
 - 口径与桌面端对齐（见 desktop.md「持仓量副图」）：永续专属，四家源（Gate / 币安系 / OKX / Bybit）

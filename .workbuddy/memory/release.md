@@ -81,7 +81,7 @@
 - **发版红了的补救**：`release` job 是 `needs: build`，任一平台构建挂 ⇒ 通道**不被污染**（仍是上一版，实测）；
   改完重推即可 —— `git push` 不通时走 refs API 改 tag（skill `tauri-gh-release-verify` 第五节第 8 条）。
 - 已用掉的 tag：`0.9.27`、`0.9.28`、`0.9.29`、`0.9.30`、`0.9.31`、`0.9.32`、`0.9.33`、`0.9.34`、`0.9.35`、`0.9.36`、`0.9.37`、`0.9.38`、`0.9.39`、`0.9.40`、`0.9.41`、`0.9.42`、`desktop-v0.1.3`、`desktop-v0.1.4`、`desktop-v0.1.5`、`desktop-v0.1.6`、`desktop-v0.1.7`、`desktop-v0.1.8`、`desktop-v0.1.9`、`desktop-v0.1.10`、`desktop-v0.1.11`、`desktop-v0.1.12`、`desktop-v0.1.13`、`desktop-v0.1.14`、`desktop-v0.1.15`、`desktop-v0.1.16`、`desktop-v0.1.17`、`desktop-v0.1.18`、`desktop-v0.1.19`、`desktop-v0.1.20`、`desktop-v0.1.21`、`desktop-v0.1.22`、`desktop-v0.1.23`、`desktop-v0.1.24`、`desktop-v0.1.25`、`desktop-v0.1.26`、`desktop-v0.1.27`、`desktop-v0.1.28`、`desktop-v0.1.29`、`desktop-v0.1.33`、`desktop-v0.1.34`、`0.9.47`、`desktop-v0.1.35`、`0.9.48`、`0.9.49`、`0.9.50`、`desktop-v0.1.36`、`desktop-v0.1.37`、`desktop-v0.1.38`、`0.9.51`、`desktop-v0.1.39`、`0.9.52`、
-  `desktop-v0.1.40`、`0.9.53`、`0.9.54`、`desktop-v0.1.41`、`desktop-v0.1.42`。
+  `desktop-v0.1.40`、`0.9.53`、`0.9.54`、`desktop-v0.1.41`、`desktop-v0.1.42`、`0.9.76`、`desktop-v0.1.71`。
   发版记录：`0.9.26`/`desktop 0.1.2`（通道模型上线）→ `0.9.27`/`desktop 0.1.3`（悬浮窗 236 + 测速排序修复）→
   `desktop 0.1.4`（发现新版自动下载 + 下完提示安装）→ `desktop 0.1.5`（悬浮窗置顶改事件驱动，纠正延迟 ms 级）→
   `0.9.28`/`desktop 0.1.6`（行情来源扩建 HTX/Bitunix、币安系 6→2；桌面端图标重做 + 面板重构）→
@@ -1146,3 +1146,45 @@ CI **42354514794** 绿（同分支连推的前两条 CI 被 concurrency 取消�
 推送走 `.workbuddy/tmp/api-push-0948.py`（2 次，`--parent` 传完整 40 位远端 SHA，均带
 `PYTHONIOENCODING=utf-8`）；tag 用 `tag-0168.py`（先断言 tree 一致）。
 - 用掉的 tag 追加：`desktop-v0.1.68`。
+
+## desktop 0.1.71 + android 0.9.76（双端同发，2026-11-21 15:29 CST / 07:29 UTC）
+
+两端各带「现货测速首答即回填」，桌面端另有线宽与选中态调整：
+
+- **双端测速竞速**：一家 = 一串主机（币安 6 个），旧的 `Promise.all` / `awaitAll` 要等整条链回齐才回填，
+  而显示值取 min ⇒ 币安那行永远卡到 ~5.1s 才亮、数字却只有几百 ms。改「首个成功立刻回填、其余取消」，
+  桌面新增 `firstReachable`、App 新增 `ProbeRace.firstSuccess`；桌面探针同时从 24h 行情换成 `probe()`（ping），
+  与 App 的 `pingPath()` 同口径。全挂仍报首选域原因。
+- **桌面线宽**：最新价虚线与划线 2px → 1.5px（`W_LAST_PRICE` / `W_DRAW_LINE` 两常量），虚线 `[5,4] → [4,3]`。
+- **桌面选中态**：划线区删掉 ✕，退出选中只剩「点画布空白 / Esc」；空白判据挪到 `belowMain` 之前（副图与时间轴
+  原先早退，点它们没反应）。
+- **Android 价格签层级**：`56fd5c8`（11-15 修的，一直没发出去）—— 右轴价格标按 priority 落笔，
+  长按读数（5）压在最新价（4）之上。
+
+提交链（本地 → 远端）：
+- `a306f90` fix(desktop 测速) → `b9b91dd`
+- `0aece8e` fix(desktop 线宽/选中) → `9dd6a85`
+- `7c7b76f` fix(android 测速) → `f05dc6f`
+- `1998710` chore(release) → `cc723db`（tag `0.9.76` / `desktop-v0.1.71` 同指此 commit）
+
+工作流：Release（Android）**44880499419** 绿 3m23s、Desktop Release **44880506479** 三 job 全绿 7m54s、
+CI **44880472026** 绿（同分支连推的前三条 CI 被 concurrency 取消，属正常）。
+
+通道验收：
+- 桌面 `desktop-latest`：id/created_at 原地不变（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.71
+  无旧版残留；`latest.json` 0.1.71（pub_date `2026-11-21T07:37:45.683Z`）；
+  exe **2832222**、dmg **4461025**、mac app.tar.gz **4381067**；两平台内联签名 == `.sig` 文件，
+  解一层 keyid `RUQiawMZLl32`（`226b03192e5df60b`）。
+- Android `android-latest`：id/created_at 原地不变（398798258 / 2026-09-29T03:22:14Z），只有
+  `market-monitor-0.9.76.apk`（**11235972**，与 0.9.75 同尺寸但 digest 不同）+ `.sha256`
+  （asset digest `893a7a25…` == 边车）；CI `本次版本号：0.9.76`、`apk cert sha256: cf2e20c7…52f034` == 固定发布密钥。
+- 包内证据：CI vite 指纹 `index-DWgusliY.js 340.82` / `index-DcE0kAte.css 53.92`（两平台 job 一致）
+  == 本地 `npm run build`。
+- ⚠️ **比签名时别再 base64 一层**：通道上 `.sig` 的内容本身就是 base64(minisign 文本)，与 `latest.json`
+  的 `signature` 逐字相等。多套一层会得到「manifest 432 / file 576」的假失败（本轮先误判过一次）。
+
+✅ 打 tag 前：桌面 `tsc --noEmit` + `vite build` 绿；Android 单测全绿、`:app:assembleDebug` 绿（BuildConfig 已 88/0.9.76）。
+
+推送走 `.workbuddy/tmp/api-push-0948.py`（4 次，`--parent` 传完整 40 位远端 SHA，均带 `PYTHONIOENCODING=utf-8`）；
+tag 用 `.workbuddy/tmp/tag-0976-0171.py`（先断言 tree 一致，双 tag 一个脚本打完）。
+- 用掉的 tag 追加：`0.9.76`、`desktop-v0.1.71`。
