@@ -731,3 +731,26 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
   `MA分析 / EMA分析` 文字动作；sheet 用 `family` 渲染标题、档位名、颜色、目录、空态与表尾。
 - 单测 433 例（+5 例 MA：sma 末值 / 无预热段 / 自动名互斥 / 两族隔离 / tick 三态）。
 - MuMu 实测：MA 17/28 档、画线、清空 MA 不影响 EMA 旧线；MA 线在 EMA 面板里不被认领。
+
+## 右侧不留价签列：绘图铺满、价签浮在图上（2026-11-21，与桌面端同批）
+
+用户口径：「右侧不再空出一块放价格签，将图表填充过来，价格签是悬浮在图表上」。
+
+- `ChartGeo.of`：`plotWidth = max(1f, size.width)` —— 原来扣掉 `AXIS_LABEL_WIDTH_DP = 58f`；
+  那个常量整档删掉，换成文件顶层 `AXIS_GUTTER_DP = 2f`（价签贴边留白），`ChartGeo.labelWidthPx` 字段也删了（本来就没人读）。
+- 四类右端文字全部**右对齐贴边**，各自量自己的宽再算 x：
+  `PriceTag`（行情价签：最新价 / 极值 / 十字光标）、`LineBadges`（划线价牌：`plotWidthPx - chipW - AXIS_GUTTER_DP`，
+  原来独立 6dp 的 `LINE_BADGE_RIGHT_INSET_DP` 一起并入）、`AxisLabel`（主图价格刻度，改成 `rightPx` 入参）、
+  `SubAxisLabels`（副图刻度，逐条量宽）；线 / 网格 / 蜡烛画到 `plotWidthPx` 就是画布最右，牌子盖住末端。
+- 右上角两枚叠加标（划线眼睛、复位标）跟着挪到真正的右缘，注释里「落在 58dp 刻度列里、不压最新蜡烛」已作废。
+- 命中 / 手势本来就按 `plotWidthPx` 换算（`position.x / plotWidthPx`、`indexAt`），改宽度后天然一致；
+  `timeLabelPlacements` 会把标签夹进 `[0, plotWidth - labelW]`，不会溢出。
+
+**验证**：`JAVA_HOME=~/.jdks/ms-17.0.19 ./gradlew :app:testDebugUnitTest` 全绿（compiled + 单测 0 失败）。
+⚠️ 这轮**没有真机/模拟器验收**：`adb connect 127.0.0.1:16385` 后 `adb devices` 为空（模拟器没起，沙箱也起不了）。
+要看图得让用户手动开 MuMu 再跑一次截图。
+
+⚠️ Kotlin 里 `ChartGeo` 是 private、它的 companion 常量只能写 `ChartGeo.X` 引用；
+第一次就是漏了前缀导致 `Unresolved reference` —— 常量干脆提到文件顶层（`AXIS_GUTTER_DP`），全文件直接用。
+⚠️ 连跑两次 Gradle 各 ~6 分钟；`-q` 成功时**一行输出都没有**（只有 `tail` 自己偶尔吐的 xargs 断言噪声），
+判成败要看 `app/build/test-results/testDebugUnitTest/*.xml` 里的 `failures="0" errors="0"`。
