@@ -63,10 +63,12 @@ import {
 import {
   isKlineFresh,
   klineCacheKey,
+  klineFetchedAt,
   mergeRefreshedKlines,
   recallKlines,
   rememberKlines,
 } from '../lib/klineCache';
+import { planWarm, WARM_GAP_MS, type WarmSlot } from '../lib/klineWarm';
 import { Sparkline } from '../hooks/useSparks';
 import { useDirectConnection } from '../hooks/useDirectConnection';
 import { useDrawings } from '../hooks/useDrawings';
@@ -455,6 +457,78 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     if (candlesKey == null || candlesKey !== klineKey || candles.length === 0) return;
     rememberKlines(candlesKey, candles);
   }, [candlesKey, klineKey, candles]);
+
+  /**
+   * 周期条上**其它**周期的后台预热（调度规则见 `lib/klineWarm`）。
+   *
+   * 为什么要有这一层：切周期慢的根子不是网络，是「别的周期根本没有数据」——
+   * 缓存只记看过的那几个（默认周期条就有 8 个 chip），冷启动的切换必然要等一次完整往返。
+   * 这里按 60s 一轮把每个周期各自取一次写进缓存，切过去就是命中、同帧上屏；
+   * 当前周期跳过（它自己有 2s 末根链路），同一时刻只发一个请求、相邻两次隔 `WARM_GAP_MS`，
+   * 冷启时约十几秒把整条铺完，之后按各自的到期时间错开。
+   *
+   * 窗口不可见时**照跑**（用户口径：宁可多打几个请求，也要「随时切回来都是现成的」）；
+   * 换标的 / 换源 / 改周期列表都会重建队列，在飞的旧请求靠 `alive` 丢弃。
+   */
+  useEffect(() => {
+    if (!market || !symbol || intervals.length === 0) return;
+    let alive = true;
+    let timer = 0;
+    /** 本帧内失败过的周期：缓存只记「成功取到的时刻」，失败得自己记（退避用）。 */
+    const failed = new Map<string, number>();
+
+    const slots = (): WarmSlot[] =>
+      intervals.map((iv) => ({
+        interval: iv,
+        fetchedAt: klineFetchedAt(klineCacheKey(market, symbol, source, iv)) ?? 0,
+        failedAt: failed.get(iv) ?? 0,
+      }));
+
+    const schedule = (waitMs: number) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(tick, Math.max(0, waitMs));
+    };
+
+    const tick = () => {
+      if (!alive) return;
+      const plan = planWarm(slots(), Date.now(), interval);
+      if (plan == null) return;
+      const wait = plan.dueAt - Date.now();
+      if (wait > 0) {
+        schedule(wait);
+        return;
+      }
+      const target = plan.interval;
+      const key = klineCacheKey(market, symbol, source, target);
+      fetchKlines(market, symbol, target, fastBars)
+        .then((bars) => {
+          // 取回来是空的（这个周期本来没数据 / 源抽风）也算失败：否则它会一直「最饿」，
+          // 每 1.5s 被选中一次 —— 变成打接口的死循环
+          if (bars.length === 0) {
+            if (alive) failed.set(target, Date.now());
+            return;
+          }
+          failed.delete(target);
+          // 人切走了（effect 已卸载）也照样落缓存：这一份数据本身是有效的，
+          // 丢掉等于下次再打一遍同一个请求。
+          // 与切换时的核对同口径：只换重叠段，缓存里更老的历史（翻旧页补回来的）原样保留
+          rememberKlines(key, mergeRefreshedKlines(bars, recallKlines(key)));
+        })
+        .catch(() => {
+          if (alive) failed.set(target, Date.now());
+        })
+        .finally(() => {
+          if (alive) schedule(WARM_GAP_MS);
+        });
+    };
+
+    // 首拍让给当前周期的首屏请求：它没回来之前别抢带宽
+    schedule(WARM_GAP_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [market, symbol, source, interval, intervals, fastBars]);
 
   /**
    * 「时间轴快够到已加载的最老一根了」→ 往前补一页（画布逐帧上报，这里同步去重）。
