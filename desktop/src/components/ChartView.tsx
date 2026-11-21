@@ -337,11 +337,17 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     setInterval_(firstSupported(intervals));
   }, [interval, intervals]);
 
-  // 切换标的/周期：先看缓存（切回来 = 同步上屏、零等待），再按新鲜度核对最新一段。
+  // 切换标的/周期：**双段式上屏** —— 先把旧图撤掉、盖上骨架 + 「加载中」遮罩，
+  // 最新这段回来后才整图上屏。只有一种情况跳过第一段：`KLINE_FRESH_MS`（5s）内刚取过，
+  // 那条路径根本不发请求、手上就是最新的（来回对比两个周期时不闪）。
+  //
+  // 为什么不再「先铺缓存、再静默替换」：缓存常常是几十秒前的那段，末几根与此刻的最新价
+  // 对不上；先画上去再自己变一次，看着像图在抽风。多等一次往返反而是明确的。
+  // 缓存从此只当**退路**：请求失败 / 回来是空的，拿它兜底（见下），总比空图或一直转圈强。
   // `reloadSeq` 只为「重新加载」按钮服务。
   //
-  // 用 layout effect 而不是 effect：换周期必须**在同一帧里**把蜡烛换掉。缓存命中时若等到
-  // 被动 effect 才换，画布会先用新周期的坐标画上一段的蜡烛（一帧错轴、时间轴标签也错）。
+  // 用 layout effect 而不是 effect：换周期必须**在同一帧里**把蜡烛换掉。否则画布会先用
+  // 新周期的坐标画上一段的蜡烛（一帧错轴、时间轴标签也错）。
   useLayoutEffect(() => {
     if (!market || !symbol || klineKey == null) {
       setCandlesKey(null);
@@ -351,11 +357,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     }
     let alive = true;
     const cached = recallKlines(klineKey);
-    // 旧图立刻撤掉、遮罩立刻盖上：这一段里画布画的是骨架（见 KlineCanvas 的 draw）。
-    // 命中缓存就没有这一段 —— 图上直接是刚才那一张，随后静默换成核对过的最新数据。
+    // 5s 内刚取过就不用打接口：末几根由 2s 的实时链路追平，图上没差别。
+    // 超了就走加载态 —— 宁可多等一次往返，也不拿过期的蜡烛顶在前面。
+    const fresh = cached != null && isKlineFresh(klineKey);
     setCandlesKey(klineKey);
-    setCandles(cached ?? []);
-    setLoad({ loading: cached == null, failed: false, reason: '' });
+    setCandles(fresh && cached ? cached : []);
+    setLoad({ loading: !fresh, failed: false, reason: '' });
     setWarmGaveUp(false);
     // 换目标 = 上一段的历史翻页全部作废；旧页在飞也让它自生自灭（epoch 对不上不落地）
     const older = olderRef.current;
@@ -364,14 +371,15 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     older.requestedOldest = 0;
     older.failedAt = 0;
     older.epoch += 1;
-    // 刚取过就不再打接口：这十几秒里最新那几根由 2s 的实时轮询追平，
-    // 于是「两个周期来回切」既不等待、也不产生请求
-    if (cached != null && isKlineFresh(klineKey)) return;
+    // 刚取过就不再打接口（见上 `fresh`）
+    if (fresh) return;
     fetchKlines(market, symbol, interval, fastBars)
       .then((bars) => {
         if (!alive) return;
-        // 核对回来是空的（数据源抽风）：手上这份更可信，别把图清掉
+        // 核对回来是空的（数据源抽风）：退回缓存那份，总比空图好；
+        // 没有缓存就走下面的空态（「这个周期没有取到 K 线」）
         if (bars.length === 0 && cached != null) {
+          setCandles(cached);
           setLoad({ loading: false, failed: false, reason: '' });
           return;
         }
@@ -380,11 +388,16 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         setLoad({ loading: false, failed: false, reason: '' });
       })
       .catch((error: unknown) => {
-        // 有缓存就留着它：图上那份仍然有效、最多差几根，遮罩比旧图更吓人
-        if (!alive || cached != null) return;
-        // 失败也要把遮罩撤掉，否则一直是「加载中」，看着像卡死了（那时给的是「重新加载」）
+        if (!alive) return;
+        // 失败：有缓存就退回它（过期几根也比一块空图 + 「重新加载」更接近真相），
+        // 没有才给失败提示 —— 那时遮罩必须撤掉，否则一直是「加载中」，看着像卡死了。
         // reason 一路带出来：各家业务码（如 Bitget 400171 参数非法）与「网络不通」是两种病，
         // 提示里只说「网络或数据源不通」会把能自查的线索吞掉（2026-10-22 的 Bitget 周期码 bug 即如此）
+        if (cached != null) {
+          setCandles(cached);
+          setLoad({ loading: false, failed: false, reason: '' });
+          return;
+        }
         setLoad({ loading: false, failed: true, reason: errorText(error) });
       });
     return () => {
@@ -463,11 +476,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    *
    * 为什么要有这一层：切周期慢的根子不是网络，是「别的周期根本没有数据」——
    * 缓存只记看过的那几个（默认周期条就有 8 个 chip），冷启动的切换必然要等一次完整往返。
-   * 这里按 60s 一轮把每个周期各自取一次写进缓存，切过去就是命中、同帧上屏；
+   * 这里按 60s 一轮把每个周期各自取一次写进缓存：切换那一发若失败/回来是空的，
+   * 手上有整段可以退守（见取数 effect），5s 内来回对比也能直接上屏；
    * 当前周期跳过（它自己有 2s 末根链路），同一时刻只发一个请求、相邻两次隔 `WARM_GAP_MS`，
    * 冷启时约十几秒把整条铺完，之后按各自的到期时间错开。
    *
-   * 窗口不可见时**照跑**（用户口径：宁可多打几个请求，也要「随时切回来都是现成的」）；
+   * 窗口不可见时**照跑**（用户口径：宁可多打几个请求，也别让切换撞上接口抖动时无货可退）；
    * 换标的 / 换源 / 改周期列表都会重建队列，在飞的旧请求靠 `alive` 丢弃。
    */
   useEffect(() => {
