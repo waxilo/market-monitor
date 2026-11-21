@@ -1058,8 +1058,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                     aria-pressed={lineBadgeVisible(selectedLine)}
                     title={
                       lineBadgeVisible(selectedLine)
-                        ? '隐藏这条线的价位牌（右轴那一列的价格签；只藏价签，线本身还在）'
-                        : '显示这条线的价位牌（右轴那一列的价格签）'
+                        ? '隐藏这条线的价位牌（图表右侧那枚悬浮的价格签；只藏价签，线本身还在）'
+                        : '显示这条线的价位牌（图表右侧那枚悬浮的价格签）'
                     }
                     onClick={() =>
                       drawings.setPriceLineBadge(selection.index, !lineBadgeVisible(selectedLine))

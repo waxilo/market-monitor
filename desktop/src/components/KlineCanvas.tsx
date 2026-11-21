@@ -50,7 +50,7 @@ import {
   type SubPaneKind,
 } from '../lib/chartSeries';
 import {
-  AXIS_W,
+  AXIS_GUTTER,
   chartHeights,
   READOUT_LINE,
   READOUT_PAD,
@@ -686,7 +686,9 @@ export function KlineCanvas({
     ctx.textBaseline = 'middle';
     const p = readPalette();
 
-    const plotW = Math.max(1, cssW - AXIS_W);
+    // 绘图宽 = 画布宽：右轴那一列不再扣掉（2026-11-21 用户：右侧不再空出一块放价签，
+    // 图表铺满，价签浮在图上 —— 见 `drawBadge` 与 `AXIS_GUTTER`）。
+    const plotW = Math.max(1, cssW);
 
     /**
      * 数据还没到（换标的 / 换周期 / 换数据源之后的那一段）：画**骨架**。
@@ -851,7 +853,7 @@ export function KlineCanvas({
         ctx.lineWidth = W_DRAW_LINE;
         hline(ctx, 0, plotW, y);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
-        // 告警线红底纸色字、普通画线黄底深字。价位牌在右轴那一列（见「价格标」那段）。
+        // 告警线红底纸色字、普通画线黄底深字。价位牌浮在图表右侧（见「价格标」那段）。
         if (line.note) {
           noteChips.push({
             text: line.note,
@@ -925,7 +927,7 @@ export function KlineCanvas({
     }
 
     // ── 可见区间最高 / 最低的价线 ──
-    // 从极值那一根拉一条虚线到右轴（币安那张图的画法）：左端咬住极值那根蜡烛、右端接上轴上的价签，
+    // 从极值那一根拉一条虚线到右缘（币安那张图的画法）：左端咬住极值那根蜡烛、右端接上那枚价签，
     // 一眼看出「这个数字说的是图上哪个点」。所以它比最新价那条更淡、也不横贯整张图 ——
     // 左边那半张图不该被两条新线切碎。
     const drawExtremeLevel = (index: number, price: number) => {
@@ -944,41 +946,13 @@ export function KlineCanvas({
     // 备注牌**最后盖章**：牌心压在线 y 上，实心牌把线盖掉一截 ⇒ 线看着从牌里穿过去。
     // 放在最新价虚线之后，是为了让牌面永远干净（牌上不许有别的线划过去）。
     //
-    // 划线自己的价位牌**不在这里**：它和最新价 / 极值 / 十字光标一起画进右轴那一列
+    // 划线自己的价位牌**不在这里**：它和最新价 / 极值 / 十字光标一起画在图表右侧（悬浮）
     // （2026-11-15 用户：不和其他价签分开放），见下面「价格标」那段。
     // 备注牌仍在左端（图上一眼从左边读起）。
     for (const chip of noteChips) {
       drawLineNote(ctx, chip.text, chip.x, chip.y, chip.fg, chip.bg, plotW, mainTop, mainBottom);
     }
     ctx.restore();
-
-    // 没有价签的划线：补画右轴那一列（2026-11-21 用户「这个线如果没有价格签，也应该是贯穿图表的」）。
-    //
-    // 主图的绘制被裁到 `plotW`（右轴那 58px 是价签的地盘），所以一条线在画布上止于价签左缘：
-    // 有线价签时它接上那块牌子、看着是连贯的；**价签被关掉时**那里就空出一截，线像被剪断
-    // （用户带图报的就是这个）。所以这里在裁剪之外补一段 `plotW → cssW`。
-    // 同高若有别的价签（最新价 / 极值 / 十字光标），价签在下面「价格标」那段才画、会盖住这一段；
-    // 划线自己的价签同理 —— 但这类线本来就没有价签，所以不用再判。
-    for (const line of pl) {
-      if (lineBadgeVisible(line)) continue;
-      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
-      if (y < mainTop || y > mainBottom) continue;
-      ctx.strokeStyle = line.alert ? p.down : p.line;
-      ctx.lineWidth = W_DRAW_LINE;
-      hline(ctx, plotW, cssW, y);
-    }
-    // 选中刻度的右端跟着挪到画布最右（主图那段画在 `plotW - 1`，被裁在这里看不到）：
-    // 线既然贯穿到头，刻度就该在真的端点，否则它悬在线中间、像一道多余的记号。
-    const selLine = selPrice >= 0 ? pl[selPrice] : undefined;
-    if (selLine && !lineBadgeVisible(selLine)) {
-      const y = yOf(toFraction(mainR, selLine.price), mainTop, mh);
-      if (y >= mainTop && y <= mainBottom) {
-        ctx.strokeStyle = selLine.alert ? p.down : p.line;
-        ctx.lineWidth = W_DRAW_LINE;
-        const ly = Math.round(y) + 0.5;
-        vline(ctx, cssW - 1, ly - 5, ly + 5);
-      }
-    }
 
     // ── 副图：分隔线 + 零轴 + 柱 + 线 ──
     s.subPanes.forEach((pane, k) => {
@@ -1054,6 +1028,9 @@ export function KlineCanvas({
     // 副图的指标刻度不在此列，见下。
 
     // 副图刻度：每块只取首尾两条，块本来就矮
+    //
+    // 与主图价签同一套：**右对齐、贴在画布右边缘**（右轴不再占一列）。刻度没有底牌，
+    // 所以淡淡的压在柱子上 —— 这也是币安 / TradingView 在窄屏上的取舍（读数优先于柱子）。
     s.subPanes.forEach((pane, k) => {
       const range = subRs[k];
       const paneTop = mainBottom + k * SUB_PANE_H + SUB_READOUT_H;
@@ -1064,25 +1041,31 @@ export function KlineCanvas({
         const y = yOf(toFraction(range, value), paneTop, paneH);
         if (Math.abs(y - lastTickY) < AXIS_MIN_GAP) continue;
         lastTickY = y;
+        ctx.textAlign = 'right';
         ctx.fillText(
           // 成交量与持仓量都是大额（几亿起步），走 K/M/B 缩写；其余指标的小数刻度照旧
           pane.kind === 'VOLUME' || pane.kind === 'OI' ? formatCompact(value) : value.toFixed(2),
-          plotW + 4,
+          cssW - AXIS_GUTTER - 2,
           y,
         );
+        ctx.textAlign = 'left';
       }
     });
 
-    // ── 价格标（划线价牌 / 极值 / 最新价 / 十字光标）：全贴在右轴这一列，与线同高 ──
+    // ── 价格标（划线价牌 / 极值 / 最新价 / 十字光标）：全贴画布右缘、浮在图上，与线同高 ──
     // 排在刻度之后，盖住同高刻度。
     const drawBadge = (text: string, centerY: number, bg: string, fg: string) => {
       const w = ctx.measureText(text).width + 8;
       const h = 14;
       const y = clampNum(centerY - h / 2, mainTop, Math.max(mainTop, mainBottom - h));
+      // **右对齐、贴在画布右边缘**（2026-11-21 用户：右轴不再占一列，价签浮在图表上）：
+      // 图形铺满整宽，牌子压在最右这几根蜡烛之上 —— 实底牌心保证读数照样清楚，
+      // 线（最新价 / 极值 / 划线）画到 `plotW` 也就是画布最右，末端自然被牌子盖住、看着是「接着」的。
+      const left = Math.max(0, cssW - AXIS_GUTTER - w);
       ctx.fillStyle = bg;
-      roundRect(ctx, plotW + 1, y, w, h, 3);
+      roundRect(ctx, left, y, w, h, 3);
       ctx.fillStyle = fg;
-      ctx.fillText(text, plotW + 5, y + h / 2 + 0.5);
+      ctx.fillText(text, left + 5, y + h / 2 + 0.5);
     };
     // **不在可视区里的不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
     // 看着像就在那个价上。
@@ -1380,7 +1363,8 @@ export function KlineCanvas({
 
     const geom = () => {
       const rect = canvas.getBoundingClientRect();
-      return { rect, plotW: Math.max(1, rect.width - AXIS_W) };
+      // 与 draw 同口径：绘图宽 = 画布宽（命中 / 缩放 / 平移都按这个换算）
+      return { rect, plotW: Math.max(1, rect.width) };
     };
 
     /** 主图上下边界 —— 直接取 heights，别再手写一遍（手写过就会跟 draw 分叉）。 */
