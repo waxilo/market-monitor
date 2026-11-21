@@ -952,6 +952,34 @@ export function KlineCanvas({
     }
     ctx.restore();
 
+    // 没有价签的划线：补画右轴那一列（2026-11-21 用户「这个线如果没有价格签，也应该是贯穿图表的」）。
+    //
+    // 主图的绘制被裁到 `plotW`（右轴那 58px 是价签的地盘），所以一条线在画布上止于价签左缘：
+    // 有线价签时它接上那块牌子、看着是连贯的；**价签被关掉时**那里就空出一截，线像被剪断
+    // （用户带图报的就是这个）。所以这里在裁剪之外补一段 `plotW → cssW`。
+    // 同高若有别的价签（最新价 / 极值 / 十字光标），价签在下面「价格标」那段才画、会盖住这一段；
+    // 划线自己的价签同理 —— 但这类线本来就没有价签，所以不用再判。
+    for (const line of pl) {
+      if (lineBadgeVisible(line)) continue;
+      const y = yOf(toFraction(mainR, line.price), mainTop, mh);
+      if (y < mainTop || y > mainBottom) continue;
+      ctx.strokeStyle = line.alert ? p.down : p.line;
+      ctx.lineWidth = W_DRAW_LINE;
+      hline(ctx, plotW, cssW, y);
+    }
+    // 选中刻度的右端跟着挪到画布最右（主图那段画在 `plotW - 1`，被裁在这里看不到）：
+    // 线既然贯穿到头，刻度就该在真的端点，否则它悬在线中间、像一道多余的记号。
+    const selLine = selPrice >= 0 ? pl[selPrice] : undefined;
+    if (selLine && !lineBadgeVisible(selLine)) {
+      const y = yOf(toFraction(mainR, selLine.price), mainTop, mh);
+      if (y >= mainTop && y <= mainBottom) {
+        ctx.strokeStyle = selLine.alert ? p.down : p.line;
+        ctx.lineWidth = W_DRAW_LINE;
+        const ly = Math.round(y) + 0.5;
+        vline(ctx, cssW - 1, ly - 5, ly + 5);
+      }
+    }
+
     // ── 副图：分隔线 + 零轴 + 柱 + 线 ──
     s.subPanes.forEach((pane, k) => {
       const paneTop = mainBottom + k * SUB_PANE_H + SUB_READOUT_H;
