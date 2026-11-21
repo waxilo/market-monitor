@@ -917,9 +917,13 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
               两种面孔（互斥）：
               · 平时 = 选线型（水平线 / 直线，点一次进入、再点一次退出）+ 清空 + 锁定 + 眼睛 + 告警数；
-              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 价签 / 删除 / ✕）。
+              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 价签 / 删除）。
                 整块换掉而不是并排，是因为这两组动作天生冲突：一边在画新线、一边在改旧线，
-                并排放只会让人在同一行里同时看到两件不相干的事。 */}
+                并排放只会让人在同一行里同时看到两件不相干的事。
+
+              ❗**没有「✕ 取消选中」按钮**（2026-11-21 用户：选中态尾巴上那枚 ✕ 多余）：
+              退出选中只有两条路 —— **在图上空白处点一下**（含副图 / 时间轴，见 KlineCanvas 的
+              pointerdown）、或按 **Esc**。选中本来就是「临时看一眼」，不该再占一个按钮位。 */}
           <div className="sep" />
 
           <div className="bar-group">
@@ -927,8 +931,12 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
             {selection ? (
               <>
-                {/* 先报清是哪条：水平线读价位（那是它唯一的身份），直线报序号 */}
-                <span className="bar-label draw-target" title="当前选中的线（在图上单击另一条可换）">
+                {/* 先报清是哪条：水平线读价位（那是它唯一的身份），直线报序号。
+                    这里也是「怎么退出选中」的唯一提示 —— 点空白 / Esc，界面上没有按钮。 */}
+                <span
+                  className="bar-label draw-target"
+                  title="当前选中的线（在图上单击另一条可换；点空白处或按 Esc 取消）"
+                >
                   {selectedLineLabel}
                 </span>
                 <button
@@ -980,15 +988,6 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                   onClick={removeSelected}
                 >
                   <TrashIcon />
-                </button>
-                <button
-                  type="button"
-                  className="chip icon-only"
-                  title="取消选中（Esc）"
-                  aria-label="取消选中"
-                  onClick={() => setSelection(null)}
-                >
-                  ✕
                 </button>
               </>
             ) : (

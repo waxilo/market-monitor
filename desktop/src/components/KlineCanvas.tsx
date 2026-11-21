@@ -108,6 +108,20 @@ const TREND_MIN_DRAW_PX = 8;
 const TREND_HANDLE_R = 3.5;
 
 /**
+ * 「行情线」的粗细（CSS px）：最新价那条虚线、以及用户画的所有线（水平线 / 两点直线 / 预览）。
+ *
+ * 集中在这里是因为它们必须**同粗**（对价时靠这一层参照），而调粗细是视觉反馈的常规动作：
+ * 2 → 1.5（2026-11-21 用户「太粗」）。⚠️ 画布按 `devicePixelRatio` 缩放，2 CSS px 在 150%
+ * 屏上是 3 个物理像素 —— 别按「屏幕像素」直觉去估这里的数。
+ * 划线（1.5）现在与均线同粗；再细到 1 就会重演 2026-11-15 那次「压在 K 线上看丢」。
+ */
+const W_LAST_PRICE = 1.5;
+const W_DRAW_LINE = 1.5;
+
+/** 最新价虚线的疏密：跟着线宽一起收（2px 时代是 [5, 4]），细了之后长段看着更空。 */
+const LAST_PRICE_DASH = [4, 3];
+
+/**
  * 骨架网格的量程：**任取一段等距区间**即可 —— 网格的条数与间距由 `gridLines` 的 1-2-5 阶梯
  * 决定，取 (0,1) 恰好落成 6 条等距横线，就是一张「还没有数据的图」该有的样子。
  * 数值本身不参与任何绘制（骨架不画刻度数字），与 App ChartSkeleton 的 SKELETON_RANGE 同值。
@@ -832,17 +846,17 @@ export function KlineCanvas({
         const color = line.alert ? p.down : p.line;
         const selected = index === selPrice;
         if (selected) {
-          // 选中标记：**两端各一道短竖线**，线本身保持同一粗细。
+          // 选中标记：**两端各一道短竖线**，线本身保持同一粗细（[W_DRAW_LINE]）。
           // 原先加粗到 2px + 一层光晕（未选中却只有 1px），用户对价时会被画宽的那一圈带偏
-          // （2026-11-15）。现在所有划线本来就是 2px，选中只加两端刻度，粗细不再变化。
+          // （2026-11-15）。现在选中只加两端刻度，粗细与未选中时完全一致。
           const ly = Math.round(y) + 0.5;
           ctx.strokeStyle = color;
-          ctx.lineWidth = 2;
+          ctx.lineWidth = W_DRAW_LINE;
           vline(ctx, 0, ly - 5, ly + 5);
           vline(ctx, plotW - 1, ly - 5, ly + 5);
         }
         ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = W_DRAW_LINE;
         hline(ctx, 0, plotW, y);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
         // 告警线红底纸色字、普通画线黄底深字。价位牌在右轴那一列（见「价格标」那段）。
@@ -862,14 +876,14 @@ export function KlineCanvas({
     // 斜线读作「一条斜率」，颜色不必再分工。端点把手**只画在选中的那条上**：把手是
     // 「这条线现在能拖」的信号，没选中就没有能拖的理由（0.1.x 起先选中、后拖动）。
     ctx.strokeStyle = p.line;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = W_DRAW_LINE;
     tl.forEach((line) => {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       // 选中不改粗细、不加光晕：对齐靠的就是线本来的位置（见上面水平线同一口径），
       // 选中信号交给锚点把手（下面 `drawTrendHandle`），没选中就没有能拖的理由。
       ctx.strokeStyle = p.line;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = W_DRAW_LINE;
       infiniteLine(a.x, a.y, b.x, b.y);
       // 备注挂在**看得见的那个锚点**旁：A 被判出绘图区（线画到未来/过去很远）就换 B ——
       // 否则「给这条直线写了备注但图上找不到」。
@@ -881,7 +895,8 @@ export function KlineCanvas({
       // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）
       noteChips.push({ text: line.note, x: spot.x + 8, y: spot.y, fg: p.onAccent, bg: p.line });
     });
-    ctx.lineWidth = 2;
+    // 待定的两点直线预览也吃这个宽度（下面的 infiniteLine 用的是当前 ctx.lineWidth）
+    ctx.lineWidth = W_DRAW_LINE;
     const selectedTrend = selTrend >= 0 ? tl[selTrend] : undefined;
     if (!lock && selectedTrend) {
       for (const anchor of [selectedTrend.a, selectedTrend.b]) {
@@ -908,10 +923,11 @@ export function KlineCanvas({
     const lastColor = last.close >= last.open ? p.up : p.down;
     if (lastY >= mainTop && lastY <= mainBottom) {
       // 最新价线走涨跌色（与 App 一致）：它是「现在在哪儿」，而这一根的颜色就是最近的答案。
-      // 与划线同粗（2px）：这一条是现价的参照线，1px 时压在 K 线上容易看丢（2026-11-15 用户）。
+      // 与划线同粗（[W_LAST_PRICE] === [W_DRAW_LINE]）：这一条是现价的参照线，比 K 线本身细
+      // 就压不住背景、比划线粗又会抢戏。2026-11-15 曾加到 2（1px 看丢），2026-11-21 收回 1.5（太粗）。
       ctx.strokeStyle = lastColor;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 4]);
+      ctx.lineWidth = W_LAST_PRICE;
+      ctx.setLineDash(LAST_PRICE_DASH);
       hline(ctx, 0, plotW, lastY);
       ctx.setLineDash([]);
     }
@@ -1638,10 +1654,13 @@ export function KlineCanvas({
           return;
         }
       }
+      // 空白处 = 取消选中。**只看「没命中任何线」**，不管落在哪儿：主图空地、副图、时间轴、
+      // 右侧价格轴留白都算空白（2026-11-21 用户「点击空白直接去掉选中」—— 划线区那枚 ✕ 已删，
+      // 这里成了退出选中的主要入口，只认主图空地会让人觉得「点了没反应」）。
+      // 必须在 `belowMain` 之前：副图与时间轴本来是「只读区直接 return」，那样点它们就没反应了。
+      if (modelRef.current.selection) modelRef.current.onSelect(null);
       // 副图与时间轴：只读区，不参与拖拽
       if (belowMain(y)) return;
-      // 空白处 = 取消选中 + 拖画布
-      if (modelRef.current.selection) modelRef.current.onSelect(null);
       mode = 'pan';
       axis = null;
       accumX = 0;
