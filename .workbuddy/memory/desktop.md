@@ -1287,7 +1287,8 @@ EMA 面板泛化成**一族均线一处实现**，新增 MA 入口（周期条�
   effect 卸载（人切走了）也照样落库，只是不再排下一个。
 
 **配套**：`klineCache` 的 `MAX_ENTRIES` 6 → **16**（≥ 一整条周期条），新增 `klineFetchedAt(key)`（只读、
-不刷 LRU）；`KLINE_FRESH_MS` 15s → **60s**（与预热同口径 ⇒ 切到暖过的周期一个请求都不发）。
+不刷 LRU）；`KLINE_FRESH_MS` 15s → **60s**（当时与预热同口径 ⇒ 切到暖过的周期一个请求都不发）。
+⚠️ **这条口径当天晚些时候被推翻**：切周期改成双段式，`KLINE_FRESH_MS` 定在 **5s**，见下节。
 
 **验证**（真链路，无头 Chrome + CDP，脚本 `desktop/.workbuddy/tmp/verify-kline-warm-cdp.mjs`）：
 Gate 永续 BTC_USDT，8 个 chip：冷启 0.37s 首屏 15m → 1.98s 起每 1.5s 一个周期，11.5s 铺完 1m/5m/30m/1h/4h/1d/7d，
@@ -1297,3 +1298,31 @@ Gate 永续 BTC_USDT，8 个 chip：冷启 0.37s 首屏 15m → 1.98s 起每 1.5
 
 ⚠️ 脚本坑：`const URL = ...` 会**遮蔽全局 `URL` 类** ⇒ `new URL(u)` 抛错被自己的 try/catch 吞掉，
 现象是「一条请求都没记到」。常量改名 `PAGE_URL` 即可。
+
+## 切周期双段式加载（2026-11-21 晚，推翻「缓存先上屏」）
+
+**要求**（用户原话）：切周期若还要加载最新，不该直接展示已缓存的 K 线图，应该先「加载中」，最新这段回来才展示
+—— 整个周期的 K 线加载是**双段式**。
+
+**旧行为为什么不行**：命中缓存就同帧上屏，几十秒前那段先铺上去、随后静默换成最新，图在眼皮底下自己变一次，
+末几根还与旁边的最新价对不上；而「同帧上屏」本来是给「切周期慢」配的解药，预热之后已经不需要它顶着了。
+
+**改法**（只动桌面端。Android 一直是这套：`displayCandles` 在 `rawBase != baseOf(selected)` 时返回空列表 ⇒
+`ChartLoading` 骨架 + 遮罩，数据回来才落图）：
+- `ChartView` 取数 effect 里 `fresh = cached != null && isKlineFresh(klineKey)`：**只有 fresh 才把缓存放上屏**，
+  否则 `setCandles([])` + `setLoad({ loading: true })`（画布走 `n === 0` 的骨架分支）；
+- `KLINE_FRESH_MS` 60s → **5s**（≈ 两个实时节拍）：5s 内来回对比两个周期仍零等待、零请求，更旧的缓存不再顶前面；
+- 预热调度用**自己的** `klineWarm.WARM_FRESH_MS = 60s`，两者已解耦（别为了切换把预热也改小，会变成每 5s 全刷一遍）；
+- 缓存从此只当**退路**：请求失败 / 回来是空数组 → `setCandles(cached)`，没有缓存才弹「重新加载」空态；
+  旧 catch 里那句 `if (!alive || cached != null) return` 会把遮罩**永久留住**（loading 从不撤），一并修掉；
+- 加载态里 2s 实时帧不会污染：`applyLive` 遇到 `prev.length === 0` 直接 return。
+
+**代价（用户已知情）**：每次切周期都等一次往返，实测遮罩 ~0.3~0.6s（1m/limit=200，币安）。换来的是「看到的一定是最新」。
+
+**验收**：`desktop/.workbuddy/tmp/verify-two-phase-load-cdp.mjs` 13 条全过 —— 切 1m 先遮罩再上图、期间发 `1m/200`；
+5s 内点回 15m 无遮罩无整段请求；隔 6s 再切同一周期又先遮罩。截图 `two-phase-0-loading.png`（骨架+转圈，无蜡烛）。
+纯逻辑 `verify-kline-warm.mjs` 同步改成断言 5s 窗口 + 预热 60s 另算。
+
+⚠️ CDP 桩的坑：`Page.addScriptToEvaluateOnNewDocument` 在 document_start 跑时 `document.documentElement` 可能是 null，
+`observe(...)` 抛 TypeError 会**连带跳过后面装 fillRect 钩子那段**，现象是 `fills`/`loadingSeen` 永远 0
+（断言全在假通过/假失败）。观察根写 `document.documentElement || document`，两个 try 分开。
