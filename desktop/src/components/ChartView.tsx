@@ -2,7 +2,6 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   fetchKlines,
   fetchKlinesBefore,
-  fetchOpenInterest,
   nativeLadder,
   nativeMinutes,
   supportsOlderKlines,
@@ -62,12 +61,15 @@ import {
 } from '../lib/maAnalysis';
 import {
   isKlineFresh,
+  KLINE_FRESH_MS,
   klineCacheKey,
   klineFetchedAt,
   mergeRefreshedKlines,
   recallKlines,
   rememberKlines,
+  subscribeKlines,
 } from '../lib/klineCache';
+import { loadKlines, loadOpenInterest } from '../lib/klineStore';
 import { planWarm, WARM_GAP_MS, type WarmSlot } from '../lib/klineWarm';
 import { Sparkline } from '../hooks/useSparks';
 import { useDirectConnection } from '../hooks/useDirectConnection';
@@ -359,7 +361,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     const cached = recallKlines(klineKey);
     // 5s 内刚取过就不用打接口：末几根由 2s 的实时链路追平，图上没差别。
     // 超了就走加载态 —— 宁可多等一次往返，也不拿过期的蜡烛顶在前面。
-    const fresh = cached != null && isKlineFresh(klineKey);
+    // 还要求**根数够一屏**：缓存可能是面板写进来的、也可能短得连 MA 都算不出来。
+    const fresh = cached != null && cached.length >= fastBars && isKlineFresh(klineKey);
     setCandlesKey(klineKey);
     setCandles(fresh && cached ? cached : []);
     setLoad({ loading: !fresh, failed: false, reason: '' });
@@ -373,7 +376,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     older.epoch += 1;
     // 刚取过就不再打接口（见上 `fresh`）
     if (fresh) return;
-    fetchKlines(market, symbol, interval, fastBars)
+    // 走统一入口（`lib/klineStore`）：命中「刚被面板 / 预热刷新过」的缓存就不再发请求，
+    // 与面板扫描撞上时共用同一个 in-flight 请求。
+    loadKlines({ market, symbol, source, interval, want: fastBars, freshMs: KLINE_FRESH_MS })
       .then((bars) => {
         if (!alive) return;
         // 核对回来是空的（数据源抽风）：退回缓存那份，总比空图好；
@@ -472,6 +477,36 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
   }, [candlesKey, klineKey, candles]);
 
   /**
+   * 均线分析面板（或预热）刷新了这个周期 → **静默合并**进来（2026-11-21 用户口径）。
+   *
+   * 不盖遮罩、不动翻页历史，只把重叠段换成刚取回的那份：面板一轮扫描本来就会把
+   * 整条周期条各取一遍，它手里的当前周期比 2s 链路更权威（整段重取，连事后修正的成交量都带回来）。
+   * 用户看不到任何「重新加载」，而图上最后一根跟着准了。
+   *
+   * 只在**手上已有图**时合并：加载态里插队会让首屏那一段的落点变得不可预测
+   * （图会先被面板这份填上，随后自己的请求回来又整体换掉，反而闪一下）。
+   */
+  useEffect(() => {
+    if (klineKey == null) return;
+    return subscribeKlines((key, bars) => {
+      if (key !== klineKey) return;
+      setCandles((prev) => {
+        if (prev.length === 0) return prev;
+        const merged = mergeRefreshedKlines(bars, prev);
+        // 一模一样（同一段、同一首尾）就别造新数组：画布每次重绘都是白花的
+        if (
+          merged.length === prev.length &&
+          merged[0]?.timestamp === prev[0]?.timestamp &&
+          merged[merged.length - 1]?.timestamp === prev[prev.length - 1]?.timestamp
+        ) {
+          return prev;
+        }
+        return merged;
+      });
+    });
+  }, [klineKey]);
+
+  /**
    * 周期条上**其它**周期的后台预热（调度规则见 `lib/klineWarm`）。
    *
    * 为什么要有这一层：切周期慢的根子不是网络，是「别的周期根本没有数据」——
@@ -513,8 +548,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
         return;
       }
       const target = plan.interval;
-      const key = klineCacheKey(market, symbol, source, target);
-      fetchKlines(market, symbol, target, fastBars)
+      // 统一入口：与面板扫描撞上时搭同一趟车（面板正在飞这个周期就不重复打）。
+      // `freshMs: 0` —— 该不该取已经由 `planWarm` 判过，这里只管取。
+      loadKlines({ market, symbol, source, interval: target, want: fastBars, freshMs: 0 })
         .then((bars) => {
           // 取回来是空的（这个周期本来没数据 / 源抽风）也算失败：否则它会一直「最饿」，
           // 每 1.5s 被选中一次 —— 变成打接口的死循环
@@ -523,10 +559,8 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
             return;
           }
           failed.delete(target);
-          // 人切走了（effect 已卸载）也照样落缓存：这一份数据本身是有效的，
-          // 丢掉等于下次再打一遍同一个请求。
-          // 与切换时的核对同口径：只换重叠段，缓存里更老的历史（翻旧页补回来的）原样保留
-          rememberKlines(key, mergeRefreshedKlines(bars, recallKlines(key)));
+          // 人切走了（effect 已卸载）也照样落了缓存（在 store 里）：这一份数据本身是有效的，
+          // 丢掉等于下次再打一遍同一个请求。合并老段也在 store 里做，这里不再手动写。
         })
         .catch(() => {
           if (alive) failed.set(target, Date.now());
@@ -637,6 +671,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
     const timer = setInterval(() => {
       if (wsLive) return;
+      // 这一发**故意不走 `loadKlines`**：它只要「最新一根」用来追末根，
+      // 走统一入口会命中缓存、拿回整段（`bars[0]` 是最老的那根，直接画错），
+      // 而且每 2s 写一次缓存并触发订阅，白白让画布重绘。
       fetchKlines(market, symbol, interval, 1)
         .then((bars) => {
           if (!alive || bars.length === 0) return;
@@ -661,7 +698,9 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
     // 换标的 / 换周期时先清掉旧序列：上一段的持仓量画在新 K 线上就是一坨错线
     setOi(null);
     const load = () => {
-      fetchOpenInterest(market, symbol, interval, PAGE_BARS)
+      // 副图取数也走统一层（`lib/klineStore`）：OI 是独立接口、有自己的缓存，
+      // 10s 内切回同一个周期直接命中；同一时刻的并发（切周期瞬间的两次轮询）只打一次。
+      loadOpenInterest({ market, symbol, source, interval, want: PAGE_BARS })
         .then((series) => {
           if (alive) setOi(series);
         })

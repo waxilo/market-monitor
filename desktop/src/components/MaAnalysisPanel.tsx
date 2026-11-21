@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { fetchKlines, type Bar, type MarketType } from '../lib/api';
+import { type Bar, type MarketType } from '../lib/api';
+import { loadKlines } from '../lib/klineStore';
 import {
   analysisWindow,
   EMPTY_SCAN,
@@ -370,7 +371,19 @@ export function MaAnalysisPanel({
 
     const load = async (interval: string): Promise<Outcome> => {
       try {
-        return { interval, bars: await fetchKlines(market, symbol, interval, barCount) };
+        // 统一入口（`lib/klineStore`）：这一轮取回来的会落进周期缓存，切周期时直接就能用；
+        // 图表正在飞同一个周期时也搭同一趟车。
+        // `freshMs: 0` —— 「刷新」必须真的去取，命中缓存等于没刷；`notify` 让图表静默合并。
+        const bars = await loadKlines({
+          market,
+          symbol,
+          source,
+          interval,
+          want: barCount,
+          freshMs: 0,
+          notify: true,
+        });
+        return { interval, bars };
       } catch (error) {
         return { interval, reason: reasonOf(error) };
       } finally {
