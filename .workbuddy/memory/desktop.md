@@ -1351,3 +1351,50 @@ Gate 永续 BTC_USDT，8 个 chip：冷启 0.37s 首屏 15m → 1.98s 起每 1.5
 ⚠️ CDP 桩的坑：`Page.addScriptToEvaluateOnNewDocument` 在 document_start 跑时 `document.documentElement` 可能是 null，
 `observe(...)` 抛 TypeError 会**连带跳过后面装 fillRect 钩子那段**，现象是 `fills`/`loadingSeen` 永远 0
 （断言全在假通过/假失败）。观察根写 `document.documentElement || document`，两个 try 分开。
+
+## 周期数据只有一个来源：`lib/klineStore`（2026-11-21）
+
+**起因**（用户两句话）：
+① 「现在每个周期都有缓存，均线分析是不是可以基于这些缓存？周期和均线应该统一数据来源。
+   均线分析刷新时，刷新的数据图表上是否也可以用？」
+② 「指标取数、副图取数应该都从这个缓存取」。
+
+**改前是两条（实为五条）独立的取数链**：图表 `fetchKlines(fastBars 200~330)`、均线面板
+`fetchKlines(analysisWindow 500~1000)` 每 60s 扫整条周期条、周期预热 7 个周期、迷你走势
+`fetchKlines('1h', 24)`、持仓量副图 `fetchOpenInterest` 每 10s 整段重拉。面板那 8 个请求里，
+7 个正是预热刚暖过的 —— 同一份行情反复拉。
+
+**现在**：`loadKlines({ market, symbol, source, interval, want, freshMs, notify })`
+- 命中条件（`klineCache.canServeFromCache`，纯函数）：有数据 + **根数 ≥ want** + 没超 `freshMs`；
+- `want` 各自声明：图表 `fastBars`(200)、面板 `analysisWindow`(500)、迷你走势 24；
+  缓存够长就直接给（长的给短的用安全 —— 尾部对齐、末尾就是最新），**短的自己截尾**
+  （`useSparks` 必须 `bars.slice(-24)`，否则拿到 500 根、走势图形状就变了）；
+- `freshMs` 两档，别混：图表 5s（`KLINE_FRESH_MS`，末几根让 2s 链路追）、面板 0（「刷新」必须真取）；
+- 同 key **in-flight 去重**（`flying.want >= want` 搭车，不够就等它落地再取一次）；
+- 请求 `limit = max(want, 缓存已有长度)`，绝不拿 200 根去换 500 根；
+- 写回后 `notify: true`（面板传）→ 图表订阅 `subscribeKlines`，对**当前周期静默合并**
+  （`mergeRefreshedKlines`，不盖遮罩、不动翻页历史；prev 为空时不插队）。
+
+**`rememberKlines` 改成「只增不减」**：同一 key 现在有三个写者（首屏 200 / 补齐后的历史 / 面板 500），
+谁后写谁说话会把长的那份砍成短的。短的进来只换重叠段，更老的历史原样留着。
+`MAX_ENTRIES` 16 → **32**：面板一轮就把整条周期条灌进来，16 格会被它挤掉图表最近用的那几个。
+
+**持仓量副图**：`loadOpenInterest`（`lib/klineStore` 里独立的一份 Map + inFlight，
+key = kline 口径 + `|oi`，`OI_FRESH_MS = 10s`）。OI 是独立接口、不吃 K 线缓存；10s 新鲜度
+省的不是稳态轮询，而是**切周期/标的回来那一下**与并发去重。
+
+**⚠️ 2s 实时轮询那一发（`fetchKlines(..., 1)`）绝不能走 store**：它只要「最新一根」，
+走统一入口会命中缓存、拿回整段（`bars[0]` 是最老那根 ⇒ 图上直接画错），而且每 2s 写缓存 + 通知订阅。
+源码里留了注释钉住这件事。
+
+**验收**（`desktop/.workbuddy/tmp/verify-unified-store-cdp.mjs`，23 条全过）：
+打开面板 → 8 个周期各 1 条 `limit=500`；关掉面板 5s 内切周期 → **零请求、零遮罩**
+（缓存是刚取的最新一段，不违反双段式）；面板重扫期间图不出遮罩、不变空；迷你走势照常；
+持仓量直调两次 `sameRef === true`（命中缓存）。
+纯逻辑 `verify-kline-store.mjs` 24 条（命中三条件 / 只增不减 / 订阅通知 / merge 口径）。
+回归：双段式 13、蜡烛共线 5、价签悬浮 17、预热 13 —— 全绿。
+
+**⚠️ 这一轮最大的坑不在业务代码里**：CDP 脚本突然「零输出 + SIGTERM」，看着像 node 炸了。
+真因是 `spawn(chrome)` **继承了父进程的 stdout**，Chrome 不退出 ⇒ 管道永不 EOF ⇒
+`node x.mjs | tail` 一直等到超时被工具杀掉。`cdp-lib.mjs` 的 spawn 现在带 `stdio: 'ignore'`
+并在 `close()` 里 kill。以后再遇到「脚本零输出」，先怀疑管道/子进程，别怀疑业务。
