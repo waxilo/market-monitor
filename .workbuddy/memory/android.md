@@ -754,3 +754,41 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 第一次就是漏了前缀导致 `Unresolved reference` —— 常量干脆提到文件顶层（`AXIS_GUTTER_DP`），全文件直接用。
 ⚠️ 连跑两次 Gradle 各 ~6 分钟；`-q` 成功时**一行输出都没有**（只有 `tail` 自己偶尔吐的 xargs 断言噪声），
 判成败要看 `app/build/test-results/testDebugUnitTest/*.xml` 里的 `failures="0" errors="0"`。
+
+## 直线的编辑入口也收成把手 + 纵轴刻度条数自适应（2026-11-22，0.9.78）
+
+用户三条（同一轮）：「app 的纵坐标缩放，画的直线会漂移，和桌面端之前一样」/「app 端的直线两个点
+没选中时不展示，拖动一个点移动能改变角度，参考桌面端」/「移动端的纵坐标不显示间隔：8000，9000 这种」。
+
+**① 漂移的根因 = 线身可拖**。`drawDrawLines` 把两点向左右沿**延长到画布边界**，而命中是
+`nearestTrend` → `distanceToSegment`：斜线在屏幕上等于把画布斜切一条带子（抓取带 24dp）。
+已选中时纵向拖量程，起手压在线身上 → `TrendMode.MOVE` 整根拖走，而 `pricePan/priceZoom` 一格没动
+（与 2026-11-21 水平线那次同一个病）。改法：**两端 + 中点三枚把手**，
+`lineTouch(hit, selected, dragAllowed = onTrendGrip(...) != null)`；线身（含未选中）只 `Select`。
+
+- `TrendGrip { ANCHOR_A, ANCHOR_B, MID }`，`onTrendGrip(point, p1, p2, hitPx)` 纯函数：
+  **端点优先于中点**（短线段时中点必然也在圈里，而改角度才是主操作），半径 `TREND_GRIP_HIT = 20dp`
+  （比水平类那枚 18dp 宽一档：斜线上的点没有线身可借力）。
+- `TrendMode.ANCHOR`：被抓那端跟手、另一端用 `trendFixedAnchor` 原样钉住 ⇒ **改角度**；
+  `MID` 走原来的 `MOVE`（整体平移）。两者松手都 `onTrendCommit`。
+- ❗**`trendAnchorsOf(id)` 必须做成 composable 作用域的函数、再当参数传进 `detectChartGestures`**：
+  `detectChartGestures` 是独立的 `PointerInputScope` 扩展函数，`liveDrawLines`
+  （`rememberUpdatedState` 的委托属性）在它里面直接引用是 **Unresolved reference**，
+  而且报错还带一句误导性的 `Restricted suspending functions can invoke member...`。
+  手势函数里所有实时数据都靠入参 lambda（`geo`/`trendPixels`/`trendAnchors`）。
+
+**② 未选中不画端点**：`TREND_ANCHOR_DOT(3dp)` 整档删掉，换 `TREND_GRIP_DOT = 4.5dp`，
+只在 `picked` 时画三枚（两端大、中点 0.78 倍），视觉与水平类那两个把手同源
+（本色圆 + 中心白点 —— 纯实心圆压在**同色**斜线上会融成一体）。
+
+**③ 刻度**：两个原因同时修。
+- 小数位原本跟 `tickSize`（BTC 0.1 ⇒ `8000.0`/`8500.0`），改成跟**步长**：
+  `decimalsForStep(step)`，step ≥ 1 ⇒ 0 位。`ValueRange.gridStep(count)` 新抽出来供两边共用。
+- 条数原本固定 5，主图被压矮时（横屏 + 读数带多行 + 两块副图）每条间距 < `minGapPx`，
+  被「太近就丢」逐条滤掉 ⇒ **一条不剩**。现在 `tickCount = (mainHeightPx / minGapPx).coerceIn(2, 8)`，
+  矮图宁可少给也不给 0。副图同样：`gridLines(count)` 全取 2~3 条（原先固定「首尾两条」，
+  矮块只剩一条）。
+
+**单测**：`TrendGripTest` 7 + `AxisDecimalsTest` 6（含 8000~9000 区间在 2~8 条下必须整数），
+`FlatGripTest` 那条「直线不受把手限制」改成「同样只认把手」。合计 **467 项全过**。
+⚠️ 仍无真机验收（`adb devices` 为空）。

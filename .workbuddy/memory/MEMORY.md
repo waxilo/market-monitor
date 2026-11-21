@@ -31,7 +31,10 @@ Release**（tag 固定永不新增，**版本号由产物名承载**，tag 只�
   **MuMu 验收注入拖动的坑（上拖会被主图顶边夹住 ⇒ 改向下拖；判锁定的「离线 30px 按下」口径；
   **沙箱不能替用户起模拟器**（拦 `sc.exe`、`emulator-5554` 永久 offline）但用户手动启动后可连：
   端口读 `MuMuManager info -v 0` 的 `adb_port`（本机 16385），每次 Bash 调用 adb server 都重启
-  ⇒ connect 必须与操作同条命令；导库用 `exec-out`（`shell cat` 会污染二进制））**
+  ⇒ connect 必须与操作同条命令；导库用 `exec-out`（`shell cat` 会污染二进制））**、
+  **划线编辑入口收成把手（0.9.78 起两端 + 中点三枚，线身只选中；`TrendMode.ANCHOR` 单端跟手改角度）、
+  纵轴刻度条数按高度自适应 + 小数位跟步长（`decimalsForStep` / `ValueRange.gridStep`）、
+  以及「`detectChartGestures` 是 PointerInputScope 扩展、实时数据只能靠入参 lambda」这条编译坑**
 - `release.md` —— 通道模型与发版验收
 - `YYYY-MM-DD.md` —— 当日流水（含每次探测/踩坑的完整过程）
 
