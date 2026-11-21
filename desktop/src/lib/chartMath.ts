@@ -532,9 +532,9 @@ export function timeLabelPlacements(
 export const BODY_SHARE = 0.58;
 
 export interface BodyRect {
-  /** 整数左缘。 */
+  /** 左缘（整数像素列：奇数宽才能让柱心落在像素列正中的 `round(centerX) + 0.5`）。 */
   left: number;
-  /** 整数宽度（>= 1）。 */
+  /** 宽度，**恒为奇数**、>= 1 —— 见下面「柱心与影线共线」。 */
   w: number;
 }
 
@@ -544,27 +544,27 @@ export interface BodyRect {
  *
  * 三条约束，按优先级排：
  *
- * 1. **槽里必须留出看得见的缝**。缩到槽宽 3~7px 时，`Math.round(slot * 0.66) | 1` 会算出
+ * 1. **柱心必须与影线共线**。影线是 1px 的 `vline`，中心落在 `Math.round(x) + 0.5`
+ *    （那一列像素的正中，见 KlineCanvas）。柱体只有取**奇数宽 + 整数左缘**时，中心才正好
+ *    等于同一点：`left + w/2 = round(centerX) + 0.5`。偶数宽的中心只能落在像素边界（整数）上，
+ *    与影线差半像素；窄槽再叠上 `round(centerX - w/2)` 的取整，误差会到整整 1px ——
+ *    2026-11-21 用户带图报的「蜡烛的芯和蜡烛没有居中对齐」就是这个（原来窄槽只顾着留缝，
+ *    走了一条偶数宽 + 取整左缘的捷径）。
+ * 2. **槽里必须留出看得见的缝**。缩到槽宽 3~7px 时，`Math.round(slot * 0.66) | 1` 会算出
  *    3~5px —— 占去槽宽的大半，相邻两根只剩零点几像素，一整排 K 线糊成连续的色带
  *    （2026-11-21 用户报「缩放时 K 线贴在一起」）。所以宽度上限是 `floor(slot) - 2`：
  *    名义 2px 是有原因的 —— 画布按 devicePixelRatio 缩放后左右边缘各有一层抗锯齿，
  *    实测（`desktop/.workbuddy/tmp/verify-candle-gap-cdp.mjs`）名义 2px 的缝在屏幕上
  *    只剩约 1px，名义 1px 就等于没有。
- * 2. **宽槽取奇数宽**，柱心精确落回 `round(centerX) + 0.5` —— 影线落在
- *    `Math.round(x) + 0.5`（见 KlineCanvas 的 vline），奇数宽 + 整数左缘才能让柱心与影线
- *    严格重合；偶数宽的中心只能落在整数上，必然偏半像素，平移时就是「影线与柱体不居中」。
- * 3. 窄槽（实体 < 7px）保不住奇数宽就不保：这个尺度上半像素看不出来，缝更不能省。
+ * 3. 两条打架时**让宽度、不让对齐**：向上取的那一档奇数放不进上限，就往下取一档
+ *    （密区最多细 1px，肉眼看不出来；而错位 1px 与糊成一条都一眼可见）。
  */
 export function candleBodyRect(centerX: number, slot: number): BodyRect {
-  const maxW = Math.max(1, Math.floor(slot) - 2);
+  const cap = Math.max(1, Math.floor(slot) - 2);
   const wanted = Math.max(1, Math.round(slot * BODY_SHARE));
-
-  // 宽槽：宽一档（奇数）保住柱心与影线严格居中
-  const odd = wanted | 1;
-  if (wanted >= 7 && odd <= maxW) {
-    return { left: Math.round(centerX) - (odd - 1) / 2, w: odd };
-  }
-  // 密区：奇数宽会把缝吃掉 1px ⇒ 宁可偶数宽，柱心落在整数上（这 0.5px 在这个尺度看不到）
-  const w = Math.max(1, Math.min(wanted, maxW));
-  return { left: Math.round(centerX - w / 2), w };
+  // 向上取一档奇数（比名义宽粗 0~1px）：奇数宽才有「整数左缘 + 柱心压半像素」的解
+  let w = wanted | 1;
+  if (w > cap) w = Math.max(1, (wanted - 1) | 1);
+  // w 恒为奇数 ⇒ left 恒为整数，柱心 = round(centerX) + 0.5，与影线严格重合
+  return { left: Math.round(centerX) - (w - 1) / 2, w };
 }

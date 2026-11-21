@@ -735,6 +735,8 @@ export function KlineCanvas({
     // 实体随槽宽等比，**但槽里必须留缝**（规则与取值见 chartMath.candleBodyRect）：
     // 曾用 `Math.max(1, round(slot * 0.66)) | 1`，缩到槽宽 3~4px 时会算出 3px，
     // 相邻两根只剩不到 0.5px 缝，整排 K 线糊成一条连续色带（2026-11-21 用户）。
+    // 它返回的宽度恒为奇数、左缘恒为整数：柱心正好压在 `round(x) + 0.5` 这一列，
+    // 与下面 `vline` 的影线严格共线 —— 偶数宽 / 取整左缘的写法会差 1px（芯歪到实体一侧）。
     const bodyRect = (x: number) => candleBodyRect(x, slot);
     const dec = decimalsFor(ts);
     /** 价格读数（轴上的价签与划线价牌共用一套小数位）。 */
