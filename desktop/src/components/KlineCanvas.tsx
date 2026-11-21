@@ -72,6 +72,7 @@ import {
   clipLineToRect,
   nearestTrendBody,
   nearestTrendHandle,
+  TREND_HANDLE_HIT_PX,
   type TrendAnchor,
   type TrendEnd,
   type TrendHandle,
@@ -104,8 +105,24 @@ const RESET_BADGE_TEXT = '复位';
 const RESET_BADGE_H = 16;
 /** 两点直线：起笔之后，第二次落点的最短距离。太近就当这一下还没落定，别画出退化的线。 */
 const TREND_MIN_DRAW_PX = 8;
-/** 待定起点的把手半径（画出来的大小；命中不用它 —— 画布上没有抓取）。 */
-const TREND_HANDLE_R = 3.5;
+/**
+ * 把手的半径。**这是「能否抓住」的唯一视觉线索**，所以比线宽明显大一圈：
+ * 3.5 + 1px 描边在黄色画线上几乎融成一体（2026-11-21 实测截图里根本看不见圆点），
+ * 用户就不知道这条线还能拖。4.5 + 2px 纸色描边之后，黄线上是一枚带白边的实心点。
+ */
+const TREND_HANDLE_R = 4.5;
+
+/**
+ * 水平线选中后两端那枚把手：**改价的唯一入口**（离左右边缘的距离 / 命中半径）。
+ *
+ * 为什么不再「按住线身拖动改价」（2026-11-21 用户报「上下移动图表，直线穿过的位置变了」）：
+ * 水平线横贯整宽，`LINE_HIT_PX`（4px）的命中带等于把画布横切成一条带子 —— 想上下平移图表时
+ * 起手落进带子里就把线拖走了。实测：在线上按住往下拖 120px，线价 57500 → 56288.84，
+ * 而 `pricePan` 一格没动（图表根本没平移）。把手是唯一编辑入口之后，**按在图上拖动永远是
+ * 平移画布**；线价只会在明确抓住把手时改变。
+ */
+const PRICE_HANDLE_INSET = 8;
+const PRICE_HANDLE_HIT_PX = 7;
 
 /**
  * 「行情线」的粗细（CSS px）：最新价那条虚线、以及用户画的所有线（水平线 / 两点直线 / 预览）。
@@ -337,15 +354,18 @@ function drawTrendHandle(
   top: number,
   bottom: number,
   plotW: number,
+  color = p.line,
 ) {
   if (x < -TREND_HANDLE_R || x > plotW + TREND_HANDLE_R) return;
   if (y < top - TREND_HANDLE_R || y > bottom + TREND_HANDLE_R) return;
   ctx.beginPath();
   ctx.arc(x, y, TREND_HANDLE_R, 0, Math.PI * 2);
-  ctx.fillStyle = p.line;
+  ctx.fillStyle = color;
   ctx.fill();
+  // 2px 纸色描边：把手大半压在**同色**的画线上，细描边等于没有 —— 这圈白边才是
+  // 「这里能抓」的形状依据（见 TREND_HANDLE_R 的注释）。
   ctx.strokeStyle = p.paper;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 2;
   ctx.stroke();
 }
 
@@ -840,14 +860,13 @@ export function KlineCanvas({
         const color = line.alert ? p.down : p.line;
         const selected = index === selPrice;
         if (selected) {
-          // 选中标记：**两端各一道短竖线**，线本身保持同一粗细（[W_DRAW_LINE]）。
-          // 原先加粗到 2px + 一层光晕（未选中却只有 1px），用户对价时会被画宽的那一圈带偏
-          // （2026-11-15）。现在选中只加两端刻度，粗细与未选中时完全一致。
-          const ly = Math.round(y) + 0.5;
-          ctx.strokeStyle = color;
-          ctx.lineWidth = W_DRAW_LINE;
-          vline(ctx, 0, ly - 5, ly + 5);
-          vline(ctx, plotW - 1, ly - 5, ly + 5);
+          // 选中标记 = 两端各一枚圆形把手（**改价的唯一入口**，见 PRICE_HANDLE_INSET）。
+          // 线本身保持同一粗细（[W_DRAW_LINE]）：原先左右各加粗到 2px 会把对价的一圈带偏
+          // （2026-11-15）；后来画的短竖线只是标记、拖不动，用户仍以为「拖线身就能改价」，
+          // 于是上下平移图表时把线一起拖走（2026-11-21）。现在把手是真能抓的，标记与入口合一。
+          const hy = Math.round(y) + 0.5;
+          drawTrendHandle(ctx, PRICE_HANDLE_INSET, hy, p, mainTop, mainBottom, plotW, color);
+          drawTrendHandle(ctx, plotW - PRICE_HANDLE_INSET, hy, p, mainTop, mainBottom, plotW, color);
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = W_DRAW_LINE;
@@ -893,10 +912,32 @@ export function KlineCanvas({
     ctx.lineWidth = W_DRAW_LINE;
     const selectedTrend = selTrend >= 0 ? tl[selTrend] : undefined;
     if (!lock && selectedTrend) {
-      for (const anchor of [selectedTrend.a, selectedTrend.b]) {
+      let ax = 0;
+      let ay = 0;
+      let bx = 0;
+      let by = 0;
+      for (const [k, anchor] of [selectedTrend.a, selectedTrend.b].entries()) {
         const pt = anchorPx(anchor, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
+        if (k === 0) {
+          ax = pt.x;
+          ay = pt.y;
+        } else {
+          bx = pt.x;
+          by = pt.y;
+        }
         drawTrendHandle(ctx, pt.x, pt.y, p, mainTop, mainBottom, plotW);
       }
+      // 中点把手 = **整体平移**的唯一入口（与 `trendMidHandles` 同一处算中点：
+      // 两端锚点的像素中点，可能落在绘图区外，那样就画不出来、也抓不到）。
+      drawTrendHandle(
+        ctx,
+        (ax + bx) / 2,
+        (ay + by) / 2,
+        p,
+        mainTop,
+        mainBottom,
+        plotW,
+      );
     }
 
     // 画了一半的直线（划线区选了「直线」、已经落了第一个点）的预览：起点把手 + 过起点与鼠标的
@@ -1424,6 +1465,42 @@ export function KlineCanvas({
     const hitLine = (y: number) =>
       nearestLineWithin(modelRef.current.priceLines.map((l) => yOfPrice(l.price)), y);
 
+    /**
+     * 落点是否抓住了**当前选中那条水平线**的把手（左右两端各一枚）。
+     *
+     * 没选中任何水平线时恒 -1 —— 把手只在选中之后才画出来，没画出来的东西不能被抓住。
+     * 它是改价的唯一入口（见 `PRICE_HANDLE_INSET`）：线身的命中带只负责「选中」，
+     * 不再负责「拖动」，否则上下平移图表时压到线就会把线拖走。
+     */
+    const hitPriceHandle = (x: number, y: number, plotW: number) => {
+      const sel = modelRef.current.selection;
+      if (!sel || sel.kind !== 'price') return -1;
+      const line = modelRef.current.priceLines[sel.index];
+      if (!line) return -1;
+      const ly = yOfPrice(line.price);
+      const { top, bottom } = mainBounds();
+      if (ly < top || ly > bottom) return -1;
+      const near = (hx: number) => Math.hypot(x - hx, y - ly) <= PRICE_HANDLE_HIT_PX;
+      return near(PRICE_HANDLE_INSET) || near(plotW - PRICE_HANDLE_INSET) ? sel.index : -1;
+    };
+
+    /**
+     * 选中那条趋势线的**中点把手**（整体平移的唯一入口）。
+     *
+     * 与水平线同一个道理：趋势线在屏幕上也是一条贯穿全宽的线（无限直线裁剪），线身命中带
+     * 同样会把画布切一刀。整体平移挪到中点上之后，「按在图上的任何位置拖动」都只剩
+     * 平移画布一种含义，而想挪整条线就抓住它中间那枚圆点。
+     */
+    const trendMidHandles = (plotW: number) => {
+      const sel = modelRef.current.selection;
+      if (!sel || sel.kind !== 'trend') return [];
+      const line = modelRef.current.trendLines[sel.index];
+      if (!line) return [];
+      const a = pxOfAnchor(line.a, plotW);
+      const b = pxOfAnchor(line.b, plotW);
+      return [{ index: sel.index, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }];
+    };
+
     /** 落点在主图**下方**（副图与时间轴）—— 只读区，手势与缩放都不响应。 */
     const belowMain = (y: number) => y > mainBounds().bottom;
 
@@ -1601,26 +1678,43 @@ export function KlineCanvas({
         return;
       }
 
-      // 抓取已有的画线（只在**未锁定 + 已选中**时）：把手 → 直线线身 → 水平线 ——
-      // 把手最小、最难中，排最前。锁定时整段跳过：落点照旧是「拖画布」。
+      // 抓取已有的画线：**只有把手才能编辑**，线身只负责「选中」。
+      // 锁定时整段跳过：落点照旧是「拖画布」。
       //
-      // **没选中的线这一下只选中、不拖动**：一场误拖会把线挪走，而用户以为在平移画布；
-      // 「先单击选中，再按住拖」也让划线区的编辑按钮先出现一次，动作永远有据可查。
+      // 为什么线身不再驱动拖动（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
+      // 水平线与趋势线在屏幕上都是**贯穿全宽**的，4px 的线身命中带等于把画布横切成一条带子 ——
+      // 想上下平移图表时起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，
+      // 而图表一格都没动）。现在按在图上的任何位置拖动都只平移画布，抓到把手才是编辑。
+      let hitAnyLine = false;
       if (!modelRef.current.linesLocked && inMain) {
         const model = modelRef.current;
-        /**
-         * 命中一条线：已是选中的那条 → true（继续进入拖拽）；否则只上报选中 → false。
-         */
-        const pick = (next: LineSelection) => {
-          if (isSameLine(model.selection, next)) return true;
+        /** 选中这条线（已经选中就什么也不做）—— 不进入任何拖拽。 */
+        const selectOnly = (next: LineSelection) => {
+          hitAnyLine = true;
+          if (isSameLine(model.selection, next)) return;
           model.onSelect(next);
           crossRef.current = null;
           draw();
-          return false;
         };
+        // 1) 水平线两端的把手：改价的唯一入口，最小最难中，排最前。
+        const priceHandle = hitPriceHandle(x, y, plotW);
+        if (priceHandle >= 0) {
+          mode = 'line';
+          grabIndex = priceHandle;
+          crossRef.current = null;
+          pointerId = e.pointerId;
+          canvas.setPointerCapture(e.pointerId);
+          applyCursor(canvas, 'on-line');
+          draw();
+          return;
+        }
+        // 2) 趋势线两端的把手：改角度（未选中时这一下只选中，把手在选中后才画出来）。
         const handle = nearestTrendHandle(trendHandles(plotW), x, y);
         if (handle) {
-          if (!pick({ kind: 'trend', index: handle.index })) return;
+          if (!isSameLine(model.selection, { kind: 'trend', index: handle.index })) {
+            selectOnly({ kind: 'trend', index: handle.index });
+            return;
+          }
           mode = 'trend-anchor';
           grabIndex = handle.index;
           grabEnd = handle.end;
@@ -1631,11 +1725,13 @@ export function KlineCanvas({
           draw();
           return;
         }
-        const body = nearestTrendBody(trendBodies(plotW), x, y);
-        if (body >= 0) {
-          if (!pick({ kind: 'trend', index: body })) return;
+        // 3) 选中那条趋势线的中点把手：整体平移的唯一入口。
+        const mid = trendMidHandles(plotW).find(
+          (h) => Math.hypot(h.x - x, h.y - y) <= TREND_HANDLE_HIT_PX,
+        );
+        if (mid) {
           mode = 'trend-body';
-          grabIndex = body;
+          grabIndex = mid.index;
           grabLastX = x;
           grabLastY = y;
           crossRef.current = null;
@@ -1645,24 +1741,20 @@ export function KlineCanvas({
           draw();
           return;
         }
-        const hit = hitLine(y);
-        if (hit >= 0) {
-          if (!pick({ kind: 'price', index: hit })) return;
-          mode = 'line';
-          grabIndex = hit;
-          crossRef.current = null;
-          pointerId = e.pointerId;
-          canvas.setPointerCapture(e.pointerId);
-          applyCursor(canvas, 'on-line');
-          draw();
-          return;
+        // 4) 线身（趋势线的无限直线 / 水平线）：只选中，落点继续走「拖画布」。
+        const body = nearestTrendBody(trendBodies(plotW), x, y);
+        if (body >= 0) selectOnly({ kind: 'trend', index: body });
+        else {
+          const hit = hitLine(y);
+          if (hit >= 0) selectOnly({ kind: 'price', index: hit });
         }
       }
       // 空白处 = 取消选中。**只看「没命中任何线」**，不管落在哪儿：主图空地、副图、时间轴、
       // 右侧价格轴留白都算空白（2026-11-21 用户「点击空白直接去掉选中」—— 划线区那枚 ✕ 已删，
       // 这里成了退出选中的主要入口，只认主图空地会让人觉得「点了没反应」）。
       // 必须在 `belowMain` 之前：副图与时间轴本来是「只读区直接 return」，那样点它们就没反应了。
-      if (modelRef.current.selection) modelRef.current.onSelect(null);
+      // 命中线身的那一下已经选中了线，不能再抹掉（否则「点线选中」会变成「点线选中又立刻取消」）。
+      if (!hitAnyLine && modelRef.current.selection) modelRef.current.onSelect(null);
       // 副图与时间轴：只读区，不参与拖拽
       if (belowMain(y)) return;
       mode = 'pan';
