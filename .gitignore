@@ -19,6 +19,8 @@ keystore.properties
 .workbuddy/tmp/
 # 同一规则在子目录里（desktop/ 下的验证脚本等本地工具）
 desktop/.workbuddy/tmp/
+# Android 真机验证留下的截图与 UI dump（历史遗留，几十张 png，绝不入库）
+android/.workbuddy/
 .trae/
 
 # IDE 本地配置（各人自己的编辑器偏好，不入库）
