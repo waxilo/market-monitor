@@ -3707,8 +3707,25 @@ private const val READOUT_MAX_LINES = 1
 /** 指标读数带的字号：比 labelSmall(11sp) 再小一档，让整族数值稳定落在一行。 */
 private val READOUT_FONT_SIZE = 9.sp
 
-/** 右侧纵轴文字的字号（2026-11-23 第三轮：9 → 10sp，用户「价格轴太窄了」—— 字太小同样读作窄）。 */
+/**
+ * 右侧纵轴**刻度数字**的字号（2026-11-23 第三轮：9 → 10sp，用户「价格轴太窄了」—— 字太小同样读作窄）。
+ *
+ * 2026-11-23 第四轮起**只归刻度**：价签字号独立成 [PRICE_TAG_FONT_SIZE]。
+ * 两者曾经共用一个常量（「牌子的小字比列里的刻度还小，读起来像两张不同层级的贴纸」），
+ * 但刻度现在整档关掉（[AXIS_TICKS_VISIBLE]），继续共用只会让「缩价签」顺手把刻度也缩掉，
+ * 将来重新打开刻度又得二选一。分开之后各调各的，互不牵连。
+ */
 private val AXIS_FONT_SIZE = 10.sp
+
+/**
+ * 价格签（最新价 / 十字光标 / 极值 / 划线牌 / 划线备注 / 日期标）的字号。
+ *
+ * 10 → 9sp（2026-11-23 第四轮用户「价格签太大了，缩小点」）：上一轮为了消除「细弱感」
+ * 把牌子从 8sp 提到 10sp，同时把内边距一起加厚，结果整枚色块偏胖，右侧那一列跟着变宽、
+ * 把绘图区压窄。现在回调到 9sp + 收薄内边距，牌面小一档、列宽也跟着收（列宽是量出来的，
+ * 见 [rememberAxisColumnWidth]，不需要另改死值）。
+ */
+private val PRICE_TAG_FONT_SIZE = 9.sp
 
 /**
  * 右侧价格列里**是否渲染刻度数字**（主图网格步长值 + 副图两端值）。
@@ -3739,7 +3756,12 @@ internal fun decimalsForStep(step: Double): Int {
     return (-exponent).coerceIn(0, 8)
 }
 
-/** 纵轴刻度与价格标的共用文字样式（价格轴、副图轴、十字光标/最新价/告警线标）。 */
+/**
+ * **刻度**文字样式（主图价格刻度、副图刻度、时间轴刻度）。
+ *
+ * 2026-11-23 第四轮起不再兼管价格签 —— 价签有自己的 [rememberPriceTagStyle]（9sp）。
+ * 这里的 10sp 只在 [AXIS_TICKS_VISIBLE] 打开时才会真正上屏。
+ */
 @Composable
 private fun rememberAxisTextStyle(): TextStyle =
     MaterialTheme.typography.labelSmall.copy(
@@ -3749,14 +3771,20 @@ private fun rememberAxisTextStyle(): TextStyle =
     )
 
 /**
- * 价格标（最新价/十字光标/告警线）文字：**与刻度同号 10sp**（2026-11-23 第三轮）。
+ * 价格标（最新价/十字光标/告警线/日期标）文字：**独立一档 [PRICE_TAG_FONT_SIZE]（9sp）**。
  *
- * 曾经矮一档（8sp，「不跟蜡烛抢视线」），但价格列独立成列之后，牌子里的小字比列里的刻度
- * 还小，读起来像两张不同层级的贴纸 —— 用户对「价格轴太窄」的观感有一半来自这种细弱感。
+ * 不再从 [rememberAxisTextStyle] `copy` 出来 —— 刻度（10sp）现在整档关掉，
+ * 继续挂在它身上等于「价签的字号由一段根本不画的文字决定」（2026-11-23 第四轮拆开）。
+ * 行高同步收到 11sp：色块的厚度 = 行高 + 上下内边距，字号缩了行高不缩，
+ * 牌子还是原来那么厚，看着仍然「大」。
  */
 @Composable
 private fun rememberPriceTagStyle(): TextStyle =
-    rememberAxisTextStyle().copy(fontSize = AXIS_FONT_SIZE, lineHeight = 13.sp)
+    MaterialTheme.typography.labelSmall.copy(
+        fontSize = PRICE_TAG_FONT_SIZE,
+        lineHeight = 11.sp,
+        letterSpacing = 0.sp,
+    )
 
 /**
  * 量列宽时主图刻度的条数样本：取 `PriceAxisLabels` 允许的**最大**条数（那里是 `coerceIn(2, 8)`）。
@@ -3884,15 +3912,17 @@ private val READOUT_LINE_HEIGHT = 12.sp
 private const val CANDLE_READOUT_BAND_DP = 28f
 
 /**
- * 价格标（最新价/十字光标/告警线共用）的水平内边距（dp）。
+ * 价格标（最新价/十字光标/告警线/划线牌/日期标共用）的水平内边距（dp）。
  *
- * 3.5 → 5.5（2026-11-23 第三轮）：字号提到 10sp 后实心色块要跟着长厚，
- * 否则数字顶满块边、看着仍像贴在一条窄缝里。
+ * 5.5 → 4.0（2026-11-23 第四轮用户「价格签太大」）：上一轮为了让 10sp 的字不顶满块边，
+ * 把内边距从 3.5 加到 5.5，结果牌面整体偏胖 —— 左右各 5.5dp 等于给每枚价签多挂了 3dp 宽度，
+ * 而这一列宽是按牌宽量出来的（见 `rememberAxisColumnWidth`）⇒ 列宽跟着胖、绘图区跟着窄。
+ * 字号回 9sp 之后 4.0dp 足够让数字不贴边。
  */
-private const val PRICE_BADGE_PAD_H_DP = 5.5f
+private const val PRICE_BADGE_PAD_H_DP = 4f
 
-/** 价格标的垂直内边距（dp）：与 [PRICE_BADGE_PAD_H_DP] 同批从 1 提到 2。 */
-private const val PRICE_BADGE_PAD_V_DP = 2f
+/** 价格标的垂直内边距（dp）：与 [PRICE_BADGE_PAD_H_DP] 同批从 2 收到 1.5，色块随之变薄。 */
+private const val PRICE_BADGE_PAD_V_DP = 1.5f
 
 
 /*

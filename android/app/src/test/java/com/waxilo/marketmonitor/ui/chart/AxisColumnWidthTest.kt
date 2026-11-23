@@ -148,6 +148,42 @@ class AxisColumnWidthTest {
     }
 
     @Test
+    fun `缩小档的列宽仍能装下整枚价签 且比放大档窄一截`() {
+        // 2026-11-23 第四轮用户「价格签太大，缩小点」：字号 10 → 9sp、左右内边距 5.5 → 4dp。
+        // 两条口子都得守住：
+        // ① 缩完仍要装得下整枚价签（牌宽 + 两侧内边距 + 贴边留白），否则数字被裁；
+        // ② 列宽必须真的变窄 —— 用户要的就是「牌小了，占的地方也跟着小」。
+        val density = 1.75f
+        val gutterPx = gutter * density
+        val text10 = 8 * 9.6f // '60,701.58' 八个字符，10sp 等宽约 9.6px/字符
+        val text9 = 8 * 8.6f // 9sp 同比缩到约 8.6px/字符
+        val wide = axisColumnWidthPx(
+            widestTagTextPx = text10,
+            widestAxisTextPx = 0f,
+            badgePadH = 5.5f * density,
+            gutter = gutterPx,
+            minWidthPx = 0f,
+            maxWidthPx = 1920f * 0.35f,
+        )
+        val slim = axisColumnWidthPx(
+            widestTagTextPx = text9,
+            widestAxisTextPx = 0f,
+            badgePadH = 4f * density,
+            gutter = gutterPx,
+            minWidthPx = 0f,
+            maxWidthPx = 1920f * 0.35f,
+        )
+        assertEquals(
+            "列宽 = 牌宽 + 贴边留白（牌宽含左右各一份内边距）",
+            text9 + 4f * density * 2f + gutterPx,
+            slim,
+            1e-3f,
+        )
+        assertTrue("缩小档必须比放大档窄：$slim vs $wide", slim < wide)
+        assertTrue("缩了约一成以上", slim <= wide * 0.92f)
+    }
+
+    @Test
     fun `刻度文本更长时才会把列撑宽 说明关闭刻度后不会多算`() {
         // 反向口径：刻度**参与**量宽（AXIS_TICKS_VISIBLE = true）时列必须跟着刻度走，
         // 否则打开刻度就会把最长那条裁掉。这条守住「开关两种状态都对」。
