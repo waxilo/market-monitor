@@ -514,17 +514,6 @@ fun KlineChart(
     val mainReadoutLines = remember(series) { series.mainReadoutLineCount() }
     // 小条与读数带同容器：它的高度也计进读数带，绘图区整体下移
     val readoutHeightDp = chartReadoutBandDp(mainReadoutLines, candleReadout != null)
-    val geo = remember(canvasSize, density, series.subPanes.size, readoutHeightDp) {
-        ChartGeo.of(canvasSize, density, series.subPanes.size, readoutHeightDp)
-    }
-    /**
-     * 「有数据 + 有尺寸」才允许绘制。
-     *
-     * `ChartGeo.of` 在尺寸还是 [IntSize.Zero] 时会把宽度兜底成 1f（为了让下游除法不炸），
-     * 于是所有以 `plotWidthPx <= 1f` 当哨兵值的判断都依赖这个魔数。
-     * 这里显式算一次，绘制与轴标签共用，避免各写各的判据时漏掉某一个。
-     */
-    val isReady = barCount > 0 && geo.isUsable
     /**
      * 有数据的区间（**夹在 `0..barCount-1` 内**），只用于「算量程」——
      * 右侧留白那段没有数据，参与算量程会把价格区间拉歪。
@@ -561,6 +550,32 @@ fun KlineChart(
     val subRanges = remember(series, dataWindow.first, dataWindow.last) {
         series.subPanes.map { series.subRange(it, dataWindow.first, dataWindow.last) }
     }
+    /**
+     * 右侧价格列宽度：按这一列里最宽的文本量（见 [rememberAxisColumnWidth]）。
+     *
+     * 传**自动量程**而不是叠加纵轴缩放后的 `mainRange`：后者一变（捏合纵轴）步长就变，
+     * 列宽跟着逐帧抖，整张图会横向跳；自动量程只跟可见数据窗口走，缩放纵轴时纹丝不动。
+     */
+    val axisWidthPx = rememberAxisColumnWidth(
+        range = autoRange,
+        lastPrice = series.candles.lastOrNull()?.closeDouble(),
+        subRanges = subRanges,
+        subPanes = series.subPanes,
+        tickSize = tickSize,
+        canvasWidthPx = canvasSize.width.toFloat(),
+        density = density,
+    )
+    val geo = remember(canvasSize, density, series.subPanes.size, readoutHeightDp, axisWidthPx) {
+        ChartGeo.of(canvasSize, density, series.subPanes.size, readoutHeightDp, axisWidthPx)
+    }
+    /**
+     * 「有数据 + 有尺寸」才允许绘制。
+     *
+     * `ChartGeo.of` 在尺寸还是 [IntSize.Zero] 时会把宽度兜底成 1f（为了让下游除法不炸），
+     * 于是所有以 `plotWidthPx <= 1f` 当哨兵值的判断都依赖这个魔数。
+     * 这里显式算一次，绘制与轴标签共用，避免各写各的判据时漏掉某一个。
+     */
+    val isReady = barCount > 0 && geo.isUsable
 
     /**
      * 手势协程在 `pointerInput` 启动那一刻把回调闭包一起捕获，之后不会更新。
@@ -737,13 +752,20 @@ fun KlineChart(
         return alertRange.fromFraction(fraction)
     }
 
-    /** 直线锚点（下标+价格）→ 像素：与蜡烛同一个 `xOf` 链，平移缩放后自然落位。 */
+    /**
+     * 直线锚点（下标+价格）→ 像素：与蜡烛同一个 `xOf` 链，平移缩放后自然落位。
+     *
+     * ⚠️ 纵向用 [ValueRange.fractionRaw]（**不夹取**）而不是 `toFraction`：
+     * 直线是两点定斜率，任一端被夹到 [-0.5, 1.5] 就改了斜率 —— 纵轴缩放到锚点出量程时，
+     * 线会绕着另一端转（2026-11-23 用户「缩放纵坐标，直线穿过的点还是会变」）。
+     * 越界的那一端由 `trendPixels()` 的 `clipLineToRect` 裁掉。
+     */
     fun anchorPx(anchor: TrendAnchor): Offset {
         val g = liveGeo
         val p = livePlot
         return Offset(
             ((anchor.index - p.start).toFloat() + 0.5f) * g.slot(p.visibleBars),
-            g.yOf(alertRange.toFraction(anchor.price), g.mainTopPx, g.mainHeightPx),
+            g.yOf(alertRange.fractionRaw(anchor.price), g.mainTopPx, g.mainHeightPx),
         )
     }
 
@@ -1096,10 +1118,13 @@ fun KlineChart(
         }
 
         if (isReady) {
-            // 纵轴**不挂刻度数字**（2026-11-22 用户三次明确：「不显示纵轴价格间隔，8000、9000 这种」）。
-            // 网格线仍由 Canvas 画（drawGridAndAxes），只是不再往右缘贴一列价位 ——
-            // 需要读具体价位时用长按十字光标 / 最新价牌 / 划线牌，那几枚是「指着哪就是哪」的读数，
-            // 而右缘那列固定刻度既挡图又容易被误读成「当前价」。
+            // ---- 右侧价格列 ----
+            // 列宽 = 最宽价签宽（见 `rememberAxisColumnWidth`），住户只有价签，不再有刻度数字
+            // （2026-11-23 用户「价格轴宽度和价格签一样宽 + 价格轴上不显示价格段」）。
+            // 列本身仍是「上下拖 = 缩放纵轴」的手势区（见 `onPriceAxis`），与是否画刻度无关。
+            if (AXIS_TICKS_VISIBLE) {
+                PriceAxisLabels(mainRange, geo, density, Modifier.align(Alignment.TopStart))
+            }
             // ---- 右轴价格标：所有「这条线多少钱」的读数都在这一处落位 ----
             //
             // 三种标共用右轴那一列：最新价（虚拟的当前价线）、十字光标横线、划线
@@ -1134,8 +1159,8 @@ fun KlineChart(
                 density = density,
                 tickSize = tickSize,
             )
-            // 划线自己的价牌浮在**画布右端、贴价格轴左侧**，备注牌仍在左端（2026-11-04 用户：
-            // 与右轴那列行情读数分开）。右轴只答「现在多少钱 / 这段最高最低」。
+            // 划线自己的价牌也住进同一列（2026-11-23-2：与刻度数字、行情读数共用一条右边线），
+            // 备注牌仍在左端。
             LineBadges(
                 alertLines = visibleAlertLines,
                 drawLines = visibleDrawLines,
@@ -1144,8 +1169,10 @@ fun KlineChart(
                 density = density,
                 tickSize = tickSize,
             )
-            // 副图纵轴同样不挂刻度数字（与主图统一，见上）：副图块矮，两三个数字本来也
-            // 挤在块角上，读起来更像噪点；量级看曲线形状，具体值交给十字光标。
+            // 副图纵轴刻度与主图同开关（2026-11-23：一起关掉）。
+            if (AXIS_TICKS_VISIBLE) {
+                SubAxisLabels(series.subPanes, subRanges, geo, density, Modifier.align(Alignment.TopStart))
+            }
             TimeAxisLabels(
                 series, plot, geo, interval, density,
                 Modifier.align(Alignment.TopStart),
@@ -1287,8 +1314,8 @@ fun KlineChart(
         // 与「重开详情」的区别：重开只回到最新价，缩放原样保留。按一次即经 onViewChange 落盘。
         // 位置选**绘图区右上角**（2026-11-02 用户拍板）：原来放左下角，紧挨横向拖图与
         // 全屏角标的起手处，手指扫过极易误触 —— 误点一次就把缩放与位置全清掉。
-        // 落在主图右上角，**浮在图上**（2026-11-02 用户拍板位置；2026-11-21 起右侧不再留刻度列，
-        // 这枚小标与价签一样压在蜡烛上，代价只是临时盖住最顶那一小块，下一格照常可读）。
+        // 2026-11-21 右侧不留刻度列时它与价签一样压在蜡烛上；11-23 价格列回来后
+        // **必须让出那一列**（`end = 列宽 + 内缩`），否则正好盖住最顶上那条刻度数字。
         if (priceZoom != 1f || pricePan != 0f || !viewport.isInitial()) {
             PriceScaleResetBadge(
                 onClick = {
@@ -1300,7 +1327,9 @@ fun KlineChart(
                     .align(Alignment.TopEnd)
                     .padding(
                         top = with(density) { geo.mainTopPx.toDp() } + CORNER_BUTTON_INSET,
-                        end = CORNER_BUTTON_INSET,
+                        end = with(density) {
+                            (geo.labelWidthPx + CORNER_BUTTON_INSET.toPx()).toDp()
+                        },
                     ),
             )
         }
@@ -1506,6 +1535,8 @@ private data class ChartGeo(
      */
     val measured: Boolean,
     val plotWidthPx: Float,
+    /** 右侧价格列宽度（画布宽 - 绘图宽）。刻度数字、行情价签、划线价牌都住在这条列里。 */
+    val labelWidthPx: Float,
     val plotHeightPx: Float,
     val timeAxisHeightPx: Float,
     /** 指标读数带占用的高度；绘图区（含主图与副图）从这条线以下才开始。 */
@@ -1518,6 +1549,9 @@ private data class ChartGeo(
 ) {
     /** 尺寸可用（已量到且宽度足够放下一个像素以上的绘图区）。 */
     val isUsable: Boolean get() = measured && plotWidthPx > 1f
+
+    /** 画布右缘（含价格列）。刻度与价签一律右对齐到这里，别再各自算一遍。 */
+    val canvasRightPx: Float get() = plotWidthPx + labelWidthPx
 
     fun slot(visibleBars: Float): Float = plotWidthPx / max(1f, visibleBars)
 
@@ -1562,6 +1596,27 @@ private data class ChartGeo(
          * 占比保底会反过来把主图抬高，「主图大小与副图数量无关」就破了。
          */
         const val MAIN_MIN_DP = 150f
+
+        /**
+         * 右侧价格列的**下限**宽度（2026-11-23-4 起为 0：列宽完全等于价签宽）。
+         *
+         * 这一列是**独立的一条**，不从绘图区上浮着压过去：绘图宽 = 画布宽 - 实际列宽。
+         * 列里的唯一住户是**行情价签**（最新价 / 极值 / 十字光标 / 划线牌），刻度数字已关
+         * （见 `AXIS_TICKS_VISIBLE`）；列本身还是「上下拖 = 缩放纵轴」的手势区（见 `onPriceAxis`）。
+         *
+         * 为什么把下限降回 0（2026-11-23 用户「价格轴宽度和价格签一样宽」）：
+         * 前几轮用 58dp / 70dp / 84dp 当死下限，本意是「留呼吸空间」，实际效果是
+         * **价签左边空出一大片、数字仍贴在右缘**，看起来像一条空缝而不是一条轴。
+         * 现在宽度 = 最宽价签（文字 + 左右内边距）+ 贴边留白，**左右都零冗余**，
+         * 价签色块自己就是这一列的边界。
+         *
+         * 没有任何样本时（首帧 / 加载中）列宽取 0：那时也不画价签，
+         * 绘图区铺满反而是对的；数据回来量到宽度后列才收窄一次。
+         */
+        const val AXIS_LABEL_MIN_WIDTH_DP = 0f
+
+        /** 价格列最多吃掉画布的这个比例：竖屏窄机 + 大字体时宁可压窄列，也不能把 K 线挤没。 */
+        const val AXIS_LABEL_MAX_SHARE = 0.35f
         const val TIME_AXIS_HEIGHT_DP = 18f
 
         /** 单行读数占用的高度（与 [READOUT_LINE_HEIGHT] 对齐，单位 dp）。 */
@@ -1580,14 +1635,28 @@ private data class ChartGeo(
         fun readoutBandHeight(lineCount: Int): Float =
             READOUT_BAND_PAD_DP + READOUT_LINE_DP * lineCount.coerceAtLeast(1)
 
-        fun of(size: IntSize, density: Density, subCount: Int, readoutHeightDp: Float): ChartGeo =
+        fun of(
+            size: IntSize,
+            density: Density,
+            subCount: Int,
+            readoutHeightDp: Float,
+            /**
+             * 价格列宽度（像素），由调用方按这一列里最宽的文本量出（见 [rememberAxisColumnWidth]）。
+             * 0 或负值 = 还没量到（首帧 / 没有任何样本），回落到 [AXIS_LABEL_MIN_WIDTH_DP]。
+             */
+            axisWidthPx: Float = 0f,
+        ): ChartGeo =
             with(density) {
                 val measured = size.width > 0 && size.height > 0
+                val minLabel = AXIS_LABEL_MIN_WIDTH_DP.dp.toPx()
                 val timeAxis = TIME_AXIS_HEIGHT_DP.dp.toPx()
                 val readout = readoutHeightDp.dp.toPx()
                 val subReadout = SUB_READOUT_DP.dp.toPx()
-                // 绘图宽 = 画布宽：右轴那一列不再扣掉（价签浮在图上，见 AXIS_GUTTER_DP）
-                val plotWidth = max(1f, size.width.toFloat())
+                // 绘图宽 = 画布宽 - 右侧价格列。列宽先取「量出来的那一份」，再吃一次上限：
+                // 窄机 + 大字体时宁可压窄列也不把 K 线压没（上限见 AXIS_LABEL_MAX_SHARE）。
+                val desired = if (axisWidthPx > 0f) axisWidthPx else minLabel
+                val labelWidth = min(desired, size.width * AXIS_LABEL_MAX_SHARE).coerceAtLeast(0f)
+                val plotWidth = max(1f, size.width.toFloat() - labelWidth)
                 val plotHeight = max(1f, size.height.toFloat() - timeAxis)
                 // 极端窄高比下先保住蜡烛区域，再夹读数带，避免把绘图区压没
                 val safeReadout = readout.coerceAtMost((plotHeight * 0.3f).coerceAtLeast(0f))
@@ -1602,6 +1671,8 @@ private data class ChartGeo(
                 ChartGeo(
                     measured = measured,
                     plotWidthPx = plotWidth,
+                    // 真实让出去的那一截（可能被上限压窄过），刻度与价签都靠它定位
+                    labelWidthPx = max(0f, size.width.toFloat() - plotWidth),
                     plotHeightPx = plotHeight,
                     timeAxisHeightPx = timeAxis,
                     readoutHeightPx = safeReadout,
@@ -1630,6 +1701,15 @@ private fun DrawScope.drawGridAndAxes(
         if (y in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) {
             drawLine(palette.grid, Offset(0f, y), Offset(geo.plotWidthPx, y), 1f)
         }
+    }
+    // 价格列与绘图区的分界线：价格列是一条独立的窄条，没有这条线读起来像块留白
+    if (geo.labelWidthPx > 0f) {
+        drawLine(
+            palette.grid,
+            Offset(geo.plotWidthPx, geo.plotTopPx),
+            Offset(geo.plotWidthPx, geo.plotHeightPx),
+            1f,
+        )
     }
     // 每块副图各画一条与主图的分隔线 + 零轴（MACD 这类有正负的指标需要基准线）
     subRanges.forEachIndexed { index, subRange ->
@@ -2248,10 +2328,10 @@ private fun BoxScope.RightPriceBadges(
 private data class LineBadge(val price: Double, val alert: Boolean, val note: String?)
 
 /**
- * 划线的两块牌：**价位浮在画布右端、贴着价格轴左侧**（2026-11-04 用户），备注在左端。
+ * 划线的两块牌：**价位住进右侧价格列**、备注在左端。
  *
- * 右轴那一列只放行情自己的读数（最新价 / 可见区间极值 / 十字光标）—— 划线的价位不进那一列，
- * 而是右对齐浮在图上，与线同高、随线走；备注仍串在线的左端（图上一眼从左边读起）。
+ * 右轴那一列住户（自下而上）：网格刻度 → 行情读数（最新价 / 极值 / 十字光标）→ 划线价牌，
+ * 全部右对齐到画布右缘，读起来才是「一列数字」。备注仍串在线的左端（图上一眼从左边读起）。
  * EMA 分析画的线名字形如 `8时EMA50`（面板靠它回显），不挂牌的话图上一排红线分不清哪根是哪一档。
  *
  * 落位只裁边不避让：太近就叠住，谁压谁交给书写顺序。
@@ -2303,8 +2383,11 @@ private fun BoxScope.LineBadges(
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .offset(
+                    // **住进右侧价格列**（2026-11-23-2 用户「价格签应该放在价格轴上」）：
+                    // 右缘对齐到**画布右缘**（与刻度数字、行情价签共用同一条右边线），
+                    // 不再是 11-04 那版「贴绘图区右缘、浮在 K 线上」。
                     x = with(density) {
-                        (geo.plotWidthPx - chipW - rightInset).coerceAtLeast(0f).toDp()
+                        (geo.canvasRightPx - rightInset - chipW).coerceAtLeast(0f).toDp()
                     },
                     y = with(density) { (center - chipH / 2f).toDp() },
                 )
@@ -2390,16 +2473,20 @@ private fun PriceTag(
     }
     val padH = with(density) { PRICE_BADGE_PAD_H_DP.dp.toPx() }
     val padV = with(density) { PRICE_BADGE_PAD_V_DP.dp.toPx() }
-    // **右对齐、贴画布右缘**（2026-11-21 用户：右轴不再占一列，价签浮在图上）：
-    // 图形铺满整宽，牌子压在最右几根蜡烛之上 —— 实底牌心保证读数照样清楚，
-    // 线（最新价 / 极值 / 划线 / 十字光标）画到 `plotWidthPx` 也就是画布最右，末端被牌子盖住。
+    // **住进右侧价格列**（2026-11-23 用户「把纵坐标价格区加回来」）：
+    // 右缘与刻度数字对齐（`canvasRightPx - gutter`），不再压蜡烛。
+    // 列宽已按「这一列里最宽的价签」量出来（见 `rememberAxisColumnWidth`），所以正常情况下
+    // 左缘正好落在列内；只有上限被压窄（竖屏窄机 + 大字体）时才向左溢一点 ——
+    // 那时宁可压几像素图，也好过把价签画出画布外。
     val tagW = textSize.width + padH * 2f
-    val tagRight = with(density) { AXIS_GUTTER_DP.dp.toPx() }
+    val gutterPx = with(density) { AXIS_GUTTER_DP.dp.toPx() }
     Text(
         text = text,
         modifier = modifier
             .offset(
-                x = with(density) { (geo.plotWidthPx - tagRight - tagW).coerceAtLeast(0f).toDp() },
+                x = with(density) {
+                    (geo.canvasRightPx - gutterPx - tagW).coerceAtLeast(0f).toDp()
+                },
                 // 以落位高度为中心垂直居中：先退掉文字高度的一半，再退掉上内边距
                 y = with(density) { (centerYPx - textSize.height / 2f - padV).toDp() },
             )
@@ -2413,14 +2500,156 @@ private fun PriceTag(
 }
 
 /**
- * 副图的右侧纵轴刻度：**已停用**（2026-11-22）。
+ * 主图右侧价格刻度（住进价格列，2026-11-23 起重新挂上）。
  *
- * 与主图同一口径 —— 用户要的是「不显示纵轴价格间隔」，副图那两三个数字同样属于刻度，
- * 一起收掉。保留本注释是为了让后来者知道这里曾经有过一列数字、以及为什么拿掉：
- * 副图块矮，数字挤在块角更像噪点，量级看曲线形状即可，具体值由十字光标给。
+ * 三条边界规则：
+ * - 文字**垂直居中**到网格线上（旧版用 `y - 6f` 硬编码，字高变了就偏）；
+ * - 条数按可用高度自适应（见下方 `tickCount`），不再固定 5 条；
+ * - 相邻刻度仍挨太近时丢掉下面那条 —— 那是兜底，正常不会再触发全丢。
  *
- * 主图那一列同批删除（连 `PriceAxisLabels` / `AxisLabel` / `AXIS_LABEL_MIN_GAP_DP`）。
+ * 右对齐到**画布右缘**（`geo.canvasRightPx`）而不是绘图区右缘：这一列是独立的一条，
+ * 刻度与价签共用同一条右边线，读起来才是「一列数字」。
  */
+@Suppress("unused") // 由 AXIS_TICKS_VISIBLE 控制；保留实现是因为这个开关三起三落过三次
+@Composable
+private fun PriceAxisLabels(
+    range: ValueRange,
+    geo: ChartGeo,
+    density: Density,
+    modifier: Modifier = Modifier,
+) {
+    val style = rememberAxisTextStyle()
+    val measurer = rememberTextMeasurer()
+    val labelHeightPx = remember(style, density) {
+        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
+    }
+    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
+    /**
+     * 刻度条数按**可用高度**自适应。
+     *
+     * 固定 5 条时主图被压矮（横屏 + 多行读数 + 两块副图）会让每条间距小于 [minGapPx]，
+     * `lastDrawnY` 那道判据把它们逐条丢掉 —— 表现为右轴一条刻度都没有。
+     * 按高度定条数，矮图宁可只给 2~3 条，也不给 0 条。
+     */
+    val tickCount = remember(geo.mainHeightPx, minGapPx) {
+        (geo.mainHeightPx / minGapPx).toInt().coerceIn(2, 8)
+    }
+    // 小数位跟着步长走：step ≥ 1 一律整数，刻度读起来才是「8000 / 9000」
+    val decimals = remember(range, tickCount) { decimalsForStep(range.gridStep(tickCount)) }
+
+    var lastDrawnY = Float.NEGATIVE_INFINITY
+    // 顶/底那条刻度贴着边界时**整条丢掉**，不夹进主图：
+    // - 上半截会探进读数带（看起来像被切了一半）；
+    // - 下半截会与副图顶部那条刻度撞在一起（主图最底一条和副图最高一条几乎同一 y）。
+    // 夹取只能解决前者、反而把后者逼得更近，所以宁愿少一条也不叠字。
+    val halfHeight = labelHeightPx / 2f
+    val topBound = geo.mainTopPx + halfHeight
+    val bottomBound = geo.mainTopPx + geo.mainHeightPx - halfHeight
+    range.gridLines(tickCount).forEach { value ->
+        val y = geo.yOf(range.toFraction(value), geo.mainTopPx, geo.mainHeightPx)
+        if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
+        if (y < topBound || y > bottomBound) return@forEach
+        // 必须取绝对值：gridLines 按数值升序，而像素 y 随数值增大而减小（屏幕 y 轴向下）。
+        // 不取绝对值的话 y - lastDrawnY 恒为负，除第一条外全被当成「挨太近」丢掉。
+        if (abs(y - lastDrawnY) < minGapPx) return@forEach
+        lastDrawnY = y
+        AxisLabel(
+            text = PriceFormatter.localeNumber(value, decimals),
+            rightPx = geo.canvasRightPx,
+            centerYPx = y,
+            labelHeightPx = labelHeightPx,
+            density = density,
+            style = style,
+            modifier = modifier,
+        )
+    }
+}
+
+/**
+ * 价格列里的一行刻度文字：**右对齐到 [rightPx]**，垂直居中到 [centerYPx]。
+ * 用固定 [labelHeightPx] 折半来定位，避免依赖 TextStyle 的行高推断。
+ */
+@Composable
+private fun AxisLabel(
+    text: String,
+    rightPx: Float,
+    centerYPx: Float,
+    labelHeightPx: Float,
+    density: Density,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+) {
+    val measurer = rememberTextMeasurer()
+    val widthPx = remember(text, style, density) {
+        measurer.measure(AnnotatedString(text), style, density = density).size.width.toFloat()
+    }
+    val gutterPx = with(density) { AXIS_GUTTER_DP.dp.toPx() }
+    Text(
+        text = text,
+        modifier = modifier.offset(
+            x = with(density) { (rightPx - gutterPx - widthPx).coerceAtLeast(0f).toDp() },
+            y = with(density) { (centerYPx - labelHeightPx / 2f).toDp() },
+        ),
+        style = style,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+    )
+}
+
+/**
+ * 副图右侧价格刻度（与主图同一列、同一套间距判据）。
+ *
+ * 条数按这块副图的高度定（矮块 2 条、高块 3 条）：副图普遍矮，画满会糊；
+ * 原先固定「首尾两条」，块一矮第二条就被 minGap 丢掉，只剩孤零零一个数字。
+ */
+@Suppress("unused") // 与主图刻度同开关（AXIS_TICKS_VISIBLE）
+@Composable
+private fun SubAxisLabels(
+    panes: List<SubPaneData>,
+    ranges: List<ValueRange>,
+    geo: ChartGeo,
+    density: Density,
+    modifier: Modifier = Modifier,
+) {
+    if (panes.isEmpty() || geo.subHeightPx <= 1f) return
+    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val style = rememberAxisTextStyle()
+    val measurer = rememberTextMeasurer()
+    val labelHeightPx = remember(style, density) {
+        measurer.measure(AnnotatedString("0"), style, density = density).size.height.toFloat()
+    }
+    val minGapPx = labelHeightPx + with(density) { AXIS_LABEL_MIN_GAP_DP.dp.toPx() }
+    val gutterPx = with(density) { AXIS_GUTTER_DP.dp.toPx() }
+
+    panes.forEachIndexed { index, pane ->
+        val range = ranges.getOrNull(index) ?: return@forEachIndexed
+        val top = geo.subTopOf(index)
+        val count = (geo.subHeightPx / minGapPx).toInt().coerceIn(2, 3)
+        var lastDrawnY = Float.NEGATIVE_INFINITY
+        range.gridLines(count = count).forEach { value ->
+            val y = geo.yOf(range.toFraction(value), top, geo.subHeightPx)
+            if (abs(y - lastDrawnY) < minGapPx) return@forEach
+            lastDrawnY = y
+            val label = if (pane.compactAxis) PriceFormatter.formatCompact(value)
+            else PriceFormatter.localeNumber(value, PriceFormatter.DEFAULT_DECIMALS)
+            val labelWidthPx = remember(label, style, density) {
+                measurer.measure(AnnotatedString(label), style, density = density).size.width.toFloat()
+            }
+            Text(
+                text = label,
+                modifier = modifier.offset(
+                    x = with(density) {
+                        (geo.canvasRightPx - gutterPx - labelWidthPx).coerceAtLeast(0f).toDp()
+                    },
+                    y = with(density) { (y - labelHeightPx / 2f).toDp() },
+                ),
+                style = style,
+                color = labelColor,
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 /**
  * 时间轴刻度。
@@ -3452,16 +3681,21 @@ private const val MAX_TIME_LABELS = 4
 private const val TIME_LABEL_MIN_GAP_DP = 10f
 
 /**
- * 右端价签的贴边留白（dp）。
+ * 价格列里文字距画布右缘的留白（dp）。
  *
- * ❗**右侧不再单独留一列给价签**（2026-11-21 用户，与桌面端同一口径 ——
- * 「右侧不再空出一块放价格签，将图表填充过来，价格签是悬浮在图表上」）：
- * 绘图宽 = 画布宽（`ChartGeo.plotWidthPx` 就是画布宽），价签 / 划线牌全部
- * 右对齐浮在图上（`PriceTag` / `LineBadges`）。
- * 纵轴刻度数字同批取消（2026-11-22 用户：「不显示纵轴价格间隔」）。
- * 历史：这里是 `AXIS_LABEL_WIDTH_DP = 58f`，那 58dp 曾在 `plotWidthPx` 里扣掉。
+ * 列本身是**独立的一条**（宽按这一列最宽的文本量出，见 [ChartGeo.AXIS_LABEL_MIN_WIDTH_DP]），
+ * 本值只管这条列内部再退几像素 —— 刻度数字、行情价签、划线价牌共用它，右缘才对得齐。
+ *
+ * 历史：2026-11-21 曾取消整列（价签浮在图上、绘图铺满），2026-11-22 连刻度数字一起收掉；
+ * 2026-11-23 用户「把纵坐标价格区加回来」，整列连同刻度一起恢复。
  */
 private const val AXIS_GUTTER_DP = 2f
+
+/**
+ * 同一列里两条刻度文字的最小间距（dp）：不足 [刻度字高 + 本值] 就把下面那条丢掉。
+ * 只是兜底 —— 条数已经按可用高度算过（见 PriceAxisLabels 的 tickCount）。
+ */
+private const val AXIS_LABEL_MIN_GAP_DP = 4f
 
 /**
  * 单族指标读数固定一行（如一整排 MA 挤在一行、BOLL 三条挤在一行）。
@@ -3473,8 +3707,25 @@ private const val READOUT_MAX_LINES = 1
 /** 指标读数带的字号：比 labelSmall(11sp) 再小一档，让整族数值稳定落在一行。 */
 private val READOUT_FONT_SIZE = 9.sp
 
-/** 右侧纵轴文字的字号：与读数带同档，刻度数字不该在视觉上与蜡烛抢地方。 */
-private val AXIS_FONT_SIZE = 9.sp
+/** 右侧纵轴文字的字号（2026-11-23 第三轮：9 → 10sp，用户「价格轴太窄了」—— 字太小同样读作窄）。 */
+private val AXIS_FONT_SIZE = 10.sp
+
+/**
+ * 右侧价格列里**是否渲染刻度数字**（主图网格步长值 + 副图两端值）。
+ *
+ * 关（2026-11-23-4 用户「价格轴上不显示价格段」）。这一列从此只住价签：
+ * 最新价 / 可见区间极值 / 十字光标 / 划线牌 —— 都是「指着哪就是哪」的读数。
+ *
+ * 三起三落的历史，别再当意外：
+ * 1. 2026-11-22 用户「不显示纵轴价格间隔」⇒ 连 `PriceAxisLabels` / `AxisLabel` 一起删了；
+ * 2. 2026-11-23 用户「把纵坐标价格区加回来」⇒ 刻度与价格列一起恢复；
+ * 3. 2026-11-23 同日用户「价格轴上不显示价格段」⇒ 价格列留、刻度关。
+ *
+ * 因此这次**不删函数**（[PriceAxisLabels] / [SubAxisLabels] 原样保留，只由本开关控制）：
+ * 删了再加回的成本，远高于留一个布尔常量。打开它时列宽会自动把刻度文本算进去
+ * （见 `rememberAxisColumnWidth` 里的 `widestAxis`），不需要改第二处。
+ */
+private const val AXIS_TICKS_VISIBLE = false
 
 /**
  * 刻度文字的小数位：**由步长决定**，与 tickSize 无关。
@@ -3493,14 +3744,134 @@ internal fun decimalsForStep(step: Double): Int {
 private fun rememberAxisTextStyle(): TextStyle =
     MaterialTheme.typography.labelSmall.copy(
         fontSize = AXIS_FONT_SIZE,
-        lineHeight = 11.sp,
+        lineHeight = 13.sp,
         letterSpacing = 0.sp,
     )
 
-/** 价格标（最新价/十字光标/告警线）文字：比轴刻度再小一号，读数不该跟蜡烛抢视线。 */
+/**
+ * 价格标（最新价/十字光标/告警线）文字：**与刻度同号 10sp**（2026-11-23 第三轮）。
+ *
+ * 曾经矮一档（8sp，「不跟蜡烛抢视线」），但价格列独立成列之后，牌子里的小字比列里的刻度
+ * 还小，读起来像两张不同层级的贴纸 —— 用户对「价格轴太窄」的观感有一半来自这种细弱感。
+ */
 @Composable
 private fun rememberPriceTagStyle(): TextStyle =
-    rememberAxisTextStyle().copy(fontSize = 8.sp, lineHeight = 9.sp)
+    rememberAxisTextStyle().copy(fontSize = AXIS_FONT_SIZE, lineHeight = 13.sp)
+
+/**
+ * 量列宽时主图刻度的条数样本：取 `PriceAxisLabels` 允许的**最大**条数（那里是 `coerceIn(2, 8)`）。
+ *
+ * 条数越多 ⇒ `gridStep` 越小 ⇒ 小数位越多 ⇒ 文本越长。拿最大值当样本，列宽就与
+ * 「这一刻主图有多高」解耦：横屏/竖屏切换导致条数在 2~8 之间变时，列宽不会跟着跳。
+ */
+private const val AXIS_SAMPLE_TICKS_MAIN = 8
+
+/**
+ * 价格列宽度的最终夹取。**纯函数**：不含任何 Compose 依赖，直接单测（见 `AxisColumnWidthTest`）。
+ *
+ * 取两类的较宽者：
+ * - 价签（最新价 / 极值 / 划线牌）是**实心底块**，文字左右各多一个 [badgePadH]；
+ * - 刻度数字是裸文字，但它可能比价签更长（步长小 ⇒ 小数位多）。
+ *
+ * 最后加一个贴边留白 [gutter]（右缘对齐用），再夹进 `[minWidthPx, maxWidthPx]`。
+ * 上限先跟下限取大，避免画布极窄时 `coerceIn` 抛 `IllegalArgumentException`。
+ */
+internal fun axisColumnWidthPx(
+    widestTagTextPx: Float,
+    widestAxisTextPx: Float,
+    badgePadH: Float,
+    gutter: Float,
+    minWidthPx: Float,
+    maxWidthPx: Float,
+): Float {
+    val tagWidth = widestTagTextPx + badgePadH * 2f
+    val content = max(tagWidth, widestAxisTextPx) + gutter
+    return content.coerceIn(minWidthPx, maxWidthPx.coerceAtLeast(minWidthPx))
+}
+
+/**
+ * 价格列该占多宽：**按这一列里真正要显示的最宽那段文字量出来**，不用死值
+ * （58dp 装不下 `60,701.58`，价签左溢压 K 线 —— 2026-11-23 用户报）。
+ *
+ * 三条口径必须与住户一致，否则「量出来的宽」和「真画出来的宽」会对不上：
+ * - 价签（[PriceTag] / [LineBadges]）小数位跟 `tickSize` 走，字号是 [rememberPriceTagStyle]；
+ * - 主图刻度（[PriceAxisLabels]）小数位跟**步长**走，字号是 [rememberAxisTextStyle]；
+ * - 副图刻度（[SubAxisLabels]）`compactAxis` 的走 K/M/B 缩写，其余固定两位小数。
+ *
+ * 入参用**自动量程**（不是叠加了纵轴缩放的量程）：`priceZoom` 一变步长就变，
+ * 拿缩放后的量程算宽会让列宽逐帧抖，整张图横向跳。
+ */
+@Composable
+private fun rememberAxisColumnWidth(
+    range: ValueRange?,
+    lastPrice: Double?,
+    subRanges: List<ValueRange>,
+    subPanes: List<SubPaneData>,
+    tickSize: BigDecimal?,
+    canvasWidthPx: Float,
+    density: Density,
+): Float {
+    val measurer = rememberTextMeasurer()
+    val axisStyle = rememberAxisTextStyle()
+    val tagStyle = rememberPriceTagStyle()
+    // 价签样本：最新价 + 量程两端（划线价牌落在两者之间，字符数不会更长）
+    val tagTexts = remember(range, lastPrice, tickSize) {
+        val decimals = PriceFormatter.decimalsFor(tickSize)
+        buildList {
+            lastPrice?.takeIf { it.isFinite() }?.let { add(PriceFormatter.localeNumber(it, decimals)) }
+            if (range != null && range.high.isFinite() && range.low.isFinite()) {
+                add(PriceFormatter.localeNumber(range.high, decimals))
+                add(PriceFormatter.localeNumber(range.low, decimals))
+            }
+        }
+    }
+    // 刻度样本：主图两端 + 每块副图两端，各自口径与住户一致
+    val axisTexts = remember(range, subRanges, subPanes) {
+        buildList {
+            if (range != null && range.high.isFinite() && range.low.isFinite()) {
+                val decimals = decimalsForStep(range.gridStep(AXIS_SAMPLE_TICKS_MAIN))
+                add(PriceFormatter.localeNumber(range.high, decimals))
+                add(PriceFormatter.localeNumber(range.low, decimals))
+            }
+            subRanges.forEachIndexed { index, sub ->
+                if (!sub.high.isFinite() || !sub.low.isFinite()) return@forEachIndexed
+                if (subPanes.getOrNull(index)?.compactAxis == true) {
+                    add(PriceFormatter.formatCompact(sub.high))
+                    add(PriceFormatter.formatCompact(sub.low))
+                } else {
+                    // 与 `SubAxisLabels` 一字不差：非 compact 的副图刻度**固定两位小数**，
+                    // 跟着步长算会量出更长的文本、把列白撑宽一截。
+                    add(PriceFormatter.localeNumber(sub.high, PriceFormatter.DEFAULT_DECIMALS))
+                    add(PriceFormatter.localeNumber(sub.low, PriceFormatter.DEFAULT_DECIMALS))
+                }
+            }
+        }
+    }
+    return remember(tagTexts, axisTexts, axisStyle, tagStyle, canvasWidthPx, density) {
+        val widestTag = tagTexts.maxOfOrNull { text ->
+            measurer.measure(AnnotatedString(text), tagStyle, density = density).size.width
+        } ?: 0
+        // 刻度不渲染时**不许它参与量宽**：否则列会被一段根本不画的文字撑宽，
+        // 「价格轴和价格签一样宽」立刻破掉（2026-11-23-4）。
+        val widestAxis = if (AXIS_TICKS_VISIBLE) {
+            axisTexts.maxOfOrNull { text ->
+                measurer.measure(AnnotatedString(text), axisStyle, density = density).size.width
+            } ?: 0
+        } else {
+            0
+        }
+        with(density) {
+            axisColumnWidthPx(
+                widestTagTextPx = widestTag.toFloat(),
+                widestAxisTextPx = widestAxis.toFloat(),
+                badgePadH = PRICE_BADGE_PAD_H_DP.dp.toPx(),
+                gutter = AXIS_GUTTER_DP.dp.toPx(),
+                minWidthPx = ChartGeo.AXIS_LABEL_MIN_WIDTH_DP.dp.toPx(),
+                maxWidthPx = canvasWidthPx * ChartGeo.AXIS_LABEL_MAX_SHARE,
+            )
+        }
+    }
+}
 
 /** 指标读数带的行高：与 [ChartGeo.READOUT_LINE_DP] 对齐，用来算读数带总高。 */
 private val READOUT_LINE_HEIGHT = 12.sp
@@ -3512,11 +3883,16 @@ private val READOUT_LINE_HEIGHT = 12.sp
  */
 private const val CANDLE_READOUT_BAND_DP = 28f
 
-/** 价格标（最新价/十字光标/告警线共用）的水平内边距（dp）。 */
-private const val PRICE_BADGE_PAD_H_DP = 3.5f
+/**
+ * 价格标（最新价/十字光标/告警线共用）的水平内边距（dp）。
+ *
+ * 3.5 → 5.5（2026-11-23 第三轮）：字号提到 10sp 后实心色块要跟着长厚，
+ * 否则数字顶满块边、看着仍像贴在一条窄缝里。
+ */
+private const val PRICE_BADGE_PAD_H_DP = 5.5f
 
-/** 价格标的垂直内边距（dp）。 */
-private const val PRICE_BADGE_PAD_V_DP = 1f
+/** 价格标的垂直内边距（dp）：与 [PRICE_BADGE_PAD_H_DP] 同批从 1 提到 2。 */
+private const val PRICE_BADGE_PAD_V_DP = 2f
 
 
 /*

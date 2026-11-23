@@ -474,11 +474,23 @@ data class ValueRange(val low: Double, val high: Double) {
     }
 
     /** 归一化纵向位置：0 为顶部、1 为底部（像素轴向下），未定义值原样返回 NaN。 */
-    fun toFraction(value: Double): Float {
+    fun toFraction(value: Double): Float = fractionRaw(value).coerceIn(-0.5f, 1.5f)
+
+    /**
+     * 归一化纵向位置，**不夹取**：出量程就是负数 / 大于 1。
+     *
+     * 只给「两点直线」这类**斜率必须保真**的画法用（[KlineChart][DrawGuideLine] 的锚点）。
+     * 夹取对**单点**无害（蜡烛、网格、读数夹一下只是挪到视野外，本来也要被裁掉），
+     * 但对一条直线是灾难：斜率由两端像素共同决定，任一端被按在 -0.5 / 1.5 上就改了斜率
+     * —— 纵轴一缩放，锚点跑到量程外，线就绕着另一端转
+     * （2026-11-23 用户「缩放纵坐标，直线穿过的点还是会变」）。
+     * 越界的锚点交给 `clipLineToRect` 裁可见段，不需要在换算这一步提前夹。
+     */
+    fun fractionRaw(value: Double): Float {
         if (value.isNaN()) return Float.NaN
         val span = high - low
         if (span <= EPSILON) return 0.5f
-        return ((high - value) / span).toFloat().coerceIn(-0.5f, 1.5f)
+        return ((high - value) / span).toFloat()
     }
 
     fun fromFraction(fraction: Float): Double {

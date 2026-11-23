@@ -44,12 +44,28 @@ export function padded(range: Range, ratio = DEFAULT_PADDING): Range {
   return { low: range.low - span * ratio, high: range.high + span * ratio };
 }
 
-/** 归一化纵向位置：0 顶部、1 底部；结果只夹到 [-0.5, 1.5]，超出的交给裁剪。 */
-export function toFraction(range: Range, value: number): number {
+/**
+ * 归一化纵向位置（**不夹取**）：0 顶部、1 底部，出量程就是负数 / 大于 1。
+ *
+ * 只给「两点直线」这类**斜率必须保真**的画法用。夹取对**单点**无害（蜡烛、网格、读数
+ * 夹一下只是挪到视野外，本来也会被裁掉），但对一条线是灾难：斜率由两端的像素共同决定，
+ * 任一端被按在边界上都会改变斜率 —— 纵轴一缩放，锚点跑到量程外，线就绕着另一端转
+ * （2026-11-23 用户「缩放纵坐标，直线穿过的点还是会变」）。
+ * 越界的锚点交给 `clipLineToRect` 去裁可见段，不需要在换算这一步提前夹。
+ */
+export function rawFraction(range: Range, value: number): number {
   if (Number.isNaN(value)) return NaN;
   const span = range.high - range.low;
   if (span <= EPSILON) return 0.5;
-  return clampNum((range.high - value) / span, -0.5, 1.5);
+  return (range.high - value) / span;
+}
+
+/**
+ * 归一化纵向位置：0 顶部、1 底部；结果只夹到 [-0.5, 1.5]，超出的交给裁剪。
+ * 单点用（蜡烛 / 网格 / 读数 / 水平线）；**两点直线一律走 [rawFraction]**。
+ */
+export function toFraction(range: Range, value: number): number {
+  return clampNum(rawFraction(range, value), -0.5, 1.5);
 }
 
 export function fromFraction(range: Range, fraction: number): number {

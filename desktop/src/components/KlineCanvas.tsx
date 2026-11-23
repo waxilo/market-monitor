@@ -25,6 +25,7 @@ import {
   pricePanCenteringOn,
   priceRange,
   PRICE_MIN_VISIBLE_SHARE,
+  rawFraction,
   timeAtIndex,
   timeIndexOf,
   timeLabelPlacements,
@@ -424,7 +425,11 @@ function drawLineNote(
 /**
  * 数据空间锚点 → 主图像素（两点直线的绘制与命中判定**共用这一处**换算）。
  * 与 draw 里的 `xOf`/`yOf` 严格同式：x 走 `(i - start + 0.5) * slot`、y 走
- * `top + toFraction(量程, 价格) * 高` —— 两处各写一份必然会分叉（曾经手写过就分叉）。
+ * `top + fraction(量程, 价格) * 高` —— 两处各写一份必然会分叉（曾经手写过就分叉）。
+ *
+ * ⚠️ 纵向这一支用的是**不夹取**的 [rawFraction]，不是 `toFraction`：直线是两点定斜率，
+ * 任一端被夹到 [-0.5, 1.5] 就改了斜率（纵轴缩放到锚点出量程时肉眼可见地转），
+ * 越界的那一端由 `clipLineToRect` 裁掉即可。2026-11-23 用户「缩放纵坐标，直线穿过的点还是会变」。
  */function anchorPx(
   anchor: TrendAnchor,
   candles: Bar[],
@@ -438,7 +443,7 @@ function drawLineNote(
   const n = candles.length;
   const slot = plotW / Math.max(1, clampViewport(vp, n).visibleBars);
   const x = (timeIndexOf(candles, anchor.t, intervalMs) - plotStart(vp, n) + 0.5) * slot;
-  const y = top + toFraction(mainR, anchor.p) * (bottom - top);
+  const y = top + rawFraction(mainR, anchor.p) * (bottom - top);
   return { x, y };
 }
 
