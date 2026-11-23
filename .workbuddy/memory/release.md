@@ -1260,3 +1260,37 @@ tag 这次**用内联 `python -c` 打**（先断言 tree 一致，不为一次�
   apksigner 证书指纹 `cf2e20c7…52f034` == 基线（可覆盖安装）；CI 日志 `本次版本号：0.9.81` + pinned-key 断言过。
 - ⚠️ **相邻两版 APK 压缩后尺寸又一次完全相同**（都 11235972）—— 别拿体积当「有没有换包」的证据，看 digest。
 - 用掉的 tag 追加：`0.9.81`。
+
+## desktop 0.1.74 + android 0.9.82（双端同发，2026-11-23 17:10 CST / 09:10 UTC）
+
+双端同一条交互口径：**直线去掉中点把手，整根平移改为按住线身**（桌面 8px / App 10dp 窄带，
+只认已选中那条；端点仍先判 = 改角度）。详见 `android.md`「中点退场」与 `desktop.md` 同日那条。
+
+提交链（远端 API 重建，SHA 与本地不同）：
+- `1e79a51` → 远端 `6a72d38` feat(chart)（代码 + 单测）
+- `2f9ed8f` → 远端 `6474d0c` chore(release)（版本号 + 记忆文档；tag `0.9.82` / `desktop-v0.1.74` 同指此 commit）
+
+`git push` 仍被拦，走 `api-push-0948.py`（两跳，第一跳无 `--parent`、第二跳 `--parent 6a72d38…`）。
+本地 `git fetch origin main` + `git update-ref refs/heads/main FETCH_HEAD` 对齐（tree `413e4da3` 两侧相同；**没有** reset --hard）。
+❗**建 tag 别把 `-f` 字段和 `--input -` 混用**：两者并存时 gh 以 `--input` 为准，`tag`/`object` 全空 ⇒
+ref POST 报 `At least 40 characters are required … 0 were supplied`（这次白跑一轮）。
+正确写法是纯 `-F` 嵌套字段：`gh api -X POST repos/o/r/git/tags -f tag=… -f message=… -f object=<远端SHA>
+-f type=commit -F "tagger[name]=…" -F "tagger[email]=…" -F "tagger[date]=…" --jq .sha`，再 POST `/git/refs`。
+tag 对象：`0.9.82` → `929f3888`、`desktop-v0.1.74` → `c95123e6`（都是附注 tag，指 `6474d0c`）。
+
+工作流：Release（Android）**45144760312** 绿 3m24s、Desktop Release **45144794817** 三 job 全绿
+（win 6m16s / mac 5m45s / 发布 12s）、CI(main) **45144682192** 绿。
+
+通道验收：
+- Android `android-latest`：id/created **原地不变**（398798258 / 2026-09-29T03:22:14Z），只有
+  `market-monitor-0.9.82.apk`（**11235976**，比 0.9.81 多 4 字节）+ `.sha256`；
+  asset digest `278916ce…644661a2` == 边车逐字；CI 日志 `本次版本号：0.9.82`、
+  `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥。
+- 桌面 `desktop-latest`：id/created **原地不变**（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.74
+  无 0.1.73 残留；`latest.json` 0.1.74（pub_date `2026-11-23T09:17:49.304Z`）；
+  exe **2831642**（digest `4ed969fc…`）、dmg **4460820**（`f9df0587…`）、mac app.tar.gz **4380772**；
+  两平台 `.sig` 解一层 alg `ED` + keyid `226b03192e5df60b` == 基线、`len=74`、
+  且与 manifest 内联签名逐字相等；exe/dmg 的 `.sha256` 边车 == asset digest。
+- 包内证据：CI vite 指纹 `index-D43cUXk6.js 344.73` / `index-DcE0kAte.css 53.92`（win 与 mac 两 job 一致）
+  == 本地 `npm run build`；CI `本次版本号：0.1.74` + `--config {"version":"0.1.74"}`。
+- 用掉的 tag 追加：`0.9.82`、`desktop-v0.1.74`。
