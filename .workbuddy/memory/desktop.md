@@ -585,6 +585,12 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
 > 验收 `verify-drag-safe.mjs`（8）+ `verify-handles.mjs`（6）全绿；回归 13+5+17+23。
 > ⚠️ `verify-float-badge-cdp.mjs` 的探测点 `cssW-8` 正好是右把手中心，已改 `cssW-30`（否则「牌子已撤」假失败）。
 > ❗Android 端**尚未同步**这套口径（`KlineChart.kt` 与全屏划线的「抓线拖动」仍是老路，触摸下同样会误拖）。
+>
+> ❗**2026-11-23 改口径：中点把手删掉，整根平移改「按住线身」**（用户「直线中间的点去掉，点其他两点之外就能平移」）。
+> ③ 变成「选中那条直线的**线身**」：`clipLineToRect` 裁出可见段 → `onTrendBody(seg, x, y)`（`TREND_BODY_GRAB_PX = 8`）
+> 命中即 `mode='trend-body'`；② 仍是两端把手改角度（先判，端点在带里）。`trendMidHandles` 与中点那枚
+> `drawTrendHandle` 一并删除（它落在两锚点像素中点、常是屏幕正中，既挡读数又抢「中央上下拖=调量程」的起手位）。
+> 未选中/别条的线身仍是「只选中 + pan」。Android 同步同口径（`onTrendBody`，`TREND_BODY_GRAB = 10dp`）。
 
 > ❗**蜡烛实体的宽度只有一个出处**（2026-11-21 用户「缩放时 K 线会贴在一起」）：`chartMath.candleBodyRect(centerX, slot)`。
 > 旧公式 `Math.max(1, Math.round(slot * 0.66)) | 1` 在槽宽 3~7px 时算出 3~5px —— 占去槽宽的大半，

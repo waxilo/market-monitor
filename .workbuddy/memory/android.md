@@ -780,6 +780,7 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 - `TrendGrip { ANCHOR_A, ANCHOR_B, MID }`，`onTrendGrip(point, p1, p2, hitPx)` 纯函数：
   **端点优先于中点**（短线段时中点必然也在圈里，而改角度才是主操作），半径 `TREND_GRIP_HIT = 20dp`
   （比水平类那枚 18dp 宽一档：斜线上的点没有线身可借力）。
+  ⚠️ **2026-11-23 起 `MID` 已删**，整根平移改由线身接手（见下方「中点退场」一节）。
 - `TrendMode.ANCHOR`：被抓那端跟手、另一端用 `trendFixedAnchor` 原样钉住 ⇒ **改角度**；
   `MID` 走原来的 `MOVE`（整体平移）。两者松手都 `onTrendCommit`。
 - ❗**`trendAnchorsOf(id)` 必须做成 composable 作用域的函数、再当参数传进 `detectChartGestures`**：
@@ -838,3 +839,22 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 
 单测：`TrendClipTest` 8 项；`./gradlew :app:testDebugUnitTest` **475 项全过**。
 ⚠️ 无真机验收（adb 无设备）。0.9.79 / vc 91。
+
+## 中点退场：直线只剩两端，整根平移改「按住线身」（2026-11-23，双端）
+
+用户：「双端是否都去掉了直线中间的点，改为点击其他两点之外就能平移」→ 当时代码里**双端都还是三点**，
+于是按这句改口径（双端同一天落地）。
+
+- **Android**：`TrendGrip` 只剩 `ANCHOR_A/ANCHOR_B`；`MID_HIT_SHARE` 与中点那枚 `drawCircle` 全删
+  （`drawTrendGrips` 只画两端）。新增纯函数 `onTrendBody(point, p1, p2, hitPx)`：
+  `distanceToSegment` ≤ `TREND_BODY_GRAB = 10dp` 即算「按住线身」。手势侧 down 的判定顺序是
+  **水平把手 → 两端把手 → 线身 → 只选中**，`dragAllowed = flatGrip || trendGrip != null || trendBodyGrab`；
+  只有**已选中**那条的线身能拖（未选中仍是 `Select`）。命中带只用于抓取，**选中半径仍是 24dp**。
+- **桌面**：`trendMidHandles` 与中点 `drawTrendHandle` 删掉；命中顺序改成
+  **水平把手 → 端点把手 → 选中线的可见段（`clipLineToRect` + `onTrendBody`，8px）→ 其余线身只选中**。
+  线身判的是**裁进主图的那一段**（与 `infiniteLine` 同矩形），锚点在屏外时不会认「空白里的延长线」。
+- **单测**：`TrendGripTest` 12 项（含「中点不再判把手」「线身带宽内/外」「可见段外的延长线不算」、
+  非法输入），`TrendClipTest` 里那条 `TrendGrip.MID` 断言改成「中点不给把手、但可拖」。
+  `:app:testDebugUnitTest` 图表包全绿（TrendGrip 12/12、TrendClip 8/8）。
+- ⚠️ 风险口径没变：带宽宽了会回到「拖量程顺手把线拖走」，所以 10dp/8px 是刻意的窄带；
+  双指落下清 `trendMode` 的那道闸（2026-11-22）必须留着 —— 线身可拖之后它更重要。
