@@ -1188,3 +1188,42 @@ CI **44880472026** 绿（同分支连推的前三条 CI 被 concurrency 取消�
 推送走 `.workbuddy/tmp/api-push-0948.py`（4 次，`--parent` 传完整 40 位远端 SHA，均带 `PYTHONIOENCODING=utf-8`）；
 tag 用 `.workbuddy/tmp/tag-0976-0171.py`（先断言 tree 一致，双 tag 一个脚本打完）。
 - 用掉的 tag 追加：`0.9.76`、`desktop-v0.1.71`。
+
+## desktop 0.1.73 + android 0.9.80（双端同发，2026-11-23 12:00 CST / 04:00 UTC）
+
+两端同一条根因修复 + Android 价格列定版：
+
+- **双端「两点直线纵轴保真」**：锚点纵向换算从 `toFraction`（夹到 `[-0.5, 1.5]`）改走新增的
+  **不夹取** `rawFraction` / `fractionRaw`，只在 `anchorPx()` 这一处生效；越界锚点交给已有的
+  `clipLineToRect` 裁可见段。症状是「纵轴缩放时直线穿过的点会变」—— 线由两端像素定斜率，
+  任一端被夹到边界就改了斜率。`toFraction` 本身口径逐字节未变（蜡烛 / 网格 / 读数照旧）。
+- **Android 价格列四轮定版（终态）**：列宽 = **最宽价签宽**（`AXIS_LABEL_MIN_WIDTH_DP` 降到 0，
+  上限 35%，用 `autoRange` 算宽避免缩放时逐帧抖）；**主/副图刻度数字整列关闭**
+  （`AXIS_TICKS_VISIBLE = false`，函数保留下次一个布尔就能开）；字号 9/8 → **10sp** 统一，
+  价签内边距 3.5/1 → 5.5/2dp；`LineBadges` 与行情价签右对齐进列，「复位」小标让出列宽。
+- 新增单测 `TrendAnchorGeometryTest`（7）+ `AxisColumnWidthTest`（8），Android 全量 **491 项全过**。
+
+提交链（远端 API 推送后 SHA 与本地不同）：
+- `da01993` → 远端 `d1d92ab` fix(chart)
+- `34c365a` → 远端 `5b96daf` chore(release)（tag `0.9.80` / `desktop-v0.1.73` 同指此 commit）
+
+`git push` 本机仍被拦（`not a git repository`），走 `api-push-chain.py`（2 跳，1m8s）；
+tag 用 `.workbuddy/tmp/tag-0980-0173.py`（先断言 tree 一致）。本地用 `git update-ref refs/heads/main <远端SHA>`
+对齐（**没有** `reset --hard`）。
+
+工作流：Release（Android）**45109284054** 绿 3m21s、Desktop Release **45109292764** 三 job 全绿（mac 先完、
+win 再 ~7min）、CI **45109209064** 绿。
+
+通道验收：
+- Android `android-latest`：id/created **原地不变**（398798258 / 2026-09-29T03:22:14Z），只有
+  `market-monitor-0.9.80.apk`（**11235972**，与 0.9.76 同尺寸但 digest 不同）+ `.sha256`；
+  真下载 sha256 `d3fb76f6…1da82c` == 边车 == asset digest；aapt `92 / 0.9.80`；
+  apksigner 证书指纹 `cf2e20c7…52f034` == 基线（签名跨版本稳定）。
+- 桌面 `desktop-latest`：id/created **原地不变**（398800166 / 2026-09-28T12:55:50Z）、8 产物全 0.1.73
+  无 0.1.72 残留；`latest.json` 0.1.73（pub_date `2026-11-23T04:08:50.234Z`）；
+  exe **2832076** / dmg **4462415** / mac app.tar.gz **4382571**；exe+dmg 的 sha256 == 边车；
+  两平台 `.sig` 解一层 keyid `226b03192e5df60b` == 基线、内联签名 == `.sig` 文件逐字相等。
+- 包内证据：exe 内嵌 `0.1.73`（utf-16le 命中 2）、`0.1.72` 命中 0；CI vite 指纹
+  `index-BcnsEaxl.js 344.63` / `index-DcE0kAte.css 53.92` == 本地 `npm run build`。
+- ⚠️ 0.9.77 / 0.9.78 / 0.9.79 与 desktop 0.1.72 **本册未逐条留痕**（当时只记进当日流水），如需追溯看 `2026-11-23.md`。
+- 用掉的 tag 追加：`0.9.80`、`desktop-v0.1.73`。

@@ -734,6 +734,17 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 
 ## 右侧不留价签列：绘图铺满、价签浮在图上（2026-11-21，与桌面端同批）
 
+> ⚠️ **已反转（2026-11-23，分三轮，最终口径见下；0.9.80 已发）**：
+> ① 价格列**重新独立占宽**，宽度 = **这一列最宽价签的宽**（`rememberAxisColumnWidth` /
+> 纯函数 `axisColumnWidthPx`；`AXIS_LABEL_MIN_WIDTH_DP` 已降到 **0**，即完全由价签撑开；
+> 上限 `AXIS_LABEL_MAX_SHARE = 0.35f`；算宽一律用 `autoRange` 不用缩放后的量程，否则列宽逐帧抖）。
+> ② **主图/副图刻度数字整列关闭** —— `PriceAxisLabels` / `SubAxisLabels` 用 `AXIS_TICKS_VISIBLE = false`
+> 包着（函数体保留，用户 11-22 关 / 11-23 开 / 11-23 又关，来回三次，留开关比删了再补省事）。
+> ③ 字号：刻度 9 → **10sp**，价签 8 → **10sp**；价签内边距 3.5/1 → **5.5/2dp**。
+> ④ `LineBadges` 不再「浮在图上贴轴左侧」，改为右对齐进列（`canvasRightPx - 2dp - chipW`）；
+> 「复位」小标 `end` 要加 `labelWidthPx`。
+> 详见 `2026-11-23.md`。**下面这段只作历史背景，不要再照它改。**
+
 用户口径：「右侧不再空出一块放价格签，将图表填充过来，价格签是悬浮在图表上」。
 
 - `ChartGeo.of`：`plotWidth = max(1f, size.width)` —— 原来扣掉 `AXIS_LABEL_WIDTH_DP = 58f`；
@@ -819,6 +830,11 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 `PriceAxisLabels` / `SubAxisLabels` / `AxisLabel` / `AXIS_LABEL_MIN_GAP_DP` 全删，
 主图与副图右缘都不再挂价位列（网格线仍在 Canvas 里画）。价位由长按十字光标 / 最新价牌 /
 划线牌给。`decimalsForStep` / `ValueRange.gridStep` 保留（纯函数，AxisDecimalsTest 仍测）。
+
+> ⚠️ **2026-11-23 曾把整列恢复，当天又关掉（终态）**：`PriceAxisLabels` / `SubAxisLabels` / `AxisLabel` /
+> `AXIS_LABEL_MIN_GAP_DP` 都回来了，但渲染被 **`AXIS_TICKS_VISIBLE = false`** 关着 ——
+> 用户当天先「把纵坐标价格区加回来」、再「价格轴太窄了」、最后「价格轴上不显示价格段」，
+> 于是列只留价签、刻度全部不画。列宽由价签撑开（下限 0）。详见 `2026-11-23.md`。
 
 单测：`TrendClipTest` 8 项；`./gradlew :app:testDebugUnitTest` **475 项全过**。
 ⚠️ 无真机验收（adb 无设备）。0.9.79 / vc 91。
