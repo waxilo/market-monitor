@@ -73,7 +73,7 @@ import {
   clipLineToRect,
   nearestTrendBody,
   nearestTrendHandle,
-  TREND_HANDLE_HIT_PX,
+  onTrendBody,
   type TrendAnchor,
   type TrendEnd,
   type TrendHandle,
@@ -917,32 +917,13 @@ export function KlineCanvas({
     ctx.lineWidth = W_DRAW_LINE;
     const selectedTrend = selTrend >= 0 ? tl[selTrend] : undefined;
     if (!lock && selectedTrend) {
-      let ax = 0;
-      let ay = 0;
-      let bx = 0;
-      let by = 0;
-      for (const [k, anchor] of [selectedTrend.a, selectedTrend.b].entries()) {
+      // 选中信号 = **只有两端**这两枚圆点（2026-11-23 起中点那枚已删）。
+      // 两端=改角度；整根平移改成按住线身（`onTrendBody`），于是屏幕上不再有一枚
+      // 正好压在中央、既挡读数又抢「中央上下拖 = 调量程」起手位的圆点。
+      for (const anchor of [selectedTrend.a, selectedTrend.b]) {
         const pt = anchorPx(anchor, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
-        if (k === 0) {
-          ax = pt.x;
-          ay = pt.y;
-        } else {
-          bx = pt.x;
-          by = pt.y;
-        }
         drawTrendHandle(ctx, pt.x, pt.y, p, mainTop, mainBottom, plotW);
       }
-      // 中点把手 = **整体平移**的唯一入口（与 `trendMidHandles` 同一处算中点：
-      // 两端锚点的像素中点，可能落在绘图区外，那样就画不出来、也抓不到）。
-      drawTrendHandle(
-        ctx,
-        (ax + bx) / 2,
-        (ay + by) / 2,
-        p,
-        mainTop,
-        mainBottom,
-        plotW,
-      );
     }
 
     // 画了一半的直线（划线区选了「直线」、已经落了第一个点）的预览：起点把手 + 过起点与鼠标的
@@ -1489,23 +1470,6 @@ export function KlineCanvas({
       return near(PRICE_HANDLE_INSET) || near(plotW - PRICE_HANDLE_INSET) ? sel.index : -1;
     };
 
-    /**
-     * 选中那条趋势线的**中点把手**（整体平移的唯一入口）。
-     *
-     * 与水平线同一个道理：趋势线在屏幕上也是一条贯穿全宽的线（无限直线裁剪），线身命中带
-     * 同样会把画布切一刀。整体平移挪到中点上之后，「按在图上的任何位置拖动」都只剩
-     * 平移画布一种含义，而想挪整条线就抓住它中间那枚圆点。
-     */
-    const trendMidHandles = (plotW: number) => {
-      const sel = modelRef.current.selection;
-      if (!sel || sel.kind !== 'trend') return [];
-      const line = modelRef.current.trendLines[sel.index];
-      if (!line) return [];
-      const a = pxOfAnchor(line.a, plotW);
-      const b = pxOfAnchor(line.b, plotW);
-      return [{ index: sel.index, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }];
-    };
-
     /** 落点在主图**下方**（副图与时间轴）—— 只读区，手势与缩放都不响应。 */
     const belowMain = (y: number) => y > mainBounds().bottom;
 
@@ -1683,13 +1647,15 @@ export function KlineCanvas({
         return;
       }
 
-      // 抓取已有的画线：**只有把手才能编辑**，线身只负责「选中」。
+      // 抓取已有的画线：**水平类只有两端把手能编辑**；直线两端把手改角度、
+      // **线身中段**整根平移（2026-11-23，中点那枚圆点已删）。
       // 锁定时整段跳过：落点照旧是「拖画布」。
       //
-      // 为什么线身不再驱动拖动（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
+      // 为什么水平类不许「按住线身拖」（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
       // 水平线与趋势线在屏幕上都是**贯穿全宽**的，4px 的线身命中带等于把画布横切成一条带子 ——
       // 想上下平移图表时起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，
-      // 而图表一格都没动）。现在按在图上的任何位置拖动都只平移画布，抓到把手才是编辑。
+      // 而图表一格都没动）。直线那侧用**窄带 + 只认已选中的那条**兜住同一个风险
+      // （见 `TREND_BODY_GRAB_PX`）：没选中时按线身仍是「只选中」。
       let hitAnyLine = false;
       if (!modelRef.current.linesLocked && inMain) {
         const model = modelRef.current;
@@ -1730,13 +1696,24 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 3) 选中那条趋势线的中点把手：整体平移的唯一入口。
-        const mid = trendMidHandles(plotW).find(
-          (h) => Math.hypot(h.x - x, h.y - y) <= TREND_HANDLE_HIT_PX,
-        );
-        if (mid) {
+        // 3) 选中那条直线的**线身**：整体平移的入口（2026-11-23 起，中点圆点已删）。
+        //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 与 `infiniteLine`
+        //    同一个裁剪矩形，锚点早被平移到屏幕外时也不会认「空白里的延长线」。
+        //    端点已在第 2 步吃过，所以按在端点上仍是改角度，按在其余处才是整根平移。
+        const sel = model.selection;
+        const selTrendIdx = sel && sel.kind === 'trend' ? sel.index : -1;
+        const selBody = selTrendIdx >= 0 ? trendBodies(plotW)[selTrendIdx] : undefined;
+        const selSpan = selBody
+          ? clipLineToRect(selBody.x1, selBody.y1, selBody.x2, selBody.y2, {
+              left: 0,
+              top,
+              right: plotW,
+              bottom,
+            })
+          : null;
+        if (onTrendBody(selSpan, x, y)) {
           mode = 'trend-body';
-          grabIndex = mid.index;
+          grabIndex = selTrendIdx;
           grabLastX = x;
           grabLastY = y;
           crossRef.current = null;
@@ -1747,6 +1724,7 @@ export function KlineCanvas({
           return;
         }
         // 4) 线身（趋势线的无限直线 / 水平线）：只选中，落点继续走「拖画布」。
+        //    走到这里说明「按中的不是已选中那条的线身」（已选中 + 线身命中在第 3 步就接管了）。
         const body = nearestTrendBody(trendBodies(plotW), x, y);
         if (body >= 0) selectOnly({ kind: 'trend', index: body });
         else {

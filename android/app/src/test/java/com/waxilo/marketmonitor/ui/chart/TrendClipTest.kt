@@ -102,8 +102,10 @@ class TrendClipTest {
         val (s, e) = span
         assertEquals(TrendGrip.ANCHOR_A, onTrendGrip(s, s, e, 20f))
         assertEquals(TrendGrip.ANCHOR_B, onTrendGrip(e, s, e, 20f))
+        // 中段不再是把手（2026-11-23 中点圆点已删），但按住它就是整体平移的入口
         val mid = Offset((s.x + e.x) / 2f, (s.y + e.y) / 2f)
-        assertEquals(TrendGrip.MID, onTrendGrip(mid, s, e, 20f))
+        assertNull(onTrendGrip(mid, s, e, 20f))
+        assertTrue(onTrendBody(mid, s, e, 10f))
     }
 
     @Test

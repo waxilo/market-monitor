@@ -45,6 +45,13 @@ export type TrendStore = Record<string, TrendLine[]>;
 export const TREND_HANDLE_HIT_PX = 6;
 /** 线身命中容差（像素），与水平线的 LINE_HIT_PX 同值。 */
 export const TREND_BODY_HIT_PX = 4;
+/**
+ * 「按住线身整根平移」的命中带宽（像素，2026-11-23 起）。
+ *
+ * 比选中用的 [TREND_BODY_HIT_PX] 宽一些（按住要准头，4px 鼠标很难压住），
+ * 但仍是窄带：这条带子与线同向、横切整个绘图区，宽了就是「拖纵轴量程顺手把线拖走」。
+ */
+export const TREND_BODY_GRAB_PX = 8;
 
 const EPSILON = 1e-9;
 
@@ -238,6 +245,26 @@ export function distanceToLinePx(
   return Math.abs(dy * (px - ax) - dx * (py - ay)) / Math.sqrt(len2);
 }
 
+/**
+ * 点到**线段** ab 的最短距离（像素）。垂足落在线段外时取较近的端点 ——
+ * 与 [distanceToLinePx] 的差别只在「延长段上算不算」：拖动判命中的线身必须是**画出来的那一段**。
+ */
+export function distanceToSegmentPx(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  px: number,
+  py: number,
+): number {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const len2 = vx * vx + vy * vy;
+  if (len2 < EPSILON) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * vx + (py - ay) * vy) / len2));
+  return Math.hypot(px - (ax + vx * t), py - (ay + vy * t));
+}
+
 export interface TrendHandle {
   index: number;
   end: TrendEnd;
@@ -286,4 +313,32 @@ export function nearestTrendBody(
     }
   }
   return best;
+}
+
+/**
+ * 选中直线的**线身**能不能作为「整体平移」的抓取点（2026-11-23）。
+ *
+ * 中点那枚圆点已删：它落在两锚点的像素中点，常常正好是屏幕中央，既压读数视线，
+ * 又抢走「主图中央上下拖 = 调价格量程」的起手位。整根平移改由线身接手，
+ * 于是选中后看得见的两个圆点只剩「改角度」一种含义。
+ *
+ * 命中带（[TREND_BODY_GRAB_PX]）比线身选中用的 [TREND_BODY_HIT_PX] 宽，
+ * 但仍是一条窄带：按住线身本来就需要一点准头，宽了就是「拖量程顺手把线拖走」。
+ * 判的是**到线段**的距离（[distanceToSegmentPx]）：两个锚点可能早已被平移到绘图区外，
+ * 延到屏幕外的那截线并没有画出来，认了就是「按在空白里线却动了」。
+ * 调用方必须先判端点把手（[nearestTrendHandle]）—— 端点区域也落在带里。
+ */
+export function onTrendBody(
+  segment: PixelSegment | null | undefined,
+  x: number,
+  y: number,
+  tolerance = TREND_BODY_GRAB_PX,
+): boolean {
+  if (!segment) return false;
+  if (![x, y, tolerance].every(Number.isFinite)) return false;
+  if (tolerance <= 0) return false;
+  if (![segment.x1, segment.y1, segment.x2, segment.y2].every(Number.isFinite)) return false;
+  return (
+    distanceToSegmentPx(segment.x1, segment.y1, segment.x2, segment.y2, x, y) <= tolerance
+  );
 }
