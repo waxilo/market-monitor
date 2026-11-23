@@ -1227,3 +1227,36 @@ win 再 ~7min）、CI **45109209064** 绿。
   `index-BcnsEaxl.js 344.63` / `index-DcE0kAte.css 53.92` == 本地 `npm run build`。
 - ⚠️ 0.9.77 / 0.9.78 / 0.9.79 与 desktop 0.1.72 **本册未逐条留痕**（当时只记进当日流水），如需追溯看 `2026-11-23.md`。
 - 用掉的 tag 追加：`0.9.80`、`desktop-v0.1.73`。
+
+## android 0.9.81（**只发 Android**，2026-11-23 16:30 CST / 08:30 UTC）
+
+价格签缩一档 —— 同日第三轮把牌子从 8sp 放大到 10sp、内边距加到 5.5dp，用户当场反馈「太大了」，
+列宽是按牌面量出来的，牌一胖列就宽、绘图区被压窄：
+
+- **价签字号拆家**：新增 `PRICE_TAG_FONT_SIZE = 9.sp`，`AXIS_FONT_SIZE` 留 **10sp 只归刻度**；
+  `rememberPriceTagStyle` 不再 `copy` 刻度样式（刻度整档关着 ⇒ 价签字号不该由一段不画的文字决定）。
+- 行高 13 → **11sp**（色块厚度 = 行高 + 上下内边距，只缩字号不缩行高，牌子还是那么厚）；
+  `PRICE_BADGE_PAD_H_DP` 5.5 → **4.0**、`PRICE_BADGE_PAD_V_DP` 2.0 → **1.5**。
+- **列宽不用改死值**：`rememberAxisColumnWidth` 按最宽牌面量宽，牌缩列自动收。
+  280dpi 口径（`60,701.58`）：牌宽 96→**83px**、列宽约 100→**86px**（-13%）、厚度 30→**25px**（-18%）。
+- 新增单测（`AxisColumnWidthTest` 第 9 条「缩小档的列宽仍能装下整枚价签 且比放大档窄一截」）：
+  两条口子 = 不裁字 + 列宽真的窄一成以上。Android 全量 **492 项全过**（41 suites，1m26s，走 `-I init-builddir.gradle`）。
+
+提交链（远端 API 重建，SHA 与本地不同）：
+- `bc7d27d` → 远端 `15fd3fb` fix(chart)
+- `a6b5320` → 远端 `7380392` chore(release)（tag `0.9.81` 指此 commit）
+
+`git push` 仍被拦（`not a git repository`），走 `api-push-0948.py --parent`（两跳 40s + 13s）；
+tag 这次**用内联 `python -c` 打**（先断言 tree 一致，不为一次性操作新建脚本文件）；
+本地 `git fetch origin main` 后 `git update-ref refs/heads/main FETCH_HEAD` 对齐（**没有** reset --hard）。
+
+工作流：Release（Android）**45139310741** 绿 2m17s（只有 Node20 / setup-java v4 弃用警告）、CI **45139277182**。
+
+通道验收：
+- `android-latest` id/created **原地不变**（398798258 / 2026-09-29T03:22:14Z），只有
+  `market-monitor-0.9.81.apk`（**11235972**，与 0.9.80 同尺寸但 digest 不同
+  `7ddbc262…846effe6`）+ `.sha256`（边车内容逐字 == asset digest）。
+- 真下载 APK 复算 sha256 == 边车；aapt2 `versionCode=93 / versionName=0.9.81`（包名 `com.waxilo.marketmonitor`）；
+  apksigner 证书指纹 `cf2e20c7…52f034` == 基线（可覆盖安装）；CI 日志 `本次版本号：0.9.81` + pinned-key 断言过。
+- ⚠️ **相邻两版 APK 压缩后尺寸又一次完全相同**（都 11235972）—— 别拿体积当「有没有换包」的证据，看 digest。
+- 用掉的 tag 追加：`0.9.81`。
