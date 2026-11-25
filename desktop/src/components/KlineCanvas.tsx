@@ -1361,9 +1361,9 @@ export function KlineCanvas({
     if (!canvas) return;
     /**
      * 本场手势的种类，在**按下那一刻**由落点决定：
-     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖**已选中的**那条线。
+     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖**已选中**的那条线。
      *
-     * 两条铁律（2026-10-24 起）：
+     * 两条铁律（2026-10-24 起，2026-11-25 重申）：
      * · 未选中任何线时，按下只做「选中 / 取消选中」，绝不拖动 —— 一场误拖会把线挪走，
      *   而用户以为自己在平移画布；
      * · 工具（划线区里点的线型）激活时，按下即落点画线，不进入拖拽。
@@ -1647,16 +1647,16 @@ export function KlineCanvas({
         return;
       }
 
-      // 抓取已有的画线：**水平类只有两端把手能编辑**；直线两端把手改角度、
-      // **线身**按住就整根平移（2026-11-23 中点那枚圆点退场；2026-11-25 起连「先选中」
-      // 也不要了 —— 用户「直线不能随便平移了，需要抓点」）。
+      // 抓取已有的画线：**先选中，才编辑**（2026-11-25 用户「不管什么线，都应该要先选中
+      // 才能编辑，现在没选中就可以拖动」）。选中之后：水平线抓两端把手改价，直线抓两端把手
+      // 改角度、按住线身整根平移（2026-11-23 中点那枚圆点退场）。
       // 锁定时整段跳过：落点照旧是「拖画布」。
       //
-      // 为什么水平类不许「按住线身拖」（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
-      // 水平线在屏幕上**贯穿全宽**，4px 的线身命中带等于把画布横切成一条带子 ——
-      // 想上下平移图表时起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，
-      // 而图表一格都没动）。直线那侧靠**窄带**兜住同一个风险（`TREND_BODY_GRAB_PX` = 8px，
-      // 且只认画出来那一段）：它是一条斜带子，误抓面积只有一个 16px 宽的走廊，不是整片画布。
+      // 为什么未选中时绝不拖动（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
+      // 水平线在屏幕上**贯穿全宽**，线身命中带等于把画布横切成一条带子 —— 想上下平移图表时
+      // 起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，而图表一格都没动）。
+      // 直线那侧靠**窄带 + 只认已选中的那条**兜住同一个风险（`TREND_BODY_GRAB_PX` = 8px，
+      // 且只认画出来那一段）：误抓面积只有一个 16px 宽的走廊，不是整片画布。
       let hitAnyLine = false;
       if (!modelRef.current.linesLocked && inMain) {
         const model = modelRef.current;
@@ -1697,19 +1697,20 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 3) 直线**线身**：按下即抓、整根平移（2026-11-23 起点那枚圆点已删；
-        //    2026-11-25 起**不必先选中** —— 用户「直线不能随便平移了，需要抓点」：
-        //    先点一下选中、第二下才拖得动，手势上就是「抓不住」）。
-        //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 锚点早被平移到
-        //    屏幕外时也不认「空白里的延长线」。端点已在第 2 步吃过：按在端点上仍是改角度。
-        //    这一下同时把它选中（划线区切成编辑条），松手不动就是纯选中。
-        const grab = findTrendBodyGrab(trendBodies(plotW), { left: 0, top, right: plotW, bottom }, x, y);
-        if (grab >= 0) {
-          if (!isSameLine(model.selection, { kind: 'trend', index: grab })) {
-            model.onSelect({ kind: 'trend', index: grab });
-          }
+        // 3) **已选中那条**直线的线身：整体平移（2026-11-23 起，中点圆点已删）。
+        //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 与 `infiniteLine`
+        //    同一个裁剪矩形，锚点早被平移到屏幕外时也不会认「空白里的延长线」。
+        //    端点已在第 2 步吃过，所以按在端点上仍是改角度，按在其余处才是整根平移。
+        //    **只认已选中那条**（2026-11-25 用户「先选中才能编辑」）：没选中时按线身
+        //    只做第 4 步的选中，绝不拖动 —— 否则一次「想选中」的误拖就把线挪走了。
+        const selIndex = model.selection?.kind === 'trend' ? model.selection.index : -1;
+        const selBody = selIndex >= 0 ? trendBodies(plotW)[selIndex] : undefined;
+        if (
+          selBody
+          && findTrendBodyGrab([selBody], { left: 0, top, right: plotW, bottom }, x, y) === 0
+        ) {
           mode = 'trend-body';
-          grabIndex = grab;
+          grabIndex = selIndex;
           grabLastX = x;
           grabLastY = y;
           crossRef.current = null;
@@ -1719,9 +1720,16 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 4) 水平线线身：只选中，落点继续走「拖画布」（水平线是贯穿全宽的，见上面那段）。
-        const priceHit = hitLine(y);
-        if (priceHit >= 0) selectOnly({ kind: 'price', index: priceHit });
+        // 4) 其余线身（未选中的直线 / 水平线）：只选中，落点继续走「拖画布」。
+        //    走到这里说明「按中的不是已选中那条的线身」（已选中 + 线身命中在第 3 步就接管了）。
+        //    命中带与空闲光标的十字角标同一条（`findTrendBodyGrab`）：光标承诺「这里能抓」，
+        //    按下去至少要把这条线选中；真正能动它要等下一次按下。
+        const grab = findTrendBodyGrab(trendBodies(plotW), { left: 0, top, right: plotW, bottom }, x, y);
+        if (grab >= 0) selectOnly({ kind: 'trend', index: grab });
+        else {
+          const priceHit = hitLine(y);
+          if (priceHit >= 0) selectOnly({ kind: 'price', index: priceHit });
+        }
       }
       // 空白处 = 取消选中。**只看「没命中任何线」**，不管落在哪儿：主图空地、副图、时间轴、
       // 右侧价格轴留白都算空白（2026-11-21 用户「点击空白直接去掉选中」—— 划线区那枚 ✕ 已删，
