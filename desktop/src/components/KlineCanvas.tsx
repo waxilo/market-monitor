@@ -73,7 +73,7 @@ import {
   clipLineToRect,
   nearestTrendBody,
   nearestTrendHandle,
-  onTrendBody,
+  findTrendBodyGrab,
   type TrendAnchor,
   type TrendEnd,
   type TrendHandle,
@@ -1648,14 +1648,15 @@ export function KlineCanvas({
       }
 
       // 抓取已有的画线：**水平类只有两端把手能编辑**；直线两端把手改角度、
-      // **线身中段**整根平移（2026-11-23，中点那枚圆点已删）。
+      // **线身**按住就整根平移（2026-11-23 中点那枚圆点退场；2026-11-25 起连「先选中」
+      // 也不要了 —— 用户「直线不能随便平移了，需要抓点」）。
       // 锁定时整段跳过：落点照旧是「拖画布」。
       //
       // 为什么水平类不许「按住线身拖」（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
-      // 水平线与趋势线在屏幕上都是**贯穿全宽**的，4px 的线身命中带等于把画布横切成一条带子 ——
+      // 水平线在屏幕上**贯穿全宽**，4px 的线身命中带等于把画布横切成一条带子 ——
       // 想上下平移图表时起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，
-      // 而图表一格都没动）。直线那侧用**窄带 + 只认已选中的那条**兜住同一个风险
-      // （见 `TREND_BODY_GRAB_PX`）：没选中时按线身仍是「只选中」。
+      // 而图表一格都没动）。直线那侧靠**窄带**兜住同一个风险（`TREND_BODY_GRAB_PX` = 8px，
+      // 且只认画出来那一段）：它是一条斜带子，误抓面积只有一个 16px 宽的走廊，不是整片画布。
       let hitAnyLine = false;
       if (!modelRef.current.linesLocked && inMain) {
         const model = modelRef.current;
@@ -1696,24 +1697,19 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 3) 选中那条直线的**线身**：整体平移的入口（2026-11-23 起，中点圆点已删）。
-        //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 与 `infiniteLine`
-        //    同一个裁剪矩形，锚点早被平移到屏幕外时也不会认「空白里的延长线」。
-        //    端点已在第 2 步吃过，所以按在端点上仍是改角度，按在其余处才是整根平移。
-        const sel = model.selection;
-        const selTrendIdx = sel && sel.kind === 'trend' ? sel.index : -1;
-        const selBody = selTrendIdx >= 0 ? trendBodies(plotW)[selTrendIdx] : undefined;
-        const selSpan = selBody
-          ? clipLineToRect(selBody.x1, selBody.y1, selBody.x2, selBody.y2, {
-              left: 0,
-              top,
-              right: plotW,
-              bottom,
-            })
-          : null;
-        if (onTrendBody(selSpan, x, y)) {
+        // 3) 直线**线身**：按下即抓、整根平移（2026-11-23 起点那枚圆点已删；
+        //    2026-11-25 起**不必先选中** —— 用户「直线不能随便平移了，需要抓点」：
+        //    先点一下选中、第二下才拖得动，手势上就是「抓不住」）。
+        //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 锚点早被平移到
+        //    屏幕外时也不认「空白里的延长线」。端点已在第 2 步吃过：按在端点上仍是改角度。
+        //    这一下同时把它选中（划线区切成编辑条），松手不动就是纯选中。
+        const grab = findTrendBodyGrab(trendBodies(plotW), { left: 0, top, right: plotW, bottom }, x, y);
+        if (grab >= 0) {
+          if (!isSameLine(model.selection, { kind: 'trend', index: grab })) {
+            model.onSelect({ kind: 'trend', index: grab });
+          }
           mode = 'trend-body';
-          grabIndex = selTrendIdx;
+          grabIndex = grab;
           grabLastX = x;
           grabLastY = y;
           crossRef.current = null;
@@ -1723,14 +1719,9 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 4) 线身（趋势线的无限直线 / 水平线）：只选中，落点继续走「拖画布」。
-        //    走到这里说明「按中的不是已选中那条的线身」（已选中 + 线身命中在第 3 步就接管了）。
-        const body = nearestTrendBody(trendBodies(plotW), x, y);
-        if (body >= 0) selectOnly({ kind: 'trend', index: body });
-        else {
-          const hit = hitLine(y);
-          if (hit >= 0) selectOnly({ kind: 'price', index: hit });
-        }
+        // 4) 水平线线身：只选中，落点继续走「拖画布」（水平线是贯穿全宽的，见上面那段）。
+        const priceHit = hitLine(y);
+        if (priceHit >= 0) selectOnly({ kind: 'price', index: priceHit });
       }
       // 空白处 = 取消选中。**只看「没命中任何线」**，不管落在哪儿：主图空地、副图、时间轴、
       // 右侧价格轴留白都算空白（2026-11-21 用户「点击空白直接去掉选中」—— 划线区那枚 ✕ 已删，
@@ -1838,8 +1829,10 @@ export function KlineCanvas({
       if (modelRef.current.tool === 'none' && !modelRef.current.linesLocked) {
         const { top, bottom } = mainBounds();
         if (x <= plotW && y >= top && y <= bottom) {
+          // 直线的线身用**和按下同一套判据**（`findTrendBodyGrab`）：光标承诺的
+          // 「这里能抓」必须与真按下去的命中带一致，否则那枚四角十字就成了空头支票。
           const onAnyLine = nearestTrendHandle(trendHandles(plotW), x, y) != null
-            || nearestTrendBody(trendBodies(plotW), x, y) >= 0
+            || findTrendBodyGrab(trendBodies(plotW), { left: 0, top, right: plotW, bottom }, x, y) >= 0
             || hitLine(y) >= 0;
           if (onAnyLine) cursor = 'on-line';
         }

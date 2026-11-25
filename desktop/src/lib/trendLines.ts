@@ -316,29 +316,44 @@ export function nearestTrendBody(
 }
 
 /**
- * 选中直线的**线身**能不能作为「整体平移」的抓取点（2026-11-23）。
+ * 线身抓取：按下就能**整根平移**的是哪一条（2026-11-23 起；2026-11-25 起不必先选中）。
  *
  * 中点那枚圆点已删：它落在两锚点的像素中点，常常正好是屏幕中央，既压读数视线，
  * 又抢走「主图中央上下拖 = 调价格量程」的起手位。整根平移改由线身接手，
  * 于是选中后看得见的两个圆点只剩「改角度」一种含义。
  *
- * 命中带（[TREND_BODY_GRAB_PX]）比线身选中用的 [TREND_BODY_HIT_PX] 宽，
- * 但仍是一条窄带：按住线身本来就需要一点准头，宽了就是「拖量程顺手把线拖走」。
- * 判的是**到线段**的距离（[distanceToSegmentPx]）：两个锚点可能早已被平移到绘图区外，
- * 延到屏幕外的那截线并没有画出来，认了就是「按在空白里线却动了」。
- * 调用方必须先判端点把手（[nearestTrendHandle]）—— 端点区域也落在带里。
+ * 判的是**到画出来那一段**的距离（先 [clipLineToRect] 再 [distanceToSegmentPx]）：
+ * 两个锚点可能早已被平移到绘图区外，延到屏幕外的那截线并没有画出来，
+ * 认了就是「按在空白里线却动了」。
+ *
+ * 带宽（[TREND_BODY_GRAB_PX]）比选中用的 [TREND_BODY_HIT_PX] 宽：按住需要准头。
+ * 但仍是一条窄带 —— 它与线同向、横切整个绘图区，再宽就是「拖量程顺手把线拖走」。
+ * 调用方必须先判端点把手（[nearestTrendHandle]）：按下端点仍是改角度，
+ * 而端点区域本来就落在这条带子里。
+ *
+ * 返回最近的那一条下标；没有则 -1（-1 意味着这一下归「拖画布」）。
  */
-export function onTrendBody(
-  segment: PixelSegment | null | undefined,
+export function findTrendBodyGrab(
+  segments: readonly PixelSegment[],
+  rect: PixelRect,
   x: number,
   y: number,
   tolerance = TREND_BODY_GRAB_PX,
-): boolean {
-  if (!segment) return false;
-  if (![x, y, tolerance].every(Number.isFinite)) return false;
-  if (tolerance <= 0) return false;
-  if (![segment.x1, segment.y1, segment.x2, segment.y2].every(Number.isFinite)) return false;
-  return (
-    distanceToSegmentPx(segment.x1, segment.y1, segment.x2, segment.y2, x, y) <= tolerance
-  );
+): number {
+  if (![x, y, tolerance].every(Number.isFinite) || tolerance <= 0) return -1;
+  let best = -1;
+  let bestDistance = tolerance;
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    if (!s) continue;
+    if (![s.x1, s.y1, s.x2, s.y2].every(Number.isFinite)) continue;
+    const span = clipLineToRect(s.x1, s.y1, s.x2, s.y2, rect);
+    if (!span) continue;
+    const distance = distanceToSegmentPx(span.x1, span.y1, span.x2, span.y2, x, y);
+    if (distance <= bestDistance) {
+      bestDistance = distance;
+      best = i;
+    }
+  }
+  return best;
 }
