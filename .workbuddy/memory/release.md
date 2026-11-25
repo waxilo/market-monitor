@@ -1350,3 +1350,31 @@ tag 用两次 `gh api`（`POST /git/tags` 纯 `-f`/`-F` 字段 → `POST /git/re
   （0.9.82 与本版字节数恰好相同 11235976，只凭体积会误判成「没重新构建」；digest 不同 + dex 命中才算数）。
 - 桌面通道未动（仍 0.1.75，8 产物无残留）。
 - 用掉的 tag 追加：`0.9.83`。
+
+## 2026-11-25 晚：desktop 0.1.76 / android 0.9.84（画线「先选中才编辑」回退 + App 把手落到真实锚点）
+
+**改动**——用户「不管什么线，都要先选中才能编辑（双端）」「app 调角度的两个点不是我画线时的落点」：
+把 1700a02/5f964a5 的「按下即抓」双向回退（线身只对已选中那条生效，未选中按下只选中）；
+App 的 `TrendLinePixels` 新增 `anchorA/anchorB`（真实锚点），把手画在/抓在落笔处、转角支点用另一枚真锚点，
+出绘图区的那枚不画。
+
+提交链（本次是**直推**，没有走 API 重建）：
+- `bf70eea` fix(chart) 桌面端先选中再编辑
+- `cdf9c8f` fix(chart) App 把手回真实落点 + 先选中
+- `bc13561` chore(release)（tauri.conf 0.1.76 / vc 96 + 0.9.84 + README 两处版本表）
+
+工作流：CI(main) **45641343138** 绿 2m27s（单测 + debug APK；本机无 JDK，**Kotlin 编译靠这条 CI 兜底**）；
+Release(android) **45641896185** 绿 3m26s；Desktop Release **45641896044** 绿（win 15:09:10→15:18:20、
+mac 15:14:14→15:19:30、publish 15s）。主分支先推、CI 绿了才推两个 tag（README 第 1 步的口径）。
+
+通道验收（`verify-channel.mjs` 本机已不在，逐条手查同样的口径）：
+- `android-latest` 原地换：id **398798258** / created_at **2026-09-29T03:22:14Z** 均未变；
+  只有 `market-monitor-0.9.84.apk`（**11235976**，与 0.9.82/0.9.83 同字节数——第三次同体积巧合）
+  + `.sha256`。asset digest `7a18c5ed…467715` == 边车 == 本地 `shasum -a 256` 三处一致。
+- **包内证据**：APK 解开后 `anchorA`/`anchorB` 在 classes.dex(3/2)、classes2(0/1)、classes3(2/2) 命中，
+  而 tag `0.9.83` 的源码里 `anchorA` 出现 0 次 ⇒ 线上这版确实是本轮新代码。
+- `desktop-latest` 原地换：id **398800166** / created_at **2026-09-28T12:55:50Z** 未变，8 产物全是 0.1.76
+  （dmg 4460871 / app.tar.gz 4380706 / exe 2829935 + 三个 `.sha256` 与两个 `.sig`）。
+  `latest.json` version 0.1.76、pub_date 15:19:36Z；exe sig 的 keyid（小端 0BF65D2E19036B22
+  = 记忆里的 226B03192E5DF60B）== 固定签名密钥。
+- 用掉的 tag 追加：`desktop-v0.1.76`、`0.9.84`。
