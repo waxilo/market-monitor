@@ -10,12 +10,13 @@ import org.junit.Test
 /**
  * 直线「看得见的那一段」：把过两个锚点的**无限直线**裁到主图矩形的纯几何。
  *
- * 为什么值得单测（2026-11-22 真机两条反馈）：
+ * 为什么值得单测（2026-11-22 真机反馈）：
  * - **直线无法点击选中** —— 命中按两个锚点之间的线段判，而屏幕上画的是延长到边界的线；
  *   点在延长段上算落空，一次都选不中。
- * - **把手抓不着** —— 锚点可能被横向平移推到屏幕外，把手画在那里就等于没有。
  *
- * 裁剪结果同时喂给绘制、命中、把手，所以这里的断言就是「看得见 = 点得着 = 抓得住」。
+ * 裁剪结果喂给绘制段与线身命中带，所以这里的断言就是「看得见 = 点得着」。
+ * 两端把手**不走裁剪**：它们落在用户画线时的真实锚点上（2026-11-25 用户
+ * 「调角度的两个点并不是我画线时的落点」），锚点出视野时干脆不画。
  */
 class TrendClipTest {
 
@@ -96,15 +97,20 @@ class TrendClipTest {
     }
 
     @Test
-    fun `可见段两端就是把手位置——锚点全在屏幕外也抓得着`() {
-        // 两个锚点都在画布外（画完又平移走了）：只有可见段端点判得到把手
-        val span = clip(Offset(-2000f, -600f), Offset(4000f, 1400f))!!
+    fun `可见段两端不再是把手——把手在真实锚点上`() {
+        // 2026-11-25 用户「调角度的两个点并不是我画线时的落点」：可见段两端是直线撞到
+        // 绘图区边框的位置，与落笔位置无关。把手必须画在、抓在原来的两个锚点上，
+        // 这里的两个锚点都在画布外 —— 那就一枚把手都不画，而不是把边框交点伪装成把手。
+        val a = Offset(-2000f, -600f)
+        val b = Offset(4000f, 1400f)
+        val span = clip(a, b)!!
         val (s, e) = span
-        assertEquals(TrendGrip.ANCHOR_A, onTrendGrip(s, s, e, 20f))
-        assertEquals(TrendGrip.ANCHOR_B, onTrendGrip(e, s, e, 20f))
-        // 中段不再是把手（2026-11-23 中点圆点已删），但按住它就是整体平移的入口
+        assertNull(onTrendGrip(s, a, b, 20f))
+        assertNull(onTrendGrip(e, a, b, 20f))
+        assertEquals(TrendGrip.ANCHOR_A, onTrendGrip(a, a, b, 20f))
+        assertEquals(TrendGrip.ANCHOR_B, onTrendGrip(b, a, b, 20f))
+        // 线身仍按可见段判：点得着的是屏幕上画出来的那一截
         val mid = Offset((s.x + e.x) / 2f, (s.y + e.y) / 2f)
-        assertNull(onTrendGrip(mid, s, e, 20f))
         assertTrue(onTrendBody(mid, s, e, 10f))
     }
 

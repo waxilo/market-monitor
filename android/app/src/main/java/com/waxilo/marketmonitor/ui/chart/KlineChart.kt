@@ -780,11 +780,14 @@ fun KlineChart(
     /**
      * 已有直线**在当前绘图区里看得见的那一段**（两端都已被裁到主图矩形内）。
      *
-     * ❗这里给的是**裁剪后的可见段**，不是原始两个锚点。三条理由（2026-11-22 真机反馈）：
+     * ❗这里给的是**裁剪后的可见段**，不是原始两个锚点：
      * ① 直线在屏幕上向左右沿延长到绘图区边界，用户点的是**看得见的那条线** ——
      *    按锚点段判命中时，点在延长段上算落空，于是一次都选不中；
-     * ② 锚点可能早被横向平移推到屏幕外，把手画在那里就等于没有把手；
-     * ③ 命中带、把手位置、绘制段三者必须同源，否则「看得见」与「点得着」永远对不上。
+     * ② 命中带必须是画出来那一段，否则「按在空白里线却动了」。
+     *
+     * 两个**真实锚点**（用户画线时的落点）一并带出：两端把手画在那里、抓那里
+     * （2026-11-25 用户「调角度的两个点并不是我画线时的落点」——此前把手落在可见段两端，
+     * 也就是绘图区边界上，跟落笔的位置没有关系）。
      */
     fun trendPixels(): List<TrendLinePixels> =
         liveDrawLines.mapNotNull { line ->
@@ -793,14 +796,16 @@ fun KlineChart(
             if (line.kind != ChartLineKind.TREND || a1 == null || a2 == null) null
             else {
                 val g = liveGeo
+                val a = anchorPx(a1)
+                val b = anchorPx(a2)
                 clipLineToRect(
-                    a = anchorPx(a1),
-                    b = anchorPx(a2),
+                    a = a,
+                    b = b,
                     left = 0f,
                     top = g.mainTopPx,
                     right = g.plotWidthPx,
                     bottom = g.mainTopPx + g.mainHeightPx,
-                )?.let { TrendLinePixels(line.id, it.first, it.second) }
+                )?.let { TrendLinePixels(line.id, it.first, it.second, anchorA = a, anchorB = b) }
             }
         }
 
@@ -1917,8 +1922,20 @@ private fun DrawScope.drawDrawLines(
                 drawLine(color, span.first, span.second, width)
                 // 把手**只在选中态出现**（2026-11-22 用户「两个点没选中时不展示」）：
                 // 只有两端、改角度；整根平移按住线身即可（2026-11-23 起，中点圆点已删）。
-                // 位置就是可见段的两端 —— 锚点在屏幕外时也一定看得见、抓得着。
-                if (picked) drawTrendGrips(span.first, span.second, color)
+                // 位置是**用户画线时的两个真实落点**（不是可见段端点）：此前画在裁到边界
+                // 的那两头，用户反馈「调角度的两个点并不是我画线时的落点」（2026-11-25）。
+                // 出绘图区的那枚不画 —— 看不见的点也不能被抓（见 [drawTrendGrips]）。
+                if (picked) {
+                    drawTrendGrips(
+                        p1 = anchorPx(a1),
+                        p2 = anchorPx(a2),
+                        color = color,
+                        left = 0f,
+                        top = geo.mainTopPx,
+                        right = geo.plotWidthPx,
+                        bottom = geo.mainTopPx + geo.mainHeightPx,
+                    )
+                }
             }
         }
     }
@@ -1930,14 +1947,30 @@ private fun DrawScope.drawDrawLines(
  * 都由**本色实心圆 + 中心白点**组成：把手大半压在**同色**的斜线上，纯实心圆会跟线融成一体
  * （桌面端 6 倍放大截图为证），白心是「这里能抓」的唯一形状依据。
  *
+ * 位置是**用户画线时的那两个锚点**（2026-11-25 用户「调角度的两个点并不是我画线时的落点」）：
+ * 原先画在可见段两端，也就是直线撞到绘图区边框的地方，跟落笔位置毫无关系。
+ * 落到边框外（锚点被平移/缩放出视野）的那一枚不画 —— 画在边框上会被误认成「这是落点」，
+ * 而且那枚假把手还改不了它该改的角度。此时整根平移仍可按住线身完成。
+ *
  * 中点那枚已在 2026-11-23 删除（用户「直线中间的点去掉，点其他两点之外就能平移」）：
  * 它落在屏幕正中央，既压住读数视线，又正好抢走「主图中央上下拖 = 调价格量程」的起手位。
- * 整体平移改由**线身**接手（[onTrendBody]），于是选中后看得见的两个圆点只是「改角度」的入口。
+ * 整体平移改由**线身**接手，于是选中后看得见的两个圆点只是「改角度」的入口。
  */
-private fun DrawScope.drawTrendGrips(p1: Offset, p2: Offset, color: Color) {
+private fun DrawScope.drawTrendGrips(
+    p1: Offset,
+    p2: Offset,
+    color: Color,
+    left: Float,
+    top: Float,
+    right: Float,
+    bottom: Float,
+) {
     val ring = Color.White.copy(alpha = 0.92f)
     val r = TREND_GRIP_DOT.toPx()
     for (p in listOf(p1, p2)) {
+        if (!p.x.isFinite() || !p.y.isFinite()) continue
+        // 与桌面端 `drawTrendHandle` 同一条界：整枚把手落在主图矩形内（留一个半径的余量）才画。
+        if (p.x < left - r || p.x > right + r || p.y < top - r || p.y > bottom + r) continue
         drawCircle(color, radius = r, center = p)
         drawCircle(ring, radius = r * 0.46f, center = p)
     }
@@ -2837,8 +2870,8 @@ private suspend fun PointerInputScope.detectChartGestures(
      * 判定，按在线上就再也长按不出读数。现在拆成两个不同时刻的动作：
      * · **单击**（按下即抬、没滑出 slop）→ 选中这一条（由 [onSelectLine] 落地）；
      *   单击空白处 → 取消选中；
-     * · **按住** → 当场接管，整场跟手拖动（水平类抓两端把手改价位；直线**压在线身上就算抓**，
-     *   选中与否都行，2026-11-25）。
+     * · **按住已选中的线** → 当场接管，整场跟手拖动（水平类抓两端把手改价位；直线
+     *   压在线身上就算抓，2026-11-25 用户「都要先选中才能编辑」——未选中时按线身只选中）。
      * 直线那一档在 slop 之前只是候选（`pendingTrendBody`），所以「按住线看读数」
      * （长按十字光标）仍然成立；水平类的线身按住拖动 = 普通画布手势（平移），
      * 线纹丝不动 —— 误划再也拖不走线。
@@ -2967,18 +3000,18 @@ private suspend fun PointerInputScope.detectChartGestures(
          * 为什么不在 down 就选中：这样「按住线横向平移画布」会顺手把线选走 ——
          * 选中是带视觉与后续拖动的承诺，必须由一次真正的「点击」产生。
          * 滑出 slop 或落下第二根手指即作废（见循环内），这一场就只是平移/缩放。
-         * 唯一的例外是直线线身：滑满 slop 会转成整根平移，那时当场选中（见 [pendingTrendBody]），
-         * 因为拖动本来就以「选中这一条」为前提。
+         * 直线线身也一样：未选中时按线身只当点击候选，滑走就只是平移画布
+         * （2026-11-25 用户「都要先选中才能编辑」）。
          */
         var pendingSelect: LineRef? = null
         /** 本场按在空白处：松手时取消选中（同样要「没滑走、没长按」）。 */
         var tapOnBlank = false
         /**
-         * 本场按下压在**直线线身**上的候选（2026-11-25）：手指走满 slop 才转成整根平移。
+         * 本场按下压在**已选中**直线线身上的候选（2026-11-25）：手指走满 slop 才转成整根平移。
          *
          * 为什么不在 down 就进 MOVE：长按十字光标（按住看读数）与「抓住线身拖」共用同一个
          * 起手，只有「手指动了没有」能区分两者。转换点在循环里，那里会**重取基准**
-         * （`trendDown` = 当时的指尖、两端 = 按下那一刻的可见端点），所以线不会补跳这半个
+         * （`trendDown` = 当时的指尖、两端 = 按下那一刻的真实锚点），所以线不会补跳这半个
          * slop —— 跟手感与「down 即抓」没有区别。
          * 双指落下、长按成立、滑满 slop（转换）三者之一都会把它消费掉（见循环内）。
          */
@@ -2994,8 +3027,9 @@ private suspend fun PointerInputScope.detectChartGestures(
             }
             // ② 解锁态：按下就近找**哪根线**（不必先选工具），再看这一下落在它的哪儿 ——
             //    · 水平类的两端把手 → 当场接管，整场跟手改价；
-            //    · 直线线身（**选中与否都算**）→ 记候选，手指走满 slop 转成整根平移
-            //      （2026-11-25 用户「app 也存在相同问题」：此前要先点一下选中才拖得动）；
+            //    · 直线线身（**只认已选中那条**）→ 记候选，手指走满 slop 转成整根平移
+            //      （2026-11-25 用户「不管什么线，都要先选中才能编辑」：没选中时按线身
+            //      只走下面的「点击候选」，松手才选中，绝不拖动）；
             //    · 其余命中 → 只记「点击候选」，松手且没滑走才选中它（2026-10-24 口径）；
             //    · 落空 → 松手取消选中，拖动照旧是平移画布。
             //    刻度区与副图区不参与 —— 那两处起笔本来就另有含义
@@ -3030,8 +3064,9 @@ private suspend fun PointerInputScope.detectChartGestures(
                 /**
                  * 直线：这一下是「改角度」「抓线身」还是「只当点击」（优先级见 [trendTouchAt]）。
                  *
-                 * 线身**不再要求先选中**（2026-11-25）：按下压在线上就是抓，松手不动才是纯选中。
-                 * 命中带仍比选中半径窄一档（[TREND_BODY_GRAB]）—— 这条带子横切整个绘图区，
+                 * 端点与线身都**只认已选中那条**（2026-11-25 用户「不管什么线，都要先选中
+                 * 才能编辑」）：未选中时这一下只当点击，松手选中它，第二下才拖得动。
+                 * 线身命中带比选中半径窄一档（[TREND_BODY_GRAB]）—— 这条带子横切整个绘图区，
                  * 宽了就回到「调量程顺手把线拖走」。
                  */
                 val trendTouch = trendTouchAt(
@@ -3048,11 +3083,11 @@ private suspend fun PointerInputScope.detectChartGestures(
                         if (trend != null) {
                             trendGrabbedId = trend.id
                             trendDown = first.position
-                            // 固定端 = **另一端可见点**对应的锚点（不是原始 anchor1/2）：
-                            // 原始锚点可能早被平移到屏幕外，拿它当旋转轴会让跟手端与手指
-                            // 之间多出一段杠杆，拖起来线跑得比手指快。
+                            // 固定端 = **另一枚把手的真实锚点**（不是可见段端点）：
+                            // 抓取端与固定端都是用户画下的那两个点，转完之后把手仍落在原处，
+                            // 不会被悄悄挪到绘图区边界上（2026-11-25 用户反馈的同一个毛病）。
                             val gripIsA = trendTouch == TrendTouch.ANCHOR_A
-                            val fixedPx = if (gripIsA) trend.p2 else trend.p1
+                            val fixedPx = if (gripIsA) trend.anchorB else trend.anchorA
                             val fixed = trendAnchorAt(fixedPx.x, fixedPx.y)
                             if (fixed != null) {
                                 trendGripIsA = gripIsA
@@ -3062,22 +3097,19 @@ private suspend fun PointerInputScope.detectChartGestures(
                         }
                     }
 
-                    // 线身：先只记候选 —— 手指走满 slop 才转成整根平移（见循环里的
-                    // `pendingTrendBody`），一动就走、不动的松手就是一次单击（收尾处选中）。
-                    // 不在 down 直接进 MOVE 是为了给长按十字光标让路：按住线看读数仍然要能用，
-                    // 而「按下即抓」在跟手感上与延迟到 slop 没有任何区别（转换点重取基准，见下）。
-                    TrendTouch.BODY -> {
-                        pendingTrendBody = hitTrend
-                        pendingSelect = hit
-                    }
+                    // 线身（**已选中**那条）：先只记候选 —— 手指走满 slop 才转成整根平移
+                    // （见循环里的 `pendingTrendBody`）。不在 down 直接进 MOVE 是为了给
+                    // 长按十字光标让路：按住线看读数仍然要能用，而「按下即抓」在跟手感上
+                    // 与延迟到 slop 没有任何区别（转换点重取基准，见下）。
+                    TrendTouch.BODY -> pendingTrendBody = hitTrend
 
                     // 没落在直线上（或离得太远）：水平类走到这里才判，与旧口径一致。
                     TrendTouch.NONE -> when (
                         lineTouch(hit, currentSelection(), dragAllowed = flatGrip)
                     ) {
                         // 水平类**只有两端把手算抓到**：线身横贯整个绘图区，按住就算抓的话
-                        // 「上下平移图表」起手压到线就会把线拖走（2026-11-21 的老毛病，
-                        // 2026-11-25 只对**直线**放开线身，水平类维持原样）。
+                        // 「上下平移图表」起手压到线就会把线拖走（2026-11-21 的老毛病；
+                        // 直线那边同理，只是它的线身带是窄带、且只认已选中那条）。
                         LineTouch.Drag -> {
                             // 抓取半径有 24dp，手指未必正落在线上：记下「线在手指上下多少」，
                             // 拖动时补回去，线只跟位移走、不往手指上跳。
@@ -3354,21 +3386,20 @@ private suspend fun PointerInputScope.detectChartGestures(
                 // 位移一旦超过 slop，长按就再也不可能成立（见上方的长按条件）——
                 // 这场手势是平移/翻页：遗留的十字光标到此为止，不陪着图一起滑
                 if (travelled > touchSlop) onCrosshair(null)
-                // ★ 按下压在直线线身上、手指终于走满 slop：**就在这一帧转成整根平移**
-                //   （2026-11-25）。基准重取（trendDown = 当前指尖），线只跟之后的位移走 ——
-                //   既不补跳这半个 slop；这一帧也不落到下面的画布平移里，否则图表会先横移
-                //   几像素再开始拖线，观感就是「抓歪了一格」。
+                // ★ 按下压在已选中直线的线身上、手指终于走满 slop：**就在这一帧转成整根平移**
+                //   （2026-11-25）。基准重取（trendDown = 当前指尖、两端 = 真实锚点），
+                //   线只跟之后的位移走 —— 既不补跳这半个 slop；这一帧也不落到下面的画布平移里，
+                //   否则图表会先横移几像素再开始拖线，观感就是「抓歪了一格」。
                 val body = pendingTrendBody
                 if (body != null && travelled > touchSlop) {
                     pendingTrendBody = null
                     pendingSelect = null
                     trendGrabbedId = body.id
-                    trendBase = body.p1 to body.p2
+                    trendBase = body.anchorA to body.anchorB
                     trendDown = primary.position
                     trendMode = TrendMode.MOVE
                     owned = true
-                    // 拖动开始即选中：这条线从此是「选中态」（编辑栏跟着出来），
-                    // 与单击选中同源 —— 松手不再补一次 select。
+                    // 这条路只对已选中那条开放；再落一次选中是幂等的（松手不再补 select）。
                     onSelectLine(LineRef.Guide(body.id))
                     continue
                 }
@@ -3490,7 +3521,7 @@ internal fun LineRef.selectable(): Boolean = when (this) {
 /**
  * 按下命中 [hit]、当前选中 [selected] 时，这一场单指的用途 —— **水平类专用**。
  *
- * 直线的通道已独立成 [trendTouchAt]（线身现在选中与否都算抓，见那儿的注释），
+ * 直线的通道已独立成 [trendTouchAt]（只认已选中那条，见那儿的注释），
  * 走到这里的一定是水平类线（告警线 / 水平线），或者是「离直线太远」的命中。
  *
  * 判据只有两条：**只有点到已选中的那条才直接拖**，其余命中一律先「选中」。
@@ -3577,7 +3608,7 @@ internal fun onTrendGrip(
  * 命中带比选中用的抓取半径（[ALERT_GRAB_WIDTH] 24dp）窄得多，见 [TREND_BODY_GRAB]：
  * 这条带子横切整个绘图区，宽了就回到「拖量程顺手拖线」的老毛病。
  * 调用方**必须先判 [onTrendGrip]**：端点区域也落在这条带里，顺序反了就改不了角度。
- * 2026-11-25 起这条判据对**所有**直线生效（此前只认选中那条，见 [trendTouchAt]）。
+ * 只对**已选中**那条生效（2026-11-25 用户「先选中才能编辑」，见 [trendTouchAt]）。
  */
 internal fun onTrendBody(
     point: Offset,
@@ -3607,14 +3638,16 @@ internal enum class TrendTouch {
 }
 
 /**
- * 按下落在直线上时的定性：**端点优先，其次线身**（2026-11-25 起线身不再要求先选中）。
+ * 按下落在直线上时的定性：**端点优先，其次线身**，且**只对已选中那条成立**。
  *
- * 端点必须先判：线身的命中带本来就盖住端点附近，顺序反了就永远改不了角度。
- * 端点把手只在 [selected] 那条上判 —— 把手只给选中态画，认未选中那条的「看不见的把手」
- * 等于凭空抢走一次线身抓取。
+ * 2026-11-25 用户「不管什么线，都应该要先选中才能编辑，现在没选中就可以拖动，这个问题双端都有」：
+ * 未选中时这一下只能产生「选中」，所以直接返回 [TrendTouch.NONE]，由调用方的点击候选接管。
+ * 选中之后：
+ * - 端点必须先判：线身的命中带本来就盖住端点附近，顺序反了就永远改不了角度；
+ * - 端点用**真实锚点**（[TrendLinePixels.anchorA]/[TrendLinePixels.anchorB]），不是可见段端点 ——
+ *   把手画在用户画线时落的那两个点上（2026-11-25 用户「调角度的两个点并不是我画线时的落点」）；
+ * - 线身用**可见段**（[TrendLinePixels.p1]/[TrendLinePixels.p2]），按在延长段上也算命中。
  *
- * 线身**对所有直线成立**：用户 2026-11-25「app 也存在相同问题」指的是
- * 「先点一下选中、第二下才拖得动」那套 —— 按下就是抓，选中与否只是「有没有高亮」。
  * 真正开始平移还要等手指走满 slop，那一档在 `detectChartGestures` 里（`pendingTrendBody`），
  * 为的是不把「按住看读数」（长按十字光标）挤掉。
  */
@@ -3626,12 +3659,13 @@ internal fun trendTouchAt(
     bodyHitPx: Float,
 ): TrendTouch {
     if (line == null) return TrendTouch.NONE
-    if (selected) {
-        when (onTrendGrip(point, line.p1, line.p2, gripHitPx)) {
-            TrendGrip.ANCHOR_A -> return TrendTouch.ANCHOR_A
-            TrendGrip.ANCHOR_B -> return TrendTouch.ANCHOR_B
-            null -> Unit
-        }
+    // 未选中 = 这一下只能「选中」：不许改角度，也不许整根平移（2026-11-25 用户
+    // 「不管什么线，都应该要先选中才能编辑」）。调用方会把 NONE 落成点击候选。
+    if (!selected) return TrendTouch.NONE
+    when (onTrendGrip(point, line.anchorA, line.anchorB, gripHitPx)) {
+        TrendGrip.ANCHOR_A -> return TrendTouch.ANCHOR_A
+        TrendGrip.ANCHOR_B -> return TrendTouch.ANCHOR_B
+        null -> Unit
     }
     return if (onTrendBody(point, line.p1, line.p2, bodyHitPx)) TrendTouch.BODY else TrendTouch.NONE
 }
@@ -3650,18 +3684,32 @@ private enum class TrendMode {
     /** 已有种子：拖动只挪准星（预览线跟着走）；**轻点**才成交（准星压在种子上则撤销）。 */
     PLACE2,
     /**
-     * 按住已有直线的**线身**（两端之外）：整根随手指平移。中点圆点已删（2026-11-23）。
+     * 按住**已选中**直线的**线身**（两端之外）：整根随手指平移。中点圆点已删（2026-11-23）。
      *
-     * 2026-11-25 起**不必先选中**：按下压在线身上、手指走满 slop 即在循环里转入这一档
-     * （见 `pendingTrendBody`），转入时重取基准，线不补跳。
+     * 按下压在已选中那条的线身上、手指走满 slop 即在循环里转入这一档
+     * （见 `pendingTrendBody`），转入时重取基准，线不补跳。未选中时按线身只选中，
+     * 下一场按下才拖得动（2026-11-25 用户「都要先选中才能编辑」）。
      */
     MOVE,
     /** 抓住已有直线**某一端把手**：这一端跟手、另一端钉住 —— 改角度。 */
     ANCHOR,
 }
 
-/** 一条已有直线当前的两端像素落点，手势按它就近抓取与平移。 */
-internal data class TrendLinePixels(val id: Long, val p1: Offset, val p2: Offset)
+/**
+ * 一条已有直线当前的两端像素落点，手势按它就近抓取与平移。
+ *
+ * [p1]/[p2] 是**裁到主图矩形的可见段**（画出来、点得着的那一截），线身命中用它；
+ * [anchorA]/[anchorB] 是用户画线时落下的两个**真实锚点**，两端把手画在这里、抓这里
+ * （2026-11-25 用户「调角度的两个点并不是我画线时的落点」）。
+ * 锚点可能被平移/缩放出绘图区，绘制端会跳过落在区外的那枚把手。
+ */
+internal data class TrendLinePixels(
+    val id: Long,
+    val p1: Offset,
+    val p2: Offset,
+    val anchorA: Offset = p1,
+    val anchorB: Offset = p2,
+)
 
 /**
  * 把过 [a]、[b] 的**无限长直线**裁进矩形，返回矩形内那一段的两个端点；不相交返回 null。
@@ -3673,8 +3721,8 @@ internal data class TrendLinePixels(val id: Long, val p1: Offset, val p2: Offset
  * 用 Liang–Barsky 参数裁剪：不必先把斜率算出来，所以**近竖直的线也不会炸**（旧实现里
  * `(p2.y - p1.y) / dx` 在 `dx ≈ 0` 时得单独走一支，那一支又只按高度延长、与横向延长不同源）。
  *
- * 这一条是直线几何的唯一来源 —— 绘制段、命中带、把手位置全都从它出来。
- * 三者各算一次是过去几轮反复出错的根子（画得到点不着、把手画在屏幕外）。
+ * 绘制段与线身命中带都从它出来（同一处裁剪，画得到 = 点得着）。
+ * 两端把手**不**走裁剪：它们落在用户画线时的真实锚点上（见 [TrendLinePixels]）。
  */
 internal fun clipLineToRect(
     a: Offset,
@@ -4071,12 +4119,11 @@ private val TREND_GRIP_HIT = 12.dp
 
 /**
  * 直线**线身**的命中带宽（dp）—— 整体平移的入口（2026-11-23 起，见 [onTrendBody]；
- * 2026-11-25 起选中与否都算抓，见 [trendTouchAt]）。
+ * 只对**已选中**那条生效，见 [trendTouchAt]）。
  *
  * 比选中用的 [ALERT_GRAB_WIDTH]（24dp）窄一半：这条带子与直线同向、横切整个绘图区，
  * 宽了就是 2026-11-21/22 那两轮的老毛病（纵向调量程时起手压在带上，线跟着走）。
  * 10dp（单侧）在真机上仍是一条「顺着线摸得着」的窄带，而按住线身本来就需要一点准头。
- * 这条带子如今对**所有**直线生效（不再只对选中那条），所以宁可再窄不能更宽。
  */
 private val TREND_BODY_GRAB = 10.dp
 
