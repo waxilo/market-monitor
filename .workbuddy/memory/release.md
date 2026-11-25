@@ -1322,3 +1322,31 @@ tag 用两次 `gh api`（POST `/git/tags` 纯 `-f` 字段 → POST `/git/refs`�
   == 本地 `npm run build`；CI `本次版本号：0.1.75` + `--config {"version":"0.1.75"}`。
 - Android 通道未动（仍是 `market-monitor-0.9.82.apk`，单 APK 无残留）。
 - 用掉的 tag 追加：`desktop-v0.1.75`。
+
+## android 0.9.83（单发 App，2026-11-25 19:05 CST / 11:05 UTC）
+
+**直线线身「按下即抓」**——App 侧补齐桌面 0.1.75 的口径：整根平移不再要求先单击选中
+（此前「先选中 → 第二下才拖」，一按一拖没反应）。唯一差异：App 把「真拖」延迟到走满 slop
+（为了不挤掉长按十字光标），转换点重取基准，线不补跳。桌面端本轮不动。
+
+提交链（远端 API 重建，SHA 与本地不同）：
+- `b9a2dcf` → 远端 `5f964a5` fix(chart)（`trendTouchAt` + `pendingTrendBody` + `TrendTouchTest`）
+- `b6d360b` → 远端 `c10aa09` chore(release)（vc 95 / 0.9.83 + 记忆文档；tag `0.9.83` 指此 commit）
+
+两跳都是 `api-push-0948.py --parent <上一跳远端SHA>`（第一跳 parent = `ee7f5454`，即 0.1.75 那轮的远端头）；
+本地 `git fetch` + `git reset --soft FETCH_HEAD` 对齐（tree `97c29d20` 两侧相同，**没有** reset --hard）。
+tag 用两次 `gh api`（`POST /git/tags` 纯 `-f`/`-F` 字段 → `POST /git/refs`）建，tag 对象 `a0de3e11`。
+
+工作流：Release **45601213598** 绿 2m48s（11:05:57→11:08:42）；CI(main) **45601162395** 绿 2m12s
+（其间另有一次 CI 45601082538 被新推送取消，正常）。
+
+通道验收：`verify-channel.mjs 0.1.75` **34/34 PASS**（一份脚本双通道）——
+- `android-latest` 原地换：id **398798258** / created_at **2026-09-29T03:22:14Z** 均未变；
+  只有 `market-monitor-0.9.83.apk`（**11235976**）+ `.sha256`，0.9.82 已被 publish-channel 移除。
+- APK asset digest `d0bd20a3…ee17f3` == 边车逐字；CI `本次版本号：0.9.83`、
+  `apk cert sha256: cf2e20c7…52f034` == 固定发布密钥基线。
+- **包内证据**：把 APK 拉进内存解 zip，`classes3.dex` 里 `trendTouchAt` / `pendingTrendBody` / `TrendTouch`
+  三个**本次新增**的标识符全部命中，而父提交 `5f964a5^` 里这三个词出现 0 次 ⇒ 线上这版确实是新代码
+  （0.9.82 与本版字节数恰好相同 11235976，只凭体积会误判成「没重新构建」；digest 不同 + dex 命中才算数）。
+- 桌面通道未动（仍 0.1.75，8 产物无残留）。
+- 用掉的 tag 追加：`0.9.83`。
