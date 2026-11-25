@@ -1294,3 +1294,31 @@ tag 对象：`0.9.82` → `929f3888`、`desktop-v0.1.74` → `c95123e6`（都是
 - 包内证据：CI vite 指纹 `index-D43cUXk6.js 344.73` / `index-DcE0kAte.css 53.92`（win 与 mac 两 job 一致）
   == 本地 `npm run build`；CI `本次版本号：0.1.74` + `--config {"version":"0.1.74"}`。
 - 用掉的 tag 追加：`0.9.82`、`desktop-v0.1.74`。
+
+## desktop 0.1.75（单发桌面，2026-11-25 15:41 CST / 07:41 UTC）
+
+**直线线身「按下即抓」**——整根平移不再要求先单击选中（此前「先选中 → 第二下才拖」，
+观感就是只剩两端把手能动）。桌面端专属；Android 仍要求先选中，未同步。
+
+提交链（远端 API 重建，SHA 与本地不同）：
+- `75370e1` → 远端 `1700a02` fix(chart)（`findTrendBodyGrab` + 按下即抓 + 光标同判据）
+- `2290b2c` → 远端 `1e9d867` docs(memory)（desktop.md 新口径 + 2026-11-25 流水）
+- `3edb506` → 远端 `49dacf1` chore(release)（`tauri.conf.json` 0.1.75；tag `desktop-v0.1.75` 指此 commit）
+
+`git push` 仍被拦（`fatal: not a git repository`），三跳都是 `api-push-0948.py --parent <上一跳远端SHA>`；
+本地 `git fetch` + `git reset --soft FETCH_HEAD` 对齐（tree `f0ab26fb` 两侧相同，**没有** reset --hard）。
+tag 用两次 `gh api`（POST `/git/tags` 纯 `-f` 字段 → POST `/git/refs`）建，tag 对象 `af2717ea`，未踩 `--input` 那个坑。
+
+工作流：CI(main) **45570043243** 绿 1m30s；Desktop Release **45570079152** 三 job 全绿
+（win 7m42s / mac 3m23s / 发布 18s），07:49:18 UTC 收尾。
+
+通道验收：`verify-channel.mjs 0.1.75` **34/34 PASS**（github.com 这次直连就通，没走代理兜底）——
+- `desktop-latest` 原地换：id **398800166** / created_at **2026-09-28T12:55:50Z** 均未变；
+  8 产物全 0.1.75、无 0.1.74 残留；`latest.json` 1343 B、pub_date `2026-11-25T07:49:04.569Z`。
+- exe **2832713**（digest `998be038…`，`.sha256` 边车逐字相等）、dmg **4460664**、
+  mac app.tar.gz **4380533**；两平台 `.sig` alg `ED` + keyid `226B03192E5DF60B` == 内嵌公钥，
+  且与 manifest 内联签名一致。
+- 包内证据：CI vite 指纹 `index-Cq4lcL-H.js 344.82` / `index-DcE0kAte.css 53.92`（win 与 mac 两 job 一致）
+  == 本地 `npm run build`；CI `本次版本号：0.1.75` + `--config {"version":"0.1.75"}`。
+- Android 通道未动（仍是 `market-monitor-0.9.82.apk`，单 APK 无残留）。
+- 用掉的 tag 追加：`desktop-v0.1.75`。
