@@ -603,7 +603,9 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
 > 离线 45px 横拖只平移画布、锁定后拖不动）；回归 `verify-draw-zone.mjs` 里水平线那几条仍按老口径通过。
 > ⚠️ 该脚本 5 条 FAIL 是**陈旧断言**（✕「取消选中」按钮 2026-11-21 已删、`document.querySelector('.interval-bar …')`
 > 命中的是另一条 bar、价位标签只留两位小数），与本次改动无关。
-> ❗Android 端**尚未同步**这一条（仍是「必须先选中才能拖线身」）。
+> ❗Android 端已于 **2026-11-25 同步**这一条（`trendTouchAt` + `pendingTrendBody`，0.9.83）：
+> 差异只有一处 —— App 的十字光标靠长按，所以线身抓取**延迟到走满 slop 才真拖**
+> （桌面是 down 即进 `trend-body`；桌面十字光标是悬停，没有这个冲突）。详见 `android.md` 同名小节。
 
 > ❗**蜡烛实体的宽度只有一个出处**（2026-11-21 用户「缩放时 K 线会贴在一起」）：`chartMath.candleBodyRect(centerX, slot)`。
 > 旧公式 `Math.max(1, Math.round(slot * 0.66)) | 1` 在槽宽 3~7px 时算出 3~5px —— 占去槽宽的大半，

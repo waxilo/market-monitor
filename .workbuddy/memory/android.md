@@ -850,6 +850,7 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
   `distanceToSegment` ≤ `TREND_BODY_GRAB = 10dp` 即算「按住线身」。手势侧 down 的判定顺序是
   **水平把手 → 两端把手 → 线身 → 只选中**，`dragAllowed = flatGrip || trendGrip != null || trendBodyGrab`；
   只有**已选中**那条的线身能拖（未选中仍是 `Select`）。命中带只用于抓取，**选中半径仍是 24dp**。
+  ⚠️ 该条「只认已选中」已于 **2026-11-25 作废**（见文末「线身按下即抓」）。
 - **桌面**：`trendMidHandles` 与中点 `drawTrendHandle` 删掉；命中顺序改成
   **水平把手 → 端点把手 → 选中线的可见段（`clipLineToRect` + `onTrendBody`，8px）→ 其余线身只选中**。
   线身判的是**裁进主图的那一段**（与 `infiniteLine` 同矩形），锚点在屏外时不会认「空白里的延长线」。
@@ -858,3 +859,32 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
   `:app:testDebugUnitTest` 图表包全绿（TrendGrip 12/12、TrendClip 8/8）。
 - ⚠️ 风险口径没变：带宽宽了会回到「拖量程顺手把线拖走」，所以 10dp/8px 是刻意的窄带；
   双指落下清 `trendMode` 的那道闸（2026-11-22）必须留着 —— 线身可拖之后它更重要。
+
+## 线身「按下即抓」：不必先选中，走满 slop 才真拖（2026-11-25，双端对齐）
+
+用户先在桌面端报「直线不能随便平移了，需要抓点」，当天发 0.1.75；随后「app 也存在相同问题」
+⇒ App 侧同口径落地（0.9.83 / vc 95）。病灶是 11-23 那版的 `option`：**只有已选中那条的线身能拖**，
+于是「一按一拖」没反应，观感只剩两端把手能动。
+
+- **纯函数**（可单测的那一半）：新增 `trendTouchAt(line, selected, point, gripHitPx, bodyHitPx)`
+  → `TrendTouch.{NONE, BODY, ANCHOR_A, ANCHOR_B}`，把「端点优先、其次线身、都没中才是画布」
+  这条优先级从手势体里搬出来钉死。端点**只在 `selected` 时判**（把手只给选中态画，
+  认未选中那条的「看不见的把手」等于凭空抢走一次线身抓取）。`lineTouch` 退役成**水平类专用**。
+- **手势侧**：down 命中线身 → `pendingTrendBody`（含未选中那条），**不**当场进 `MOVE`；
+  单指循环里第一帧 `travelled > touchSlop` 时转入 `TrendMode.MOVE`，并**重取基准**
+  （`trendDown` = 当时指尖，两端 = 按下那一刻的可见端点）⇒ 线不补跳那半个 slop，
+  这一帧也不落到画布平移里（否则图表先横移几像素再开始拖线，像抓歪了一格）。
+  转入时 `onSelectLine`（拖动以选中为前提，松手不再补选）；不动就是单击 → 收尾处选中。
+- ❗**为什么不像桌面那样 down 即进 MOVE**：桌面十字光标是悬停，App 是**长按**。
+  down 即抓会把「按住线看读数」挤掉（10dp 带内再也长按不出十字光标）；
+  延迟到 slop 后两者由「手指动了没有」天然分开，跟手感没有区别。
+  双指落下、长按成立、滑满 slop 三处都会消费 `pendingTrendBody`（漏一处就变成
+  「捏合完抬掉一根手指，线接着被拖走」—— 11-22 那个漂移的同款）。
+- **草稿不参与抓取**：`trendPixels()` 先滤掉 `id == 0L`（`LineRef.Guide(id).selectable()`），
+  否则会把一次拖动/落库回调发给还没落库的临时对象。
+- **单测**：新增 `TrendTouchTest` 7 项（未选中线身/未选中端点都 `BODY`、已选中端点仍 `ANCHOR_*`、
+  带外 `NONE`、`line == null`、非法输入）；`TrendGripTest`/`LineTouchTest`/`FlatGripTest` 未改断言仍全绿，
+  `:app:testDebugUnitTest` 全量 **504 项 0 失败**（新增的 `TrendTouchTest` 7 项在内）。
+- ⚠️ 代价与桌面一致：**10dp 窄带内起手的单指竖向拖动不再调价格量程**，改成拖这条线
+  （双指捏合照旧不受影响 —— 2 指落下就清 `trendMode`）。用户要的就是这个方向，窄带别再放宽。
+- ⚠️ 无真机验收（`adb devices` 为空，MuMu 未启动；沙箱不能替用户起模拟器）。
