@@ -591,6 +591,19 @@ UI 在 `MiniListPanel.tsx`【已删】，拖拽排序抽成 `hooks/useDragSort.t
 > 命中即 `mode='trend-body'`；② 仍是两端把手改角度（先判，端点在带里）。`trendMidHandles` 与中点那枚
 > `drawTrendHandle` 一并删除（它落在两锚点像素中点、常是屏幕正中，既挡读数又抢「中央上下拖=调量程」的起手位）。
 > 未选中/别条的线身仍是「只选中 + pan」。Android 同步同口径（`onTrendBody`，`TREND_BODY_GRAB = 10dp`）。
+>
+> ❗**2026-11-25 再改一步：直线线身「按下即抓」，不再要求先选中**（用户「桌面端直线不能随便平移了，需要抓点」）。
+> 前一天的口径是「先点一下选中 → 第二下才拖得动」，手势上就是抓不住 ⇒ 用户以为只剩两端把手能动。
+> 现在 `onTrendBody` 换成 `findTrendBodyGrab(segments, rect, x, y)`（返回最近一条的下标，内部 `clipLineToRect` +
+> `distanceToSegmentPx`，带宽仍 `TREND_BODY_GRAB_PX = 8`）：命中就在**同一个 pointerdown 里**既 `onSelect` 又进
+> `mode='trend-body'` —— 按下去不动就是纯选中，一动就整根平移。步骤 3 从「只看已选中那条」放宽到**所有直线**
+> （`nearestTrendBody` 现在只剩双击「点在选中线上」这一处判据用）；水平线仍是老口径（线身只选中、落点继续 pan）。
+> 空闲光标也换成同一判据（`findTrendBodyGrab`），承诺「这里能抓」必须与真命中带一致。
+> 验收：`.workbuddy/tmp/verify-trend-body-grab.mjs` 13/13（未选中按住线身横拖/竖拖 = 两端同位移、单击只选中、
+> 离线 45px 横拖只平移画布、锁定后拖不动）；回归 `verify-draw-zone.mjs` 里水平线那几条仍按老口径通过。
+> ⚠️ 该脚本 5 条 FAIL 是**陈旧断言**（✕「取消选中」按钮 2026-11-21 已删、`document.querySelector('.interval-bar …')`
+> 命中的是另一条 bar、价位标签只留两位小数），与本次改动无关。
+> ❗Android 端**尚未同步**这一条（仍是「必须先选中才能拖线身」）。
 
 > ❗**蜡烛实体的宽度只有一个出处**（2026-11-21 用户「缩放时 K 线会贴在一起」）：`chartMath.candleBodyRect(centerX, slot)`。
 > 旧公式 `Math.max(1, Math.round(slot * 0.66)) | 1` 在槽宽 3~7px 时算出 3~5px —— 占去槽宽的大半，
