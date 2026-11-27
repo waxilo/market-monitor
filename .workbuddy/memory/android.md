@@ -926,12 +926,18 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 
 ## 水平线（告警线 / 画线）去掉两端把手：任意位置走满 slop 就能拖（2026-11-26）
 
+> ❗**2026-11-27 定版收窄**：合并 0.1.76（2026-11-25 用户「不管什么线，都要先选中才能编辑」）后，
+> `LineTouch` **恢复三档**（`Drag` 只给已选中那条 / `Select` = 未选中只当点击候选 / `None`）。
+> 「两端把手删掉、已选中后线上任意位置可拖」保留，未选中不再能拖。下面这段按此读。
+
 与桌面端同日同一件事（见 `desktop.md`）：「水平线应该去掉抓点，任意位置都应该可以拖拽」。
 
 - 删 `drawFlatGrips` + `FLAT_GRIP_INSET(10dp)` / `FLAT_GRIP_DOT(5dp)` / `FLAT_GRIP_HIT(18dp)`
   与 `onFlatGrip(...)` 及其单测 `FlatGripTest`。
-- `lineTouch` 从三态收成两态：`lineTouch(hit)` → 命中可选中的线就是 `Drag`，否则 `None`。
-  `LineTouch.Select` 整个删掉（那是「先点一下选中、第二下才拖得动」的旧口径）。`LineTouchTest` 重写。
+- `lineTouch` 当天从三态收成两态（`lineTouch(hit)` → 命中可选中的线就是 `Drag`，否则 `None`、
+  `LineTouch.Select` 删掉）；**2026-11-27 又恢复三态** `lineTouch(hit, selected)`：
+  `hit == selected` → `Drag`，可选中的其它线 → `Select`（只当点击候选、松手才选中），
+  否则 `None`。`LineTouchTest` 覆盖 6 项（Drag / Select / None / 两种草稿 / selectable）。
 - **down 只记候选**（`pendingLineGrab`），手指**走满 slop** 才真正接管（与 `pendingTrendBody` 同构）：
   ① 长按看读数（十字光标）与「按住线拖」共用起手，只有「手指动了没有」能区分；
   ② 线上任意位置都能抓之后，按下即接管会让「上下平移图表起手压到线」当场变拖线。
