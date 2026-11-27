@@ -1378,3 +1378,36 @@ mac 15:14:14→15:19:30、publish 15s）。主分支先推、CI 绿了才推两�
   `latest.json` version 0.1.76、pub_date 15:19:36Z；exe sig 的 keyid（小端 0BF65D2E19036B22
   = 记忆里的 226B03192E5DF60B）== 固定签名密钥。
 - 用掉的 tag 追加：`desktop-v0.1.76`、`0.9.84`。
+
+## desktop 0.1.77 + android 0.9.85（双端同发，2026-11-27 09:33 CST / 01:33 UTC）
+
+**撞车教训**：这一版本该是 0.1.76 / 0.9.84，但 11-25 夜另一轮会话已经用掉（见 2026-11-27 流水）。
+发版前**必查远端头**（`gh api repos/o/r/commits/main`），别只信本地 `git log`。
+
+内容：画线的「先选中才编辑」与「选中后无抓点、任意位置可拖」并行成立（用户 11-27 定版），
+外加三档配色（普通中性 / 选中黄 / 告警红，选中压过告警）与实线/虚线切换，双端同步。
+
+提交链（**远端头已前移到 fe1115b ⇒ 本地两个提交的 parent 不在远端分支上，API 推送直接拒**）：
+- `975acfb` = 用 `git commit-tree "c7abd70^{tree}" -p fe1115b` 重建的 feat 提交（tree 与原合并提交逐字相同）
+- `ace6744` = `git commit-tree "e66eb8d^{tree}" -p 975acfb` 重建的 chore(release)
+- 两跳 `api-push-0948.py`（第二跳 `--parent` 第一跳远端 SHA）→ 远端 `71dcc0c` / `4b63d8a`；
+  本地 `fetch` 后 `git update-ref refs/heads/main 4b63d8a`（工作区不动，**没有** reset --hard）。
+- ⚠️ **脚本那条 `parent 不在远端分支上` 是硬闸**：远端被别处推进过时，唯一解是 `commit-tree` 重建
+  （tree 不变、parent 换远端头），别想着 `--force`。脚本这轮补了「`--parent` 支持逗号分隔多父」，
+  但最终没用上（改成单父两跳更省事）。
+- tag 用 `POST /git/tags` + `POST /git/refs` 建：`desktop-v0.1.77` → `f37bbedb`、`0.9.85` → `b9fda459`。
+
+工作流：Release（Android）**45923216988** 绿 3m26s；Desktop Release **45923214451** 三 job 全绿
+（mac 5m26s / win 6m21s / 发布 17s）；CI(main) **45923172328** 绿 3m10s（中间那次 45923138119 被新推送取消，正常）。
+
+通道验收：`verify-channel.mjs 0.1.77` **34/34 PASS**——
+- 桌面 `desktop-latest`：id **398800166** / createdAt **2026-09-28T12:55:50Z** 原地不变；8 产物全 0.1.77
+  无残留；`latest.json` 1343 B、pub_date `2026-11-27T01:39:47.804Z`；exe **2830958**（sha256 `fa4decaf…` == 边车）、
+  dmg **4462826**、app.tar.gz **4383001**；两平台 `.sig` alg `ED` + keyid `226B03192E5DF60B` == 内嵌公钥。
+- 包内证据：CI vite 指纹 `index-D9AoHl6j.js 345.88` / `index-BnB_-eGm.css 54.10`（win/mac 两 job 一致）
+  == 本地 `npm run build`；CI `本次版本号：0.1.77`。
+- Android `android-latest`：createdAt **2026-09-29T03:22:14Z** 不变；只有 `market-monitor-0.9.85.apk`
+  （**11252356**）+ `.sha256`；asset digest `67201caf…dd96be` == 边车逐字、自算一致；
+  aapt2 `versionCode=97 / versionName=0.9.85`；apksigner 证书 `cf2e20c7…52f034` == 固定发布密钥；
+  `classes3.dex` 里 `DashGlyph` / `setDashed` / `MIGRATION_12_13` 全命中 ⇒ 确为新代码。
+- 用掉的 tag 追加：`desktop-v0.1.77`、`0.9.85`。
