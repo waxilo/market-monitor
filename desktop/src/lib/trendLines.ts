@@ -33,6 +33,11 @@ export interface TrendLine {
    * 重新拼 `{ a, b }` —— 后者会把备注连同以后加的其它字段一起吞掉。
    */
   note?: string;
+  /**
+   * 画成虚线。与水平线 `PriceLine.dashed` 同一口径：**缺失 = 实线**，只有显式 true 才落字段。
+   * 纯样式开关，不参与身份、不影响手势命中（命中按几何算，与线型无关）。
+   */
+  dashed?: boolean;
 }
 
 /** 按标的索引的直线表（键 = `市场:标的`，与水平线同一套键）。 */
@@ -66,12 +71,21 @@ function finiteAnchor(v: unknown): TrendAnchor | null {
 
 function finiteLine(v: unknown): TrendLine | null {
   if (!v || typeof v !== 'object') return null;
-  const { a, b, note } = v as { a?: unknown; b?: unknown; note?: unknown };
+  const { a, b, note, dashed } = v as {
+    a?: unknown;
+    b?: unknown;
+    note?: unknown;
+    dashed?: unknown;
+  };
   const fa = finiteAnchor(a);
   const fb = finiteAnchor(b);
   if (!fa || !fb) return null;
+  const line: TrendLine = { a: fa, b: fb };
   const text = normalizeLineNote(note);
-  return text ? { a: fa, b: fb, note: text } : { a: fa, b: fb };
+  if (text) line.note = text;
+  // 线型：缺失 = 实线，只有显式 true 才落字段（与 PriceLine 的解析同一口径）
+  if (dashed === true) line.dashed = true;
+  return line;
 }
 
 /** 读一份直线表：坏数据一律丢弃而不是抛错 —— 它是用户点出来的，重建成本极低。 */
@@ -169,6 +183,27 @@ export function setTrendNote(
       return copy;
     }
     return { ...l, note: next };
+  });
+}
+
+/**
+ * 改第 index 条的**线型**（实线 / 虚线）。与 `setLineNote` 同口径：改回实线就把字段删掉，
+ * 缺省即实线，存档里不留 `dashed: false` 的噪音。
+ */
+export function setTrendDashed(
+  lines: readonly TrendLine[],
+  index: number,
+  dashed: boolean,
+): TrendLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  return lines.map((l, i) => {
+    if (i !== index) return l;
+    if (!dashed) {
+      const copy = { ...l };
+      delete copy.dashed;
+      return copy;
+    }
+    return { ...l, dashed: true };
   });
 }
 

@@ -888,3 +888,105 @@ Align（`待对齐` → 点一下 → `已对齐 8hEMA50 到 82417.68`）/ Remov
 - ⚠️ 代价与桌面一致：**10dp 窄带内起手的单指竖向拖动不再调价格量程**，改成拖这条线
   （双指捏合照旧不受影响 —— 2 指落下就清 `trendMode`）。用户要的就是这个方向，窄带别再放宽。
 - ⚠️ 无真机验收（`adb devices` 为空，MuMu 未启动；沙箱不能替用户起模拟器）。
+
+## 均线分析画的线迁到 `chart_line`：默认无价签、不告警、对齐全自动（2026-11-26，双端）
+
+用户口径：「默认无价格签、不告警。都支持手动设置为有价格签，有告警。点击对齐保留用户设置。
+均线分析的画线更新了自动对齐，不要人点」⇒ 三件事：**默认值翻过来**、**「对齐」这一档整个删掉**、
+**每轮刷新自动对齐且不动用户设置**。存储也一并换了家（用户选的）：`alert_rule` → `chart_line`。
+
+- **为什么必须换家**：老实现一条均线线 = 一条 `alert_rule`，「线」与「告警」绑死 ⇒ 不告警的线
+  无处安放；而且删线=删规则，用户改备注就认不出身份。`chart_line` 本来就有身份证了。
+- **身份** `MaOrigin(family, interval, period)`，周期按 `storageKey` 比（`1h`/`1时` 都认）。
+  `lineOf(lines, family, level)` **只认身份**：手画的线即使价位正好落在均线上也**不认领**；
+  用户改过备注仍然认得出（老代码按名字认人，改名即失联）。反向的 `parseAutoNote` 只用于迁移。
+- **Room v12**：`chart_line` 加 5 列 `originKind/originInterval/originPeriod/showBadge/alertRuleId`。
+  `MIGRATION_11_12` 把 `alert_rule` 里名字能被 `parseAutoNote` 解析出身份的行**搬**成 `chart_line`
+  （`showBadge = 0`、`alertRuleId` 指回原规则、**原规则保留**以免丢 Webhook）；名字解不出的
+  （用户改过名 / 手建的预警）原样不动，仍在图上当告警线。
+- **默认值**：`MaAnalysis.newLine` = `showBadge = false`、`alertRuleId = null`（黄线、无价签）；
+  手画的线仍默认 `showBadge = true`。
+- **`MaTick` 去掉 `Align`**：已画过这一档 → `Remove(lineId, alertRuleId)`（**直接删**，不看是否
+  对齐、也不看告警开没开）；新建 → `Add`。老 `Align` 分支正是「点对齐把用户关掉的告警又打开」的根因。
+- **自动对齐** `MaAnalysis.alignments(lines)` → `DetailViewModel.alignMaLines`：每轮取数后
+  `setPrice` + 同步挂着的规则 `threshold`（不清 `AlertState`、不弹提示），**只改价位**，
+  `showBadge` / `alertRuleId` / `note` 一律保留。
+- **开关入口在竖栏编辑栏**：选中一条线后除备注/删除/✕ 外多两枚 —— 价签（`TagGlyph`）、
+  告警（`BellGlyph`，只在 `origin != null` 时可用）。`setLineAlert` 关的时候走 `deleteRule`
+  而不是 `enabled = false`：禁用的规则会在预警列表留一行「已关闭」，用户以为还剩一条线。
+- **颜色分工不变**：`DrawGuideLine.alert` → 红（会响）/ 黄（记号）；价签由 `LineBadge.showBadge`
+  控制，备注牌照旧画。分析面板的行标记也跟着线走：`alerts` 为真才是红底 + 红条，
+  否则只有一道黄条（`.mark` 口径）。
+- **双向清理**：`AlertRepositoryImpl.deleteRule` 顺手 `chartLineDao.clearAlertRule(id)`
+  （否则线上还挂着已删规则的 id）；`deleteDrawLine` 连带删规则；`commitDrawLine` 落库后同步阈值。
+- **校验**：`:app:compileDebugKotlin` OK；`:app:testDebugUnitTest` 全绿（`MaAnalysisTest` 43 项，
+  新增「改过备注仍然认得出」「手画线价位正好落在均线上也不认领」「已画过的档位再点一下就删」
+  「挂着告警的线挪的时候把规则 id 一起带出来」「`parseAutoNote` 与 `intervalOfLabel` 互为逆运算」等）。
+  ⚠️ 未真机验收（沙箱起不了模拟器），竖栏两枚新按钮与黄线观感要用户在 MuMu 上看一眼。
+
+## 水平线（告警线 / 画线）去掉两端把手：任意位置走满 slop 就能拖（2026-11-26）
+
+与桌面端同日同一件事（见 `desktop.md`）：「水平线应该去掉抓点，任意位置都应该可以拖拽」。
+
+- 删 `drawFlatGrips` + `FLAT_GRIP_INSET(10dp)` / `FLAT_GRIP_DOT(5dp)` / `FLAT_GRIP_HIT(18dp)`
+  与 `onFlatGrip(...)` 及其单测 `FlatGripTest`。
+- `lineTouch` 从三态收成两态：`lineTouch(hit)` → 命中可选中的线就是 `Drag`，否则 `None`。
+  `LineTouch.Select` 整个删掉（那是「先点一下选中、第二下才拖得动」的旧口径）。`LineTouchTest` 重写。
+- **down 只记候选**（`pendingLineGrab`），手指**走满 slop** 才真正接管（与 `pendingTrendBody` 同构）：
+  ① 长按看读数（十字光标）与「按住线拖」共用起手，只有「手指动了没有」能区分；
+  ② 线上任意位置都能抓之后，按下即接管会让「上下平移图表起手压到线」当场变拖线。
+  转换那一帧重取基准（`grabOffsetY` = 线在手指上方多少，用 `horizontalAnchors()` 现算），
+  并且 `continue` 掉，不让这帧落到画布平移里。双指落下 / 长按成立都会清掉这个候选。
+- **选中态仍由外发光表示**（`LINE_SELECTED_HALO_ALPHA = 0.22`、宽 9f + 线加粗），
+  这次没有新增东西 —— 删掉把手后它成了唯一信号，别再删。
+- 校验：`:app:compileDebugKotlin` OK；`:app:testDebugUnitTest` **493 项 0 失败**
+  （`FlatGripTest` 已删，`LineTouchTest` 5 项覆盖新口径）。⚠️ 未真机验收：真机上「按住线
+  走满 slop 才拖」的手感、以及长按看读数是否仍可用，需要用户在 MuMu 上过一眼。
+
+## 画线三档配色：普通＝中性（黑/近白）、选中＝黄、告警＝红（2026-11-26）
+
+与桌面端同日同一件事（见 `desktop.md` 同名小节）：「水平线、直线改为黑色，选中状态统一为黄色，
+告警线统一为红色」，且「黑色按主题自适应」「选中压过告警」。
+
+- `ChartPalette` 加 `plain`，两处构造（主图 729 附近、mini 图 1390 附近）都填
+  `scheme.onBackground` —— 就是 `MarketColors.ink`（浅色 `#14161A` / 深色 `#ECEDEF`）。
+  **不新开常量**：正文色天然是「中性、不抢注意力」的那一档，和桌面 `--line-plain` 同值。
+- `drawDrawLines`：`when { picked || line.dragging -> palette.mark; line.alert -> palette.down;
+  else -> palette.plain }`。`line.dragging` 也算选中档 —— 拖着的那一条必须看得见。
+- `drawAlertLines`（老 `alert_rule` 的线）：选中 → `palette.mark`，否则恒 `palette.down`。
+  它的 halo 也跟着变色（原来是 `down.copy(alpha)`，写死了红）。
+- `LineBadges` 价位牌新增 `selected: LineRef?` 参数 + `LineBadge.selected` 字段；
+  底色 `选中 accent / 告警 down / 普通 ink`，字色 `选中 onAccent / 其余 paper`。
+  之前普通线价签是黄底 —— 黄现在专给选中，不跟线色就自相矛盾。调用处传 `selectedLine`。
+- 面板 `MaRow` 左缘竖条 `colors.accent` → `colors.muted`（灰），黄留给「选中」。
+- 校验：`:app:compileDebugKotlin` OK；`:app:testDebugUnitTest` **493 项 0 失败**。
+  ⚠️ **未真机验收**（沙箱起不了模拟器）：深色主题下近白的线压在密集 K 线上够不够清楚、
+  选中转黄的回执是否一眼可见，要用户在 MuMu 上看。
+
+## 画线可切虚线：两张表各加一列，竖栏编辑栏多一枚（2026-11-26）
+
+与桌面端同日同一件事（见 `desktop.md`）：「支持将实线设置为虚线，双端都支持」。
+
+- **为什么要动两张表**：图上的线有两个来源 —— 手画的线 + 均线分析的线在 `chart_line`，
+  「预警线」工具画的仍是一条 `alert_rule`。竖栏那枚开关对**选中的任何一条线**都得有效，
+  否则就是「同样是线，有的能切、有的不能」。两张表各加 `dashed INTEGER NOT NULL DEFAULT 0`。
+- **Room v13**（`MIGRATION_12_13`）：两条 `ALTER TABLE`，纯样式列、不搬数据。
+  老线升级后仍是实线（默认 0），与 v12 之前完全一致。
+- **领域层**：`ChartLine.dashed` / `AlertRule.dashed`（默认 false）；`ChartLineEntity` /
+  `AlertRuleEntity` 双向映射；`ChartLineDao.setDashed` / `AlertDao.setDashed` 都是**单列 UPDATE**
+  （不整行 upsert —— 读-改-写之间图表可能正拖着这条线）；仓库 `setDashed` / `setRuleDashed`。
+- **绘制**：`DrawGuideLine.dashed` / `AlertPriceLine.dashed`；`lineDashEffect()` 在绘制函数里
+  算一次（`PathEffect.dashPathEffect`），虚线线的**发光与线身用同一个 pen**（虚线下面垫实心光
+  看着仍是实线）；直线的两端把手**始终实心**（它要抓得住）。段长/间隔 `8dp / 5dp`，
+  与桌面 `[8, 5]` 同值；6/4 在 1 倍屏读不出断开（2px 线抗锯齿吃掉一半空隙）。
+- **两个容易漏的传递点**：① `ChartLine.toGuideLine` 要把 dashed 带进绘制语言；
+  ② `DrawGuideLine.toChartLine(existing=...)` 的 `base()` 必须带上 `existing.dashed` ——
+  否则**拖一下线就变回实线**（它是整行 upsert，没带上的字段会被默认值覆盖）。
+  `alertLines` 的拖动分支同样要沿用 `own[...].dashed`，不然松手前后线型会闪。
+- **入口**：`DrawToolRail` 编辑栏新增一枚 `DashGlyph`（三段短横，`selected = dashedOn`），
+  `dashedOn: Boolean?` 由 `DetailScreen` 按「选中的是 ChartLine 还是 AlertRule」取值；
+  `DetailViewModel.setLineDashed(ref, on)` 按 `LineRef` 分派到各自的仓库。
+- **校验**：`:app:compileDebugKotlin` OK；`:app:testDebugUnitTest` **499 项 0 失败**
+  （新增 `LineDashedMappingTest` 6 项：默认实线、两条路径往返、老行补 0 读成实线）。
+  ⚠️ **未真机验收**（沙箱起不了模拟器）：虚线在 2px 线上够不够清楚、竖栏多一枚按钮后
+  横屏是否仍放得下，要用户在 MuMu 上看。

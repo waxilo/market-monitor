@@ -85,6 +85,13 @@ data class AlertRule(
      * 认领键），note 是用户随手写的一句话。让备注去改 name 会把面板的回显弄丢。
      */
     val note: String? = null,
+    /**
+     * 图上这条线画成虚线。纯样式开关（默认实线），不影响判定、推送或重复模式。
+     *
+     * 与 `ChartLine.dashed` 同一口径 —— 两条存储路径（预警线走本规则、画线走 `chart_line`）
+     * 都得有这个字段，否则竖栏里同一枚「线型」按钮在两类线上会表现不一致。
+     */
+    val dashed: Boolean = false,
     val createdAt: Long = 0L,
 ) {
     val symbolKey: String get() = "${market.key}:$symbol"

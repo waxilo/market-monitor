@@ -206,6 +206,10 @@ interface AlertDao {
     @Query("UPDATE alert_rule SET note = :note WHERE id = :id")
     suspend fun setNote(id: Long, note: String?)
 
+    /** 只改线型（1 = 虚线），与 [setNote] 同一条理由：不整行 REPLACE。 */
+    @Query("UPDATE alert_rule SET dashed = :dashed WHERE id = :id")
+    suspend fun setDashed(id: Long, dashed: Int)
+
     @Query("DELETE FROM alert_rule WHERE id = :id")
     suspend fun deleteRule(id: Long)
 
@@ -271,6 +275,34 @@ interface ChartLineDao {
      */
     @Query("UPDATE chart_line SET note = :note WHERE id = :id")
     suspend fun setNote(id: Long, note: String?)
+
+    /**
+     * 单列更新：价签开关 / 挂的告警规则 / 价位。
+     *
+     * 都不走 [upsert]：读-改-写之间图表可能正拖着这条线，整行写回去会把刚拖到的位置
+     * 盖回旧值（与 [setNote] 同一条理由）。自动对齐每轮都要改价位，这是热路径。
+     */
+    @Query("UPDATE chart_line SET showBadge = :show WHERE id = :id")
+    suspend fun setShowBadge(id: Long, show: Int)
+
+    @Query("UPDATE chart_line SET alertRuleId = :ruleId WHERE id = :id")
+    suspend fun setAlertRule(id: Long, ruleId: Long?)
+
+    /** 线型（1 = 虚线）。与上面几列同一条理由：只碰这一列，不整行写回。 */
+    @Query("UPDATE chart_line SET dashed = :dashed WHERE id = :id")
+    suspend fun setDashed(id: Long, dashed: Int)
+
+    /**
+     * 规则被删掉时把线上的挂载点清干净（null = 不告警）。
+     *
+     * 不这么做的话，线会一直指向一个不存在的规则：图上仍是红的（`alertRuleId != null`），
+     * 却永远不会响 —— 颜色在撒谎，而用户在面板上看到的还是「已画」。
+     */
+    @Query("UPDATE chart_line SET alertRuleId = NULL WHERE alertRuleId = :ruleId")
+    suspend fun clearAlertRule(ruleId: Long)
+
+    @Query("UPDATE chart_line SET price = :price WHERE id = :id")
+    suspend fun setPrice(id: Long, price: String)
 
     @Query("DELETE FROM chart_line WHERE id = :id")
     suspend fun delete(id: Long)

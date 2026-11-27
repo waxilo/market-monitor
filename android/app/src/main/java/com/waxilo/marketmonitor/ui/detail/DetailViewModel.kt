@@ -351,6 +351,15 @@ class DetailViewModel(
     private val alerts = container.alertRepository
     private val chartLinesRepo = container.chartLineRepository
 
+    /**
+     * 本标的已落库的画线（含均线分析代画的那批）。
+     *
+     * 声明在这里而不是图表那一段（虽然它主要喂给图表）：[alertLines] 要读它来滤掉
+     * 「挂在画线上的规则」—— 属性初始化按书写顺序执行，写晚了那一段就取不到值。
+     */
+    val chartLines: StateFlow<List<ChartLine>> = chartLinesRepo.lines(id.market, id.symbol)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     private val interval = MutableStateFlow(DEFAULT_CHART_INTERVAL)
     private val reloadToken = MutableStateFlow(0)
     private val chart = MutableStateFlow(ChartData())
@@ -389,27 +398,34 @@ class DetailViewModel(
     private var noticeJob: Job? = null
 
     /**
-     * 画在图表上的全部告警线。
+     * 画在图表上的全部**告警线**（= 有阈值、且不是某条画线的附属规则）。
      *
      * **直接由规则派生**，不另存一份：这样规则在预警列表里被删掉、或单次触发后被移除，
      * 线就自动消失，不会出现「线还在、预警早没了」的假象；反过来在预警页改阈值，
      * 回到详情页也能看到最新的那条线。拖动中的线覆盖掉对应规则的历史价位，
      * 松手落库后覆盖就没意义了（派生值已经是新价位）。
      *
+     * 2026-11-26 起要**滤掉挂在画线上的那批规则**（`ChartLine.alertRuleId`）：那些线由
+     * `chart_line` 画（黄/红、价签可关、位置跟着均线走），规则只负责「响」。
+     * 不滤的话同一条均线会在图上叠成两根线，删一根会看着像没反应。
+     *
      * 只有带目标价（threshold）的规则能画成一条线，区间/涨跌幅规则没有单一价位。
      */
     val alertLines: StateFlow<List<AlertPriceLine>> = combine(
         alerts.rules(),
         alertDrag,
-    ) { rules, drag ->
-        val own = rules.filter { it.market == id.market && it.symbol == id.symbol }
+        chartLines,
+    ) { rules, drag, lines ->
+        val linked = lines.mapNotNullTo(HashSet()) { it.alertRuleId }
+        val own = rules.filter { it.market == id.market && it.symbol == id.symbol && it.id !in linked }
             .mapNotNull { rule ->
                 val threshold = rule.threshold ?: return@mapNotNull null
                 AlertPriceLine(
                     ruleId = rule.id,
                     price = threshold.toDouble(),
-                    // 用户写的备注优先；EMA 面板自动画的线没有 note，自动名（8时EMA50）直接顶上
+                    // 用户写的备注优先；没有备注就露规则名（预警列表里用户自己起的那句）
                     label = rule.note ?: rule.name.takeIf(MaAnalysis::isAutoNote),
+                    dashed = rule.dashed,
                 )
             }
         if (drag == null) own
@@ -417,8 +433,9 @@ class DetailViewModel(
             ruleId = drag.ruleId,
             price = drag.price.toDouble(),
             dragging = true,
-            // 拖动中的线沿用它的备注：松手前后牌子不闪
+            // 拖动中的线沿用它的备注与线型：松手前后不闪
             label = own.firstOrNull { it.ruleId == drag.ruleId }?.label,
+            dashed = own.firstOrNull { it.ruleId == drag.ruleId }?.dashed == true,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -1018,7 +1035,7 @@ class DetailViewModel(
      * **不清旧值**：结果经 [MaAnalysis.merge] 并到上一轮上（某周期没取到时沿用它的旧数）。
      * 上一轮还在飞就先取消 —— 两轮结果交错落盘会让表在新旧之间跳。
      *
-     * 拿到新值的最后一件事是**让图上的自动线跟着走**（[alignMaRules]）：手动「刷新」与
+     * 拿到新值的最后一件事是**让图上的自动线跟着走**（[alignMaLines]）：手动「刷新」与
      * 每分钟的自动那一轮都经过这里 —— 它俩本来就是同一条路，对齐也该只挂在一处。
      */
     fun refreshMaAnalysis() {
@@ -1056,7 +1073,7 @@ class DetailViewModel(
             maRefreshing.value = false
             // 数值到手：图上的自动线跟着走（与桌面端 onLevels → alignLevelLines 同一时刻）。
             // 放在 refreshing 落下之后 —— 对齐要写库，别让按钮多转那一会儿。
-            alignMaRules(merged, family)
+            alignMaLines(merged, family)
         }
     }
 
@@ -1097,23 +1114,38 @@ class DetailViewModel(
     }
 
     /**
-     * 面板里点一行：把这一档落成 / 对齐 / 撤掉一条告警线（判据见 [MaAnalysis.tick]）。
+     * 面板里点一行：**画一条线 / 把这条线删掉**（判据见 [MaAnalysis.tick]）。
      *
-     * 画出来的就是**普通告警线**（`alert_rule`）—— 与拖出来的是同一种东西，所以在图上能拖、
-     * 能在预警列表里看到、也能在预警页关掉或删掉。名字用自动备注（`1时MA20` / `1时EMA50`），
-     * 面板靠它回显。
+     * 画的是 `chart_line`（带 [MaOrigin] 身份的水平线），**默认无价签、不告警** ——
+     * 它首先是一条看盘用的参考线，不是预警。要价签 / 告警在竖栏里选中它再打开
+     * （见 [setLineBadge] / [setLineAlert]）。对齐是自动的（每轮取数后 [alignMaLines]），
+     * 所以这里没有「对齐到当前值」这一档。
      */
     fun toggleMaLine(row: MaLevelRow, family: MaFamily) {
         val note = MaAnalysis.note(family, row.interval, row.period)
         viewModelScope.launch {
             try {
-                when (val tick = MaAnalysis.tick(symbolRules.value, family, row.level, note)) {
+                when (val tick = MaAnalysis.tick(chartLines.value, family, row.level)) {
                     MaTick.None -> showNotice("这一档还没算出来，稍后再试")
-                    MaTick.Add -> saveMaRule(row, note)
-                    is MaTick.Align -> alignMaRule(tick.ruleId, row, note)
+                    MaTick.Add -> {
+                        chartLinesRepo.save(
+                            MaAnalysis.newLine(
+                                market = id.market,
+                                symbol = id.symbol,
+                                family = family,
+                                level = row.level,
+                                createdAt = System.currentTimeMillis(),
+                            ),
+                        )
+                        showNotice("已画 $note · 选中它可开价签 / 告警")
+                    }
+
                     is MaTick.Remove -> {
-                        alerts.deleteRule(tick.ruleId)
-                        showNotice("已取消 $note 的告警线")
+                        chartLinesRepo.delete(tick.lineId)
+                        // 线没了，挂在它上面的告警规则也必须走 —— 否则预警列表里留下一条
+                        // 没有线的规则，用户只能去那边单独删
+                        tick.alertRuleId?.let { alerts.deleteRule(it) }
+                        showNotice("已取消 $note 划线")
                     }
                 }
             } catch (e: CancellationException) {
@@ -1125,17 +1157,20 @@ class DetailViewModel(
     }
 
     /**
-     * 一键清掉本标的图上**这一族分析画的线**（= 名字是这一族面板自动名的那批告警规则）。
+     * 一键清掉本标的图上**这一族分析画的线**（= `origin` 属于这一族的 chart_line）。
      *
-     * 只按名字收（`8时MA20` / `8时EMA50`，见 [MaAnalysis.isFamilyAutoNote]）：
-     * 用户手拖的告警线、手画的划线、另一族的线一概不碰。画没了随时回面板点行补回来，
-     * 所以不设二次确认 —— 回执里说了清了几条。
+     * 只按身份收：用户手画的线、另一族的线、手拖的告警线一概不碰。挂在被清那几条线上的
+     * 告警规则一并删掉 —— 线都没了，规则留着只会在预警列表里孤零零地响。
+     * 画没了随时回面板点行补回来，所以不设二次确认 —— 回执里说了清了几条。
      */
     fun clearMaLines(family: MaFamily) {
         viewModelScope.launch {
             try {
-                val targets = symbolRules.value.filter { MaAnalysis.isFamilyAutoNote(it.name, family) }
-                targets.forEach { alerts.deleteRule(it.id) }
+                val targets = chartLines.value.filter { it.origin?.family == family }
+                for (line in targets) {
+                    chartLinesRepo.delete(line.id)
+                    line.alertRuleId?.let { alerts.deleteRule(it) }
+                }
                 showNotice(
                     if (targets.isEmpty()) {
                         "图上没有 ${family.label} 划线"
@@ -1152,69 +1187,34 @@ class DetailViewModel(
     }
 
     /**
-     * 存 EMA 原值，**不对齐 tickSize**。
+     * 每轮扫描结束后把图上**这一族**的系统划线拉到新值（判据见 [MaAnalysis.alignments]）。
      *
-     * 两个理由：① 桌面端也是原样落，两边数值才对得上；② 一旦四舍五入，「已对齐」这个判据
-     * 就永远不成立（线价被改过，与下一轮的 EMA 值不可能再相等），面板会满屏「待对齐」，
-     * 而且每轮刷新都判成「漂了」，[alignMaRules] 会不停写库（写得还是同一个价）。
-     * 规则表本身不校验刻度（那条校验只在预警编辑器里）。
-     */
-    private suspend fun saveMaRule(row: MaLevelRow, note: String) {
-        val price = BigDecimal.valueOf(row.value)
-        alerts.saveRule(
-            AlertRule(
-                market = id.market,
-                symbol = id.symbol,
-                name = note,
-                condition = AlertCondition.REACH,
-                threshold = price,
-                // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
-                createdAt = System.currentTimeMillis(),
-            ),
-        )
-        showNotice("已画 $note · 穿越 ${priceLabel(price)} 提醒")
-    }
-
-    private suspend fun alignMaRule(ruleId: Long, row: MaLevelRow, note: String) {
-        val existing = alerts.rule(ruleId) ?: return
-        val price = BigDecimal.valueOf(row.value)
-        val moved = existing.threshold?.compareTo(price) != 0
-        alerts.saveRule(
-            existing.copy(
-                name = note,
-                condition = AlertCondition.REACH,
-                threshold = price,
-                // 之前被用户在预警页关掉的那条，对齐时就当场恢复 —— 面板说「已画」的线该是活的
-                enabled = true,
-            ),
-        )
-        // 价位换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让新价位一次都不提醒，
-        // wasSatisfied 也会把真正的「穿越」边沿吃掉（与 commitAlertLine 同一条理由）。
-        // 只是重新打开告警（价位没变）时不能清，那会把「已经满足」的边沿判断重置。
-        if (moved) alerts.saveState(ruleId, AlertState())
-        showNotice("已对齐 $note 到 ${priceLabel(price)}")
-    }
-
-    /**
-     * 每轮扫描结束后把图上**这一族**的自动线拉到新值（判据见 [MaAnalysis.alignments]）。
+     * 与桌面端 `onLevels → alignLevelLines` 同一时刻、同一条口径：**只改价位**。
+     * 价签开关、备注、告警在不在，全是用户设过的 —— 对齐只是「同一条线挪到新位置」，
+     * 不该替用户做决定（早先的人工对齐会把用户关掉的告警重新打开，正是这次要修的）。
      *
-     * 与上面的人工对齐 [alignMaRule] 有两处**故意不同**：
+     * 线上挂着告警规则的，规则阈值必须一起改：否则线在 A、告警盯的是 B，
+     * 面板说「已画」、真正响起来却在另一个价。
      *
-     *  - **不改 `enabled`**：用户可能在预警页特意关掉了这条线，每分钟自动打开一次就成了
-     *    骚扰；人工点那一下是「我要它盯着」，自动这一趟不是。
-     *  - **不清 `AlertState`**：自动对齐每 60 秒就可能执行一次，每次都清 `fired` 会让
-     *    「只响一次」的规则永远重新武装；而 REACH 的边沿判定读的是价格本身（`lastPrice`），
-     *    阈值被挪走不会误判，不清更安全。
+     * **不清 `AlertState`**：自动对齐每 60 秒就可能执行一次，每次都清 `fired` 会让
+     * 「只响一次」的规则永远重新武装；而 REACH 的边沿判定读的是价格本身（`lastPrice`），
+     * 阈值被挪走不会误判，不清更安全。
      *
      * 写库是**逐条、静默**的：一条失败不该拖住其余几条，也不该弹提示 —— 这是背景动作，
      * 下一轮（60 秒后）还会再试。取消失常照样往上抛，别把 cancel 吞成「对齐失败」。
      */
-    private suspend fun alignMaRules(scan: MaScan, family: MaFamily) {
-        val moves = MaAnalysis.alignments(symbolRules.value, family, scan.levels)
+    private suspend fun alignMaLines(scan: MaScan, family: MaFamily) {
+        val moves = MaAnalysis.alignments(chartLines.value, family, scan.levels)
+        if (moves.isEmpty()) return
+        val rules = symbolRules.value.associateBy { it.id }
         for (move in moves) {
             try {
-                val rule = alerts.rule(move.ruleId) ?: continue
-                alerts.saveRule(rule.copy(threshold = move.price))
+                chartLinesRepo.setPrice(move.lineId, move.price)
+                val ruleId = move.alertRuleId ?: continue
+                val rule = rules[ruleId] ?: continue
+                if (rule.threshold?.compareTo(move.price) != 0) {
+                    alerts.saveRule(rule.copy(threshold = move.price))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1280,10 +1280,6 @@ class DetailViewModel(
 
     // ---- 视觉画线（水平线/直线，纯记号不告警） ----
 
-    /** 本标的已落库的视觉画线。 */
-    val chartLines: StateFlow<List<ChartLine>> = chartLinesRepo.lines(id.market, id.symbol)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
     /**
      * 正在拖动的那一笔画线草稿（已换算成可落库形态，id 为 0 = 新建中）。
      * 与 alertDrag 同理放 ViewModel：全屏旋屏重建组合，草稿不能丢。
@@ -1304,8 +1300,9 @@ class DetailViewModel(
             candles = displayCandles(chart.value, interval.value),
             interval = interval.value,
             createdAt = existing?.createdAt ?: System.currentTimeMillis(),
-            // 拖一根已有的线不该顺手抹掉它的备注：落库是整行 upsert，见 toChartLine 的说明
-            note = existing?.note,
+            // 落库是整行 upsert：备注 / 均线身份 / 价签开关 / 挂的告警都得从原行带过来，
+            // 否则拖一下就把它们抹了（早先只补了备注）
+            existing = existing,
         )
     }
 
@@ -1318,6 +1315,15 @@ class DetailViewModel(
             try {
                 chartLinesRepo.save(draft)
                 drawDraft.value = null
+                // 线挪了，挂在它上面的告警规则阈值必须一起挪 —— 否则线在 A、告警盯的是 B
+                val ruleId = draft.alertRuleId ?: return@launch
+                val price = draft.price ?: return@launch
+                val rule = alerts.rule(ruleId) ?: return@launch
+                if (rule.threshold?.compareTo(price) == 0) return@launch
+                alerts.saveRule(rule.copy(threshold = price))
+                // 价位换了，旧的触发状态必须清零：否则 ONCE 的 fired 闸门会让新价位一次都不提醒，
+                // wasSatisfied 也会把真正的「穿越」边沿吃掉（与 commitAlertLine 同一条理由）
+                alerts.saveState(ruleId, AlertState())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1330,13 +1336,16 @@ class DetailViewModel(
      * 删除一条视觉画线（竖栏的删除工具点中它时调用），或撤销直线两敲落得太近的那一笔。
      *
      * lineId 为 0 = 只是放弃手上的草稿；其余删掉落库的那条。
+     * 线上挂着告警规则的，规则一并删掉 —— 线都没了，规则留着只会在预警列表里孤零零地响。
      */
     fun deleteDrawLine(lineId: Long) {
         drawDraft.value = null
         if (lineId == 0L) return
         viewModelScope.launch {
             try {
+                val ruleId = chartLines.value.firstOrNull { it.id == lineId }?.alertRuleId
                 chartLinesRepo.delete(lineId)
+                ruleId?.let { alerts.deleteRule(it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1349,9 +1358,9 @@ class DetailViewModel(
      * 给图上的一条线写 / 清备注（全屏选中一条线后，右侧编辑栏那个「备注」）。
      *
      * 两类线分属两个存储域，各写各的列：
-     * · 告警线 → `alert_rule.note`，**不动 name** —— 自动画的线名字形如 `8时EMA50`，
-     *   它是 EMA 压力支撑面板按名字认领那条线的键（见 [MaAnalysis.lineOf]）；
-     * · 水平线 / 直线 → `chart_line.note`。
+     * · 告警线 → `alert_rule.note`，**不动 name** —— 名字是预警列表里那一行的标题；
+     * · 水平线 / 直线（含均线分析画的线）→ `chart_line.note`。均线线的**身份**在
+     *   `originKind/Interval/Period` 三列里，改备注不会丢绑定（见 [MaAnalysis.lineOf]）。
      *
      * 空白（含全空格）统一按「删掉备注」写 null：库里不该同时躺着 "" 与 null 两种
      * 「没有备注」，否则每处判断都得写两遍。
@@ -1369,6 +1378,111 @@ class DetailViewModel(
                 throw e
             } catch (e: Exception) {
                 showNotice("备注保存失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 开关这条线的右轴价位牌（竖栏编辑栏那枚「价签」）。
+     *
+     * 默认值在建线时就定了（系统线隐藏、手画线显示），这里存的是用户显式改过的选择；
+     * 自动对齐只挪价位，不会把它改回去。
+     */
+    fun setLineBadge(ref: LineRef, show: Boolean) {
+        if (ref !is LineRef.Guide) return
+        viewModelScope.launch {
+            try {
+                chartLinesRepo.setShowBadge(ref.lineId, show)
+                showNotice(if (show) "已显示这条线的价签" else "已隐藏这条线的价签")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("价签设置失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 开关这条线的**线型**（实线 / 虚线，竖栏编辑栏那枚「线型」）。
+     *
+     * 图上两条线来自两张表：手画的线 + 均线分析的线在 `chart_line`，「预警线」工具的
+     * 仍是 `alert_rule`。用户眼里只有「一条线」，所以这里按 [LineRef] 分派 ——
+     * 不能让「同样是线，有的能切虚线、有的不能」。
+     *
+     * 纯样式：不碰价位、不碰告警、不动 [AlertState]（虚线不是「先别响」的意思）。
+     */
+    fun setLineDashed(ref: LineRef, on: Boolean) {
+        viewModelScope.launch {
+            try {
+                when (ref) {
+                    is LineRef.Guide -> chartLinesRepo.setDashed(ref.lineId, on)
+                    is LineRef.Alert -> {
+                        val ruleId = ref.ruleId ?: return@launch
+                        alerts.setRuleDashed(ruleId, on)
+                    }
+                }
+                showNotice(if (on) "已改成虚线" else "已改回实线")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("线型设置失败：${e.displayMessage()}")
+            }
+        }
+    }
+
+    /**
+     * 开关这条线的告警（竖栏编辑栏那枚「告警」）。
+     *
+     * 打开 = 给这条线建一条 `alert_rule`（达到 = 穿越即提醒，阈值 = 线现在的价位），
+     * 规则 id 写回 [ChartLine.alertRuleId]；关掉 = 删掉那条规则。
+     * 只在**均线分析画的线**（`origin != null`）上开放：手画的线要告警，用「预警线」工具
+     * 更直接，不必在这里再造一个入口。
+     *
+     * 关闭走 `deleteRule` 而不是 `enabled = false`：禁用的规则在预警列表里留一行「已关闭」，
+     * 用户会以为还剩一条线；既然线上的意思是「这条不响」，那就干脆不留。
+     */
+    fun setLineAlert(ref: LineRef, on: Boolean) {
+        if (ref !is LineRef.Guide) return
+        viewModelScope.launch {
+            try {
+                val line = chartLines.value.firstOrNull { it.id == ref.lineId } ?: return@launch
+                if (line.origin == null) {
+                    showNotice("手画的线要告警，请用「预警线」工具")
+                    return@launch
+                }
+                val price = line.price ?: return@launch
+                if (on) {
+                    // 规则可能已经被用户在预警页删了（那时线指向的 id 已被清空，这里再兜一次）
+                    val existing = line.alertRuleId?.let { alerts.rule(it) }
+                    if (existing != null) {
+                        alerts.setRuleEnabled(existing.id, true)
+                        return@launch
+                    }
+                    val ruleId = alerts.saveRule(
+                        AlertRule(
+                            market = id.market,
+                            symbol = id.symbol,
+                            // 名单里露线的名字：均线线是 `1时MA20`，用户改过备注就用备注
+                            name = line.note?.takeIf { it.isNotBlank() } ?: priceLabel(price),
+                            condition = AlertCondition.REACH,
+                            threshold = price,
+                            // 列表按 createdAt 倒序，新建的必须拿到当前时间才排在最前
+                            createdAt = System.currentTimeMillis(),
+                        ),
+                    )
+                    chartLinesRepo.setAlertRule(line.id, ruleId)
+                    showNotice("这条线会响了 · 穿越 ${priceLabel(price)} 提醒")
+                } else {
+                    val ruleId = line.alertRuleId
+                    if (ruleId == null) return@launch
+                    alerts.deleteRule(ruleId)
+                    chartLinesRepo.setAlertRule(line.id, null)
+                    showNotice("已关掉这条线的告警")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                showNotice("告警设置失败：${e.displayMessage()}")
             }
         }
     }

@@ -1,8 +1,10 @@
 package com.waxilo.marketmonitor.domain.indicator
 
-import com.waxilo.marketmonitor.domain.alert.AlertCondition
-import com.waxilo.marketmonitor.domain.alert.AlertRule
 import com.waxilo.marketmonitor.domain.kline.CandleInterval
+import com.waxilo.marketmonitor.domain.kline.OfficialInterval
+import com.waxilo.marketmonitor.domain.model.MarketType
+import com.waxilo.marketmonitor.domain.repository.ChartLine
+import com.waxilo.marketmonitor.domain.repository.ChartLineKind
 import java.math.BigDecimal
 
 /**
@@ -21,10 +23,11 @@ import java.math.BigDecimal
  *     把 NaN 混进排序里会让「最近的一道压力」整个失真 —— 排序里 NaN 的比较永远为假，
  *     它会随机停在任意位置。
  *
- * 落库形态与桌面端不同：桌面端一条「系统划线」是带 `origin` 的独立实体，Android 这边
- * 告警线由 `alert_rule` 派生（一条规则 = 一条线），所以**回显靠规则名**认人，见 [MaAnalysis.note]；
- * **跟随也靠名字**（[MaAnalysis.alignments] 按名字把线拉到新值，每轮刷新一次）。
- * 名字里带族名（`MA` / `EMA`），两族的线因此互不串认。
+ * 落库形态与桌面端对齐（2026-11-26 改）：面板画的线落在 `chart_line` 里，带
+ * [MaOrigin] 身份（族 / 周期 / 档位），**默认无价签、不告警**；要告警才给这条线挂一条
+ * `alert_rule`（见 [ChartLine.alertRuleId]）。早先这条线本身就是一条告警规则
+ * （`alert_rule` + 自动名当身份），于是「画一条参考线」必然等于「开一条预警」，
+ * 而且用户改个名字就再也认不回来。
  */
 
 /** 一条均线水位（还没跟现价比较）。 */
@@ -36,6 +39,23 @@ data class MaLevel(
     /** 最后一根 K 线上的均线值。 */
     val value: Double,
 )
+
+/**
+ * 均线分析代画的线的身份：(族, 周期, 档位)。
+ *
+ * 桌面端 `PriceLine.origin` 的同构物。它是这条线**唯一**的认领键 ——
+ * 备注可以被用户改写（「1时MA20」改成「日线压制」），改完仍认得出归属；
+ * 而自动名只剩「出生时写在线上的一句话」这一个用途。
+ */
+data class MaOrigin(
+    val family: MaFamily,
+    val interval: CandleInterval,
+    val period: Int,
+) {
+    /** 同一档判据（周期按 [CandleInterval.storageKey] 比，避免两个等值实例不 equals）。 */
+    fun matches(family: MaFamily, interval: CandleInterval, period: Int): Boolean =
+        this.family == family && this.interval.storageKey == interval.storageKey && this.period == period
+}
 
 /** 一条水位 + 与现价的偏离（正 = 在现价上方）。 */
 data class MaLevelRow(
@@ -76,10 +96,10 @@ data class MaScan(
     val fallbackPrice: Double = Double.NaN,
 )
 
-/** 图上与某一档均线绑定的那条告警线（面板行据此回显）。 */
+/** 图上与某一档均线绑定的那条线（面板行据此回显）。 */
 data class MaLineRef(
-    /** 那条告警规则 id —— 改它 / 删它都要用。 */
-    val ruleId: Long,
+    /** 画线表里的主键 —— 删它 / 改它都要用。 */
+    val lineId: Long,
     /**
      * 线上的价位 = 它**现在**在图上钉在哪儿。
      *
@@ -87,21 +107,27 @@ data class MaLineRef(
      * 正常情况下每轮刷新都会把线拉回当前值（见 [MaAnalysis.alignments]）。
      */
     val price: Double,
-    /** 这条线的告警开着吗（关掉的线仍画在图上，但不会响）。 */
-    val enabled: Boolean,
-    /** 规则名（= 自动备注，用户可能改过）。 */
-    val name: String,
+    /** 线上挂着的告警规则（null = 不告警）。 */
+    val alertRuleId: Long?,
+    /** 线上那句话（出生时是自动名，用户可能改过）。 */
+    val note: String?,
     /** 线上价位与这一档的当前均线值是否一致（不一致 = 漂了，下一轮刷新会拉回）。 */
     val aligned: Boolean,
-)
+) {
+    /** 这条线挂着告警规则吗（等价于 [alertRuleId] 非空）。 */
+    val alert: Boolean get() = alertRuleId != null
+}
 
 /**
- * 一条**要挪的系统划线**：把 [ruleId] 的阈值改成 [price]。
+ * 一条**要挪的系统划线**：把 [lineId] 的价位改成 [price]；若它挂着告警 [alertRuleId]，
+ * 那条规则的阈值要一起改，否则线与告警会指向两个价。
  *
  * 只描述「该改成什么」，不碰数据库 —— 落库要 suspend，纯函数层留在这里是为了能单测。
  */
 data class MaAlign(
-    val ruleId: Long,
+    val lineId: Long,
+    /** 线上挂的告警规则（null = 不告警）。 */
+    val alertRuleId: Long?,
     /** 目标档位（周期 + 档位 + 新值）。 */
     val level: MaLevel,
 ) {
@@ -121,16 +147,18 @@ class MaCurve(
     val values: DoubleArray,
 )
 
-/** 点了面板里一行之后对告警线该做什么。 */
+/** 点了面板里一行之后对线该做什么。 */
 sealed interface MaTick {
-    /** 这一档还没有线：新建一条告警线。 */
+    /** 这一档还没有线：新建一条（**不告警、不挂价签**）。 */
     data object Add : MaTick
 
-    /** 已有线但漂了（或告警被关掉）：拉到当前值，顺带把告警打开。 */
-    data class Align(val ruleId: Long) : MaTick
-
-    /** 已对齐且开着告警：删掉它（同一个条目再点一下即取消）。 */
-    data class Remove(val ruleId: Long) : MaTick
+    /**
+     * 已经有线：删掉它（同一个条目再点一下即取消）。
+     *
+     * 只带 [lineId] 不够：线上可能挂着一条告警规则，删线必须连它一起收掉，
+     * 否则预警列表里会留下一条没有线的规则。一并带出来，调用方不必再查一遍。
+     */
+    data class Remove(val lineId: Long, val alertRuleId: Long?) : MaTick
 
     /** 价位非法，什么都不做。 */
     data object None : MaTick
@@ -322,113 +350,110 @@ object MaAnalysis {
         "${interval.legacyLabel}${family.name}$period"
 
     /**
-     * 在告警规则表里找这一档均线对应的线，找不到给 null。
+     * 在画线表里找这一档均线对应的线，找不到给 null。
      *
-     * 按**规则名精确等于自动备注**认人：Android 的告警线由 `alert_rule` 派生，规则里
-     * 没有 (周期, 档位) 这样的结构化身份字段，名字是唯一能跨重启活下来的线索。
-     * 允许两个名字：现在的 [note]（`1时MA20`）与 [legacyNote]（`1hMA20`）——
-     * 两种都代表「这一档画过」，新画的线一律用前者。
+     * **只认身份**（[ChartLine.origin]）：族 + 周期（按 [CandleInterval.storageKey] 比）+ 档位。
+     * 备注不参与认人 —— 用户把「1时MA20」改成「日线压制」之后，这条线仍然是 MA20 那一条，
+     * 面板照旧回显、刷新照旧拉齐（早先靠名字认人，一改名就丢绑定）。
      *
-     * 同身份撞上多条时只认**第一条**（`minByOrNull`）：回显回答的是「这一档画过没有」，
-     * 不是「画了几条」。
+     * 手画的线（`origin == null`）即使价位正好落在均线上也不认领：那是用户自己的判断，
+     * 面板不该把它报成「已画」。同身份撞上多条（旧逻辑叠过）时只认 **id 最小**的那条：
+     * 回显回答的是「这一档画过没有」，不是「画了几条」。
      */
-    fun lineOf(
-        rules: List<AlertRule>,
-        family: MaFamily,
-        level: MaLevel,
-        note: String = note(family, level.interval, level.period),
-    ): MaLineRef? {
-        if (note.isEmpty()) return null
-        val names = setOf(note, legacyNote(family, level.interval, level.period))
-        val rule = rules.asSequence()
-            .filter { it.name in names }
-            .mapNotNull { r -> r.threshold?.let { threshold -> r to threshold } }
-            .minByOrNull { pair -> pair.first.id }
+    fun lineOf(lines: List<ChartLine>, family: MaFamily, level: MaLevel): MaLineRef? {
+        val line = lines.asSequence()
+            .filter { it.origin?.matches(family, level.interval, level.period) == true }
+            .minByOrNull { it.id }
             ?: return null
-        val price = rule.second.toDouble()
+        val price = line.price?.toDouble() ?: return null
         if (!price.isFinite() || price <= 0) return null
         return MaLineRef(
-            ruleId = rule.first.id,
+            lineId = line.id,
             price = price,
-            enabled = rule.first.enabled,
-            name = rule.first.name,
+            alertRuleId = line.alertRuleId,
+            note = line.note,
             aligned = price == level.value,
         )
     }
 
     /**
-     * 面板里点一行 = 对告警线做**一次**改动，三种结果：
+     * 面板里点一行 = **一次切换**：
      *
-     *  - 这一档还**没有**线 → 新建一条（自动名 + 达到条件 = 穿越即提醒）；
-     *  - 有、且价位与当前值一致、还开着告警 → 删掉（「再点一下取消」）；
-     *  - 有、但漂了（或告警被关掉）→ **拉到当前值**（[MaTick.Align]）：这一档的位置变了，
-     *    线留在旧价上就成了一条没人认领的横线。
+     *  - 这一档还没有线 → 画一条（默认无价签、不告警，见 [newLine]）；
+     *  - 已经画过 → 删掉（连它挂的告警规则一起，见 [MaTick.Remove]）。
      *
-     * **不做桌面端那个「同价收编」**（adopt）：那边是为了避免两条重合的线删起来像没反应，
-     * 但要收编就得改一条**用户自己建的规则**的名字；Android 的告警规则是会响、会推送的
-     * 真资产，把它悄悄改名成 `1时MA20` 比多一条重合线糟得多。何况均线是带小数的值，
-     * 精确撞上手建阈值的概率约等于零 —— 真撞上了也只是多一条线，不会动到用户的规则。
+     * **没有「对齐到当前值」这一档**（2026-11-26 用户要求）：对齐是自动的，每轮取数回来
+     * 都会把线拉到新值（见 [alignments]），不该让用户为了「拉回」再点一次；
+     * 而那种一下会把用户特意关掉的告警重新打开 —— 正是要修的那个 bug。
      */
-    fun tick(
-        rules: List<AlertRule>,
-        family: MaFamily,
-        level: MaLevel,
-        note: String = note(family, level.interval, level.period),
-    ): MaTick {
+    fun tick(lines: List<ChartLine>, family: MaFamily, level: MaLevel): MaTick {
         if (!level.value.isFinite() || level.value <= 0) return MaTick.None
-        val hit = lineOf(rules, family, level, note)
-        return when {
-            hit == null -> MaTick.Add
-            hit.aligned && hit.enabled -> MaTick.Remove(hit.ruleId)
-            else -> MaTick.Align(hit.ruleId)
-        }
+        val hit = lineOf(lines, family, level) ?: return MaTick.Add
+        return MaTick.Remove(hit.lineId, hit.alertRuleId)
     }
 
     /**
-     * 一轮扫描结束后**该落到线上的改动**：把图上这一族的自动线拉到各自的新值。
+     * 面板落一条新线：水平线、带身份、**默认不挂价签、不告警**。
+     *
+     * 备注写上自动名（`1时MA20`）只是「出生时的一句话」：图上那条线得让人认得出是哪一档，
+     * 而身份另有字段兜着，用户改掉备注也不影响归属。
+     */
+    fun newLine(
+        market: MarketType,
+        symbol: String,
+        family: MaFamily,
+        level: MaLevel,
+        createdAt: Long,
+    ): ChartLine = ChartLine(
+        market = market,
+        symbol = symbol,
+        kind = ChartLineKind.HORIZONTAL,
+        price = BigDecimal.valueOf(level.value),
+        note = note(family, level.interval, level.period),
+        origin = MaOrigin(family, level.interval, level.period),
+        showBadge = false,
+        alertRuleId = null,
+        createdAt = createdAt,
+    )
+
+    /**
+     * 一轮扫描结束后**该落到线上的改动**：把图上这一族的系统划线拉到各自的新值。
      *
      * 与桌面端 `alignLevelLines` 同一条口径 —— 「线跟着均线走」这句话的唯一执行点。
      * 均线每分钟都在动，线是拿来看的一道墙，墙必须长在均线 **现在**的位置上；
      * 停在画它的那一刻只会让面板说「已画」、图上那条线却离得老远。
      *
-     * 三条边界，每条都对应一类不该被碰的线：
+     * 三条边界：
      *
-     *  1. **认不出的名字不动**（[AlertRule.name] 不等于这一族任何一档的 [note] / [legacyNote]）。
-     *     用户手建的预警线（`BTC 十万`）价位是他自己的判断，刷新凭什么改；另一族面板画的
-     *     线也不在名单里，所以 MA 面板刷新不会顺手挪动 EMA 的线。
-     *  2. **只改「达到」条件**（[AlertCondition.REACH]）：这一类规则的触发判据是
-     *     「两次观测价之间穿过了阈值」，只挪阈值不会凭空造出一次穿越（价格确实从旧阈值
-     *     走到新阈值那一侧时算真穿越，那本来就是一次穿越）。而 ABOVE / BELOW 是水平比较
-     *     （`price >= target`），阈值一挪「满足」状态可能当场翻转，于是凭空弹一条提醒 ——
-     *     所以这类规则的线一律不自动改，用户点了面板那一行才走人工对齐。
-     *  3. **只改阈值一个字段**：名字（回显的钥匙）、开关（用户可能特意关掉）、备注、
-     *     重复模式一概保留。**也不动 [com.waxilo.marketmonitor.domain.alert.AlertState]**：
-     *     清状态会把 `ONCE` 的 fired 闸门重新打开，于是「只响一次」的规则每 60 秒复活一次；
-     *     而 REACH 的边沿判定读的是**价格**（`lastPrice`），不是阈值，不清也不会误判。
+     *  1. **只动本族身份线**：手画的线（`origin == null`）价位是用户自己的判断，
+     *     另一族面板画的线也不归这一族管 —— 两边各挪各的，不会互相抢。
+     *  2. **只改价位**（以及它挂着的告警规则的阈值）。价签开关、备注、告警在不在，
+     *     全是用户设过的，这一下只是「同一条线挪到新价位」，不是重新生成。
+     *  3. **不动 `AlertState`**：自动对齐每 60 秒就可能执行一次，每次都清 `fired`
+     *     会让「只响一次」的规则永远重新武装；而 REACH 的边沿判定读的是价格本身
+     *     （`lastPrice`），阈值被挪走不会误判，不清更安全。
      *
-     * 同一档撞上多条同名规则（旧逻辑叠出来的）时**全部拉过去**：它们本来就是同一条均线的
-     * 重复落款，留几条在旧价上反而更难收拾。
+     * 判据是**精确相等**（`compareTo` 而不是 `equals`：库里存 `68000.0`、算出来 `68000`
+     * 是同一个价）：面板与这里用的是同一个 `last` 算出来的同一个 double，不设容差 ——
+     * 设了就会出现「差一点点也算对齐」，于是面板说「已画」、图上的线却明显偏着。
      */
-    fun alignments(rules: List<AlertRule>, family: MaFamily, levels: List<MaLevel>): List<MaAlign> {
-        if (rules.isEmpty() || levels.isEmpty()) return emptyList()
-        // 名字是唯一的跨重启线索（Android 的线上没有 (周期, 档位) 这样的结构化身份字段）
-        val byName = HashMap<String, MaLevel>(levels.size * 2)
+    fun alignments(lines: List<ChartLine>, family: MaFamily, levels: List<MaLevel>): List<MaAlign> {
+        if (lines.isEmpty() || levels.isEmpty()) return emptyList()
+        val targets = HashMap<String, MaLevel>(levels.size * 2)
         for (level in levels) {
             if (!level.value.isFinite() || level.value <= 0) continue
-            byName[note(family, level.interval, level.period)] = level
-            byName[legacyNote(family, level.interval, level.period)] = level
+            targets[key(level.interval, level.period)] = level
         }
-        if (byName.isEmpty()) return emptyList()
+        if (targets.isEmpty()) return emptyList()
 
-        val out = ArrayList<MaAlign>(rules.size)
-        for (rule in rules) {
-            if (rule.condition != AlertCondition.REACH) continue
-            val level = byName[rule.name] ?: continue
-            val threshold = rule.threshold ?: continue
-            // compareTo 而不是 equals：库里存的可能是 `68000.0`、算出来的是 `68000`，
-            // 这两个 BigDecimal 不 equals，但就是同一个价位
-            if (BigDecimal.valueOf(level.value).compareTo(threshold) == 0) continue
-            out += MaAlign(rule.id, level)
+        val out = ArrayList<MaAlign>(lines.size)
+        for (line in lines) {
+            val origin = line.origin ?: continue
+            if (origin.family != family) continue
+            val level = targets[key(origin.interval, origin.period)] ?: continue
+            val price = line.price ?: continue
+            if (BigDecimal.valueOf(level.value).compareTo(price) == 0) continue
+            out += MaAlign(line.id, line.alertRuleId, level)
         }
         return out
     }
@@ -437,23 +462,63 @@ object MaAnalysis {
      * 图上有、但**当前配置里已经没有对应行**的**本族**系统划线（改过目录 / 周期条）。
      *
      * 行内回显按 (周期, 档位) 配对，这类线天然配不上任何一行 —— 不点一句出来，用户就只能
-     * 在图上看见一条带 `1时MA20` 名字的线、却在面板里怎么也找不到它。
+     * 在图上看见一条带 `1时MA20` 备注的线、却在面板里怎么也找不到它。
      * 判据用**配置**而不是扫描结果：某一档这次没取到数也只管显示，不代表它被删了。
-     * 新旧两种命名都算「在配置里」，否则升级后每条老线都会诈一次尸。
-     * 只看本族的名字 —— 另一族的线由另一张面板管。
+     * 只看本族身份 —— 另一族的线由另一张面板管。
      */
-    fun orphanLineNames(
-        rules: List<AlertRule>,
+    fun orphanLines(
+        lines: List<ChartLine>,
         family: MaFamily,
         intervals: List<CandleInterval>,
         periods: List<Int>,
-    ): List<String> {
+    ): List<ChartLine> {
         if (intervals.isEmpty() || periods.isEmpty()) return emptyList()
-        val configured = intervals
-            .flatMap { iv -> periods.flatMap { p -> listOf(note(family, iv, p), legacyNote(family, iv, p)) } }
-            .toSet()
-        return rules.map { it.name }
-            .filter { isFamilyAutoNote(it, family) && it !in configured }
+        val configured = HashSet<String>(intervals.size * periods.size)
+        for (iv in intervals) for (p in periods) configured.add(key(iv, p))
+        return lines.filter { line ->
+            val origin = line.origin ?: return@filter false
+            origin.family == family && key(origin.interval, origin.period) !in configured
+        }
+    }
+
+    /**
+     * 从一条线的名字反解身份（`1时EMA50` / 旧版 `1hMA20`）。**只为升级迁移用** —— 迁移之后
+     * 身份是字段，不再靠名字；解不出来的名字（用户改过的）留给原规则，不动。
+     */
+    fun parseAutoNote(name: String?): MaOrigin? {
+        val text = name?.trim().orEmpty()
+        if (text.isEmpty()) return null
+        val match = AUTO_LINE.find(text) ?: return null
+        val interval = intervalOfLabel(match.groupValues[1]) ?: return null
+        val family = if (match.groupValues[2] == MaFamily.EMA.name) MaFamily.EMA else MaFamily.MA
+        val period = match.groupValues[3].toIntOrNull() ?: return null
+        if (period <= 0) return null
+        return MaOrigin(family, interval, period)
+    }
+
+    /**
+     * 周期短名 → 周期：`15分` / `1时` / `1天` / `1周` / `1月`，以及旧版英文码
+     * （`15m` / `1h` / `1d` / `1w` / `1mo` / `1M`）。认不出给 null。
+     *
+     * 与 [CandleInterval.label] / [CandleInterval.legacyLabel] 互为逆运算 ——
+     * 迁移时要把老自动名还原成一档，靠的就是这两张表对得上。
+     */
+    fun intervalOfLabel(text: String): CandleInterval? {
+        val match = LABEL_FORM.find(text.trim()) ?: return null
+        val count = match.groupValues[1].toLongOrNull() ?: return null
+        if (count <= 0) return null
+        val minutes = when (match.groupValues[2]) {
+            "分", "m" -> count
+            "时", "h" -> count * 60
+            "天", "d" -> count * 1_440
+            "周", "w" -> count * 10_080
+            "月", "mo", "M" -> count * 43_200
+            else -> return null
+        }
+        if (minutes !in CandleInterval.MINUTES_RANGE) return null
+        // 官方周期要落回同一支枚举（`of`），否则它带着 official = null 与配置里的实例不等值
+        val official = OfficialInterval.entries.firstOrNull { it.minutes == minutes } ?: return CandleInterval.custom(minutes)
+        return CandleInterval.of(official)
     }
 
     /** 均线递推：MA = 简单均线，EMA = 指数均线（与图表同一套公式）。 */
@@ -472,6 +537,17 @@ object MaAnalysis {
      */
     private val AUTO_EMA = Regex("^[0-9]+[\\p{IsHan}a-zA-Z]+EMA[0-9]+$")
     private val AUTO_MA = Regex("^[0-9]+[\\p{IsHan}a-zA-Z]+(?<!E)MA[0-9]+$")
+
+    /**
+     * 把一条自动名**拆成三段**（周期短名 / 族 / 期数），[parseAutoNote] 用。
+     *
+     * 周期那一段用非贪婪：`1moMA20` 要先试 `1`（后面接不上族名）再退到 `1mo`，
+     * 贪婪的话 `1moMA` 会被整段吞进周期里。
+     */
+    private val AUTO_LINE = Regex("^([0-9]+[\\p{IsHan}a-zA-Z]+?)(EMA|MA)([0-9]+)$")
+
+    /** 周期短名的形状：`<数字><单位>`，单位见 [intervalOfLabel]。 */
+    private val LABEL_FORM = Regex("^([0-9]+)(\\p{IsHan}+|[a-zA-Z]+)$")
 
     private fun autoPattern(family: MaFamily): Regex = when (family) {
         MaFamily.MA -> AUTO_MA

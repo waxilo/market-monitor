@@ -18,6 +18,7 @@ import com.waxilo.marketmonitor.domain.repository.AlertRepository
 import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.repository.ChartLineRepository
 import com.waxilo.marketmonitor.domain.repository.WebhookDelivery
+import java.math.BigDecimal
 import com.waxilo.marketmonitor.domain.repository.WatchlistRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -65,7 +66,16 @@ class WatchlistRepositoryImpl(
 }
 
 /** 预警规则、判定状态与触发记录（PRD 4.3 / 4.5）。 */
-class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
+class AlertRepositoryImpl(
+    private val dao: AlertDao,
+    /**
+     * 只为「删规则 → 把挂着它的画线改回不告警」这一步。
+     *
+     * 三个删除入口（详情页、预警列表、预警编辑器）都经由本类，挂在这里才不会漏；
+     * 放在各个 ViewModel 里做，早晚会漏掉一个，留下一根红着却不会响的线。
+     */
+    private val chartLines: ChartLineDao,
+) : AlertRepository {
 
     override fun rules(): Flow<List<AlertRule>> = dao.observeRules().map { rows -> rows.map { it.toDomain() } }
 
@@ -85,12 +95,17 @@ class AlertRepositoryImpl(private val dao: AlertDao) : AlertRepository {
     override suspend fun deleteRule(id: Long) {
         dao.deleteRule(id)
         dao.deleteState(id)
+        // 挂着这条规则的画线变回「只是记号」：红→黄，且不再指向一个不存在的规则
+        chartLines.clearAlertRule(id)
     }
 
     override suspend fun setRuleEnabled(id: Long, enabled: Boolean) = dao.setEnabled(id, if (enabled) 1 else 0)
 
     override suspend fun setNote(id: Long, note: String?) =
         dao.setNote(id, note?.takeIf { it.isNotBlank() })
+
+    override suspend fun setRuleDashed(id: Long, dashed: Boolean) =
+        dao.setDashed(id, if (dashed) 1 else 0)
 
     override suspend fun state(ruleId: Long): AlertState = dao.findState(ruleId)?.toDomain() ?: AlertState()
 
@@ -136,6 +151,17 @@ class ChartLineRepositoryImpl(private val dao: ChartLineDao) : ChartLineReposito
 
     override suspend fun setNote(id: Long, note: String?) =
         dao.setNote(id, note?.takeIf { it.isNotBlank() })
+
+    override suspend fun setShowBadge(id: Long, show: Boolean) =
+        dao.setShowBadge(id, if (show) 1 else 0)
+
+    override suspend fun setAlertRule(id: Long, ruleId: Long?) = dao.setAlertRule(id, ruleId)
+
+    override suspend fun setDashed(id: Long, dashed: Boolean) =
+        dao.setDashed(id, if (dashed) 1 else 0)
+
+    override suspend fun setPrice(id: Long, price: BigDecimal) =
+        dao.setPrice(id, price.toPlainString())
 
     override suspend fun deleteAll(market: MarketType, symbol: String) =
         dao.deleteAll(market.key, symbol)

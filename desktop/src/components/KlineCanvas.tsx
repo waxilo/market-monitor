@@ -114,16 +114,20 @@ const TREND_MIN_DRAW_PX = 8;
 const TREND_HANDLE_R = 4.5;
 
 /**
- * 水平线选中后两端那枚把手：**改价的唯一入口**（离左右边缘的距离 / 命中半径）。
+ * 水平线「按住任意位置就拖」的命中带宽（像素）—— 线上哪一段都能抓，不再有把手。
  *
- * 为什么不再「按住线身拖动改价」（2026-11-21 用户报「上下移动图表，直线穿过的位置变了」）：
- * 水平线横贯整宽，`LINE_HIT_PX`（4px）的命中带等于把画布横切成一条带子 —— 想上下平移图表时
- * 起手落进带子里就把线拖走了。实测：在线上按住往下拖 120px，线价 57500 → 56288.84，
- * 而 `pricePan` 一格没动（图表根本没平移）。把手是唯一编辑入口之后，**按在图上拖动永远是
- * 平移画布**；线价只会在明确抓住把手时改变。
+ * 2026-11-26 用户：「水平线应该去掉抓点，任意位置都应该可以拖拽」。此前的规矩是
+ * 两端各一枚圆点当**改价的唯一入口**（理由见下面这条历史），代价是「必须精确点中那两个
+ * 半径 7px 的圆点」，手势上就是「抓不住」。
+ *
+ * ⚠️ 只对**已选中**那条生效（2026-11-25 用户「不管什么线，都要先选中才能编辑」）：
+ * 未选中时按下只做选中，落点继续拖画布 —— 否则这条横贯全宽的带子会把画布横切成一条
+ * 误抓走廊（2026-11-21 报过同一件事，实测线价 57500 → 56288.84 而 `pricePan` 一格没动）。
+ * 带宽只比选中宽一点（直线是 8，这里同值），拖动时按「线相对指尖的价差」跟手
+ * （见 `grabPriceOffset`）—— 线不跳、读数不乱。若日后觉得误抓频繁，第一选项是缩这条带子，
+ * 而不是把把手加回来。
  */
-const PRICE_HANDLE_INSET = 8;
-const PRICE_HANDLE_HIT_PX = 7;
+const PRICE_BODY_GRAB_PX = 8;
 
 /**
  * 「行情线」的粗细（CSS px）：最新价那条虚线、以及用户画的所有线（水平线 / 两点直线 / 预览）。
@@ -136,8 +140,30 @@ const PRICE_HANDLE_HIT_PX = 7;
 const W_LAST_PRICE = 1.5;
 const W_DRAW_LINE = 1.5;
 
+/**
+ * 选中一条线时那道**对称外发光**（alpha / 粗细，CSS px）：铺在线下面，不改线本身。
+ *
+ * 2026-11-26 起选中的**主信号是线色转黄**，这道光退成辅信号 —— 几条平行线挨得近时，
+ * 「正在动的是哪一条」靠一圈光比靠颜色更快看见。仍不加粗：加粗会让读数看着偏半个像素
+ * （2026-11-15 踩过）。App 侧同一套（`LINE_SELECTED_HALO_ALPHA = 0.22`、宽 9）。
+ */
+const SEL_HALO_ALPHA = 0.22;
+const SEL_HALO_WIDTH = 5;
+
 /** 最新价虚线的疏密：跟着线宽一起收（2px 时代是 [5, 4]），细了之后长段看着更空。 */
 const LAST_PRICE_DASH = [4, 3];
+
+/**
+ * 用户画线的虚线（`PriceLine.dashed` / `TrendLine.dashed`）：短划 8px、空隙 5px。
+ *
+ * 比最新价那条**长一档**（8/5 对 4/3）：最新价是行情自己画的辅助线、越不抢戏越好；
+ * 用户的线是他特意设的，虚着也该读得出「这条线在哪」，太碎会像 K 线上的杂点。
+ *
+ * ⚠️ 6/4 试过，1 倍屏上几乎读不出断开（1.5px 的线本身抗锯齿，空隙被两端半透明吃掉一半，
+ * 实测只剩 2px 真空）—— 4 倍放大截图才看得清。现在 5px 空隙落实约 3px，正常大小就有「虚线感」。
+ * App 侧同值（`DRAW_DASH_LENGTH` / `DRAW_DASH_GAP`）。
+ */
+const DRAW_DASH = [8, 5];
 
 /**
  * 骨架网格的量程：**任取一段等距区间**即可 —— 网格的条数与间距由 `gridLines` 的 1-2-5 阶梯
@@ -158,10 +184,17 @@ interface Palette {
   /** 金/黄色徽标上的字（--on-accent）：黄底配纸色字在浅色主题下读不出来。 */
   onAccent: string;
   /**
-   * 用户画线（水平线 / 两点直线）：黄。告警线取 down 红、现价线取 muted 灰，三种互不串。
-   * **三种线型一律实线**，区分只在颜色（对齐 App：红＝会响的告警、黄＝只是记号的画线）。
+   * 用户画线（水平线 / 两点直线）的**选中色**：黄。
+   *
+   * 三档语义（2026-11-26 定，与 App 同一套）：
+   * · 普通 → [plain]（中性：浅色主题近黑、深色主题近白）；
+   * · 选中 → 这里（黄，临时交互态，**压过告警色**：正拖着的那一条先看见黄）；
+   * · 挂了告警 → down 红（会响）。
+   * **三种线型一律实线**，区分只在颜色。
    */
   line: string;
+  /** 普通画线的中性色：「黑色划线」按主题落地 —— 浅色主题近黑、深色主题近白。 */
+  plain: string;
 }
 
 /** 颜色从 CSS 变量读，主题切换只需重画。 */
@@ -179,6 +212,7 @@ function readPalette(): Palette {
     edge: v('--hairline-strong') || '#3a3f47',
     onAccent: v('--on-accent') || '#1b1200',
     line: v('--line-mark') || '#f0b90b',
+    plain: v('--line-plain') || '#ecedef',
   };
 }
 
@@ -382,7 +416,7 @@ function drawTrendHandle(
  *
  * 为什么也不是「纸色半透明底板」：纸色跟图底同一个颜色，底板等于没底 —— 压在密集
  * K 线、均线、网格上的备注，字被底下的东西拖着读不清（用户截图反馈「容易被背景影响」）。
- * 现在牌面取**线的语义色**（黄＝普通画线 / 红＝告警），字取该色上的反差色，
+ * 现在牌面取**线的当前颜色**（中性＝普通画线 / 黄＝选中 / 红＝告警），字取该色上的反差色，
  * 与右轴价签同色同尺寸（`drawBadge`）—— 一眼读作「这条线的标签」，背景是什么都不影响。
  *
  * 横向夹进绘图区：备注是长句，贴着右边缘时会整段跑到轴外面去（canvas 不报错，用户只看到
@@ -411,7 +445,7 @@ function drawLineNote(
   const ny = clampNum(y, top + h / 2, Math.max(top + h / 2, bottom - h / 2));
   // **牌面照右轴那枚价签做**：实色块 + 高反差字，不是「纸色半透明」——
   // 纸色底板跟图底本来就同一个颜色，压在密集 K 线/网格上时字被底下的东西拖着读不清
-  // （用户反馈「容易被背景影响」）。底色即线的语义色（黄＝普通画线 / 红＝告警），
+  // （用户反馈「容易被背景影响」）。底色即线当前的颜色（中性 / 选中黄 / 告警红），
   // 与右轴价签同色同尺寸，读起来就是「这条线的标签」。
   ctx.globalAlpha = 1;
   ctx.fillStyle = bg;
@@ -839,70 +873,85 @@ export function KlineCanvas({
       );
     }
 
-    // 下面这一整段（水平线 / 两点直线 / 半截直线预览）**一律实线**：画线不靠线型表达语义，
-    // 所以进段先清掉任何残留的 dash —— 别让上面某个绘制分支的虚线渗下来。
+    // 下面这一整段（水平线 / 两点直线 / 半截直线预览）的**线型由每条线自己决定**
+    // （`dashed`，2026-11-26 起可切）。进段先清掉残留 dash —— 别让上面某个绘制分支的
+    // 虚线渗进「用户没要求虚线」的那一条；段内每条线画完也各自复位。
     ctx.setLineDash([]);
 
-    // 用户画的水平线：**实线**横贯主图，压在 K 线/均线之上、最新价虚线之下
+    // 用户画的水平线横贯主图，压在 K 线/均线之上、最新价之下
     // （最新价是行情本身，任何时候都不该被遮）。价格标在下面与最新价标一起画。
     //
-    // 线型只有一种（实线），语义全部交给颜色：告警线红（它要等着被触发，得一眼从普通
-    // 划线里分出来）、普通划线黄（与两点直线同色系）。早期靠「点线 / 虚线」区分告警，
-    // 但在密集 K 线上虚线断成一串点、反而不如实线好瞄 —— 现在红＝会响、黄＝只是记号。
+    // **颜色**三档（2026-11-26 定稿）：选中 → 黄（临时交互态，压过告警色）、
+    // 挂告警 → 红（要等着被触发，得一眼从普通划线里分出来）、普通划线 → 中性
+    // （浅色主题近黑、深色主题近白）。两点直线同一套。
+    // **线型**是用户自己的选择（实线 / 虚线），与颜色正交 —— 颜色说「会不会响 / 是不是正在动」，
+    // 线型只说「这条线我想画淡一点」。早期给告警线配虚线算过语义，那样「虚线 = 会响」和
+    // 「虚线 = 用户想要虚线」就会抢同一个形状，现在形状全部还给人。
     /**
      * 线备注牌：先记下来、等这一层所有线（连最新价那条虚线也算）画完再统一「盖章」。
      * 牌是实心的、牌心就压在线 y 上 ⇒ 线在牌底下断成两截，看着就是线从牌里穿过去；
      * 所以**任何线都不许从牌面上穿过去**，只能在所有线之后画。
      */
     const noteChips: { text: string; x: number; y: number; fg: string; bg: string }[] = [];
-    /** 选中的线不换色、不加粗：红/黄本身是语义，粗细与位置要和未选中时完全一致才对齐得准。 */
-    const selPrice = sel?.kind === 'price' ? sel.index : -1;
+    /** 选中 = **线色转黄**（2026-11-26 起，颜色是此刻唯一的状态信号）；粗细与位置照旧不动 ——
+     *  加粗会把对价的那一圈带偏（2026-11-15）。 */
     const selTrend = sel?.kind === 'trend' ? sel.index : -1;
+    const selPrice = sel?.kind === 'price' ? sel.index : -1;
+    // 水平线另加一道**对称外发光**（2026-11-26 去掉了两端把手）：线上任意位置都能按住拖，
+    // 再画两枚「只能抓这儿」的圆点等于把可拖范围讲反了；多条平行线时这道光让
+    // 「正在动哪一条」更明确。发光不改线的位置与粗细（对齐读价不受影响），与 App 同一口径。
     if (pl.length > 0) {
       pl.forEach((line, index) => {
         const y = yOf(toFraction(mainR, line.price), mainTop, mh);
         if (y < mainTop || y > mainBottom) return;
-        const color = line.alert ? p.down : p.line;
-        const selected = index === selPrice;
-        if (selected) {
-          // 选中标记 = 两端各一枚圆形把手（**改价的唯一入口**，见 PRICE_HANDLE_INSET）。
-          // 线本身保持同一粗细（[W_DRAW_LINE]）：原先左右各加粗到 2px 会把对价的一圈带偏
-          // （2026-11-15）；后来画的短竖线只是标记、拖不动，用户仍以为「拖线身就能改价」，
-          // 于是上下平移图表时把线一起拖走（2026-11-21）。现在把手是真能抓的，标记与入口合一。
-          const hy = Math.round(y) + 0.5;
-          drawTrendHandle(ctx, PRICE_HANDLE_INSET, hy, p, mainTop, mainBottom, plotW, color);
-          drawTrendHandle(ctx, plotW - PRICE_HANDLE_INSET, hy, p, mainTop, mainBottom, plotW, color);
+        // 三档（2026-11-26）：选中 = 黄（正在操作这一条，压过告警色）、挂告警 = 红、普通 = 中性。
+        const picked = index === selPrice;
+        const color = picked ? p.line : line.alert ? p.down : p.plain;
+        // 线型：发光与线身用**同一套 dash**，否则虚线下面垫着一条实心的光，看着还是实线。
+        ctx.setLineDash(line.dashed ? DRAW_DASH : []);
+        if (picked) {
+          ctx.globalAlpha = SEL_HALO_ALPHA;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = SEL_HALO_WIDTH;
+          hline(ctx, 0, plotW, y);
+          ctx.globalAlpha = 1;
         }
         ctx.strokeStyle = color;
         ctx.lineWidth = W_DRAW_LINE;
         hline(ctx, 0, plotW, y);
+        ctx.setLineDash([]);
         // 备注牌串在线的左端（图上一眼从左边读起），牌面与右轴那枚价签同一套：
-        // 告警线红底纸色字、普通画线黄底深字。价位牌浮在图表右侧（见「价格标」那段）。
+        // 牌底 = 线色，字色取与它反差最大的一档（黄底配深字、中性/红底配纸色字）。
         if (line.note) {
           noteChips.push({
             text: line.note,
             x: 8,
             y,
-            fg: line.alert ? p.paper : p.onAccent,
+            fg: picked ? p.onAccent : p.paper,
             bg: color,
           });
         }
       });
     }
 
-    // 用户画的两点直线：**实线**、与水平线同色（黄）。两者只差形状 —— 横线读作「一个价位」、
-    // 斜线读作「一条斜率」，颜色不必再分工。端点把手**只画在选中的那条上**：把手是
-    // 「这条线现在能拖」的信号，没选中就没有能拖的理由（0.1.x 起先选中、后拖动）。
+    // 用户画的两点直线：与水平线同一套三档色（普通中性 / 选中黄 / 告警红 ——
+    // 直线本身不挂告警，所以实际只有前两档），线型同样由 `dashed` 决定。两者只差形状 ——
+    // 横线读作「一个价位」、斜线读作「一条斜率」，颜色与线型都不必再分工。
+    // 端点把手**只画在选中的那条上**：把手是「这条线现在能拖」的信号。
     ctx.strokeStyle = p.line;
     ctx.lineWidth = W_DRAW_LINE;
-    tl.forEach((line) => {
+    tl.forEach((line, index) => {
       const a = anchorPx(line.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       const b = anchorPx(line.b, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
       // 选中不改粗细、不加光晕：对齐靠的就是线本来的位置（见上面水平线同一口径），
-      // 选中信号交给锚点把手（下面 `drawTrendHandle`），没选中就没有能拖的理由。
-      ctx.strokeStyle = p.line;
+      // 选中信号是**线色转黄** + 两端锚点把手。
+      const picked = index === selTrend;
+      const color = picked ? p.line : p.plain;
+      ctx.strokeStyle = color;
       ctx.lineWidth = W_DRAW_LINE;
+      ctx.setLineDash(line.dashed ? DRAW_DASH : []);
       infiniteLine(a.x, a.y, b.x, b.y);
+      ctx.setLineDash([]);
       // 备注挂在**看得见的那个锚点**旁：A 被判出绘图区（线画到未来/过去很远）就换 B ——
       // 否则「给这条直线写了备注但图上找不到」。
       if (!line.note) return;
@@ -910,8 +959,14 @@ export function KlineCanvas({
         pt.x >= 0 && pt.x <= plotW && pt.y >= mainTop && pt.y <= mainBottom;
       const spot = inView(a) ? a : inView(b) ? b : null;
       if (!spot) return;
-      // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）
-      noteChips.push({ text: line.note, x: spot.x + 8, y: spot.y, fg: p.onAccent, bg: p.line });
+      // 牌心压在锚点所在的那条斜线上（往右让开一点，别压住把手）；牌底跟线色、字色取反差色。
+      noteChips.push({
+        text: line.note,
+        x: spot.x + 8,
+        y: spot.y,
+        fg: picked ? p.onAccent : p.paper,
+        bg: color,
+      });
     });
     // 待定的两点直线预览也吃这个宽度（下面的 infiniteLine 用的是当前 ctx.lineWidth）
     ctx.lineWidth = W_DRAW_LINE;
@@ -927,7 +982,7 @@ export function KlineCanvas({
     }
 
     // 画了一半的直线（划线区选了「直线」、已经落了第一个点）的预览：起点把手 + 过起点与鼠标的
-    // **实线**（预览的就是成品的样子：一条黄色的无限直线）
+    // **实线、中性色**（预览的就是成品的样子：一条普通的中性无限直线；线型/颜色落点后才改得动）
     const pending = pendingRef.current;
     if (pending) {
       const a = anchorPx(pending.a, list, ivMs, vp, mainR, mainTop, mainBottom, plotW);
@@ -1097,21 +1152,23 @@ export function KlineCanvas({
     // **不在可视区里的不画标** —— drawBadge 会把标夹到上下边缘，那会让一条屏外的线
     // 看着像就在那个价上。
     //
-    // 划线自己的价位牌也进这一列（2026-11-15 用户：不和其他价签分开放），颜色照旧：
-    // 告警线红底、普通画线黄底。**先画划线、后画行情读数** —— 同一高度时由极值 /
+    // 划线自己的价位牌也进这一列（2026-11-15 用户：不和其他价签分开放），颜色照旧跟着线：
+    // 选中黄底、告警红底、普通中性底，字色取与底色反差最大的那一档。
+    // **先画划线、后画行情读数** —— 同一高度时由极值 /
     // 最新价 / 十字光标压在它上面（行情本身比用户的记号重要，且读数常常是同一个数）。
     // 每条线单独显隐，见 `lineBadgeVisible`。
-    for (const line of pl) {
-      if (!lineBadgeVisible(line)) continue;
+    pl.forEach((line, index) => {
+      if (!lineBadgeVisible(line)) return;
       const y = yOf(toFraction(mainR, line.price), mainTop, mh);
-      if (y < mainTop || y > mainBottom) continue;
+      if (y < mainTop || y > mainBottom) return;
+      const picked = index === selPrice;
       drawBadge(
         priceText(line.price),
         y,
-        line.alert ? p.down : p.line,
-        line.alert ? p.paper : p.onAccent,
+        picked ? p.line : line.alert ? p.down : p.plain,
+        picked ? p.onAccent : p.paper,
       );
-    }
+    });
     // 可见区间的最高 / 最低价：靠那条虚线对回极值那根；最新价后画，同高时由它盖住
     // （行情本身比注释重要，且那时读数是同一个数）。
     // 极值线与价签统一用灰（`p.label`）：它们是「这段行情的上下沿」这类注释，
@@ -1361,12 +1418,14 @@ export function KlineCanvas({
     if (!canvas) return;
     /**
      * 本场手势的种类，在**按下那一刻**由落点决定：
-     * `pan` = 拖画布；`trend-anchor` / `trend-body` / `line` = 拖**已选中**的那条线。
+     * `pan` = 拖画布；`trend-anchor` = 改直线角度；`trend-body` / `line` = 拖整条线改位置/价位。
      *
-     * 两条铁律（2026-10-24 起，2026-11-25 重申）：
-     * · 未选中任何线时，按下只做「选中 / 取消选中」，绝不拖动 —— 一场误拖会把线挪走，
-     *   而用户以为自己在平移画布；
+     * 两条铁律（2026-11-25 用户「不管什么线，都要先选中才能编辑」）：
+     * · **先选中，才编辑**：未选中任何线时，按下只做「选中 / 取消选中」，绝不拖动 ——
+     *   一场误拖会把线挪走，用户却以为自己在平移画布；
      * · 工具（划线区里点的线型）激活时，按下即落点画线，不进入拖拽。
+     * 选中之后（2026-11-26 用户「水平线去掉抓点，任意位置都应该可以拖拽」）：直线抓两端
+     * 把手改角度、按住线身整根平移；水平线**线上任意位置**按住就改价，两端把手已删。
      * 锁定时整段抓取跳过，落点一律走 `pan`（锁 = 线一根都不许动）。
      * 副图（以及它下面的时间轴）不参与任何手势。
      */
@@ -1387,6 +1446,13 @@ export function KlineCanvas({
     let grabEnd: TrendEnd = 'a';
     let grabLastX = 0;
     let grabLastY = 0;
+    /**
+     * 拖水平线时「线比指尖高多少价」（按下那一刻算一次，整场不变）。
+     *
+     * 抓取带有 [PRICE_BODY_GRAB_PX]，指针平均落不到线心上；不加这个偏移，第一帧线会
+     * 跳到指尖所在的价位（按 8px 折算，等于凭空改了几个 tick）。
+     */
+    let grabPriceOffset = 0;
 
     const geom = () => {
       const rect = canvas.getBoundingClientRect();
@@ -1447,28 +1513,20 @@ export function KlineCanvas({
       return cross && cross.y >= top && cross.y <= bottom ? cross.y : y;
     };
 
-    /** 离落点最近的那条水平线的下标（4px 容差），没有则 -1。 */
-    const hitLine = (y: number) =>
-      nearestLineWithin(modelRef.current.priceLines.map((l) => yOfPrice(l.price)), y);
-
     /**
-     * 落点是否抓住了**当前选中那条水平线**的把手（左右两端各一枚）。
+     * 离落点最近的那条水平线的下标（[PRICE_BODY_GRAB_PX] 容差），没有则 -1。
      *
-     * 没选中任何水平线时恒 -1 —— 把手只在选中之后才画出来，没画出来的东西不能被抓住。
-     * 它是改价的唯一入口（见 `PRICE_HANDLE_INSET`）：线身的命中带只负责「选中」，
-     * 不再负责「拖动」，否则上下平移图表时压到线就会把线拖走。
+     * 这条带子同时是「选中」和「按住拖动」的判据（2026-11-26 起）：线上任意位置都能抓，
+     * 不再有「只在两端能抓」的把手。带宽比早先只用于选中的 4px 宽一档（与直线线身同值），
+     * 「任意位置都能拖」才真的成立 —— 4px 在触控板上等于要把光标压在线上。
+     * 拖动本身只对**已选中**那条开放，未选中时这条带子只负责「选中它」（见 onPointerDown）。
      */
-    const hitPriceHandle = (x: number, y: number, plotW: number) => {
-      const sel = modelRef.current.selection;
-      if (!sel || sel.kind !== 'price') return -1;
-      const line = modelRef.current.priceLines[sel.index];
-      if (!line) return -1;
-      const ly = yOfPrice(line.price);
-      const { top, bottom } = mainBounds();
-      if (ly < top || ly > bottom) return -1;
-      const near = (hx: number) => Math.hypot(x - hx, y - ly) <= PRICE_HANDLE_HIT_PX;
-      return near(PRICE_HANDLE_INSET) || near(plotW - PRICE_HANDLE_INSET) ? sel.index : -1;
-    };
+    const hitLine = (y: number) =>
+      nearestLineWithin(
+        modelRef.current.priceLines.map((l) => yOfPrice(l.price)),
+        y,
+        PRICE_BODY_GRAB_PX,
+      );
 
     /** 落点在主图**下方**（副图与时间轴）—— 只读区，手势与缩放都不响应。 */
     const belowMain = (y: number) => y > mainBounds().bottom;
@@ -1648,8 +1706,9 @@ export function KlineCanvas({
       }
 
       // 抓取已有的画线：**先选中，才编辑**（2026-11-25 用户「不管什么线，都应该要先选中
-      // 才能编辑，现在没选中就可以拖动」）。选中之后：水平线抓两端把手改价，直线抓两端把手
-      // 改角度、按住线身整根平移（2026-11-23 中点那枚圆点退场）。
+      // 才能编辑，现在没选中就可以拖动」）。选中之后：直线抓两端把手改角度、按住线身
+      // 整根平移（2026-11-23 中点那枚圆点退场）；水平线**线上任意位置**按住就改价 ——
+      // 两端把手已删（2026-11-26 用户「去掉抓点，任意位置都应该可以拖拽」）。
       // 锁定时整段跳过：落点照旧是「拖画布」。
       //
       // 为什么未选中时绝不拖动（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
@@ -1657,6 +1716,8 @@ export function KlineCanvas({
       // 起手压到线上，线就跟着指针走（实测拖动 120px 后线价 57500 → 56288.84，而图表一格都没动）。
       // 直线那侧靠**窄带 + 只认已选中的那条**兜住同一个风险（`TREND_BODY_GRAB_PX` = 8px，
       // 且只认画出来那一段）：误抓面积只有一个 16px 宽的走廊，不是整片画布。
+      // 水平线「任意位置可拖」同样只对**已选中**那条生效（带宽 [PRICE_BODY_GRAB_PX] = 8px
+      // 与直线同值），未选中这一下只做选中、继续拖画布。
       let hitAnyLine = false;
       if (!modelRef.current.linesLocked && inMain) {
         const model = modelRef.current;
@@ -1668,19 +1729,7 @@ export function KlineCanvas({
           crossRef.current = null;
           draw();
         };
-        // 1) 水平线两端的把手：改价的唯一入口，最小最难中，排最前。
-        const priceHandle = hitPriceHandle(x, y, plotW);
-        if (priceHandle >= 0) {
-          mode = 'line';
-          grabIndex = priceHandle;
-          crossRef.current = null;
-          pointerId = e.pointerId;
-          canvas.setPointerCapture(e.pointerId);
-          applyCursor(canvas, 'on-line');
-          draw();
-          return;
-        }
-        // 2) 趋势线两端的把手：改角度（未选中时这一下只选中，把手在选中后才画出来）。
+        // 1) 趋势线两端的把手：改角度（未选中时这一下只选中，把手在选中后才画出来）。
         const handle = nearestTrendHandle(trendHandles(plotW), x, y);
         if (handle) {
           if (!isSameLine(model.selection, { kind: 'trend', index: handle.index })) {
@@ -1697,12 +1746,12 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 3) **已选中那条**直线的线身：整体平移（2026-11-23 起，中点圆点已删）。
+        // 2) **已选中那条**直线的线身：整体平移（2026-11-23 起，中点圆点已删）。
         //    判据是「到**画出来那一段**的距离 ≤ TREND_BODY_GRAB_PX」—— 与 `infiniteLine`
         //    同一个裁剪矩形，锚点早被平移到屏幕外时也不会认「空白里的延长线」。
-        //    端点已在第 2 步吃过，所以按在端点上仍是改角度，按在其余处才是整根平移。
+        //    端点已在第 1 步吃过，所以按在端点上仍是改角度，按在其余处才是整根平移。
         //    **只认已选中那条**（2026-11-25 用户「先选中才能编辑」）：没选中时按线身
-        //    只做第 4 步的选中，绝不拖动 —— 否则一次「想选中」的误拖就把线挪走了。
+        //    只做第 3 步的选中，绝不拖动 —— 否则一次「想选中」的误拖就把线挪走了。
         const selIndex = model.selection?.kind === 'trend' ? model.selection.index : -1;
         const selBody = selIndex >= 0 ? trendBodies(plotW)[selIndex] : undefined;
         if (
@@ -1720,15 +1769,34 @@ export function KlineCanvas({
           draw();
           return;
         }
-        // 4) 其余线身（未选中的直线 / 水平线）：只选中，落点继续走「拖画布」。
-        //    走到这里说明「按中的不是已选中那条的线身」（已选中 + 线身命中在第 3 步就接管了）。
+        // 3) 其余线身：未选中的线只做选中，落点继续走「拖画布」；**已选中那条水平线**则
+        //    线上任意位置按住就改价（2026-11-26 用户「去掉抓点，任意位置都能拖」）。
+        //    走到这里说明「按中的不是已选中那条的线身」（已选中 + 线身命中在第 2 步就接管了）。
         //    命中带与空闲光标的十字角标同一条（`findTrendBodyGrab`）：光标承诺「这里能抓」，
-        //    按下去至少要把这条线选中；真正能动它要等下一次按下。
+        //    按下去至少要把这条线选中；真正能动它要等下一次按下（2026-11-25「先选中，才编辑」）。
         const grab = findTrendBodyGrab(trendBodies(plotW), { left: 0, top, right: plotW, bottom }, x, y);
         if (grab >= 0) selectOnly({ kind: 'trend', index: grab });
         else {
           const priceHit = hitLine(y);
-          if (priceHit >= 0) selectOnly({ kind: 'price', index: priceHit });
+          if (priceHit >= 0) {
+            const priceSelected =
+              model.selection?.kind === 'price' && model.selection.index === priceHit;
+            if (!priceSelected) selectOnly({ kind: 'price', index: priceHit });
+            else {
+              mode = 'line';
+              grabIndex = priceHit;
+              // 抓取带有 8px，指针未必正压在线心：记下「线比指尖高多少价」，逐帧加回去 ——
+              // 线只跟位移走，不会在第一帧跳到指针上。
+              grabPriceOffset =
+                (model.priceLines[priceHit]?.price ?? 0) - priceOfY(clampNum(y, top, bottom));
+              crossRef.current = null;
+              pointerId = e.pointerId;
+              canvas.setPointerCapture(e.pointerId);
+              applyCursor(canvas, 'on-line');
+              draw();
+              return;
+            }
+          }
         }
       }
       // 空白处 = 取消选中。**只看「没命中任何线」**，不管落在哪儿：主图空地、副图、时间轴、
@@ -1783,9 +1851,12 @@ export function KlineCanvas({
         return;
       }
       if (mode === 'line') {
-        // 价格跟着指针走（绝对定位；抓取容差 4px，贴手不跳）。y 夹在主图内。
+        // 价格跟着指针走，但带上按下那一刻的价差（`grabPriceOffset`）—— 线不往指尖跳。
         const { top, bottom } = mainBounds();
-        modelRef.current.onMovePriceLine(grabIndex, priceOfY(clampNum(y, top, bottom)));
+        modelRef.current.onMovePriceLine(
+          grabIndex,
+          priceOfY(clampNum(y, top, bottom)) + grabPriceOffset,
+        );
         return;
       }
       if (mode === 'pan') {

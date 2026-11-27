@@ -292,7 +292,7 @@ export interface LevelLineRef {
   index: number;
   /** 线上的价位 —— **不是**当前均线值：线停在画它的那一刻。 */
   price: number;
-  /** 这条线是否开着价格告警（面板点出来的默认开着，可在划线区里选中后关）。 */
+  /** 这条线是否开着价格告警（**默认关**，在划线区选中它之后自己开）。 */
   alert: boolean;
   /** 线上的备注（自动备注，或用户改写后的那句话）。 */
   note?: string;
@@ -388,13 +388,11 @@ export function findLevelLine(
 
 /** `applyLevelLine` 干了什么（调用方据此决定要不要把画线眼睛自动睁开）。 */
 export type LevelLineDid =
-  /** 新画了一条。 */
+  /** 新画了一条（默认不告警、不挂价签）。 */
   | 'add'
-  /** 已有那条被拉到当前值（顺带补上身份 / 打开告警）。 */
-  | 'align'
   /** 同价上本来是手画的线，被收编成系统划线。 */
   | 'adopt'
-  /** 已对齐的线被删掉（再点一下即取消）。 */
+  /** 已画过的档位被删掉（再点一下即取消）。 */
   | 'remove'
   /** 什么都不用做（价位非法）。 */
   | 'none';
@@ -406,18 +404,20 @@ export interface LevelLinePlan {
 }
 
 /**
- * 面板里点一行 = 对画线表做**一次**完整改动，四种结果：
+ * 面板里点一行 = 对画线表做**一次**改动，三种结果：
  *
- *  - 这一档还**没有**线 → 新画一条（带自动备注与身份，开告警）；
- *  - 有、且价位与当前值一致、还开着告警 → 删掉（「再点一下取消」的旧手感不变）；
- *  - 有、但漂了（或告警被关掉）→ **拉到当前值**（`align`）：这一档的位置变了，
- *    线留在旧价上就成了一条没人认领的横线。（每轮刷新本来就会自动做这件事，见
- *    `alignLevelLines`；这里留着是因为「刚拖过、等不到下一轮」时用户该能立刻拉回。）
+ *  - 这一档还**没有**线 → 新画一条（带自动备注与身份，**不告警、不挂价签**）；
+ *  - 已经画过 → 删掉（「再点一下取消」）；
  *  - 没有绑定线、但**这个价上正好有一条手画的线** → 收编（`adopt`）而不是新增：
  *    同价再画一条只会重合，删一条时看着像没反应（`addPriceLine` 也这么挡）。
  *
- * 返回改好的整张表而不是「动作」：这一下可能同时改价位 + 告警 + 来源 + 备注，
- * 让调用方逐条调四个接口，中间态就会落盘。
+ * **没有「对齐到当前值」这一档**（2026-11-26 用户要求）：均线每分钟在动，每轮取数回来
+ * 都会把系统划线自动拉到新值（见 `alignLevelLines` / `ChartView` 的 `onLevels`），
+ * 不该让用户为了「拉回」再点一次 —— 何况那一下会把用户特意关掉的告警重新打开。
+ * 价签 / 告警要不要，全在划线区选中这条线之后单独设，这里一概不预设成「开」。
+ *
+ * 返回改好的整张表而不是「动作」：这一下可能同时改价位 + 来源 + 备注，
+ * 让调用方逐条调几个接口，中间态就会落盘。
  */
 export function applyLevelLine(
   lines: readonly PriceLine[],
@@ -428,24 +428,16 @@ export function applyLevelLine(
   if (!Number.isFinite(level.value) || level.value <= 0) return { did: 'none', lines: [...lines] };
   const origin = levelOrigin(kind, level.interval, level.period);
   const hit = findLevelLine(lines, kind, level, note);
-  if (hit) {
-    if (hit.aligned && hit.alert) {
-      return { did: 'remove', lines: removePriceLine(lines, hit.index) };
-    }
-    return {
-      did: 'align',
-      lines: bindPriceLine(lines, hit.index, { price: level.value, alert: true, origin, note }),
-    };
-  }
+  if (hit) return { did: 'remove', lines: removePriceLine(lines, hit.index) };
   // 精确价：与 `addPriceLine` 的去重口径一致（面板里点的就是同一个快照里的同一个数）
   const same = lines.findIndex((line) => line.price === level.value);
   if (same >= 0) {
     return {
       did: 'adopt',
-      lines: bindPriceLine(lines, same, { price: level.value, alert: true, origin, note }),
+      lines: bindPriceLine(lines, same, { price: level.value, origin, note }),
     };
   }
-  return { did: 'add', lines: addPriceLine(lines, level.value, true, note, origin) };
+  return { did: 'add', lines: addPriceLine(lines, level.value, false, note, origin) };
 }
 
 /**

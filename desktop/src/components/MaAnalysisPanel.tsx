@@ -192,7 +192,7 @@ interface Props {
   priceLines: readonly PriceLine[];
   /**
    * 中间缩略图下方那枚动作按钮 = 把这一档落成图上的一条**系统划线**：
-   * 没画就画、漂了拉回当前值、已对齐就删掉。`note` 是自动备注文案（新画时写上去）。
+   * 没画就画、画过就删（对齐是自动的，不在这里）。`note` 是自动备注文案（新画时写上去）。
    * `kind` 是这一行所属的族 —— 面板里切族只换视图，落线仍按各族的身份走。
    */
   onToggleLine: (kind: LevelKind, level: LevelRow, note: string) => void;
@@ -246,13 +246,18 @@ function clockText(at: number): string {
  *   （同一时刻只看一侧），点一条 = **选中**它，左栏立刻换成那一档的形态。悬浮不再弹原生
  *   文字提示 —— 详细信息都在左栏里，tooltip 只会挡着下面几行。
  * - **画线是左栏的动作按钮**：选中一条后，左栏底部那枚按钮把它落成图上的**系统划线**
- *   （没画就画、漂了拉回、已对齐就删）。这条线带**身份**落盘（`PriceLine.origin` =
- *   周期 + 档位），打开面板时那一行带「已画」底色回显。均线每分钟都在动，所以每一轮取数
- *   回来都会把这些系统划线**自动拉到**各自的新值（`onLevels` → `alignLevelLines`）——
- *   线是用来看盘的一道墙，墙得长在均线现在的位置上，不能停在画它的那一刻。
+ *   （没画就画、画过就删）。这条线带**身份**落盘（`PriceLine.origin` = 周期 + 档位），
+ *   打开面板时那一行带「已画」底色回显。**默认不告警、不挂价签** —— 它首先是一条看盘用的
+ *   参考线；要不要响、要不要露价签，在划线区选中这条线之后自己开。
+ *   均线每分钟都在动，所以每一轮取数回来都会把这些系统划线**自动拉到**各自的新值
+ *   （`onLevels` → `alignLevelLines`）—— 线是用来看盘的一道墙，墙得长在均线现在的位置上，
+ *   不能停在画它的那一刻，也不该让用户为了「拉回」再点一次。
+ *   对齐只改价位：价签开关、告警在不在、备注，都是用户设过的，一律保留。
  *   手画的线一概不动：那是用户自己的判断。
  *   行内的周期小方框只是标注，不可点 —— 点走会切周期并关掉面板。
- *   选中是另一层底色（`.sel`），与「已画」的红底（`.on`）分开：选中的那条不一定画过线。
+ *   选中是另一层底色（`.sel`），与「已画」分开：选中的那条不一定画过线。「已画」本身又分两档，
+ *   颜色跟着那条线在图上是什么颜色走 —— `.mark` 中性（只是记号，默认）／`.on` 红（挂了告警会响）。
+ *   黄这一档 2026-11-26 起专留给「选中」，不再表示「已画」。
  */
 export function MaAnalysisPanel({
   market,
@@ -597,13 +602,16 @@ export function MaAnalysisPanel({
         {rows.map((row) => {
           const label = intervalLabel(row.interval);
           /* 回显：图上与这一档绑定的那条线（没有 = 还没画）。选中态交给另一层底色，
-             行内不再写字 —— 均线一跳，「待对齐」这种瞬时状态就会自己变来变去。 */
+             行内不再写字 —— 价位每分钟都在变，写进去的瞬时状态只会自己打自己嘴巴。
+             `.on` / `.mark` 分开：`.on` = 挂了告警（会响，红），`.mark` = 只是记号（中性），
+             默认从面板画出来的是后者。 */
           const line = findLevelLine(priceLines, kind, row, autoNoteOf(row));
           const isSelected = selectedKey === curveKeyOf(row.interval, row.period);
+          const cls = line ? (line.alert ? ' on' : ' mark') : '';
           return (
             <div
               key={`${row.interval}-${row.period}`}
-              className={`ema-row${line ? ' on' : ''}${isSelected ? ' sel' : ''}`}
+              className={`ema-row${cls}${isSelected ? ' sel' : ''}`}
               role="button"
               tabIndex={0}
               aria-pressed={isSelected}
@@ -689,27 +697,17 @@ export function MaAnalysisPanel({
             <span className="ema-shape-hint">滚轮缩放 · 双击复位</span>
           </div>
           <div className="ema-shape-actions">
-            <span className={`ema-shape-line${selectedLine && !selectedLine.aligned ? ' drift' : ''}`}>
+            <span className="ema-shape-line">
               {selectedLine
-                ? `图上已画 ${formatPrice(selectedLine.price, tickSize)}${
-                    selectedLine.aligned
-                      ? ''
-                      : `（偏离 ${formatChange(
-                          ((selectedLine.price - selectedRow.value) / selectedRow.value) * 100,
-                        )}）`
-                  }`
-                : '图上未画告警线'}
+                ? `图上已画 ${formatPrice(selectedLine.price, tickSize)}`
+                : '图上未画线'}
             </span>
             <button
               type="button"
               className="ema-shape-btn"
               onClick={() => onToggleLine(kind, selectedRow, autoNoteOf(selectedRow))}
             >
-              {selectedLine
-                ? selectedLine.aligned && selectedLine.alert
-                  ? '删除告警线'
-                  : '对齐到当前值'
-                : '画告警线'}
+              {selectedLine ? '删除划线' : '画线'}
             </button>
           </div>
         </>

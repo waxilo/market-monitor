@@ -59,6 +59,14 @@ export interface PriceLine {
    * 存显式值是为了「每条线单独设置」：同是系统线，用户也可能只想留下其中一条的价牌。
    */
   showBadge?: boolean;
+  /**
+   * 画成虚线。**字段缺失 = 实线** —— 老存档、新画的线全都落在这里，判断一律
+   * `line.dashed === true`，不要指望有一个 `dashed: false` 的显式取值。
+   *
+   * 这是一个**纯样式**开关：不参与身份（`origin`）、不影响告警与价签。
+   * 虚线只把线画薄一点，语义仍然只在颜色上（选中黄 / 告警红 / 普通中性）。
+   */
+  dashed?: boolean;
 }
 
 /** 按标的索引的价目表（键 = `市场:标的`）。 */
@@ -148,6 +156,7 @@ export function parseLineStore(raw: string | null): LineStore {
             note?: unknown;
             origin?: unknown;
             showBadge?: unknown;
+            dashed?: unknown;
           };
           if (typeof o.price !== 'number' || !Number.isFinite(o.price)) return null;
           const line: PriceLine = { price: o.price, alert: o.alert === true };
@@ -157,6 +166,8 @@ export function parseLineStore(raw: string | null): LineStore {
           if (origin) line.origin = origin;
           // 只有显式的布尔才算「用户设过」；缺失留给来源默认（见 lineBadgeVisible）
           if (o.showBadge === true || o.showBadge === false) line.showBadge = o.showBadge;
+          // 线型同理：缺失 = 实线，只有显式 true 才落字段（存档里不留 `dashed: false` 噪音）
+          if (o.dashed === true) line.dashed = true;
           return line;
         }
         return null;
@@ -225,6 +236,27 @@ export function setLineBadge(
 }
 
 /**
+ * 开关第 index 条的**线型**（实线 / 虚线）。
+ *
+ * 与 `setLineNote` 同一套「空值不落字段」口径：只有虚线才落 `dashed: true`，
+ * 改回实线就把字段删掉 —— 缺省即实线，存档里不留 `dashed: false` 这种噪音。
+ */
+export function setLineDashed(
+  lines: readonly PriceLine[],
+  index: number,
+  dashed: boolean,
+): PriceLine[] {
+  if (index < 0 || index >= lines.length) return [...lines];
+  return lines.map((l, i) => {
+    if (i !== index) return l;
+    const next = { ...l };
+    if (dashed) next.dashed = true;
+    else delete next.dashed;
+    return next;
+  });
+}
+
+/**
  * 改第 index 条的备注。空（或全是空白）**等于删掉备注** —— 删字段而不是存空串，
  * 见 `PriceLine.note` 的注释；超长按 `LINE_NOTE_MAX` 截断，不报错（用户是边看边改，
  * 弹窗里已经有字数提示，图省事直接按上限收）。
@@ -253,23 +285,31 @@ export function setLineOrigin(
 }
 
 /**
- * 把第 index 条线**改绑**：价位 / 告警 / 来源一次改到位，备注只在原来没有时补。
+ * 把第 index 条线**改绑**：价位 / 来源一次改到位，备注只在原来没有时补。
  *
- * 「改到新价 + 打开告警 + 打上系统身份」这三件事在面板里永远同时发生（那一档漂了，
- * 把线拉回当前值），拆成三个接口逐次调用就会落一份中间态存档。
- * 备注不覆盖：用户写过的「缺口上沿」比自动生成的值钱。
+ * 「改到新价 + 打上系统身份」这两件事在面板里永远同时发生（那一档漂了，把线拉回当前值），
+ * 拆成两个接口逐次调用就会落一份中间态存档。
+ *
+ * **不碰 `alert` 与 `showBadge`**：这两个字段是用户对这条线的选择（要不要响、要不要露价签），
+ * 对齐只是「把线挪到均线现在的位置」，替用户改一次就是把他的设置冲掉。
+ * 备注同样不覆盖：用户写过的「缺口上沿」比自动生成的值钱。
  */
 export function bindPriceLine(
   lines: readonly PriceLine[],
   index: number,
-  target: { price: number; alert: boolean; origin: LineOrigin; note?: string },
+  target: { price: number; origin: LineOrigin; note?: string },
 ): PriceLine[] {
   if (index < 0 || index >= lines.length) return [...lines];
   if (!Number.isFinite(target.price)) return [...lines];
   return lines.map((l, i) => {
     if (i !== index) return l;
     const note = l.note ?? normalizeLineNote(target.note);
-    return withLineFields({ ...l, price: target.price, alert: target.alert }, note, target.origin);
+    const next: PriceLine = { ...l, price: target.price };
+    /* 收编（原来是手画的线）要把**现在的**价签显隐定下来：`showBadge` 缺省是按来源取的，
+       身份一变成系统线，默认值就从「显示」翻成「隐藏」—— 用户没动过这个开关，
+       却眼看着自己的价签消失了。钉成显式值即可，之后仍可单独改。 */
+    if (l.showBadge == null && l.origin == null) next.showBadge = lineBadgeVisible(l);
+    return withLineFields(next, note, target.origin);
   });
 }
 

@@ -65,7 +65,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
-import com.waxilo.marketmonitor.domain.alert.AlertRule
+import com.waxilo.marketmonitor.domain.repository.ChartLine
 import com.waxilo.marketmonitor.domain.format.PriceFormatter
 import com.waxilo.marketmonitor.domain.indicator.MaAnalysis
 import com.waxilo.marketmonitor.domain.indicator.MaBuckets
@@ -110,11 +110,13 @@ import kotlin.math.roundToInt
  * - **失败与「算不出」分开报**：前者是网络/数据源不通（该重试），后者是这个周期取回的根数
  *   不够算这一档（粗周期上的长档就是这样）。混成一句话会让用户以为取数又坏了。
  * - **点一行 = 选中**：缩略图跟着换成那一档的形态（见下），行铺淡黄底 + 右缘黄条。
- *   「已画」是另一层状态：已有图上的告警线 → 告警红底 + 左缘红条（两层互不覆盖）。
- * - **画告警线是缩略图那一栏的按钮**：选中一条后按「画告警线 / 对齐到当前值 / 删除告警线」。
- *   这条线是普通告警规则（名字 = `1时MA20` / `1时EMA50`），面板靠这个名字回显。均线每分钟
- *   都在动，所以**每轮刷新都会把这些自动线拉到新值**（见 `DetailViewModel.alignMaRules` →
- *   `MaAnalysis.alignments`）—— 线是用来看的一道墙，得长在均线现在的位置上。
+ *   「已画」是另一层状态：图上已有这一档的线 → 左缘 3dp 竖条，**颜色就是那条线的颜色**
+ *   （红 = 挂了告警会响、中性 = 只是记号 —— 默认画出来的是中性那条；两层互不覆盖）。
+ * - **画线是缩略图那一栏的按钮**：选中一条后按「画线 / 删除划线」。画出来的是 `chart_line`
+ *   里的一条水平线（带身份 = 族 + 周期 + 档位），**默认无价签、不告警** —— 它是看盘用的
+ *   参考线，要响再在竖栏里单独打开。均线每分钟都在动，所以**每轮刷新都会把线拉到新值**
+ *   （见 `DetailViewModel.alignMaLines` → `MaAnalysis.alignments`）—— 线是用来看的一道墙，
+ *   得长在均线现在的位置上；这一步不需要用户点，也不改他设过的价签 / 告警。
  *   手画的线、另一族画的线一概不动。
  *
  * 版式：一栏缩略图 + 一栏页签列表。「上方压力 / 下方支撑」两个页签一次只呈现一侧
@@ -134,8 +136,8 @@ fun MaAnalysisSheet(
     family: MaFamily,
     state: DetailUiState,
     analysis: MaAnalysisState,
-    /** 本标的的全部告警规则（回显用：名字 = 自动备注的那条就是「这一档画过」）。 */
-    rules: List<AlertRule>,
+    /** 本标的的全部画线（回显用：origin 与本档相同的那个就是「这一档画过」）。 */
+    lines: List<ChartLine>,
     /** 一次性提示（画上 / 对齐 / 取消的结果）。竖屏详情页不显示 notice，所以面板自己带一条。 */
     notice: String?,
     onRefresh: () -> Unit,
@@ -178,17 +180,17 @@ fun MaAnalysisSheet(
          * 一档 → 图上那条线。整张表一次算好：行标记、列头「已画 N」都读它，
          * 别让同一个匹配在一帧里跑几十遍。
          */
-        val refs = remember(rules, scan.levels, family) {
+        val refs = remember(lines, scan.levels, family) {
             buildMap {
                 for (level in scan.levels) {
-                    put(lineKey(level.interval, level.period), MaAnalysis.lineOf(rules, family, level))
+                    put(lineKey(level.interval, level.period), MaAnalysis.lineOf(lines, family, level))
                 }
             }
         }
         val refOf: (MaLevelRow) -> MaLineRef? = { row -> refs[lineKey(row.interval, row.period)] }
         val catalog = state.catalogOf(family)
-        val orphans = remember(rules, state.intervals, catalog, family) {
-            MaAnalysis.orphanLineNames(rules, family, state.intervals, catalog)
+        val orphans = remember(lines, state.intervals, catalog, family) {
+            MaAnalysis.orphanLines(lines, family, state.intervals, catalog)
         }
         val hasTable = scan.levels.isNotEmpty()
 
@@ -289,8 +291,8 @@ fun MaAnalysisSheet(
                         done = analysis.done,
                         total = state.intervals.size,
                         updatedAt = analysis.updatedAt,
-                        marked = remember(rules, family) {
-                            rules.count { MaAnalysis.isFamilyAutoNote(it.name, family) }
+                        marked = remember(lines, family) {
+                            lines.count { it.origin?.family == family }
                         },
                         onRefresh = onRefresh,
                         onFamilyChange = onFamilyChange,
@@ -785,7 +787,8 @@ private fun ColumnHead(
  * 一行 = 一个候选价位。整行可点（**选中**它，缩略图跟着换）。
  *
  * 两层状态互不包含：
- * · 「已画」= 这一档已有图上的告警线：告警红底 + 左缘 3dp 红条；
+ * · 「已画」= 这一档图上已经有线：左缘 3dp 竖条，**颜色就是那条线的颜色** ——
+ *   红 = 挂了告警会响（连底色一起泛红）、中性 = 只是记号（只有竖条）。默认画出来是中性那条；
  * · 「选中」= 缩略图正在看的那一档：淡黄底 + 右缘 2dp 黄条。
  *
  * 行内的周期小方框**只是标注**，不可点 —— 点了会切周期并把面板关掉。
@@ -803,6 +806,13 @@ private fun MaRow(
     val colors = MarketTheme.colors
     val slot = state.colorsOf(family)[row.period] ?: 0
     val dot = ChartLineColors[maRoleForSlot(family, slot).ordinal]
+    /* 左缘那道竖条说的是「这一档画过线」以及「它会不会响」，颜色与图上同一套口径
+       （见 `KlineChart` 的 ChartPalette：红 = 告警、中性 = 普通画线）。
+       黄这一档 2026-11-26 起**专留给「选中」**（右缘那道条 + 淡黄底），不再表示「已画」——
+       图上普通线同日改成中性色，面板得跟着同一个说法，否则两边对不上。
+       默认从面板画出来的是中性那条，挂没挂告警由用户在竖栏里自己开。 */
+    val alerts = line?.alert == true
+    val mark = if (alerts) colors.down else colors.muted
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -810,13 +820,13 @@ private fun MaRow(
             .background(
                 when {
                     selected -> colors.accent.copy(alpha = 0.16f)
-                    line != null -> colors.down.copy(alpha = 0.16f)
+                    alerts -> colors.down.copy(alpha = 0.16f)
                     else -> Color.Transparent
                 },
             )
             .drawBehind {
                 if (line != null) {
-                    drawRect(color = colors.down, size = Size(3.dp.toPx(), size.height))
+                    drawRect(color = mark, size = Size(3.dp.toPx(), size.height))
                 }
                 if (selected) {
                     drawRect(
@@ -870,7 +880,8 @@ private const val SHAPE_MIN_BARS = 16
  * 收盘价淡灰 + 这一档均线（色槽同色），**共用一根纵轴** —— 要看的就是
  * 「均线相对价格是抬还是压、拐点在哪」，分开归一化会把这条信息抹掉。
  * 双指缩放可见根数、双击复位；「− / ＋」给没有多指或想微调的场景兜底。
- * 画线动作也在这里：选中一条 → 按按钮，图上落 / 对齐 / 删掉那条告警线。
+ * 画线动作也在这里：选中一条 → 按按钮，图上画 / 删掉那条线。**对齐是自动的** ——
+ * 均线每轮刷新都会把线拉到新值（`DetailViewModel.alignMaLines`），不需要用户点。
  */
 @Composable
 private fun MaShapePane(
@@ -999,25 +1010,20 @@ private fun MaShapePane(
         ) {
             Text(
                 text = when {
-                    line == null -> "图上未画告警线"
-                    line.aligned -> "图上已画 ${formatPrice(line.price, tickSize)}"
-                    else ->
-                        "图上已画 ${formatPrice(line.price, tickSize)}（偏离 ${
-                            PriceFormatter.formatChange(((line.price - row.value) / row.value) * 100)
-                        }）"
+                    line == null -> "图上未画线"
+                    // 漂了不用提示「偏离多少」—— 下一轮取数就自动拉齐了，写出来只是徒增焦虑
+                    else -> "图上已画 ${formatPrice(line.price, tickSize)}"
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (line != null && !line.aligned) colors.down else colors.muted,
+                color = colors.muted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             TextAction(
-                text = when {
-                    line == null -> "画告警线"
-                    line.aligned && line.enabled -> "删除告警线"
-                    else -> "对齐到当前值"
-                },
+                // 只有「画 / 删」两态：对齐是自动的（见 DetailViewModel.alignMaLines），
+                // 这里不再给「对齐到当前值」这一档 —— 它还会顺手把用户关掉的告警重新打开
+                text = if (line == null) "画线" else "删除划线",
                 onClick = onToggle,
                 color = colors.ink,
                 style = InlineActionStyle,
@@ -1201,7 +1207,7 @@ private fun EmptyHint(title: String, subtitle: String?, numeric: Boolean = false
 private fun Footnotes(
     family: MaFamily,
     scan: MaScan,
-    orphans: List<String>,
+    orphans: List<ChartLine>,
     tickSize: BigDecimal?,
 ) {
     val colors = MarketTheme.colors
@@ -1255,7 +1261,7 @@ private fun Footnotes(
             Text(
                 text = buildString {
                     append("图上还有 ${orphans.size} 条 ${family.label} 划线不在当前配置里（档位或周期被删掉了）：")
-                    append(orphans.take(4).joinToString(" / "))
+                    append(orphans.take(4).joinToString(" / ") { orphanLabel(it) })
                     if (orphans.size > 4) append(" …")
                     append("（改回配置即可回显，或在图上删掉）")
                 },
@@ -1265,6 +1271,17 @@ private fun Footnotes(
             )
         }
     }
+}
+
+/**
+ * 一条孤儿线在提示里的名字：优先用它自己的备注（出生时就是自动名 `1时MA20`），
+ * 备注被清空了再按身份拼一个 —— 提示里总得有个能对上图的东西。
+ */
+private fun orphanLabel(line: ChartLine): String {
+    val note = line.note?.takeIf { it.isNotBlank() }
+    if (note != null) return note
+    val origin = line.origin ?: return "划线"
+    return "${origin.interval.label}${origin.family.lineLabel(origin.period)}"
 }
 
 private fun formatPrice(value: Double, tickSize: BigDecimal?): String {

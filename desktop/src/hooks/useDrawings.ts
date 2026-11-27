@@ -6,6 +6,7 @@ import {
   removePriceLine,
   setLineAlert,
   setLineBadge,
+  setLineDashed,
   setLineNote,
   type LineStore,
   type PriceLine,
@@ -16,6 +17,7 @@ import {
   moveTrendLineBy,
   parseTrendStore,
   removeTrendLine,
+  setTrendDashed,
   setTrendNote,
   type TrendAnchor,
   type TrendEnd,
@@ -41,8 +43,9 @@ import {
  * 换周期不该丢，换标的必须分开。
  *
  * 画线有一个按标的的**锁定开关**（`mm.linesLock`，默认解锁）：解锁时**先单击选中**
- * （2026-11-25 用户「不管什么线，都要先选中才能编辑」），选中后直线可按住线身整根平移、
- * 抓两端把手改角度（2026-11-23 起中点那枚圆点已删）；水平线抓两端把手改价。
+ * （2026-11-25 用户「不管什么线，都要先选中才能编辑」）。选中之后：直线可按住线身整根平移、
+ * 抓两端把手改角度（2026-11-23 起中点那枚圆点已删）；水平线**线上任意位置**按住就改价
+ * （2026-11-26 用户「去掉抓点，任意位置都应该可以拖拽」—— 两端把手已删）。
  * 锁上后画布不抓任何线、也不画把手，
  * 连选中都不成立，画新线 / 清空也一并收掉（见 ChartView 的划线区）。
  * **新增 / 删除 / 清空 / 改备注都只在划线区里**（2026-10-24 起右键菜单整档移除）：
@@ -83,8 +86,12 @@ export interface DrawingsApi {
   setPriceLineBadge: (index: number, show: boolean) => void;
   /** 改某条水平线的备注（空串 = 删掉备注）。 */
   setPriceLineNote: (index: number, note: string) => void;
+  /** 开关某条水平线的**线型**（实线 / 虚线）。 */
+  setPriceLineDashed: (index: number, dashed: boolean) => void;
   /** 改某条直线的备注（空串 = 删掉备注）。 */
   setTrendLineNote: (index: number, note: string) => void;
+  /** 开关某条直线的**线型**（实线 / 虚线）。 */
+  setTrendLineDashed: (index: number, dashed: boolean) => void;
   /** 拖动：水平线改到新价（画布按指针位置绝对定位）。 */
   movePriceLine: (index: number, price: number) => void;
   /** 拖动：直线整体平移（画布按指针位移换算出数据空间增量）。 */
@@ -210,6 +217,10 @@ export function useDrawings(key: string | null): DrawingsApi {
     (index: number, note: string) => editLines((cur) => setLineNote(cur, index, note)),
     [editLines],
   );
+  const dashLine = useCallback(
+    (index: number, dashed: boolean) => editLines((cur) => setLineDashed(cur, index, dashed)),
+    [editLines],
+  );
 
   const addTrend = useCallback(
     (a: TrendAnchor, b: TrendAnchor) => editTrends((cur) => addTrendLine(cur, a, b)),
@@ -231,6 +242,10 @@ export function useDrawings(key: string | null): DrawingsApi {
   );
   const noteTrend = useCallback(
     (index: number, note: string) => editTrends((cur) => setTrendNote(cur, index, note)),
+    [editTrends],
+  );
+  const dashTrend = useCallback(
+    (index: number, dashed: boolean) => editTrends((cur) => setTrendDashed(cur, index, dashed)),
     [editTrends],
   );
 
@@ -259,7 +274,9 @@ export function useDrawings(key: string | null): DrawingsApi {
     setPriceLineAlert: alertLine,
     setPriceLineBadge: badgeLine,
     setPriceLineNote: noteLine,
+    setPriceLineDashed: dashLine,
     setTrendLineNote: noteTrend,
+    setTrendLineDashed: dashTrend,
     movePriceLine: moveLine,
     moveTrendBy: dragTrendBy,
     moveTrendAnchor: dragTrendAnchor,

@@ -36,6 +36,14 @@ data class AlertRuleEntity(
      * （自动画的线 `8时EMA50` 还是 EMA 面板的认领键），note 才是用户随手写的一句话。
      */
     val note: String? = null,
+    /**
+     * 图上这条线画成虚线（1 = 虚线）。纯样式，与 [enabled] / 触发条件都无关。
+     *
+     * 老行由迁移补 0 —— 默认实线。注意它是**规则行自己的列**：`AlertRule.toEntity()` 是
+     * 整行 REPLACE，任何「先读规则、改别的字段、再写回」的路径都会把这个值一起带回去，
+     * 所以不能只在建线时写一次就假设它稳（读取一律走 toDomain，值自然跟着走）。
+     */
+    val dashed: Int = 0,
     val createdAt: Long,
 )
 
@@ -94,6 +102,7 @@ fun AlertRuleEntity.toDomain(): AlertRule {
         vibrate = vibrate == 1,
         webhookIds = webhookIds.split(',').mapNotNull { it.trim().toLongOrNull() },
         note = note?.takeIf { it.isNotBlank() },
+        dashed = dashed != 0,
         createdAt = createdAt,
     )
 }
@@ -114,6 +123,7 @@ fun AlertRule.toEntity(): AlertRuleEntity = AlertRuleEntity(
     vibrate = if (vibrate) 1 else 0,
     webhookIds = webhookIds.joinToString(","),
     note = note,
+    dashed = if (dashed) 1 else 0,
     createdAt = createdAt,
 )
 

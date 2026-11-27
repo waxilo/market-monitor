@@ -384,7 +384,9 @@ class AppContainer(private val context: Context) {
     /** 设置页现货测速入口：并行探测该源的整条域名链，返回最快往返毫秒，失败抛 IOException。 */
     suspend fun probeSpotSource(source: SpotSource): Long = marketApi.probeSpot(source)
 
-    val alertRepository: AlertRepository by lazy { AlertRepositoryImpl(database.alertDao()) }
+    val alertRepository: AlertRepository by lazy {
+        AlertRepositoryImpl(database.alertDao(), database.chartLineDao())
+    }
 
     /** 全屏划线工具的视觉画线（水平线/直线），按标的存取。 */
     val chartLineRepository: ChartLineRepository by lazy { ChartLineRepositoryImpl(database.chartLineDao()) }

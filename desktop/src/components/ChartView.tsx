@@ -833,6 +833,15 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
    */
   const selectedLine =
     selection?.kind === 'price' ? drawings.priceLines[selection.index] : undefined;
+  const selectedTrend =
+    selection?.kind === 'trend' ? drawings.trendLines[selection.index] : undefined;
+  /** 选中那条线当前是不是虚线（两种线同一个字段名，取法不同）。 */
+  const selectedDashed =
+    selection?.kind === 'price'
+      ? selectedLine?.dashed === true
+      : selection?.kind === 'trend'
+        ? selectedTrend?.dashed === true
+        : false;
   const selectedLineLabel = !selection
     ? ''
     : selection.kind === 'price'
@@ -1044,7 +1053,7 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
 
               两种面孔（互斥）：
               · 平时 = 选线型（水平线 / 直线，点一次进入、再点一次退出）+ 清空 + 锁定 + 眼睛 + 告警数；
-              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 价签 / 删除）。
+              · 选中图上某条线之后 = 只留对**这一条**的按钮（备注 / 告警 / 价签 / 线型 / 删除）。
                 整块换掉而不是并排，是因为这两组动作天生冲突：一边在画新线、一边在改旧线，
                 并排放只会让人在同一行里同时看到两件不相干的事。
 
@@ -1107,6 +1116,27 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
                     价签
                   </button>
                 )}
+                {/* 线型：实线 / 虚线。纯样式，与颜色（选中黄 / 告警红 / 普通中性）正交 ——
+                    两种线都支持（`dashed` 字段同名），所以横向线、斜线各走各的 setter。 */}
+                <button
+                  type="button"
+                  className={`chip${selectedDashed ? ' on' : ''}`}
+                  aria-pressed={selectedDashed}
+                  title={
+                    selectedDashed
+                      ? '把这条线改回实线'
+                      : '把这条线画成虚线（淡一档，不抢 K 线；颜色与告警都不受影响）'
+                  }
+                  onClick={() => {
+                    if (selection.kind === 'price') {
+                      drawings.setPriceLineDashed(selection.index, !selectedDashed);
+                    } else {
+                      drawings.setTrendLineDashed(selection.index, !selectedDashed);
+                    }
+                  }}
+                >
+                  虚线
+                </button>
                 <button
                   type="button"
                   className="chip icon-only danger"
@@ -1310,12 +1340,13 @@ export function ChartView({ item, ticker, instrument, spark, theme }: Props) {
       )}
 
       {/* 均线分析（MA / EMA 共用一个入口）：范围取「面板里选中的那一族的目录 × 周期条的列表」
-          （都算配置，不管图上画没画）。点右栏按钮 = 把这一档落成图上一条**系统划线**（自动备注
+          （都算配置，不管图上画没画）。点按钮 = 把这一档落成图上一条**系统划线**（自动备注
           「1时MA50」/「1时EMA50」，带 origin 身份落盘，面板不关，可连点几道）：没画就画、
-          漂了拉回当前值、已对齐就删掉 —— 一次点击一笔改动。
-          带着身份落盘，面板重开时那几行才能回显（整行选中底色）。
-          每一轮取数回来（手动刷新 + 每分钟自动）都只把**本族**的系统划线拉到新值：均线是活的，
-          线得跟着走；手画的线与另一族的线一概不动。抬头「清空划线」也只收本族这批线。 */}
+          画过就删 —— 一次点击一笔改动。**默认不告警、不挂价签**：那两件事是用户在划线区里
+          对某一条线单独设的，面板不预设，对齐时也不覆盖。
+          对齐不在这里做：每一轮取数回来（手动刷新 + 每分钟自动）自动把**本族**的系统划线
+          拉到新值（`onLevels`），均线是活的、线得跟着走；手画的线与另一族的线一概不动。
+          抬头「清空划线」也只收本族这批线。 */}
       {analysisOpen && (
         <MaAnalysisPanel
           market={item.market}

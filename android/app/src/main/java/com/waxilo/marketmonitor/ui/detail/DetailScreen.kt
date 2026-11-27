@@ -349,7 +349,7 @@ fun DetailScreen(
                 family = analysisFamily,
                 state = state,
                 analysis = maAnalysis,
-                rules = symbolRules,
+                lines = chartLines,
                 notice = notice,
                 onRefresh = viewModel::refreshMaAnalysis,
                 onFamilyChange = { analysisFamily = it },
@@ -505,6 +505,22 @@ private fun FullscreenChart(
         is LineRef.Alert -> ref.ruleId?.let { id -> rules.firstOrNull { it.id == id }?.note }.orEmpty()
         is LineRef.Guide -> lines.firstOrNull { it.id == ref.lineId }?.note.orEmpty()
         null -> ""
+    }
+    /**
+     * 选中的那条**画线**（告警线给 null）。
+     *
+     * 编辑栏的「价签 / 告警」两枚读它：价签对任何画线都适用，告警只对均线分析画的线开放
+     * （手画的线要告警用「预警线」工具，见 `DetailViewModel.setLineAlert`）。
+     */
+    val selectedGuide: ChartLine? = (selectedLine as? LineRef.Guide)?.let { ref ->
+        lines.firstOrNull { it.id == ref.lineId }
+    }
+    /**
+     * 选中的那条**预警线**（画线给 null）。只有「线型」这一枚需要它 ——
+     * 那是个纯样式开关，对两类线都开放（见 `DetailViewModel.setLineDashed`）。
+     */
+    val selectedRule: AlertRule? = (selectedLine as? LineRef.Alert)?.ruleId?.let { id ->
+        rules.firstOrNull { it.id == id }
     }
     // 十字光标下标也本地持有：进出全屏各用各的长按，不该互相串
     var crosshairIndex by remember { mutableStateOf<Int?>(null) }
@@ -722,6 +738,25 @@ private fun FullscreenChart(
                 editing = selectedLine != null,
                 // 这条线有没有备注：编辑栏那枚「备注」据此换色，一眼看出写过没写过
                 hasNote = selectedNote.isNotEmpty(),
+                // 价签 / 告警的当前值与可用性：null = 这条线没有这一档（见 selectedGuide 的说明）
+                badgeOn = selectedGuide?.showBadge,
+                alertOn = selectedGuide?.takeIf { it.origin != null }?.let { it.alertRuleId != null },
+                // 线型：两类线各有各的表，但用户眼里只有「这一条线」
+                dashedOn = when {
+                    selectedGuide != null -> selectedGuide.dashed
+                    selectedRule != null -> selectedRule.dashed
+                    else -> null
+                },
+                onToggleBadge = {
+                    selectedLine?.let { viewModel.setLineBadge(it, !(selectedGuide?.showBadge ?: true)) }
+                },
+                onToggleAlert = {
+                    selectedLine?.let { viewModel.setLineAlert(it, selectedGuide?.alertRuleId == null) }
+                },
+                onToggleDashed = {
+                    val now = selectedGuide?.dashed ?: selectedRule?.dashed ?: false
+                    selectedLine?.let { viewModel.setLineDashed(it, !now) }
+                },
                 onSelect = { next ->
                     // 锁定态：按钮置灰但**仍可点**，点一下把「为什么不能动」说出来。
                     // 真做成禁用的话，App 上没有 hover，用户只会以为图坏了。
@@ -968,9 +1003,26 @@ private fun DrawToolRail(
     editing: Boolean,
     /** 选中的那条线已有备注（「备注」那枚据此换色，一眼看出写过没写过）。 */
     hasNote: Boolean,
+    /**
+     * 选中那条画线的**价签**开着没（null = 不适用：告警线没有价签开关，右轴那枚恒显）。
+     * 选中均线分析画的线时，这里就是用户上次的选择 —— 默认关。
+     */
+    badgeOn: Boolean?,
+    /** 选中那条**均线分析线**的告警开着没（null = 不适用：手画的线不在这条路上开告警）。 */
+    alertOn: Boolean?,
+    /**
+     * 选中那条线现在是不是虚线（null = 没有选中线，这一枚不出现）。
+     *
+     * 两类线都支持（`chart_line.dashed` / `alert_rule.dashed`），所以它是 `Boolean?`
+     * 而不是只在某一种线上给值 —— 「同样是线，有的能切虚线」是最难解释的那种不一致。
+     */
+    dashedOn: Boolean?,
     onToggleLock: () -> Unit,
     onSelect: (DrawTool) -> Unit,
     onEditNote: () -> Unit,
+    onToggleBadge: () -> Unit,
+    onToggleAlert: () -> Unit,
+    onToggleDashed: () -> Unit,
     onDeleteLine: () -> Unit,
     onExitEditing: () -> Unit,
     onClear: () -> Unit,
@@ -1006,6 +1058,35 @@ private fun DrawToolRail(
                     roleColor = if (hasNote) colors.accent else null,
                 ) { color ->
                     NoteGlyph(color)
+                }
+                // 价签、告警：这条线的两件事，都按「现在是开是关」反色表达（与备注同一套语汇）。
+                // 均线分析落下的线默认两样都关 —— 它首先是一条参考线，不是预警。
+                if (badgeOn != null) {
+                    DrawToolButton(
+                        label = if (badgeOn) "隐藏这条线的价签" else "显示这条线的价签",
+                        selected = badgeOn,
+                        onClick = onToggleBadge,
+                        dimmed = locked,
+                    ) { color -> TagGlyph(color) }
+                }
+                if (alertOn != null) {
+                    DrawToolButton(
+                        label = if (alertOn) "关掉这条线的告警" else "打开告警（穿越时提醒）",
+                        selected = alertOn,
+                        onClick = onToggleAlert,
+                        dimmed = locked,
+                        roleColor = if (alertOn) colors.down else null,
+                    ) { color -> BellGlyph(color) }
+                }
+                // 线型：实线 ↔ 虚线。纯样式，与颜色、告警都无关 ——
+                // 「我想让这条线淡一点」和「这条线要不要响」是两件事。
+                if (dashedOn != null) {
+                    DrawToolButton(
+                        label = if (dashedOn) "改回实线" else "改成虚线（淡一档）",
+                        selected = dashedOn,
+                        onClick = onToggleDashed,
+                        dimmed = locked,
+                    ) { color -> DashGlyph(color) }
                 }
                 DrawToolButton(
                     label = "删除这条线",
@@ -1272,8 +1353,77 @@ private fun NoteGlyph(color: Color) {
     }
 }
 
-/** 退出编辑：一个叉。与顶栏那个退出全屏的 ✕ 同形，但这里退出的是「选中的那条线」。 */
+/**
+ * 价签：一条横线 + 右端一枚小牌 —— 与图上「价格线右端那枚价位牌」同形。
+ * 关掉时按钮不着色，开着时整枚反色（与备注同一套语汇：亮着 = 这件事现在是开的）。
+ */
 @Composable
+private fun TagGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.10f
+        val w = size.width
+        val h = size.height
+        drawLine(
+            color,
+            Offset(0f, h * 0.5f),
+            Offset(w * 0.58f, h * 0.5f),
+            stroke,
+            cap = StrokeCap.Round,
+        )
+        drawRoundRect(
+            color = color,
+            topLeft = Offset(w * 0.42f, h * 0.26f),
+            size = Size(w * 0.58f, h * 0.48f),
+            cornerRadius = CornerRadius(w * 0.12f, w * 0.12f),
+            style = Stroke(width = stroke),
+        )
+    }
+}
+
+/** 告警：一只铃。开着时染红（与图上「会响的线是红的」同一套语义）。 */
+@Composable
+private fun BellGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.10f
+        val w = size.width
+        val h = size.height
+        // 钟身：上半圆 + 两侧竖边 + 底边
+        drawArc(
+            color = color,
+            startAngle = 180f,
+            sweepAngle = 180f,
+            useCenter = false,
+            topLeft = Offset(w * 0.24f, h * 0.20f),
+            size = Size(w * 0.52f, h * 0.52f),
+            style = Stroke(width = stroke, cap = StrokeCap.Round),
+        )
+        drawLine(color, Offset(w * 0.24f, h * 0.46f), Offset(w * 0.24f, h * 0.70f), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w * 0.76f, h * 0.46f), Offset(w * 0.76f, h * 0.70f), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w * 0.16f, h * 0.70f), Offset(w * 0.84f, h * 0.70f), stroke, cap = StrokeCap.Round)
+        drawCircle(color, radius = stroke * 0.9f, center = Offset(w * 0.5f, h * 0.85f))
+    }
+}
+
+/**
+ * 线型：三段短横（虚线示意）。开着时整枚反色，与「价签 / 告警」同一套语汇 ——
+ * 竖栏里放不下文字，只能靠「这枚亮不亮」说明这条线现在是不是虚线。
+ */
+@Composable
+private fun DashGlyph(color: Color) {
+    Canvas(Modifier.size(RAIL_GLYPH)) {
+        val stroke = size.width * 0.10f
+        val w = size.width
+        val h = size.height
+        val y = h * 0.5f
+        val cap = StrokeCap.Round
+        // 单行三段：小尺寸下仍一眼读作「虚线」（两行会糊成一团）
+        drawLine(color, Offset(w * 0.04f, y), Offset(w * 0.30f, y), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.38f, y), Offset(w * 0.62f, y), stroke, cap = cap)
+        drawLine(color, Offset(w * 0.70f, y), Offset(w * 0.96f, y), stroke, cap = cap)
+    }
+}
+
+/** 退出编辑：一个叉。与顶栏那个退出全屏的 ✕ 同形，但这里退出的是「选中的那条线」。 */@Composable
 private fun CloseGlyph(color: Color) {
     Canvas(Modifier.size(RAIL_GLYPH)) {
         val stroke = size.width * 0.11f

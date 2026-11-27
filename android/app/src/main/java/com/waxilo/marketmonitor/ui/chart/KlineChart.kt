@@ -126,6 +126,8 @@ data class AlertPriceLine(
      * 优先于自动名。null = 不挂牌。
      */
     val label: String? = null,
+    /** 画成虚线（规则行自己的 `dashed` 列，与 `ChartLine.dashed` 同一口径）。 */
+    val dashed: Boolean = false,
 )
 
 /**
@@ -167,6 +169,20 @@ data class DrawGuideLine(
     val anchor1: TrendAnchor? = null,
     val anchor2: TrendAnchor? = null,
     val dragging: Boolean = false,
+    /**
+     * 线上那句话：出生时是均线分析的自动名（`1时MA20`），也可以是用户改过的字。
+     * 画在线的左端，与右轴那枚价位牌分开 —— 前者答「这是哪一档」，后者答「这个价多少」。
+     */
+    val note: String? = null,
+    /**
+     * 会响的线（挂着一条告警规则）。**取红**；普通画线取中性 ——
+     * 与桌面端同口径：红＝会响、中性＝只是记号。
+     */
+    val alert: Boolean = false,
+    /** 右轴那枚价位牌显不显示。 */
+    val showBadge: Boolean = true,
+    /** 画成虚线（用户自己的线型选择，与颜色正交）。 */
+    val dashed: Boolean = false,
 )
 
 /**
@@ -183,7 +199,16 @@ fun ChartLine.toGuideLine(candles: List<Kline>, interval: CandleInterval): DrawG
     return when (kind) {
         ChartLineKind.HORIZONTAL -> {
             val p = price ?: return null
-            DrawGuideLine(id = id, kind = kind, price = p.toDouble())
+            DrawGuideLine(
+                id = id,
+                kind = kind,
+                price = p.toDouble(),
+                note = note,
+                // 线与告警是两个实体：挂了规则才算「会响」的那一类，颜色随之变红
+                alert = alertRuleId != null,
+                showBadge = showBadge,
+                dashed = dashed,
+            )
         }
 
         ChartLineKind.TREND -> {
@@ -196,6 +221,8 @@ fun ChartLine.toGuideLine(candles: List<Kline>, interval: CandleInterval): DrawG
                 kind = kind,
                 anchor1 = TrendAnchor(indexAt(t1), v1.toDouble()),
                 anchor2 = TrendAnchor(indexAt(t2), v2.toDouble()),
+                note = note,
+                dashed = dashed,
             )
         }
     }
@@ -214,44 +241,44 @@ fun DrawGuideLine.toChartLine(
     interval: CandleInterval,
     createdAt: Long,
     /**
-     * 这条线原有的备注。拖动是整行 upsert（[ChartLineRepository.save]），
-     * 这里不带上就是把用户写的备注一并抹掉 —— 调用方从既有行里取来传入。
+     * 这条线**原来那一行**（新建时给 null）。拖动是整行 upsert（[ChartLineRepository.save]），
+     * 备注 / 均线身份 / 价签开关 / 挂的告警规则 / 线型都不在这个函数的输入里 —— 不从这里带上，
+     * 拖一下就把它们全抹掉（早先只补了备注，身份与价签是新加的，一起收进来免得再漏）。
      */
-    note: String? = null,
+    existing: ChartLine? = null,
 ): ChartLine? {
     val first = candles.firstOrNull()?.openTime ?: return null
     val stepMs = interval.minutes * 60_000L
     if (stepMs <= 0L) return null
     fun timeAt(index: Double): Long = first + (index * stepMs).roundToLong()
+    /** 与原行无关的那几列统一在这里补，两种线型共用。 */
+    fun base(): ChartLine = ChartLine(
+        id = id,
+        market = market,
+        symbol = symbol,
+        kind = kind,
+        note = existing?.note,
+        origin = existing?.origin,
+        showBadge = existing?.showBadge ?: true,
+        alertRuleId = existing?.alertRuleId,
+        dashed = existing?.dashed ?: false,
+        createdAt = existing?.createdAt ?: createdAt,
+    )
     return when (kind) {
         ChartLineKind.HORIZONTAL -> {
             if (!price.isFinite()) return null
-            ChartLine(
-                id = id,
-                market = market,
-                symbol = symbol,
-                kind = kind,
-                price = price.toBigDecimal(),
-                note = note,
-                createdAt = createdAt,
-            )
+            base().copy(price = price.toBigDecimal())
         }
 
         ChartLineKind.TREND -> {
             val a1 = anchor1 ?: return null
             val a2 = anchor2 ?: return null
             if (!a1.price.isFinite() || !a2.price.isFinite()) return null
-            ChartLine(
-                id = id,
-                market = market,
-                symbol = symbol,
-                kind = kind,
+            base().copy(
                 t1 = timeAt(a1.index),
                 p1 = a1.price.toBigDecimal(),
                 t2 = timeAt(a2.index),
                 p2 = a2.price.toBigDecimal(),
-                note = note,
-                createdAt = createdAt,
             )
         }
     }
@@ -715,6 +742,9 @@ fun KlineChart(
         crosshair = scheme.onSurface,
         // primary 就是设计系统的 accent 黄（见 Color.kt 的 lightMaterialScheme）
         mark = scheme.primary,
+        // onBackground = 主题的近黑 / 近白（Ink / InkLight）：普通画线要的是「中性、
+        // 不抢注意力的那一档」，正好就是正文色，不必再开一个 token。
+        plain = scheme.onBackground,
     )
 
     /**
@@ -1173,6 +1203,7 @@ fun KlineChart(
                 geo = geo,
                 density = density,
                 tickSize = tickSize,
+                selected = selectedLine,
             )
             // 副图纵轴刻度与主图同开关（2026-11-23：一起关掉）。
             if (AXIS_TICKS_VISIBLE) {
@@ -1375,6 +1406,7 @@ fun ChartSkeleton(
         lines = ChartLineColors,
         crosshair = scheme.onSurface,
         mark = scheme.primary,
+        plain = scheme.onBackground,
     )
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // 与真实图用同一个读数带高度，否则网格与分隔线会差一行
@@ -1473,13 +1505,18 @@ private data class ChartPalette(
     val lines: List<Color>,
     val crosshair: Color,
     /**
-     * 用户画线（水平线 / 直线）：黄（= 设计系统的 accent）。
+     * 用户画线（水平线 / 直线）的**选中色**：黄（= 设计系统的 accent）。
      *
-     * 与告警线（[down] 红）靠**颜色**分工：红 = 会响的告警、黄 = 只是记号的画线。
+     * 三档语义（2026-11-26 定，与桌面端同一套）：
+     * · 普通 → [plain]（中性：浅色主题近黑、深色主题近白）；
+     * · 选中 → 这里（黄，临时交互态，**压过告警色**：正拖着的那一条先看见黄）；
+     * · 挂了告警 → [down] 红（会响）。
      * 早期靠线型分工（告警虚线、画线实线），但虚线在密集 K 线上断成一串点、反而不如实线好瞄，
      * 于是三条线一律实线，语义全压到颜色上（2026-10-23，与桌面端同一口径）。
      */
     val mark: Color,
+    /** 普通画线的中性色：「黑色划线」按主题落地 —— 浅色主题近黑、深色主题近白。 */
+    val plain: Color,
 ) {
     /**
      * 角色 → 颜色。调色板色位（MA 八位 / EMA 八位 / BOLL 一位）直接按 ordinal 取
@@ -1842,39 +1879,51 @@ private fun DrawScope.drawAlertLines(
     range: ValueRange,
     selected: LineRef? = null,
 ) {
+    val dash = lineDashEffect()
     lines.forEach { line ->
         if (!line.price.isFinite()) return@forEach
         val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
         if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
         val picked = selected is LineRef.Alert && selected.ruleId != null &&
             selected.ruleId == line.ruleId
+        // 选中 = 黄（临时交互态压过告警红，与画线、与桌面端同一口径）；否则告警线恒红。
+        val color = if (picked) palette.mark else palette.down
+        // 线型由规则行自己那一列决定；发光与线身用同一个 pen —— 虚线下面垫一条实心光，
+        // 看上去仍是实线（与桌面端同一处理）。
+        val pen = if (line.dashed) dash else null
         if (picked) {
             drawLine(
-                color = palette.down.copy(alpha = LINE_SELECTED_HALO_ALPHA),
+                color = color.copy(alpha = LINE_SELECTED_HALO_ALPHA),
                 start = Offset(0f, y),
                 end = Offset(geo.plotWidthPx, y),
                 strokeWidth = LINE_SELECTED_HALO_WIDTH,
+                pathEffect = pen,
             )
-            // 两端把手 = **改价位唯一的入口**（见 FLAT_GRIP_INSET）：选中态必须把「能抓哪儿」
-            // 画出来，否则用户还是会去按线身，然后抱怨「拖图表把线拖走了」。
-            drawFlatGrips(geo.plotWidthPx, y, palette.down)
+            // 选中 = 线色转黄 + 这道外发光（2026-11-26 起；两端把手同日去掉）：
+            // 线上任意位置都能按住拖，再画两枚「只能抓这儿」的圆点等于把可拖范围讲反了。
         }
         drawLine(
-            color = palette.down,
+            color = color,
             start = Offset(0f, y),
             end = Offset(geo.plotWidthPx, y),
             strokeWidth = if (picked || line.dragging) 3.5f else 2.5f,
+            pathEffect = pen,
         )
     }
 }
 
 /**
- * 视觉画线（水平线 / 直线）：**黄色实线**，与告警红一眼分开。
+ * 视觉画线（水平线 / 直线）：**颜色三档**（2026-11-26 定，与桌面端同一套）——
+ * 普通 = [ChartPalette.plain]（中性，浅色主题近黑 / 深色主题近白）、选中 = [ChartPalette.mark] 黄、
+ * 挂告警 = [ChartPalette.down] 红。选中优先于告警：正拖着的那一条先看见黄。
  *
- * 两种形状的差别只在几何上（横线 = 一个价位、斜线 = 一条斜率），颜色统一用 [ChartPalette.mark]。
+ * **线型**（实线 / 虚线）是用户自己的选择（`DrawGuideLine.dashed`），与颜色正交：
+ * 颜色说「会不会响 / 是不是正在动」，线型只说「这条线我想画淡一点」。
  *
- * **选中**（2026-10-24）铺一道半透明同色外发光、线段加粗、直线的两枚锚点圆点放大 ——
- * 「先单击选中再拖」要求点完立刻有回执，否则用户不知道这一下到底选中了没有。
+ * 两种形状的差别只在几何上（横线 = 一个价位、斜线 = 一条斜率），颜色与线型都不分形状。
+ *
+ * **选中**另铺一道半透明同色外发光、线段加粗、直线的两枚锚点圆点放大 ——
+ * 几条平行线挨得近时，「正在动的是哪一条」靠光比靠颜色更快看见。
  */
 private fun DrawScope.drawDrawLines(
     lines: List<DrawGuideLine>,
@@ -1884,10 +1933,19 @@ private fun DrawScope.drawDrawLines(
     anchorPx: (TrendAnchor) -> Offset,
     selected: LineRef? = null,
 ) {
+    val dash = lineDashEffect()
     lines.forEach { line ->
         val picked = selected is LineRef.Guide && line.id != 0L && selected.lineId == line.id
-        val color = palette.mark
+        // 三档：选中 = 黄（临时交互态，压过告警色）、挂告警 = 红（它要等着被触发，
+        // 得一眼从普通画线里分出来）、普通 = 中性。均线分析落下的线默认不告警，落中性别。
+        val color = when {
+            picked || line.dragging -> palette.mark
+            line.alert -> palette.down
+            else -> palette.plain
+        }
         val width = if (picked || line.dragging) 3f else 2f
+        // 线型：发光与线身同一个 pen（虚线下面垫实心光会看着仍是实线，与桌面端同一处理）
+        val pen = if (line.dashed) dash else null
         val halo = color.copy(alpha = LINE_SELECTED_HALO_ALPHA)
         when (line.kind) {
             ChartLineKind.HORIZONTAL -> {
@@ -1895,11 +1953,22 @@ private fun DrawScope.drawDrawLines(
                 val y = geo.yOf(range.toFraction(line.price), geo.mainTopPx, geo.mainHeightPx)
                 if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) return@forEach
                 if (picked) {
-                    drawLine(halo, Offset(0f, y), Offset(geo.plotWidthPx, y), LINE_SELECTED_HALO_WIDTH)
-                    // 与告警线同一套把手（见 FLAT_GRIP_INSET）：线身只选中，改价抓这两枚点。
-                    drawFlatGrips(geo.plotWidthPx, y, color)
+                    drawLine(
+                        color = halo,
+                        start = Offset(0f, y),
+                        end = Offset(geo.plotWidthPx, y),
+                        strokeWidth = LINE_SELECTED_HALO_WIDTH,
+                        pathEffect = pen,
+                    )
+                    // 同告警线：选中只留外发光，两端不再画把手（任意位置可拖，见 [lineTouch]）。
                 }
-                drawLine(color, Offset(0f, y), Offset(geo.plotWidthPx, y), width)
+                drawLine(
+                    color = color,
+                    start = Offset(0f, y),
+                    end = Offset(geo.plotWidthPx, y),
+                    strokeWidth = width,
+                    pathEffect = pen,
+                )
             }
 
             ChartLineKind.TREND -> {
@@ -1917,14 +1986,27 @@ private fun DrawScope.drawDrawLines(
                     bottom = geo.mainTopPx + geo.mainHeightPx,
                 ) ?: return@forEach
                 if (picked) {
-                    drawLine(halo, span.first, span.second, LINE_SELECTED_HALO_WIDTH)
+                    drawLine(
+                        color = halo,
+                        start = span.first,
+                        end = span.second,
+                        strokeWidth = LINE_SELECTED_HALO_WIDTH,
+                        pathEffect = pen,
+                    )
                 }
-                drawLine(color, span.first, span.second, width)
+                drawLine(
+                    color = color,
+                    start = span.first,
+                    end = span.second,
+                    strokeWidth = width,
+                    pathEffect = pen,
+                )
                 // 把手**只在选中态出现**（2026-11-22 用户「两个点没选中时不展示」）：
                 // 只有两端、改角度；整根平移按住线身即可（2026-11-23 起，中点圆点已删）。
                 // 位置是**用户画线时的两个真实落点**（不是可见段端点）：此前画在裁到边界
                 // 的那两头，用户反馈「调角度的两个点并不是我画线时的落点」（2026-11-25）。
                 // 出绘图区的那枚不画 —— 看不见的点也不能被抓（见 [drawTrendGrips]）。
+                // 把手**始终画实心**：它要抓得住，虚线化只会让它更难看见。
                 if (picked) {
                     drawTrendGrips(
                         p1 = anchorPx(a1),
@@ -1980,24 +2062,6 @@ private fun DrawScope.drawTrendGrips(
 private fun DrawScope.drawTrendSeedDot(center: Offset, palette: ChartPalette) {
     if (!center.x.isFinite() || !center.y.isFinite()) return
     drawCircle(palette.mark, radius = TREND_SEED_DOT.toPx(), center = center)
-}
-
-/**
- * 水平类线两端那枚把手（**只在选中态画**，见 [FLAT_GRIP_INSET]）。
- *
- * 本色实心圆 + 中心白点：把手大半压在**同色**的线上，纯实心圆会跟线融成一体 ——
- * 桌面端实测 3.5px 的实心圆在 6 倍放大截图里根本看不出是个点，用户因此不知道线还能拖。
- * 中间那点白是「这里能抓」的唯一形状依据，深浅两套主题下都读得出来。
- */
-private fun DrawScope.drawFlatGrips(plotWidthPx: Float, yPx: Float, color: Color) {
-    if (!yPx.isFinite() || !plotWidthPx.isFinite()) return
-    val inset = FLAT_GRIP_INSET.toPx()
-    val r = FLAT_GRIP_DOT.toPx()
-    for (cx in floatArrayOf(inset, plotWidthPx - inset)) {
-        if (!cx.isFinite()) continue
-        drawCircle(color, radius = r, center = Offset(cx, yPx))
-        drawCircle(Color.White.copy(alpha = 0.92f), radius = r * 0.46f, center = Offset(cx, yPx))
-    }
 }
 
 /**
@@ -2353,15 +2417,29 @@ private fun BoxScope.RightPriceBadges(
     }
 }
 
-/** 画布左端的划线牌：价位必有一块，备注（EMA 自动名 / 用户备注）有才跟一块。 */
-private data class LineBadge(val price: Double, val alert: Boolean, val note: String?)
+/**
+ * 画布左端的划线牌：价位（可按条隐藏）+ 备注（有才跟一块）。
+ *
+ * [showBadge] 只关右轴那枚**价位牌**，备注照旧画 —— 两块牌答的是两个问题
+ * （「这个价多少」/「这是哪一档」），只藏前者不会让线变成没头没尾的一根。
+ */
+private data class LineBadge(
+    val price: Double,
+    val alert: Boolean,
+    val note: String?,
+    val showBadge: Boolean = true,
+    /** 这一条是不是**当前选中**的线：选中时牌子随线转黄（与图上同一套三档色）。 */
+    val selected: Boolean = false,
+)
 
 /**
  * 划线的两块牌：**价位住进右侧价格列**、备注在左端。
  *
  * 右轴那一列住户（自下而上）：网格刻度 → 行情读数（最新价 / 极值 / 十字光标）→ 划线价牌，
  * 全部右对齐到画布右缘，读起来才是「一列数字」。备注仍串在线的左端（图上一眼从左边读起）。
- * EMA 分析画的线名字形如 `8时EMA50`（面板靠它回显），不挂牌的话图上一排红线分不清哪根是哪一档。
+ * 均线分析画的线名字形如 `8时EMA50`，不挂牌的话图上一排线分不清哪根是哪一档 ——
+ * 但那只是备注牌；**价位牌默认不挂**（2026-11-26 用户）：一次落好几条，右轴排一排价签
+ * 会把行情读数挤满，而价位在面板里本来就能读到。每条线可以单独把价签打开。
  *
  * 落位只裁边不避让：太近就叠住，谁压谁交给书写顺序。
  */
@@ -2373,6 +2451,8 @@ private fun BoxScope.LineBadges(
     geo: ChartGeo,
     density: Density,
     tickSize: BigDecimal?,
+    /** 当前选中的线（牌子要跟线一起转黄）；null = 什么都没选。 */
+    selected: LineRef? = null,
 ) {
     val style = rememberPriceTagStyle()
     val measurer = rememberTextMeasurer()
@@ -2382,12 +2462,30 @@ private fun BoxScope.LineBadges(
     val rightInset = with(density) { AXIS_GUTTER_DP.dp.toPx() }
     val colors = MarketTheme.colors
     val decimals = PriceFormatter.decimalsFor(tickSize)
-    // 告警线红（会响的那一类）、普通画线黄（只是记号）—— 与桌面端同一套
+    // 三档与图上同源：选中黄 / 挂告警红 / 普通中性（不是黄 —— 黄这一档 2026-11-26 起专给选中）
     val entries = buildList {
-        alertLines.forEach { add(LineBadge(it.price, alert = true, note = it.label)) }
+        alertLines.forEach {
+            add(
+                LineBadge(
+                    price = it.price,
+                    alert = true,
+                    note = it.label,
+                    selected = selected is LineRef.Alert && selected.ruleId != null &&
+                        selected.ruleId == it.ruleId,
+                ),
+            )
+        }
         drawLines.forEach {
             if (it.kind == ChartLineKind.HORIZONTAL && it.price.isFinite()) {
-                add(LineBadge(it.price, alert = false, note = null))
+                add(
+                    LineBadge(
+                        price = it.price,
+                        alert = it.alert,
+                        note = it.note,
+                        showBadge = it.showBadge,
+                        selected = selected is LineRef.Guide && selected.lineId == it.id,
+                    ),
+                )
             }
         }
     }
@@ -2395,38 +2493,51 @@ private fun BoxScope.LineBadges(
         if (!entry.price.isFinite()) continue
         val y = geo.yOf(range.toFraction(entry.price), geo.mainTopPx, geo.mainHeightPx)
         if (y !in geo.mainTopPx..(geo.mainTopPx + geo.mainHeightPx)) continue
-        val text = PriceFormatter.localeNumber(entry.price, decimals)
-        val textSize = remember(text, style, density) {
-            measurer.measure(AnnotatedString(text), style, density = density).size
+        // 价位牌可以按条关掉（均线分析落的线默认就是关的）：关的是**这块牌子**，
+        // 线本身与左端备注照旧 —— 见 [LineBadge.showBadge]。
+        if (entry.showBadge) {
+            val text = PriceFormatter.localeNumber(entry.price, decimals)
+            val textSize = remember(text, style, density) {
+                measurer.measure(AnnotatedString(text), style, density = density).size
+            }
+            val chipW = textSize.width + padH * 2f
+            val chipH = textSize.height + padV * 2f
+            // 中心贴着线；贴边时裁进主图，牌子不被裁掉半截
+            val center = if (geo.mainHeightPx > chipH) {
+                y.coerceIn(geo.mainTopPx + chipH / 2f, geo.mainTopPx + geo.mainHeightPx - chipH / 2f)
+            } else {
+                y
+            }
+            Text(
+                text = text,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(
+                        // **住进右侧价格列**（2026-11-23-2 用户「价格签应该放在价格轴上」）：
+                        // 右缘对齐到**画布右缘**（与刻度数字、行情价签共用同一条右边线），
+                        // 不再是 11-04 那版「贴绘图区右缘、浮在 K 线上」。
+                        x = with(density) {
+                            (geo.canvasRightPx - rightInset - chipW).coerceAtLeast(0f).toDp()
+                        },
+                        y = with(density) { (center - chipH / 2f).toDp() },
+                    )
+                    .clip(Radius.xsShape)
+                    .background(
+                        // 牌底跟线走（选中黄 / 告警红 / 普通中性）：价签与线上不同色，
+                        // 「这行数字说的是哪一条」就得靠 y 反推，读起来慢半拍。
+                        when {
+                            entry.selected -> colors.accent
+                            entry.alert -> colors.down
+                            else -> colors.ink
+                        },
+                    )
+                    .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
+                style = style,
+                // 黄底配 onAccent 深字；红底与中性底（ink）配 paper 纸色字 —— 都是反差最大的组合
+                color = if (entry.selected) colors.onAccent else colors.paper,
+                maxLines = 1,
+            )
         }
-        val chipW = textSize.width + padH * 2f
-        val chipH = textSize.height + padV * 2f
-        // 中心贴着线；贴边时裁进主图，牌子不被裁掉半截
-        val center = if (geo.mainHeightPx > chipH) {
-            y.coerceIn(geo.mainTopPx + chipH / 2f, geo.mainTopPx + geo.mainHeightPx - chipH / 2f)
-        } else {
-            y
-        }
-        Text(
-            text = text,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .offset(
-                    // **住进右侧价格列**（2026-11-23-2 用户「价格签应该放在价格轴上」）：
-                    // 右缘对齐到**画布右缘**（与刻度数字、行情价签共用同一条右边线），
-                    // 不再是 11-04 那版「贴绘图区右缘、浮在 K 线上」。
-                    x = with(density) {
-                        (geo.canvasRightPx - rightInset - chipW).coerceAtLeast(0f).toDp()
-                    },
-                    y = with(density) { (center - chipH / 2f).toDp() },
-                )
-                .clip(Radius.xsShape)
-                .background(if (entry.alert) colors.down else colors.accent)
-                .padding(horizontal = with(density) { padH.toDp() }, vertical = with(density) { padV.toDp() }),
-            style = style,
-            color = if (entry.alert) colors.paper else colors.onAccent,
-            maxLines = 1,
-        )
         val note = entry.note?.takeIf { it.isNotBlank() } ?: continue
         val noteSize = remember(note, style, density) {
             measurer.measure(AnnotatedString(note), style, density = density).size
@@ -2931,10 +3042,7 @@ private suspend fun PointerInputScope.detectChartGestures(
     onPricePan: (deltaFraction: Float) -> Unit,
     onCrosshair: (Offset?) -> Unit,
 ) {
-    // 水平类线两端把手的几何（见 FLAT_GRIP_INSET / onFlatGrip）：只跟屏幕密度有关，
-    // 每场手势都重算一次没有意义，upstream 直接取一次。
-    val flatGripInsetPx = FLAT_GRIP_INSET.toPx()
-    val flatGripHitPx = FLAT_GRIP_HIT.toPx()
+    // 直线两端把手的几何：只跟屏幕密度有关，每场手势都重算一次没有意义，upstream 直接取一次。
     val trendGripHitPx = TREND_GRIP_HIT.toPx()
     val trendBodyGrabPx = TREND_BODY_GRAB.toPx()
     awaitEachGesture {
@@ -3017,20 +3125,33 @@ private suspend fun PointerInputScope.detectChartGestures(
          */
         var pendingTrendBody: TrendLinePixels? = null
 
+        /**
+         * 本场按下压在**已选中那条水平类线**上的候选（2026-11-26）：手指走满 slop 才转成「改价位」。
+         *
+         * 与 [pendingTrendBody] 同一套理由，两个目的：
+         * · 长按看读数（十字光标）与「按住线拖」共用同一个起手，只有「手指动了没有」能区分；
+         * · 线上任意位置都能抓（两端把手已删，见 [lineTouch]），按下即接管会让「按住线看读数」
+         *   变成拖线 —— 走满 slop 至少把「按住不动」还给读数。
+         * 只有**已选中那条**才会记候选（未选中按下只选中，`LineTouch.Select`）。
+         * 转换点在循环里，那里**重取基准**（线在手指上方多少像素），线不往指尖跳。
+         */
+        var pendingLineGrab: LineRef? = null
+
         when {
             // ① 划线工具：单指只服务那一条通道，落点就是「在这个价位新建一根」。
-            //    **不再就近抓已有线**（2026-10-14）：编辑旧线已由解锁态「选中后拖」覆盖，
+            //    **不再就近抓已有线**（2026-10-14）：编辑旧线已由解锁态「拖线」覆盖，
             //    工具模式下再抓线只会与「纯净画布上落新线」的预期打架 ——
             //    而且纯净画布里旧线根本不可见，抓一根看不见的线等于盲操作。
             drawTool == DrawTool.ALERT || drawTool == DrawTool.HORIZONTAL -> {
                 horizontalActive = true
             }
             // ② 解锁态：按下就近找**哪根线**（不必先选工具），再看这一下落在它的哪儿 ——
-            //    · 水平类的两端把手 → 当场接管，整场跟手改价；
-            //    · 直线线身（**只认已选中那条**）→ 记候选，手指走满 slop 转成整根平移
-            //      （2026-11-25 用户「不管什么线，都要先选中才能编辑」：没选中时按线身
-            //      只走下面的「点击候选」，松手才选中，绝不拖动）；
-            //    · 其余命中 → 只记「点击候选」，松手且没滑走才选中它（2026-10-24 口径）；
+            //    · 直线两端把手 → 当场接管改角度（把手只在选中态画）；
+            //    · **已选中**那条的直线线身 → 记候选，走满 slop 转成整根平移；
+            //    · **已选中**的水平类线（告警线 / 水平线）**任意位置** → 记候选，走满 slop
+            //      转成改价位（2026-11-26 两端把手已删，见 [lineTouch]）；
+            //    · 其余命中（未选中的线身）→ 只记「点击候选」，松手且没滑走才选中它
+            //      （2026-11-25 用户「不管什么线，都要先选中才能编辑」）；
             //    · 落空 → 松手取消选中，拖动照旧是平移画布。
             //    刻度区与副图区不参与 —— 那两处起笔本来就另有含义
             //    （缩放价格 / 交还页面翻页）。
@@ -3058,9 +3179,6 @@ private suspend fun PointerInputScope.detectChartGestures(
                 val flatY = hit?.let { target -> anchors.firstOrNull { it.ref == target }?.yPx }
                 /** 已选中的那条直线（**可见段**两端）：只有它才判两端把手（把手只在选中态画）。 */
                 val selectedTrend = hitTrend?.takeIf { hit == currentSelection() }
-                /** 水平类：这一下是否抓住了两端把手（[onFlatGrip]）。 */
-                val flatGrip = flatY != null && hit == currentSelection() &&
-                    onFlatGrip(first.position, flatY, plot0.plotWidthPx, flatGripInsetPx, flatGripHitPx)
                 /**
                  * 直线：这一下是「改角度」「抓线身」还是「只当点击」（优先级见 [trendTouchAt]）。
                  *
@@ -3104,21 +3222,22 @@ private suspend fun PointerInputScope.detectChartGestures(
                     TrendTouch.BODY -> pendingTrendBody = hitTrend
 
                     // 没落在直线上（或离得太远）：水平类走到这里才判，与旧口径一致。
-                    TrendTouch.NONE -> when (
-                        lineTouch(hit, currentSelection(), dragAllowed = flatGrip)
-                    ) {
-                        // 水平类**只有两端把手算抓到**：线身横贯整个绘图区，按住就算抓的话
-                        // 「上下平移图表」起手压到线就会把线拖走（2026-11-21 的老毛病；
-                        // 直线那边同理，只是它的线身带是窄带、且只认已选中那条）。
+                    TrendTouch.NONE -> when (lineTouch(hit, currentSelection())) {
+                        // 命中**已选中**那条水平类线：线上任意位置都算抓到（2026-11-26 用户
+                        // 「去掉抓点，任意位置都应该可以拖拽」）—— 先只记候选，走满 slop 才
+                        // 真正接管（见循环里的 `pendingLineGrab`），长按看读数与「按住不动」
+                        // 都还留给这场手势。
                         LineTouch.Drag -> {
-                            // 抓取半径有 24dp，手指未必正落在线上：记下「线在手指上下多少」，
-                            // 拖动时补回去，线只跟位移走、不往手指上跳。
-                            grabOffsetY = (anchors.firstOrNull { it.ref == hit }?.yPx ?: downY) - downY
-                            horizontalActive = true
-                            horizontalGrab = hit
+                            pendingLineGrab = hit
+                            pendingSelect = hit
                         }
 
+                        // 命中**没选中**的线：本场只当点击候选，松手且没滑走才选中它，
+                        // 这一下继续走平移画布（2026-11-25 用户「不管什么线，都要先选中
+                        // 才能编辑」）。水平线横贯整个绘图区，按住就算抓的话「上下平移图表」
+                        // 起手压到线就会把线拖走（2026-11-21 的老毛病）。
                         LineTouch.Select -> pendingSelect = hit
+
                         LineTouch.None -> tapOnBlank = true
                     }
                 }
@@ -3242,6 +3361,8 @@ private suspend fun PointerInputScope.detectChartGestures(
                     // 双指 = 缩放，这一下不再是「抓线身」：不清的话，抬掉一根手指后
                     // `pressed.size` 回到 1，下一帧照样会把它转成整根平移。
                     pendingTrendBody = null
+                    // 水平线同理：走满 slop 的那一帧不许把这次捏合偷偷变成「改价位」。
+                    pendingLineGrab = null
                     // 水平类只停「继续跟手」，**不清 horizontalGrab**：收尾的 commit 还指着
                     // 原来那条线，价格一格没动过就是一次空写；清成 null 会被当成「草稿落库」，
                     // 凭空多落一根线。
@@ -3331,6 +3452,8 @@ private suspend fun PointerInputScope.detectChartGestures(
                     pendingSelect = null
                     tapOnBlank = false
                     pendingTrendBody = null
+                    // 长按 = 看读数，也不许「抬指之后线自己动」：候选一起作废
+                    pendingLineGrab = null
                 }
             }
             if (longPressActive) {
@@ -3401,6 +3524,22 @@ private suspend fun PointerInputScope.detectChartGestures(
                     owned = true
                     // 这条路只对已选中那条开放；再落一次选中是幂等的（松手不再补 select）。
                     onSelectLine(LineRef.Guide(body.id))
+                    continue
+                }
+                // ★ 按下压在**水平类线**上（线上任意位置）、手指走满 slop：转成改价位
+                //   （2026-11-26）。与上面直线那一档同构：重取基准、这一帧不落到画布平移里。
+                //   抓取带 24dp 而手指未必落在线上，所以「线在手指上方多少」在这一刻量一次
+                //   （[grabOffsetY]），拖动时补回去 —— 线只跟位移走，不往指尖跳。
+                val lineGrab = pendingLineGrab
+                if (lineGrab != null && travelled > touchSlop) {
+                    pendingLineGrab = null
+                    pendingSelect = null
+                    grabOffsetY = (horizontalAnchors().firstOrNull { it.ref == lineGrab }?.yPx
+                        ?: downY) - downY
+                    horizontalGrab = lineGrab
+                    horizontalActive = true
+                    owned = true
+                    onSelectLine(lineGrab)
                     continue
                 }
                 // 方向锁：累计位移够阈值后才定性，定性后整场手势不再改
@@ -3494,13 +3633,21 @@ private suspend fun PointerInputScope.detectChartGestures(
 }
 
 /**
- * 解锁态下「按下点到了什么」→ 这一场单指的用途（2026-10-24「先单击选中」口径）。
+ * 解锁态下「按下点到了什么」→ 这一场单指的用途。
+ *
+ * 三档（2026-11-25 用户「不管什么线，都要先选中才能编辑」）：
+ * [Drag] = 命中的正是已选中那条，走满 slop 就接管；[Select] = 命中一条还没选中的线，
+ * 本场只当点击候选、松手没滑走才选中它；[None] = 按在空白。
+ *
+ * ⚠️ 2026-11-26 曾收成两档（命中即 [Drag]，省掉「先点一下」那道门槛），当天即按用户
+ * 「先选中才能编辑」的口径退回：水平线横贯整个绘图区，未选中也能拖等于把画布横切成
+ * 一条误抓走廊。**「任意位置可拖」只对已选中那条生效**，两端把手则已彻底删掉。
  */
 internal enum class LineTouch {
-    /** 命中的就是已选中的那条：当场接管，整场跟手拖动（不用长按）。 */
+    /** 命中**已选中**那条：手指走满 slop 就转成「拖这条线」（改价位），不动仍是纯停留。 */
     Drag,
 
-    /** 命中了一条没选中的线：本场只当点击候选，松手（没滑走）才选中它。 */
+    /** 命中一条**还没选中**的线：本场只当点击候选，松手（没滑走）才选中它，绝不拖动。 */
     Select,
 
     /** 没命中：松手取消选中，拖动照旧是平移/缩放画布。 */
@@ -3519,52 +3666,24 @@ internal fun LineRef.selectable(): Boolean = when (this) {
 }
 
 /**
- * 按下命中 [hit]、当前选中 [selected] 时，这一场单指的用途 —— **水平类专用**。
+ * 按下命中 [hit] 时，这一场单指的用途 —— **水平类专用**。
  *
  * 直线的通道已独立成 [trendTouchAt]（只认已选中那条，见那儿的注释），
  * 走到这里的一定是水平类线（告警线 / 水平线），或者是「离直线太远」的命中。
  *
- * 判据只有两条：**只有点到已选中的那条才直接拖**，其余命中一律先「选中」。
- * 拖动因此不再要求长按（长按还给十字光标），但也必须先点一下 ——
- * 一次平移的起手不会再顺手把路过的线拖走。
+ * 2026-11-26 用户「水平线应该去掉抓点，任意位置都应该可以拖拽」：端点那两枚半径 18dp
+ * 的圆点是唯一抓取点、「必须精确点中才算抓到」的手感作废 —— **已选中**之后线上任意位置
+ * 都算抓到。
  *
- * [dragAllowed] 是「这条命中算不算真的抓到了可拖的地方」，默认 true。
- * 水平类线**只有两端把手算抓到**（见 [onFlatGrip]）：
- * 线身横贯整个绘图区，若按住线身就算抓到，上下平移图表时起手压到线就会把线拖走 ——
- * 2026-11-21 用户报的「上下移动图表，直线穿过的位置变了」正是这个。
- * 传 false 时降级成 [LineTouch.Select]（本场只当点击，拖动交给画布平移）。
+ * 但**未选中仍然只选中**（2026-11-25 用户「不管什么线，都要先选中才能编辑」）：线横贯整个
+ * 绘图区，命中带就是一条横切画布的走廊，未选中也接管的话「上下平移图表」起手压到线就会
+ * 把线拖走（2026-11-21 报过同一件事）。缓解还有一层：down 只记候选，手指**走满 slop**
+ * 才真正接管（见 `pendingLineGrab`），长按看读数、按住不动都不受影响。
  */
-internal fun lineTouch(
-    hit: LineRef?,
-    selected: LineRef?,
-    dragAllowed: Boolean = true,
-): LineTouch = when {
+internal fun lineTouch(hit: LineRef?, selected: LineRef?): LineTouch = when {
     hit == null || !hit.selectable() -> LineTouch.None
-    hit == selected && dragAllowed -> LineTouch.Drag
+    hit == selected -> LineTouch.Drag
     else -> LineTouch.Select
-}
-
-/**
- * 落点是否抓住了水平类线两端那枚把手（圆心在 [insetPx] 与 `plotWidthPx - insetPx`，同高 [yPx]）。
- *
- * 纯函数、不碰 Compose：这是「拖动线」唯一的入口，判错了要么「拖图表把线拖走」、
- * 要么「抓半天拖不动」，两种故障方向相反、用户都很难描述清楚，值得直接单测
- * （见 `FlatGripTest`）。半径按欧氏距离判，不是方形，指尖斜着落下也算抓到。
- */
-internal fun onFlatGrip(
-    point: Offset,
-    yPx: Float,
-    plotWidthPx: Float,
-    insetPx: Float,
-    hitPx: Float,
-): Boolean {
-    if (!point.x.isFinite() || !point.y.isFinite() || !yPx.isFinite()) return false
-    if (!plotWidthPx.isFinite() || !insetPx.isFinite() || !hitPx.isFinite()) return false
-    if (hitPx <= 0f || plotWidthPx <= 0f) return false
-    val dy = point.y - yPx
-    if (abs(dy) > hitPx) return false
-    if (hypot(point.x - insetPx, dy) <= hitPx) return true
-    return hypot(point.x - (plotWidthPx - insetPx), dy) <= hitPx
 }
 
 /** 抓到的是直线上的哪一处：只有两端，改角度（整体平移走线身，见 [onTrendBody]）。 */
@@ -4109,7 +4228,8 @@ private val TREND_GRIP_DOT = 4.5.dp
 /**
  * 直线把手的命中半径（dp）。
  *
- * ❗**故意比水平类那两枚（[FLAT_GRIP_HIT] 18dp）更小**（2026-11-22 真机第二轮）。
+ * ❗**故意比直线锚点小得多**（2026-11-22 真机第二轮；水平类那两枚 18dp 的把手已于
+ * 2026-11-26 删除，桌上只剩直线这一族）。
  * 20dp 时半径约 55px，命中圈大得把线身中段也吞进去 —— 「在主图中央上下拖」本是调价格
  * 量程的常用起手位，结果一按就进「整体平移」，用户看到的就是「纵坐标缩放，直线会漂移」。
  * 把手本来就有白心圆做视觉目标，12dp（直径约 7mm）足够指尖找到，宁可贵在「抓不住就再点一次」，
@@ -4131,22 +4251,18 @@ private val TREND_BODY_GRAB = 10.dp
 private val TREND_SEED_DOT = 4.5.dp
 
 /**
- * 选中一条**水平类**线（告警线 / 水平线）之后，两端那枚把手的位置与大小。
+ * 选中一条**水平类**线（告警线 / 水平线）时：**不再画两端把手**（2026-11-26 删）。
  *
- * 为什么必须有把手、而不许「按住线身拖」（2026-11-21 用户「上下移动图表，直线穿过的位置变了」）：
- * 水平线横贯整个绘图区，[ALERT_GRAB_WIDTH]（24dp）的抓取带等于把画布横切成一条带子 ——
- * 已选中的线上下拖动时，起手落在带子里就把线拖走了，用户却以为自己在平移图表
- * （桌面端同一处实测：线价 57500 → 56288.84，而纵向平移量一格没动）。
- * 现在**线身只负责「选中」**，改价只有抓住两端这枚点这一条路 ——
- * 于是「按在图上的任何位置拖动」都只平移画布。与桌面 `PRICE_HANDLE_INSET` 同一口径。
+ * 用户口径「水平线应该去掉抓点，任意位置都应该可以拖拽」。此前的规矩是两端各一枚圆点
+ * 当改价的**唯一**入口，理由是 2026-11-21 那次误抓（线横贯绘图区，24dp 的抓取带等于把
+ * 画布横切成一条带子，纵向平移图时起手压到线就把线拖走）。代价是「必须精确点中半径 18dp
+ * 的圆点」，手感上就是「抓不住」。
+ *
+ * 现在的分工：**按下任意位置都算候选**（[lineTouch]），但手指要**走满 slop** 才真正接管
+ * （见 `pendingLineGrab`）—— 长按看读数、按住不动都还留给原手势；选中只由外发光
+ * （[LINE_SELECTED_HALO_ALPHA]）表示。若日后误抓变频繁，第一选项是缩 [ALERT_GRAB_WIDTH]，
+ * 而不是把把手加回来。
  */
-private val FLAT_GRIP_INSET = 10.dp
-
-/** 把手的圆点半径（dp）：比直线锚点（3dp）大一档，它就是「这里能抓」的形状。 */
-private val FLAT_GRIP_DOT = 5.dp
-
-/** 把手的命中半径（dp）。触摸比鼠标慷慨：指尖落点本身就有 ~8dp 误差。 */
-private val FLAT_GRIP_HIT = 18.dp
 
 /**
  * 选中一条线时的外发光：半透明同色、更宽，铺在本色线**下面**。
@@ -4158,6 +4274,30 @@ private const val LINE_SELECTED_HALO_ALPHA = 0.22f
 
 /** 外发光的线宽（px）：比本色线的 2.5px 宽出一圈，看着像一层柔光。 */
 private const val LINE_SELECTED_HALO_WIDTH = 9f
+
+/**
+ * 用户把线改成虚线后的段长与间隔（dp）：短划 8、空隙 5。
+ *
+ * 与桌面端 `DRAW_DASH = [8, 5]`（CSS px）同值：两端看着一样疏。比最新价那条虚线
+ * （4/3）长一档 —— 最新价是行情自己画的辅助线、越不抢戏越好；用户的线是他特意设的，
+ * 太碎会像 K 线上的杂点。
+ *
+ * ⚠️ 6/4 试过，1 倍屏上几乎读不出断开（2px 的线本身抗锯齿，空隙被两端半透明吃掉一半）。
+ * 用 dp 而不是 px：按密度换算，平板与手机看着同样疏密。
+ */
+private val DRAW_DASH_LENGTH = 8.dp
+private val DRAW_DASH_GAP = 5.dp
+
+/**
+ * 虚线笔刷。一次绘制里算一次就够（同一帧所有虚线同一个疏密），所以由调用方在循环外取。
+ *
+ * 用 dp 换算而不写死 px：平板 / 手机 / 不同缩放下的疏密才一致。
+ */
+private fun DrawScope.lineDashEffect(): PathEffect =
+    PathEffect.dashPathEffect(
+        floatArrayOf(DRAW_DASH_LENGTH.toPx(), DRAW_DASH_GAP.toPx()),
+        0f,
+    )
 
 /** 全屏角标按钮的边长。 */
 private val CORNER_BUTTON_SIZE = 26.dp

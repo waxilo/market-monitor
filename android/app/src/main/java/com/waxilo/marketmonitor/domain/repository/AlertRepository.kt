@@ -63,6 +63,9 @@ interface AlertRepository {
      */
     suspend fun setNote(id: Long, note: String?)
 
+    /** 只改图上这条线的线型（实线 / 虚线），不动条件、阈值与推送配置。 */
+    suspend fun setRuleDashed(id: Long, dashed: Boolean)
+
     suspend fun state(ruleId: Long): AlertState
 
     suspend fun saveState(ruleId: Long, state: AlertState)

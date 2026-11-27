@@ -6,6 +6,7 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.waxilo.marketmonitor.domain.indicator.MaAnalysis
 
 /**
  * 本地缓存库（PRD 3.2 缓存策略）。结构变化时必须写迁移脚本：
@@ -22,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AlertLogEntity::class,
         ChartLineEntity::class,
     ],
-    version = 11,
+    version = 13,
     exportSchema = false,
 )
 abstract class MarketDatabase : RoomDatabase() {
@@ -321,6 +322,76 @@ abstract class MarketDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v12：均线分析的线搬进 `chart_line`（2026-11-26）。
+         *
+         * 老形态是「一条线 = 一条 alert_rule」，于是画一条参考线必然等于开一条预警；
+         * 现在线是线（本表）、告警才是告警（[ChartLineEntity.alertRuleId] 指过去的规则）。
+         *
+         * 迁移分两步，顺序不能反 —— 先加列，再搬数据：
+         *
+         *  1. **老线搬过来**：名字能解回 (族, 周期, 档位) 的规则一律插一条带身份的 chart_line，
+         *     并把这把原规则挂上去（`alertRuleId`）。**规则本身保留** —— 它可能正开着、
+         *     正在响，静默关掉用户的预警比多一条线糟得多；`showBadge` 写 0（新默认）：
+         *     这批线正是用户嫌价签太挤的那一批。
+         *  2. 名字解不出的（用户改过名 / 手建的预警）**原样不动**，仍在图上当告警线。
+         *
+         * 不搬的话，升级后面板面对一堆「认不出身份」的告警线会显示成没画过，
+         * 用户只能一条条删了自己重画。
+         */
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `originKind` TEXT")
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `originInterval` TEXT")
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `originPeriod` INTEGER")
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `showBadge` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `alertRuleId` INTEGER")
+
+                db.query(
+                    "SELECT `id`,`market`,`symbol`,`name`,`threshold`,`note`,`createdAt` " +
+                        "FROM `alert_rule` WHERE `threshold` IS NOT NULL",
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val origin = MaAnalysis.parseAutoNote(cursor.getString(3)) ?: continue
+                        db.execSQL(
+                            "INSERT INTO `chart_line` " +
+                                "(`market`,`symbol`,`kind`,`price`,`note`,`originKind`," +
+                                "`originInterval`,`originPeriod`,`showBadge`,`alertRuleId`,`createdAt`) " +
+                                "VALUES (?,?,'h',?,?,?,?,?,0,?,?)",
+                            arrayOf(
+                                cursor.getString(1),
+                                cursor.getString(2),
+                                cursor.getString(4),
+                                cursor.getString(5),
+                                origin.family.name,
+                                origin.interval.storageKey,
+                                origin.period,
+                                cursor.getLong(0),
+                                cursor.getLong(6),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        /**
+         * v12 → v13：给**两条存储路径**各加一列线型（实线 / 虚线）。
+         *
+         * 为什么两张表都要加：图上的线有两个来源 —— 用户手画 + 均线分析的线落在 `chart_line`，
+         * 「预警线」工具画的仍是一条 `alert_rule`。竖栏里那枚「线型」按钮对**选中的任何一条线**
+         * 都要有效，缺一张表就会出现「同样是线，有的能切虚线、有的不能」。
+         *
+         * 纯样式列，`NOT NULL DEFAULT 0`（0 = 实线）⇒ 升级后所有老线保持原来的样子，
+         * 不搬数据、不需要回填。
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `chart_line` ADD COLUMN `dashed` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `alert_rule` ADD COLUMN `dashed` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): MarketDatabase =
             Room.databaseBuilder(context.applicationContext, MarketDatabase::class.java, NAME)
                 .addMigrations(
@@ -334,6 +405,8 @@ abstract class MarketDatabase : RoomDatabase() {
                     MIGRATION_8_9,
                     MIGRATION_9_10,
                     MIGRATION_10_11,
+                    MIGRATION_11_12,
+                    MIGRATION_12_13,
                 )
                 .build()
     }
